@@ -140,6 +140,18 @@ bool readSynth(juce::MemoryInputStream& mis, ats::SynthParams& s)
     return true;
 }
 
+/** True when cached partial/residual layers (host rate) can be reused for this core. */
+bool samePreviewLayerCore(const ats::SynthParams& a, const ats::SynthParams& b)
+{
+    return a.usePartialsPhase == b.usePartialsPhase
+           && a.useAllPartials == b.useAllPartials
+           && (std::abs(a.sampleRate - b.sampleRate) < 1e-3)
+           && (std::abs(a.frequencyFactor - b.frequencyFactor) < 1e-8)
+           && (std::abs(a.timeFactor - b.timeFactor) < 1e-8)
+           && (std::abs(a.startTime - b.startTime) < 1e-8)
+           && (std::abs(a.duration - b.duration) < 1e-8);
+}
+
 } // namespace
 
 AtsAudioProcessor::AtsAudioProcessor()
@@ -148,32 +160,24 @@ AtsAudioProcessor::AtsAudioProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "PARAMS", createParameterLayout())
 {
-    apvts.addParameterListener("partGain", this);
-    apvts.addParameterListener("resGain", this);
     apvts.addParameterListener("freq", this);
     apvts.addParameterListener("timeStretch", this);
     apvts.addParameterListener("synStart", this);
     apvts.addParameterListener("synDur", this);
     apvts.addParameterListener("usePhase", this);
     apvts.addParameterListener("useAllPartials", this);
-    apvts.addParameterListener("residualOnly", this);
-    apvts.addParameterListener("outputTrim", this);
 }
 
 AtsAudioProcessor::~AtsAudioProcessor()
 {
     cancelJobs();
     joinWorkers();
-    apvts.removeParameterListener("partGain", this);
-    apvts.removeParameterListener("resGain", this);
     apvts.removeParameterListener("freq", this);
     apvts.removeParameterListener("timeStretch", this);
     apvts.removeParameterListener("synStart", this);
     apvts.removeParameterListener("synDur", this);
     apvts.removeParameterListener("usePhase", this);
     apvts.removeParameterListener("useAllPartials", this);
-    apvts.removeParameterListener("residualOnly", this);
-    apvts.removeParameterListener("outputTrim", this);
 }
 
 void AtsAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -182,6 +186,10 @@ void AtsAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     outputTrimSmoothed.reset(sampleRate, 0.02);
     outputTrimSmoothed.setCurrentAndTargetValue(
         apvts.getRawParameterValue("outputTrim")->load());
+    partGainSmoothed.reset(sampleRate, 0.02);
+    partGainSmoothed.setCurrentAndTargetValue(apvts.getRawParameterValue("partGain")->load());
+    resGainSmoothed.reset(sampleRate, 0.02);
+    resGainSmoothed.setCurrentAndTargetValue(apvts.getRawParameterValue("resGain")->load());
 
     juce::ignoreUnused(samplesPerBlock);
 }
@@ -232,9 +240,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
 void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
     juce::ignoreUnused(newValue);
-    if (parameterID == "outputTrim")
-        return;
-
     synthParamsDirty.store(true);
     triggerAsyncUpdate();
 }
@@ -255,9 +260,25 @@ void AtsAudioProcessor::setError(const juce::String& e)
         setUiState(AtsUiState::Error);
 }
 
-ats::SynthParams AtsAudioProcessor::readSynthParamsFromApvts() const
+ats::SynthParams AtsAudioProcessor::readCoreSynthParamsFromApvts() const
 {
     ats::SynthParams sp;
+    sp.frequencyFactor = (double) apvts.getRawParameterValue("freq")->load();
+    sp.frequencyFactor *= std::pow(2.0, (double) midiSemitoneOffset.load() / 12.0);
+    sp.timeFactor = apvts.getRawParameterValue("timeStretch")->load();
+    sp.startTime = apvts.getRawParameterValue("synStart")->load();
+    sp.duration = apvts.getRawParameterValue("synDur")->load();
+    sp.usePartialsPhase = apvts.getRawParameterValue("usePhase")->load() > 0.5f;
+    sp.useAllPartials = apvts.getRawParameterValue("useAllPartials")->load() > 0.5f;
+    sp.sampleRate = hostSampleRate;
+    sp.partialsGain = 1.0;
+    sp.residualGain = 1.0;
+    return sp;
+}
+
+ats::SynthParams AtsAudioProcessor::readSynthParamsFromApvts() const
+{
+    auto sp = readCoreSynthParamsFromApvts();
     const bool residualOnly = apvts.getRawParameterValue("residualOnly")->load() > 0.5f;
     if (residualOnly)
     {
@@ -269,14 +290,6 @@ ats::SynthParams AtsAudioProcessor::readSynthParamsFromApvts() const
         sp.partialsGain = (double) apvts.getRawParameterValue("partGain")->load();
         sp.residualGain = (double) apvts.getRawParameterValue("resGain")->load();
     }
-    sp.frequencyFactor = (double) apvts.getRawParameterValue("freq")->load();
-    sp.frequencyFactor *= std::pow(2.0, (double) midiSemitoneOffset.load() / 12.0);
-    sp.timeFactor = apvts.getRawParameterValue("timeStretch")->load();
-    sp.startTime = apvts.getRawParameterValue("synStart")->load();
-    sp.duration = apvts.getRawParameterValue("synDur")->load();
-    sp.usePartialsPhase = apvts.getRawParameterValue("usePhase")->load() > 0.5f;
-    sp.useAllPartials = apvts.getRawParameterValue("useAllPartials")->load() > 0.5f;
-    sp.sampleRate = hostSampleRate;
     return sp;
 }
 
@@ -359,6 +372,18 @@ void AtsAudioProcessor::joinWorkers()
     analysisThreadRunning.store(false);
     resynthThreadRunning.store(false);
     transformThreadRunning.store(false);
+
+    clearPreviewLayerCache();
+}
+
+void AtsAudioProcessor::clearPreviewLayerCache()
+{
+    previewLayerCacheValid = false;
+    previewLayerCacheRevision = -1;
+    previewLayerCacheHostSr = 0.0;
+    previewLayerCacheCore = {};
+    previewLayerCachePartials.clear();
+    previewLayerCacheResidual.clear();
 }
 
 void AtsAudioProcessor::cancelJobs()
@@ -475,10 +500,14 @@ void AtsAudioProcessor::startResynthWorker()
         }
 
         const uint64_t gen = jobGeneration.load(std::memory_order_relaxed);
-        const ats::SynthParams sp = readSynthParamsFromApvts();
+        const ats::SynthParams core = readCoreSynthParamsFromApvts();
 
-        juce::AudioBuffer<float> mono;
+        juce::AudioBuffer<float> monoP;
+        juce::AudioBuffer<float> monoR;
         int modelSr = 44100;
+        int modelRevSnapshot = -1;
+        bool useLayerCache = false;
+
         {
             const juce::ScopedLock ml(modelLock);
             if (jobGeneration.load() != gen || analyzedModel.get() == nullptr)
@@ -487,8 +516,28 @@ void AtsAudioProcessor::startResynthWorker()
                 setUiState(AtsUiState::Analyzed);
                 return;
             }
-            modelSr = analyzedModel.get()->srate;
-            mono = runDoSynthesis(analyzedModel.get(), sp);
+
+            modelRevSnapshot = modelRevision.load(std::memory_order_relaxed);
+            useLayerCache = previewLayerCacheValid
+                            && previewLayerCacheRevision == modelRevSnapshot
+                            && (std::abs(previewLayerCacheHostSr - hostSampleRate) < 1e-6)
+                            && samePreviewLayerCore(previewLayerCacheCore, core)
+                            && (!previewLayerCachePartials.empty() || !previewLayerCacheResidual.empty());
+
+            if (!useLayerCache)
+            {
+                modelSr = analyzedModel.get()->srate;
+
+                ats::SynthParams spPartials = core;
+                spPartials.partialsGain = 1.0;
+                spPartials.residualGain = 0.0;
+                ats::SynthParams spResidual = core;
+                spResidual.partialsGain = 0.0;
+                spResidual.residualGain = 1.0;
+
+                monoP = runDoSynthesis(analyzedModel.get(), spPartials);
+                monoR = runDoSynthesis(analyzedModel.get(), spResidual);
+            }
         }
 
         if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire))
@@ -498,21 +547,74 @@ void AtsAudioProcessor::startResynthWorker()
             return;
         }
 
-        if (mono.getNumSamples() <= 0)
+        if (modelRevision.load(std::memory_order_relaxed) != modelRevSnapshot)
+        {
+            resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
+            return;
+        }
+
+        if (!useLayerCache)
+        {
+            const int nP = monoP.getNumSamples();
+            const int nR = monoR.getNumSamples();
+            if (nP <= 0 && nR <= 0)
+            {
+                setError("Synthesis produced silence.");
+                resynthThreadRunning.store(false);
+                setUiState(AtsUiState::Analyzed);
+                return;
+            }
+
+            std::vector<float> resampledP;
+            std::vector<float> resampledR;
+            if (nP > 0)
+                ats::resampleLinearMono(
+                    monoP.getReadPointer(0),
+                    nP,
+                    (double) modelSr,
+                    resampledP,
+                    hostSampleRate);
+            if (nR > 0)
+                ats::resampleLinearMono(
+                    monoR.getReadPointer(0),
+                    nR,
+                    (double) modelSr,
+                    resampledR,
+                    hostSampleRate);
+
+            if (resampledP.empty() && resampledR.empty())
+            {
+                setError("Synthesis produced silence.");
+                resynthThreadRunning.store(false);
+                setUiState(AtsUiState::Analyzed);
+                return;
+            }
+
+            if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire)
+                || modelRevision.load(std::memory_order_relaxed) != modelRevSnapshot)
+            {
+                resynthThreadRunning.store(false);
+                setUiState(AtsUiState::Analyzed);
+                return;
+            }
+
+            previewLayerCachePartials = std::move(resampledP);
+            previewLayerCacheResidual = std::move(resampledR);
+            previewLayerCacheCore = core;
+            previewLayerCacheRevision = modelRevSnapshot;
+            previewLayerCacheHostSr = hostSampleRate;
+            previewLayerCacheValid = true;
+        }
+
+        const size_t outN = juce::jmax(previewLayerCachePartials.size(), previewLayerCacheResidual.size());
+        if (outN == 0)
         {
             setError("Synthesis produced silence.");
             resynthThreadRunning.store(false);
             setUiState(AtsUiState::Analyzed);
             return;
         }
-
-        std::vector<float> resampled;
-        ats::resampleLinearMono(
-            mono.getReadPointer(0),
-            mono.getNumSamples(),
-            (double) modelSr,
-            resampled,
-            hostSampleRate);
 
         if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire))
         {
@@ -536,12 +638,17 @@ void AtsAudioProcessor::startResynthWorker()
         nextPlaybackBufferIndex = (writeIndex + 1) % (int) playbackBuffers.size();
 
         auto& stereo = playbackBuffers[(size_t) writeIndex];
-        stereo.setSize(2, (int) resampled.size());
-        for (int i = 0; i < stereo.getNumSamples(); ++i)
+        stereo.setSize(2, (int) outN);
+        for (int i = 0; i < (int) outN; ++i)
         {
-            const float x = resampled[static_cast<size_t>(i)];
-            stereo.setSample(0, i, x);
-            stereo.setSample(1, i, x);
+            const float p = (i < (int) previewLayerCachePartials.size())
+                                ? previewLayerCachePartials[(size_t) i]
+                                : 0.0f;
+            const float r = (i < (int) previewLayerCacheResidual.size())
+                                ? previewLayerCacheResidual[(size_t) i]
+                                : 0.0f;
+            stereo.setSample(0, i, p);
+            stereo.setSample(1, i, r);
         }
 
         if (mySerial != resynthJobSerial.load(std::memory_order_acquire))
@@ -582,6 +689,9 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     }
 
     outputTrimSmoothed.setTargetValue(apvts.getRawParameterValue("outputTrim")->load());
+    partGainSmoothed.setTargetValue(apvts.getRawParameterValue("partGain")->load());
+    resGainSmoothed.setTargetValue(apvts.getRawParameterValue("resGain")->load());
+    const bool residualOnlyMix = apvts.getRawParameterValue("residualOnly")->load() > 0.5f;
 
     const int n = buffer.getNumSamples();
     const int activeIndex = activePlaybackBufferIndex.load(std::memory_order_acquire);
@@ -600,10 +710,16 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     for (int s = 0; s < n; ++s)
     {
         const float trim = outputTrimSmoothed.getNextValue();
+        const float pg = partGainSmoothed.getNextValue();
+        const float rg = resGainSmoothed.getNextValue();
         float v = 0.0f;
         if (shouldPreview && playback != nullptr && playbackPosition < playback->getNumSamples())
         {
-            v = playback->getSample(0, playbackPosition) * trim;
+            const int nCh = playback->getNumChannels();
+            const float part = playback->getSample(0, playbackPosition);
+            const float res = nCh > 1 ? playback->getSample(1, playbackPosition) : 0.0f;
+            const float mixed = residualOnlyMix ? (res * rg) : (part * pg + res * rg);
+            v = mixed * trim;
             ++playbackPosition;
         }
 

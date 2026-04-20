@@ -115,10 +115,13 @@ private:
 
     void startResynthWorker();
     void joinWorkers();
+    void clearPreviewLayerCache();
 
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     ats::SynthParams readSynthParamsFromApvts() const;
+    /** Freq/time/phase flags only; caller sets partialsGain and residualGain for layer renders. */
+    ats::SynthParams readCoreSynthParamsFromApvts() const;
     ats::AnalysisParams readAnalysisParamsFromApvts() const;
 
     std::atomic<AtsUiState> uiState { AtsUiState::NoSource };
@@ -135,6 +138,15 @@ private:
     juce::CriticalSection modelLock;
     ats::AtsSoundPtr analyzedModel;
 
+    /** Host-rate partial / residual layers; skip re-synthesis when core + model revision unchanged. */
+    bool previewLayerCacheValid = false;
+    int previewLayerCacheRevision = -1;
+    double previewLayerCacheHostSr = 0.0;
+    ats::SynthParams previewLayerCacheCore {};
+    std::vector<float> previewLayerCachePartials;
+    std::vector<float> previewLayerCacheResidual;
+
+    /** Per slot: ch0 = partials-only render, ch1 = residual-only render; gains applied in processBlock. */
     std::array<juce::AudioBuffer<float>, 3> playbackBuffers;
     std::atomic<int> activePlaybackBufferIndex { -1 };
     std::atomic<int> readingPlaybackBufferIndex { -1 };
@@ -144,6 +156,8 @@ private:
     std::atomic<bool> previewPlaying { false };
 
     juce::LinearSmoothedValue<float> outputTrimSmoothed;
+    juce::LinearSmoothedValue<float> partGainSmoothed;
+    juce::LinearSmoothedValue<float> resGainSmoothed;
 
     std::mutex resynthMutex;
     std::atomic<uint64_t> resynthJobSerial { 0 };
