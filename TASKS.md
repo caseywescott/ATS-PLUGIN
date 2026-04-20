@@ -19,9 +19,9 @@
 
 **PRD:** §8, §2.2, §11.1  
 
-- [ ] Add `NOTICE` / `THIRD_PARTY.md` (or equivalent) listing ATSA, MathExpr, Qatsh-derived code, VST3 SDK terms, Steinberg compliance notes.
-- [ ] Record distribution assumption (e.g. GPL-compliant release vs re-license path).
-- [ ] No functional code required.
+- [x] Add `NOTICE` / `THIRD_PARTY.md` (or equivalent) listing ATSA, MathExpr, Qatsh-derived code, VST3 SDK terms, Steinberg compliance notes.
+- [x] Record distribution assumption (e.g. GPL-compliant release vs re-license path).
+- [x] No functional code required.
 
 ---
 
@@ -29,9 +29,9 @@
 
 **PRD:** §6.1, §6.4  
 
-- [ ] Choose and document build tool (CMake + JUCE, or CMake-only, etc.).
-- [ ] Directory layout: `vendor/atsa`, `src/core`, `src/plugin`, `tools/` (names flexible).
-- [ ] Submodule or subtree policy for upstream `atsa` / qatsh reference (align with repo strategy).
+- [x] Choose and document build tool (CMake + JUCE, or CMake-only, etc.).
+- [x] Directory layout: `vendor/atsa`, `src/core`, `src/plugin`, `tools/` (names flexible).
+- [x] Submodule or subtree policy for upstream `atsa` / qatsh reference (align with repo strategy).
 
 ---
 
@@ -39,9 +39,9 @@
 
 **PRD:** §6.1, §6.4, §11.5  
 
-- [ ] Build static (or clearly scoped shared) ATSA from vendored or submodule source.
-- [ ] Link libsndfile (or document alternative) for file I/O in tools/tests.
-- [ ] macOS + Windows targets compile in CI or locally; document compiler baselines.
+- [x] Build static (or clearly scoped shared) ATSA from vendored or submodule source.
+- [x] Link libsndfile (or document alternative) for file I/O in tools/tests.
+- [x] macOS + Windows targets compile in CI or locally; document compiler baselines.
 
 ---
 
@@ -49,10 +49,10 @@
 
 **PRD:** §10 P0, §5.1, §5.2, §7  
 
-- [ ] CLI: input WAV path, output WAV path, sample rate flag or file SR.
-- [ ] Populate `ANARGS` from defaults / JSON or flags (parity path toward full UI later).
-- [ ] Run analysis off main thread not required for CLI; document CPU/memory use.
-- [ ] Run synthesis; write output via sndfile.
+- [x] CLI: input WAV path, output WAV path, sample rate flag or file SR.
+- [x] Populate `ANARGS` from defaults / JSON or flags (parity path toward full UI later).
+- [x] Run analysis off main thread not required for CLI; document CPU/memory use.
+- [x] Run synthesis; write output via sndfile.
 
 ---
 
@@ -60,8 +60,8 @@
 
 **PRD:** §9  
 
-- [ ] Short fixture audio + expected output (or tolerance-based compare).
-- [ ] Document determinism expectations per PRD §5.1.
+- [x] Short fixture audio + expected output (or tolerance-based compare).
+- [x] Document determinism expectations per PRD §5.1.
 
 ---
 
@@ -69,9 +69,9 @@
 
 **PRD:** §6.1, §6.2, §6.3, §3.3  
 
-- [ ] ADR: effect-first MVP vs instrument; live analysis in/out of scope.
-- [ ] ADR: JUCE vs iPlug2 vs raw VST3; Qt in editor yes/no.
-- [ ] Threading contract: audio thread = synthesis only.
+- [x] ADR: effect-first MVP vs instrument; live analysis in/out of scope.
+- [x] ADR: JUCE vs iPlug2 vs raw VST3; Qt in editor yes/no.
+- [x] Threading contract: audio thread = synthesis only.
 
 ---
 

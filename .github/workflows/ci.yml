@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Clone Qatsh (ATSA + synthesis sources)
+        run: git clone --depth 1 https://gitlab.com/dxarts/projects/ats/qatsh.git qatsh
+
+      - name: Install libsndfile (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsndfile1-dev
+
+      - name: Install libsndfile (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libsndfile
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

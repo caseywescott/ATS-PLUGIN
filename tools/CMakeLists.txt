@@ -1,0 +1,8 @@
+add_executable(ats_offline ats_offline.c)
+target_link_libraries(ats_offline PRIVATE atsa)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(ats_offline PRIVATE m)
+endif()
+if(MSVC)
+  target_compile_definitions(ats_offline PRIVATE _USE_MATH_DEFINES)
+endif()
