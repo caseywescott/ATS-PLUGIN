@@ -69,4 +69,10 @@ After building:
 ctest --test-dir build --output-on-failure
 ```
 
-The golden test invokes `ats_offline` and checks tolerances (see `docs/DETERMINISM.md`).
+The golden test invokes `ats_offline` and checks tolerances (see `docs/DETERMINISM.md`). **`ats_roundtrip`** exercises `ats_save` / `ats_load` synthesis parity (see Phase 4 in this file).
+
+## Phase 5 — Performance and release
+
+- **Performance budgets and limitations:** `docs/PERFORMANCE.md` (reference hardware assumptions, model size / memory guidance, live-analysis stance, resynth expectations).
+- **Signing, notarization, packaging, release notes:** `docs/RELEASE.md`.
+- **Unsigned zip helper (local):** after a Release build, run `./scripts/package_release_archives.sh` from the repo root; archives land in `dist/` (not used by CI).

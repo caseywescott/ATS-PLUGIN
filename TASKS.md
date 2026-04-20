@@ -281,8 +281,8 @@
 
 **PRD:** §7, §11.3–11.4  
 
-- [ ] Recommended max partials/frames at 48 kHz / 256 samples (reference HW).
-- [ ] Live analysis stance; memory caps.
+- [x] Recommended max partials/frames at 48 kHz / 256 samples (reference HW).
+- [x] Live analysis stance; memory caps.
 
 ---
 
@@ -290,8 +290,8 @@
 
 **PRD:** §6.4, §8  
 
-- [ ] Signed binaries; notarization checklist; Windows installer or zip.
-- [ ] Release notes with license pointers.
+- [x] Signed binaries; notarization checklist; Windows installer or zip.
+- [x] Release notes with license pointers.
 
 ---
 
