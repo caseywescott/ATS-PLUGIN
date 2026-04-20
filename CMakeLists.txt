@@ -1,8 +1,12 @@
-cmake_minimum_required(VERSION 3.16)
-project(ats_plugin LANGUAGES C)
+cmake_minimum_required(VERSION 3.22)
+project(ats_plugin VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -63,6 +67,10 @@ endif()
 target_link_libraries(atsa PUBLIC SndFile::sndfile)
 
 add_subdirectory(tools)
+
+if(BUILD_PLUGIN)
+  add_subdirectory(src/plugin)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)

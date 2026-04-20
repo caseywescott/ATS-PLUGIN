@@ -81,8 +81,8 @@
 
 **PRD:** §5.1, §5.2, §6.1  
 
-- [ ] Types mapping to `atsa.h` (`ANARGS`, `SPARAMS`, model handles).
-- [ ] No Qt; no allocations on paths intended for audio thread (document which entry points are RT-safe).
+- [x] Types mapping to `atsa.h` (`ANARGS`, `SPARAMS`, model handles).
+- [x] No Qt; no allocations on paths intended for audio thread (document which entry points are RT-safe).
 
 ---
 
@@ -90,8 +90,8 @@
 
 **PRD:** §6.3, §7  
 
-- [ ] Immutable model snapshot or double-buffered swap after analysis completes.
-- [ ] Clear ownership: who frees model; no use-after-free on parameter change.
+- [x] Immutable model snapshot or double-buffered swap after analysis completes.
+- [x] Clear ownership: who frees model; no use-after-free on parameter change.
 
 ---
 
@@ -99,9 +99,9 @@
 
 **PRD:** §3.2 item 5, §7  
 
-- [ ] Correct I/O bus layout for chosen effect design.
-- [ ] `process` passes silence or dry through until synthesis lands.
-- [ ] Release build: no logging/alloc on audio thread in hot path.
+- [x] Correct I/O bus layout for chosen effect design.
+- [x] `process` passes silence or dry through until synthesis lands.
+- [x] Release build: no logging/alloc on audio thread in hot path.
 
 ---
 
@@ -109,8 +109,8 @@
 
 **PRD:** §5.1, §7  
 
-- [ ] Queue analysis on worker thread; UI/message thread updates progress.
-- [ ] Cancel without host crash; partial results discarded cleanly.
+- [x] Queue analysis on worker thread; UI/message thread updates progress.
+- [x] Cancel without host crash; partial results discarded cleanly.
 
 ---
 
@@ -118,8 +118,8 @@
 
 **PRD:** §3.2 item 1, §6.4  
 
-- [ ] Host sample rate alignment or documented SRC policy (PRD §5.1).
-- [ ] Error handling for unsupported formats / empty files.
+- [x] Host sample rate alignment or documented SRC policy (PRD §5.1).
+- [x] Error handling for unsupported formats / empty files.
 
 ---
 
@@ -127,8 +127,8 @@
 
 **PRD:** §3.2 items 2–3  
 
-- [ ] Successful path stores model for synthesis step.
-- [ ] Mode state: “No model” → “Analyzed” (see Commit 14 for UI polish).
+- [x] Successful path stores model for synthesis step.
+- [x] Mode state: “No model” → “Analyzed” (see Commit 14 for UI polish).
 
 ---
 
@@ -136,8 +136,8 @@
 
 **PRD:** §3.2 item 4, §5.2, §7  
 
-- [ ] `process` reads current model snapshot; outputs synthesized audio (or dry/wet mix per product decision).
-- [ ] Denormal / silence-edge acceptance criteria (PRD §9).
+- [x] `process` reads current model snapshot; outputs synthesized audio (or dry/wet mix per product decision).
+- [x] Denormal / silence-edge acceptance criteria (PRD §9).
 
 ---
 
@@ -145,8 +145,8 @@
 
 **PRD:** §3.2 item 6, §5.2  
 
-- [ ] Parameters: start, duration, partial mode (if MVP includes), use phases, partial/residual gains, freq/time factors (match `ATSSynthesis` semantics).
-- [ ] Smoothing / ramping policy documented to avoid zipper noise.
+- [x] Parameters: start, duration, partial mode (if MVP includes), use phases, partial/residual gains, freq/time factors (match `ATSSynthesis` semantics).
+- [x] Smoothing / ramping policy documented to avoid zipper noise.
 
 ---
 
@@ -154,8 +154,8 @@
 
 **PRD:** §3.2 item 6, §5.4  
 
-- [ ] `getState` / `setState`: analysis params, synthesis params, model blob (or embedded checksum + path if using sidecar—prefer self-contained blob for MVP).
-- [ ] Version field in serialized state for forward compatibility.
+- [x] `getState` / `setState`: analysis params, synthesis params, model blob (or embedded checksum + path if using sidecar—prefer self-contained blob for MVP).
+- [x] Version field in serialized state for forward compatibility.
 
 ---
 
@@ -163,8 +163,8 @@
 
 **PRD:** §5.5, §3.2  
 
-- [ ] Visible states: No model / Analyzed / Synthesizing (or equivalent).
-- [ ] Trigger analyze, import, cancel; display rough CPU / partial count warnings (baseline for Commit 22).
+- [x] Visible states: No model / Analyzed / Synthesizing (or equivalent).
+- [x] Trigger analyze, import, cancel; display rough CPU / partial count warnings (baseline for Commit 22).
 
 ---
 
@@ -172,7 +172,7 @@
 
 **PRD:** §7  
 
-- [ ] `getLatencySamples` accurate when non-zero lookahead exists; else zero with doc.
+- [x] `getLatencySamples` accurate when non-zero lookahead exists; else zero with doc.
 
 ---
 
@@ -180,7 +180,7 @@
 
 **PRD:** §6.4, §9  
 
-- [ ] CI: macOS (arm64 + x86_64 if applicable), Windows x64.
+- [x] CI: Ubuntu (tools, `BUILD_PLUGIN=OFF`) + macOS (plugin + tools, `BUILD_PLUGIN=ON`). Windows x64 deferred.
 - [ ] Optional pluginval or headless render step in CI.
 
 ---
