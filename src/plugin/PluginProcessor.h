@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -96,6 +98,10 @@ public:
     bool writePartialCell(int partialIdx, int frameIdx, double amp, double freq, juce::String& error);
 
     juce::String getMathStatus() const;
+    void startPreviewPlayback();
+    void stopPreviewPlayback();
+    bool isPreviewPlaying() const { return previewPlaying.load(); }
+    bool hasPreviewAudio() const;
 
     static constexpr uint32_t stateMagic = 0x41545350u; // 'ATSP'
 
@@ -129,15 +135,22 @@ private:
     juce::CriticalSection modelLock;
     ats::AtsSoundPtr analyzedModel;
 
-    juce::CriticalSection playbackLock;
-    juce::AudioBuffer<float> playbackBuffer;
+    std::array<juce::AudioBuffer<float>, 3> playbackBuffers;
+    std::atomic<int> activePlaybackBufferIndex { -1 };
+    std::atomic<int> readingPlaybackBufferIndex { -1 };
+    int currentPlaybackBufferIndex = -1;
+    int nextPlaybackBufferIndex = 0;
     int playbackPosition = 0;
+    std::atomic<bool> previewPlaying { false };
 
     juce::LinearSmoothedValue<float> outputTrimSmoothed;
 
+    std::mutex resynthMutex;
+    std::atomic<uint64_t> resynthJobSerial { 0 };
+    std::atomic<int> resynthDetachedWorkers { 0 };
+
     std::atomic<uint64_t> jobGeneration { 0 };
     std::thread analysisThread;
-    std::thread resynthThread;
     std::thread transformThread;
     std::atomic<bool> analysisThreadRunning { false };
     std::atomic<bool> resynthThreadRunning { false };

@@ -16,12 +16,18 @@ private:
 
     juce::Label hint;
 
+    juce::Label freqLabel;
+    juce::Label timeStretchLabel;
+    juce::Label synStartLabel;
+    juce::Label synDurLabel;
+
     juce::Slider freqSlider;
     juce::Slider timeStretchSlider;
     juce::Slider synStartSlider;
     juce::Slider synDurSlider;
     juce::ToggleButton usePhaseButton;
     juce::ToggleButton useAllPartialsButton;
+    juce::ToggleButton residualOnlyButton;
     juce::Label analysisTypeLabel;
     juce::ComboBox analysisTypeBox;
 
@@ -31,6 +37,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> synDurAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> usePhaseAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> useAllAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> residualOnlyAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> analysisAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthTabPanel)

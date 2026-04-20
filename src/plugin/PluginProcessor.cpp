@@ -1,9 +1,11 @@
 #include "PluginProcessor.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 
 #include "AtsMathExpr.h"
 #include "PluginEditor.h"
@@ -18,7 +20,8 @@ extern "C" {
 
 namespace
 {
-constexpr int kStateVersion = 2;
+constexpr int kStateVersion = 4;
+constexpr int kMinReadableStateVersion = 2;
 
 void freeResidual(double*** res)
 {
@@ -153,6 +156,7 @@ AtsAudioProcessor::AtsAudioProcessor()
     apvts.addParameterListener("synDur", this);
     apvts.addParameterListener("usePhase", this);
     apvts.addParameterListener("useAllPartials", this);
+    apvts.addParameterListener("residualOnly", this);
     apvts.addParameterListener("outputTrim", this);
 }
 
@@ -168,6 +172,7 @@ AtsAudioProcessor::~AtsAudioProcessor()
     apvts.removeParameterListener("synDur", this);
     apvts.removeParameterListener("usePhase", this);
     apvts.removeParameterListener("useAllPartials", this);
+    apvts.removeParameterListener("residualOnly", this);
     apvts.removeParameterListener("outputTrim", this);
 }
 
@@ -209,6 +214,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         "synDur", "Synth duration (s, 0=full)", juce::NormalisableRange<float>(0.0f, 600.0f, 0.001f, 0.4f), 0.0f));
     layout.add(std::make_unique<juce::AudioParameterBool>("usePhase", "Use partial phases", false));
     layout.add(std::make_unique<juce::AudioParameterBool>("useAllPartials", "Use all partials", true));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "residualOnly",
+        "Residual only (mute partials)",
+        false));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         "outputTrim", "Output trim", juce::NormalisableRange<float>(0.0f, 2.0f, 0.0001f), 1.0f));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -222,7 +231,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
 
 void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
-    juce::ignoreUnused(parameterID, newValue);
+    juce::ignoreUnused(newValue);
+    if (parameterID == "outputTrim")
+        return;
+
     synthParamsDirty.store(true);
     triggerAsyncUpdate();
 }
@@ -246,8 +258,17 @@ void AtsAudioProcessor::setError(const juce::String& e)
 ats::SynthParams AtsAudioProcessor::readSynthParamsFromApvts() const
 {
     ats::SynthParams sp;
-    sp.partialsGain = apvts.getRawParameterValue("partGain")->load();
-    sp.residualGain = apvts.getRawParameterValue("resGain")->load();
+    const bool residualOnly = apvts.getRawParameterValue("residualOnly")->load() > 0.5f;
+    if (residualOnly)
+    {
+        sp.partialsGain = 0.0;
+        sp.residualGain = (double) apvts.getRawParameterValue("resGain")->load();
+    }
+    else
+    {
+        sp.partialsGain = (double) apvts.getRawParameterValue("partGain")->load();
+        sp.residualGain = (double) apvts.getRawParameterValue("resGain")->load();
+    }
     sp.frequencyFactor = (double) apvts.getRawParameterValue("freq")->load();
     sp.frequencyFactor *= std::pow(2.0, (double) midiSemitoneOffset.load() / 12.0);
     sp.timeFactor = apvts.getRawParameterValue("timeStretch")->load();
@@ -263,7 +284,7 @@ ats::AnalysisParams AtsAudioProcessor::readAnalysisParamsFromApvts() const
 {
     ats::AnalysisParams a;
     const float v = apvts.getRawParameterValue("analysisType")->load();
-    const int idx = juce::jlimit(0, 3, (int) std::floor((double) v * 4.0 - 1e-9));
+    const int idx = juce::jlimit(0, 3, juce::roundToInt(v));
     a.type = idx + 1;
     return a;
 }
@@ -314,6 +335,8 @@ void AtsAudioProcessor::loadSourceFile(const juce::File& file)
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(nullptr);
     }
+    activePlaybackBufferIndex.store(-1, std::memory_order_release);
+    previewPlaying.store(false, std::memory_order_release);
     modelRevision.fetch_add(1, std::memory_order_relaxed);
 
     {
@@ -325,10 +348,12 @@ void AtsAudioProcessor::loadSourceFile(const juce::File& file)
 
 void AtsAudioProcessor::joinWorkers()
 {
+    resynthJobSerial.fetch_add(1, std::memory_order_acq_rel);
+    while (resynthDetachedWorkers.load(std::memory_order_acquire) > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
     if (analysisThread.joinable())
         analysisThread.join();
-    if (resynthThread.joinable())
-        resynthThread.join();
     if (transformThread.joinable())
         transformThread.join();
     analysisThreadRunning.store(false);
@@ -338,13 +363,14 @@ void AtsAudioProcessor::joinWorkers()
 
 void AtsAudioProcessor::cancelJobs()
 {
-    ++jobGeneration;
-    joinWorkers();
+    jobGeneration.fetch_add(1, std::memory_order_acq_rel);
+    resynthJobSerial.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void AtsAudioProcessor::startAnalysis()
 {
     cancelJobs();
+    joinWorkers();
 
     std::vector<double> localMono;
     int fileSr = 0;
@@ -418,20 +444,37 @@ void AtsAudioProcessor::startAnalysis()
 
 void AtsAudioProcessor::startResynthWorker()
 {
-    if (resynthThread.joinable())
-        resynthThread.join();
-
     {
         const juce::ScopedLock ml(modelLock);
         if (analyzedModel.get() == nullptr)
             return;
     }
 
-    const uint64_t gen = jobGeneration.load();
+    const uint64_t mySerial = resynthJobSerial.fetch_add(1, std::memory_order_acq_rel) + 1;
+
     setUiState(AtsUiState::Resynthesizing);
     resynthThreadRunning.store(true);
 
-    resynthThread = std::thread([this, gen]() {
+    std::thread([this, mySerial]() {
+        struct DetachedWorkerCount
+        {
+            std::atomic<int>& n;
+            explicit DetachedWorkerCount(std::atomic<int>& x) : n(x)
+            {
+                n.fetch_add(1, std::memory_order_acq_rel);
+            }
+            ~DetachedWorkerCount() { n.fetch_sub(1, std::memory_order_acq_rel); }
+        } counter(resynthDetachedWorkers);
+
+        std::lock_guard<std::mutex> resynthLock(resynthMutex);
+        if (mySerial != resynthJobSerial.load(std::memory_order_acquire))
+        {
+            resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
+            return;
+        }
+
+        const uint64_t gen = jobGeneration.load(std::memory_order_relaxed);
         const ats::SynthParams sp = readSynthParamsFromApvts();
 
         juce::AudioBuffer<float> mono;
@@ -441,15 +484,17 @@ void AtsAudioProcessor::startResynthWorker()
             if (jobGeneration.load() != gen || analyzedModel.get() == nullptr)
             {
                 resynthThreadRunning.store(false);
+                setUiState(AtsUiState::Analyzed);
                 return;
             }
             modelSr = analyzedModel.get()->srate;
             mono = runDoSynthesis(analyzedModel.get(), sp);
         }
 
-        if (jobGeneration.load() != gen)
+        if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire))
         {
             resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
             return;
         }
 
@@ -457,6 +502,7 @@ void AtsAudioProcessor::startResynthWorker()
         {
             setError("Synthesis produced silence.");
             resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
             return;
         }
 
@@ -468,7 +514,29 @@ void AtsAudioProcessor::startResynthWorker()
             resampled,
             hostSampleRate);
 
-        juce::AudioBuffer<float> stereo((int) resampled.size(), 2);
+        if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire))
+        {
+            resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
+            return;
+        }
+
+        const int activeIndex = activePlaybackBufferIndex.load(std::memory_order_acquire);
+        const int readingIndex = readingPlaybackBufferIndex.load(std::memory_order_acquire);
+        int writeIndex = nextPlaybackBufferIndex;
+        for (int attempt = 0; attempt < (int) playbackBuffers.size(); ++attempt)
+        {
+            const int candidate = (nextPlaybackBufferIndex + attempt) % (int) playbackBuffers.size();
+            if (candidate != activeIndex && candidate != readingIndex)
+            {
+                writeIndex = candidate;
+                break;
+            }
+        }
+        nextPlaybackBufferIndex = (writeIndex + 1) % (int) playbackBuffers.size();
+
+        auto& stereo = playbackBuffers[(size_t) writeIndex];
+        stereo.setSize(2, (int) resampled.size());
         for (int i = 0; i < stereo.getNumSamples(); ++i)
         {
             const float x = resampled[static_cast<size_t>(i)];
@@ -476,16 +544,19 @@ void AtsAudioProcessor::startResynthWorker()
             stereo.setSample(1, i, x);
         }
 
+        if (mySerial != resynthJobSerial.load(std::memory_order_acquire))
         {
-            const juce::ScopedLock pl(playbackLock);
-            playbackBuffer.setSize(2, stereo.getNumSamples());
-            playbackBuffer.makeCopyOf(stereo);
-            playbackPosition = 0;
+            resynthThreadRunning.store(false);
+            setUiState(AtsUiState::Analyzed);
+            return;
         }
+
+        activePlaybackBufferIndex.store(writeIndex, std::memory_order_release);
+        previewPlaying.store(false, std::memory_order_release);
 
         resynthThreadRunning.store(false);
         setUiState(AtsUiState::Analyzed);
-    });
+    }).detach();
 }
 
 void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -513,21 +584,56 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     outputTrimSmoothed.setTargetValue(apvts.getRawParameterValue("outputTrim")->load());
 
     const int n = buffer.getNumSamples();
-    const juce::ScopedLock pl(playbackLock);
+    const int activeIndex = activePlaybackBufferIndex.load(std::memory_order_acquire);
+    const bool hasPlayback = activeIndex >= 0 && activeIndex < (int) playbackBuffers.size();
+    readingPlaybackBufferIndex.store(hasPlayback ? activeIndex : -1, std::memory_order_release);
+
+    if (activeIndex != currentPlaybackBufferIndex)
+    {
+        currentPlaybackBufferIndex = activeIndex;
+        playbackPosition = 0;
+    }
+
+    const auto* playback = hasPlayback ? &playbackBuffers[(size_t) activeIndex] : nullptr;
+    const bool shouldPreview = previewPlaying.load(std::memory_order_acquire);
 
     for (int s = 0; s < n; ++s)
     {
         const float trim = outputTrimSmoothed.getNextValue();
         float v = 0.0f;
-        if (playbackPosition < playbackBuffer.getNumSamples())
+        if (shouldPreview && playback != nullptr && playbackPosition < playback->getNumSamples())
         {
-            v = playbackBuffer.getSample(0, playbackPosition) * trim;
+            v = playback->getSample(0, playbackPosition) * trim;
             ++playbackPosition;
         }
 
         for (int c = 0; c < buffer.getNumChannels(); ++c)
             buffer.setSample(c, s, v);
     }
+
+    readingPlaybackBufferIndex.store(-1, std::memory_order_release);
+}
+
+void AtsAudioProcessor::startPreviewPlayback()
+{
+    if (!hasPreviewAudio())
+        return;
+    playbackPosition = 0;
+    previewPlaying.store(true, std::memory_order_release);
+}
+
+void AtsAudioProcessor::stopPreviewPlayback()
+{
+    previewPlaying.store(false, std::memory_order_release);
+    playbackPosition = 0;
+}
+
+bool AtsAudioProcessor::hasPreviewAudio() const
+{
+    const int idx = activePlaybackBufferIndex.load(std::memory_order_acquire);
+    if (idx < 0 || idx >= (int) playbackBuffers.size())
+        return false;
+    return playbackBuffers[(size_t) idx].getNumSamples() > 0;
 }
 
 juce::AudioProcessorEditor* AtsAudioProcessor::createEditor()
@@ -546,7 +652,10 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     writeAnalysis(mos, ap);
 
     ats::SynthParams sp = readSynthParamsFromApvts();
+    sp.partialsGain = (double) apvts.getRawParameterValue("partGain")->load();
+    sp.residualGain = (double) apvts.getRawParameterValue("resGain")->load();
     writeSynth(mos, sp);
+    mos.writeDouble(apvts.getRawParameterValue("outputTrim")->load());
 
     juce::MemoryBlock atsData;
     {
@@ -571,6 +680,9 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     mos.writeInt64((juce::int64) atsData.getSize());
     mos.write(atsData.getData(), atsData.getSize());
 
+    if (kStateVersion >= 4)
+        mos.writeByte(apvts.getRawParameterValue("residualOnly")->load() > 0.5f ? (juce::uint8) 1 : (juce::uint8) 0);
+
     destData = mos.getMemoryBlock();
 }
 
@@ -584,13 +696,21 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         return;
 
     const int ver = mis.readInt();
-    if (ver != kStateVersion)
+    if (ver < kMinReadableStateVersion || ver > kStateVersion)
         return;
 
     ats::AnalysisParams ap;
     ats::SynthParams sp;
     if (!readAnalysis(mis, ap) || !readSynth(mis, sp))
         return;
+
+    float outputTrim = 1.0f;
+    if (ver >= 3)
+    {
+        if (mis.getNumBytesRemaining() < (juce::int64) sizeof(double))
+            return;
+        outputTrim = (float) mis.readDouble();
+    }
 
     const juce::int64 atsSize = mis.readInt64();
     juce::MemoryBlock atsData;
@@ -599,6 +719,10 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         atsData.setSize((size_t) atsSize);
         mis.read(atsData.getData(), (size_t) atsSize);
     }
+
+    bool residualOnly = false;
+    if (ver >= 4 && mis.getNumBytesRemaining() > 0)
+        residualOnly = mis.readByte() != 0;
 
     if (auto* p = apvts.getParameter("analysisType"))
         p->setValueNotifyingHost((float) (juce::jlimit(1, 4, ap.type) - 1) / 3.0f);
@@ -619,6 +743,10 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         p->setValueNotifyingHost(sp.usePartialsPhase ? 1.0f : 0.0f);
     if (auto* p = apvts.getParameter("useAllPartials"))
         p->setValueNotifyingHost(sp.useAllPartials ? 1.0f : 0.0f);
+    if (auto* p = apvts.getParameter("residualOnly"))
+        p->setValueNotifyingHost(residualOnly ? 1.0f : 0.0f);
+    if (auto* p = apvts.getParameter("outputTrim"))
+        p->setValueNotifyingHost(apvts.getParameterRange("outputTrim").convertTo0to1(outputTrim));
 
     if (atsData.getSize() > 0)
     {
@@ -630,6 +758,8 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         {
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(raw);
+            activePlaybackBufferIndex.store(-1, std::memory_order_release);
+            previewPlaying.store(false, std::memory_order_release);
             modelRevision.fetch_add(1, std::memory_order_relaxed);
             setUiState(AtsUiState::Analyzed);
             synthParamsDirty.store(true);
@@ -640,6 +770,8 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
             std::free(raw);
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(nullptr);
+            activePlaybackBufferIndex.store(-1, std::memory_order_release);
+            previewPlaying.store(false, std::memory_order_release);
             modelRevision.fetch_add(1, std::memory_order_relaxed);
             bool hasSource = false;
             {
@@ -656,6 +788,8 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(nullptr);
+        activePlaybackBufferIndex.store(-1, std::memory_order_release);
+        previewPlaying.store(false, std::memory_order_release);
         modelRevision.fetch_add(1, std::memory_order_relaxed);
         bool hasSource = false;
         {
@@ -749,6 +883,7 @@ bool AtsAudioProcessor::writePartialCell(int partialIdx, int frameIdx, double am
 void AtsAudioProcessor::startMathExpr(const juce::String& script)
 {
     cancelJobs();
+    joinWorkers();
 
     const std::string srcCopy = script.toStdString();
     if (srcCopy.empty())
@@ -980,6 +1115,8 @@ bool AtsAudioProcessor::importAtsFile(const juce::File& file, juce::String& erro
     {
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(raw);
+        activePlaybackBufferIndex.store(-1, std::memory_order_release);
+        previewPlaying.store(false, std::memory_order_release);
     }
 
     modelRevision.fetch_add(1, std::memory_order_relaxed);

@@ -45,6 +45,16 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     exportAtsButton.onClick = [this] { pickExportAts(); };
     addAndMakeVisible(exportAtsButton);
 
+    previewPlayButton.setHelpText("Start preview playback from the beginning of the current rendered model.");
+    previewPlayButton.setExplicitFocusOrder(9);
+    previewPlayButton.onClick = [this] { audioProcessor.startPreviewPlayback(); };
+    addAndMakeVisible(previewPlayButton);
+
+    previewStopButton.setHelpText("Stop preview playback and reset to the start.");
+    previewStopButton.setExplicitFocusOrder(10);
+    previewStopButton.onClick = [this] { audioProcessor.stopPreviewPlayback(); };
+    addAndMakeVisible(previewStopButton);
+
     statusLabel.setJustificationType(juce::Justification::centredLeft);
     statusLabel.setFont(juce::Font(15.0f, juce::Font::bold));
     statusLabel.setExplicitFocusOrder(6);
@@ -95,9 +105,21 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         s.setExplicitFocusOrder(order);
         s.setHelpText(name);
     };
-    setupSlider(partGainSlider, "Partials gain", 10);
-    setupSlider(resGainSlider, "Residual gain", 11);
-    setupSlider(outputTrimSlider, "Output trim", 12);
+    auto setupKnobLabel = [](juce::Label& l, const juce::String& text) {
+        l.setText(text, juce::dontSendNotification);
+        l.setJustificationType(juce::Justification::centred);
+        l.setFont(juce::Font(12.0f));
+    };
+    setupKnobLabel(partGainLabel, "Partials gain");
+    setupKnobLabel(resGainLabel, "Residual gain");
+    setupKnobLabel(outputTrimLabel, "Output trim");
+    addAndMakeVisible(partGainLabel);
+    addAndMakeVisible(resGainLabel);
+    addAndMakeVisible(outputTrimLabel);
+
+    setupSlider(partGainSlider, "Partials gain", 11);
+    setupSlider(resGainSlider, "Residual gain", 12);
+    setupSlider(outputTrimSlider, "Output trim", 13);
     addAndMakeVisible(partGainSlider);
     addAndMakeVisible(resGainSlider);
     addAndMakeVisible(outputTrimSlider);
@@ -109,7 +131,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
 
-    spectroPanel.setExplicitFocusOrder(9);
+    spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
 
     rebuildPresetList();
@@ -221,6 +243,10 @@ void SessionTabPanel::resized()
     importAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
     ioRow.removeFromLeft(sc(8));
     exportAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
+    ioRow.removeFromLeft(sc(16));
+    previewPlayButton.setBounds(ioRow.removeFromLeft(sc(90)));
+    ioRow.removeFromLeft(sc(8));
+    previewStopButton.setBounds(ioRow.removeFromLeft(sc(90)));
 
     r.removeFromTop(sc(10));
     statusLabel.setBounds(r.removeFromTop(sc(22)));
@@ -237,16 +263,28 @@ void SessionTabPanel::resized()
     auto specCol = body.removeFromRight(specW);
     spectroPanel.setBounds(specCol);
 
-    auto knobRow = body.removeFromTop(sc(120));
+    const int labelH = sc(15);
+    const int knobH = sc(104);
+    auto knobRow = body.removeFromTop(labelH + knobH + sc(6));
     const int w = juce::jmax(1, knobRow.getWidth() / 3);
-    partGainSlider.setBounds(knobRow.removeFromLeft(w).reduced(sc(6)));
-    resGainSlider.setBounds(knobRow.removeFromLeft(w).reduced(sc(6)));
-    outputTrimSlider.setBounds(knobRow.removeFromLeft(w).reduced(sc(6)));
+
+    auto placeColumn = [&](juce::Label& lab, juce::Slider& sld) {
+        auto col = knobRow.removeFromLeft(w).reduced(sc(6));
+        lab.setBounds(col.removeFromTop(labelH));
+        sld.setBounds(col);
+    };
+    placeColumn(partGainLabel, partGainSlider);
+    placeColumn(resGainLabel, resGainSlider);
+    placeColumn(outputTrimLabel, outputTrimSlider);
 }
 
 void SessionTabPanel::refreshFromProcessor()
 {
     displayProgress = (double) audioProcessor.getAnalysisProgress();
+    const bool hasPreview = audioProcessor.hasPreviewAudio();
+    const bool playing = audioProcessor.isPreviewPlaying();
+    previewPlayButton.setEnabled(hasPreview && !playing);
+    previewStopButton.setEnabled(hasPreview && playing);
 
     switch (audioProcessor.getUiState())
     {
@@ -260,7 +298,9 @@ void SessionTabPanel::refreshFromProcessor()
         statusLabel.setText("State: Analyzing (CPU heavy)", juce::dontSendNotification);
         break;
     case AtsUiState::Analyzed:
-        statusLabel.setText("State: Analyzed / playing resynth buffer", juce::dontSendNotification);
+        statusLabel.setText(playing ? "State: Analyzed / preview playing"
+                                    : "State: Analyzed / preview ready",
+                            juce::dontSendNotification);
         break;
     case AtsUiState::Resynthesizing:
         statusLabel.setText("State: Resynthesizing", juce::dontSendNotification);

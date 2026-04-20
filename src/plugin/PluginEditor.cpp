@@ -36,7 +36,12 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     tabs.addTab("Partials", juce::Colours::transparentBlack, &partialTab, false);
     tabs.addTab("Math", juce::Colours::transparentBlack, &mathTab, false);
 
-    setSize(scaled(920), scaled(640));
+    // User request: default window roughly 70% smaller, but resizable.
+    const int defaultW = juce::jmax(300, scaled(276));
+    const int defaultH = juce::jmax(220, scaled(192));
+    setResizable(true, true);
+    setResizeLimits(300, 220, scaled(1800), scaled(1200));
+    setSize(defaultW, defaultH);
 
     startTimerHz(10);
 }

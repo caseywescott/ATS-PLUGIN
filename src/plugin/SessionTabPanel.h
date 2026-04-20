@@ -31,8 +31,10 @@ private:
     juce::TextButton cancelButton { "Cancel" };
     juce::ComboBox presetCombo;
     juce::TextButton savePresetButton { "Save preset" };
-    juce::TextButton importAtsButton { "Import ATS…" };
-    juce::TextButton exportAtsButton { "Export ATS…" };
+    juce::TextButton importAtsButton { "Import ATS..." };
+    juce::TextButton exportAtsButton { "Export ATS..." };
+    juce::TextButton previewPlayButton { "Play" };
+    juce::TextButton previewStopButton { "Stop" };
     juce::Label presetLabel;
     juce::Label statusLabel;
     juce::Label errorLabel;
@@ -48,6 +50,10 @@ private:
     std::unique_ptr<juce::FileChooser> atsExportChooser;
 
     juce::Array<juce::File> userPresetFiles;
+
+    juce::Label partGainLabel;
+    juce::Label resGainLabel;
+    juce::Label outputTrimLabel;
 
     juce::Slider partGainSlider;
     juce::Slider resGainSlider;

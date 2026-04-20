@@ -38,6 +38,8 @@ static void applyDefaults(AtsAudioProcessor& proc)
         p->setValueNotifyingHost(0.0f);
     if (auto* p = apvts.getParameter("useAllPartials"))
         p->setValueNotifyingHost(1.0f);
+    if (auto* p = apvts.getParameter("residualOnly"))
+        p->setValueNotifyingHost(0.0f);
     setNorm(apvts, "outputTrim", apvts.getParameterRange("outputTrim").convertTo0to1(1.0f));
 }
 
