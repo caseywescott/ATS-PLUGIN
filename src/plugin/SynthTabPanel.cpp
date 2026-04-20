@@ -15,26 +15,36 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     auto setupLab = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centred);
-        l.setFont(juce::Font(12.0f));
+        l.setFont(juce::Font(11.0f, juce::Font::bold));
     };
-    setupLab(freqLabel, "Freq factor");
-    setupLab(timeStretchLabel, "Time factor");
-    setupLab(synStartLabel, "Synth start (s)");
-    setupLab(synDurLabel, "Synth duration (s)");
+    setupLab(freqLabel, "freq - Frequency factor");
+    setupLab(timeStretchLabel, "timeStretch - Time factor");
+    setupLab(synStartLabel, "synStart - Synth start (s)");
+    setupLab(synDurLabel, "synDur - Duration (s, 0=full)");
     addAndMakeVisible(freqLabel);
     addAndMakeVisible(timeStretchLabel);
     addAndMakeVisible(synStartLabel);
     addAndMakeVisible(synDurLabel);
+
+    const juce::Colour knobLabCol(0xfff0f0f5);
+    freqLabel.setColour(juce::Label::textColourId, knobLabCol);
+    timeStretchLabel.setColour(juce::Label::textColourId, knobLabCol);
+    synStartLabel.setColour(juce::Label::textColourId, knobLabCol);
+    synDurLabel.setColour(juce::Label::textColourId, knobLabCol);
 
     auto setup = [](juce::Slider& s, const juce::String& name) {
         s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 18);
         s.setName(name);
     };
-    setup(freqSlider, "Freq factor");
-    setup(timeStretchSlider, "Time factor");
-    setup(synStartSlider, "Synth start (s)");
-    setup(synDurSlider, "Synth duration (s)");
+    setup(freqSlider, "freq");
+    setup(timeStretchSlider, "timeStretch");
+    setup(synStartSlider, "synStart");
+    setup(synDurSlider, "synDur");
+    freqSlider.setHelpText("Frequency factor (SPARAMS frec), before MIDI transpose.");
+    timeStretchSlider.setHelpText("Time stretch factor (SPARAMS max_stretch).");
+    synStartSlider.setHelpText("Synthesis window start in seconds (SPARAMS beg).");
+    synDurSlider.setHelpText("Synthesis duration in seconds, 0 = full sound (SPARAMS end).");
 
     addAndMakeVisible(freqSlider);
     addAndMakeVisible(timeStretchSlider);
@@ -81,7 +91,7 @@ void SynthTabPanel::resized()
     hint.setBounds(r.removeFromTop(56));
     r.removeFromTop(8);
 
-    constexpr int labelH = 16;
+    constexpr int labelH = 34;
     constexpr int knobBlockH = 104;
     auto row1 = r.removeFromTop(labelH + knobBlockH + 4);
     const int w = juce::jmax(1, row1.getWidth() / 4);

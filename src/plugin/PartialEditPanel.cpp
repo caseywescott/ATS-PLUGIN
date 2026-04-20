@@ -12,22 +12,24 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
     help.setFont(juce::Font(13.0f));
     addAndMakeVisible(help);
 
-    partialLab.setText("Partial index", juce::dontSendNotification);
+    partialLab.setText("Partial index (partial #)", juce::dontSendNotification);
     partialLab.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(partialLab);
 
     partialSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     partialSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 56, 22);
+    partialSlider.setName("Partial index");
     partialSlider.setRange(0, 0, 1);
     partialSlider.onValueChange = [this] { refreshDisplayedCell(); };
     addAndMakeVisible(partialSlider);
 
-    frameLab.setText("Frame index", juce::dontSendNotification);
+    frameLab.setText("Frame index (time frame #)", juce::dontSendNotification);
     frameLab.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(frameLab);
 
     frameSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     frameSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 56, 22);
+    frameSlider.setName("Frame index");
     frameSlider.setRange(0, 0, 1);
     frameSlider.onValueChange = [this] { refreshDisplayedCell(); };
     addAndMakeVisible(frameSlider);
@@ -131,12 +133,12 @@ void PartialEditPanel::resized()
     r.removeFromTop(8);
 
     auto rowP = r.removeFromTop(28);
-    partialLab.setBounds(rowP.removeFromLeft(110));
+    partialLab.setBounds(rowP.removeFromLeft(200));
     partialSlider.setBounds(rowP);
 
     r.removeFromTop(6);
     auto rowF = r.removeFromTop(28);
-    frameLab.setBounds(rowF.removeFromLeft(110));
+    frameLab.setBounds(rowF.removeFromLeft(200));
     frameSlider.setBounds(rowF);
 
     r.removeFromTop(8);

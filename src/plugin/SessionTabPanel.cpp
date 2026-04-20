@@ -108,18 +108,26 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     auto setupKnobLabel = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centred);
-        l.setFont(juce::Font(12.0f));
+        l.setFont(juce::Font(12.0f, juce::Font::bold));
     };
-    setupKnobLabel(partGainLabel, "Partials gain");
-    setupKnobLabel(resGainLabel, "Residual gain");
-    setupKnobLabel(outputTrimLabel, "Output trim");
+    setupKnobLabel(partGainLabel, "partGain - Partials (amp)");
+    setupKnobLabel(resGainLabel, "resGain - Residual (ramp)");
+    setupKnobLabel(outputTrimLabel, "outputTrim - Master level");
     addAndMakeVisible(partGainLabel);
     addAndMakeVisible(resGainLabel);
     addAndMakeVisible(outputTrimLabel);
 
-    setupSlider(partGainSlider, "Partials gain", 11);
-    setupSlider(resGainSlider, "Residual gain", 12);
-    setupSlider(outputTrimSlider, "Output trim", 13);
+    const juce::Colour knobLabCol(0xfff0f0f5);
+    partGainLabel.setColour(juce::Label::textColourId, knobLabCol);
+    resGainLabel.setColour(juce::Label::textColourId, knobLabCol);
+    outputTrimLabel.setColour(juce::Label::textColourId, knobLabCol);
+
+    setupSlider(partGainSlider, "partGain", 11);
+    setupSlider(resGainSlider, "resGain", 12);
+    setupSlider(outputTrimSlider, "outputTrim", 13);
+    partGainSlider.setHelpText("Partials path gain (SPARAMS amp). Applied in real time to the preview.");
+    resGainSlider.setHelpText("Residual / noise-band gain (SPARAMS ramp). Applied in real time to the preview.");
+    outputTrimSlider.setHelpText("Master output trim after partial + residual mix.");
     addAndMakeVisible(partGainSlider);
     addAndMakeVisible(resGainSlider);
     addAndMakeVisible(outputTrimSlider);
@@ -263,7 +271,7 @@ void SessionTabPanel::resized()
     auto specCol = body.removeFromRight(specW);
     spectroPanel.setBounds(specCol);
 
-    const int labelH = sc(15);
+    const int labelH = sc(32);
     const int knobH = sc(104);
     auto knobRow = body.removeFromTop(labelH + knobH + sc(6));
     const int w = juce::jmax(1, knobRow.getWidth() / 3);
