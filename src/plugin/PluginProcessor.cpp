@@ -308,6 +308,12 @@ void AtsAudioProcessor::loadSourceFile(const juce::File& file)
     }
 
     {
+        const juce::ScopedLock ml(modelLock);
+        analyzedModel.reset(nullptr);
+    }
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+
+    {
         const juce::SpinLock::ScopedLockType sl(errorLock);
         lastError.clear();
     }
@@ -389,6 +395,8 @@ void AtsAudioProcessor::startAnalysis()
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(raw);
         }
+
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
 
         analysisProgress.store(1.0f);
         analysisThreadRunning.store(false);
@@ -599,6 +607,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         {
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(raw);
+            modelRevision.fetch_add(1, std::memory_order_relaxed);
             setUiState(AtsUiState::Analyzed);
             synthParamsDirty.store(true);
             triggerAsyncUpdate();
@@ -606,7 +615,136 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         else
         {
             std::free(raw);
+            const juce::ScopedLock ml(modelLock);
+            analyzedModel.reset(nullptr);
+            modelRevision.fetch_add(1, std::memory_order_relaxed);
+            bool hasSource = false;
+            {
+                const juce::ScopedLock sl(sourceLock);
+                hasSource = !sourceMono.empty();
+            }
+            setUiState(hasSource ? AtsUiState::ReadyToAnalyze : AtsUiState::NoSource);
+            synthParamsDirty.store(true);
+            triggerAsyncUpdate();
         }
         tmp.deleteFile();
     }
+    else
+    {
+        const juce::ScopedLock ml(modelLock);
+        analyzedModel.reset(nullptr);
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
+        bool hasSource = false;
+        {
+            const juce::ScopedLock sl(sourceLock);
+            hasSource = !sourceMono.empty();
+        }
+        setUiState(hasSource ? AtsUiState::ReadyToAnalyze : AtsUiState::NoSource);
+        synthParamsDirty.store(true);
+        triggerAsyncUpdate();
+    }
+}
+
+bool AtsAudioProcessor::isWorkerBusy() const
+{
+    return analysisThreadRunning.load() || resynthThreadRunning.load();
+}
+
+bool AtsAudioProcessor::getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const
+{
+    const juce::ScopedLock ml(modelLock);
+    auto* s = analyzedModel.get();
+    if (s == nullptr)
+        return false;
+    partials = s->partials;
+    frames = s->frames;
+    hasResidualBands = (s->band_energy != nullptr);
+    return true;
+}
+
+bool AtsAudioProcessor::buildSpectrogramTexture(bool partialsMode, int width, int height, juce::Image& out)
+{
+    if (width <= 0 || height <= 0)
+        return false;
+
+    out = juce::Image(juce::Image::ARGB, width, height, true);
+    out.clear(juce::Rectangle<int>(width, height), juce::Colours::black);
+
+    const juce::ScopedLock ml(modelLock);
+    auto* s = analyzedModel.get();
+    if (s == nullptr || s->frames <= 0)
+        return false;
+
+    juce::Image::BitmapData bd(out, juce::Image::BitmapData::writeOnly);
+
+    const float dbMin = -90.0f;
+    const float dbMax = -10.0f;
+
+    if (partialsMode)
+    {
+        if (s->partials <= 0 || s->amp == nullptr)
+            return true;
+
+        for (int y = 0; y < height; ++y)
+        {
+            const int par = juce::jmin(s->partials - 1, (int) ((int64_t) y * (int64_t) s->partials / (int64_t) height));
+            for (int x = 0; x < width; ++x)
+            {
+                const int fr = juce::jmin(s->frames - 1, (int) ((int64_t) x * (int64_t) s->frames / (int64_t) width));
+                const double a = s->amp[par][fr];
+                const float db = (float) (20.0 * std::log10(juce::jmax(1e-15, a)));
+                const float t = juce::jlimit(0.0f, 1.0f, (db - dbMin) / (dbMax - dbMin));
+                const auto col = juce::Colour::fromHSV(0.62f - 0.35f * t, 0.55f + 0.35f * t, 0.15f + 0.75f * t, 1.0f);
+                bd.setPixelColour(x, y, col);
+            }
+        }
+    }
+    else
+    {
+        if (s->band_energy == nullptr || s->frames <= 0)
+            return true;
+
+        for (int y = 0; y < height; ++y)
+        {
+            const int band = juce::jmin(ATSA_CRITICAL_BANDS - 1, (int) ((int64_t) y * (int64_t) ATSA_CRITICAL_BANDS / (int64_t) height));
+            for (int x = 0; x < width; ++x)
+            {
+                const int fr = juce::jmin(s->frames - 1, (int) ((int64_t) x * (int64_t) s->frames / (int64_t) width));
+                const double e = s->band_energy[band][fr];
+                const float db = (float) (10.0 * std::log10(juce::jmax(1e-20, e)));
+                const float t = juce::jlimit(0.0f, 1.0f, (db - (dbMin - 20.0f)) / (dbMax - (dbMin - 20.0f)));
+                const auto col = juce::Colour::fromHSV(0.25f + 0.45f * t, 0.7f, 0.2f + 0.7f * t, 1.0f);
+                bd.setPixelColour(x, y, col);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool AtsAudioProcessor::saveFullStatePreset(const juce::File& file)
+{
+    juce::MemoryBlock block;
+    getStateInformation(block);
+    return file.replaceWithData(block.getData(), block.getSize());
+}
+
+bool AtsAudioProcessor::loadFullStatePreset(const juce::File& file)
+{
+    if (!file.existsAsFile())
+        return false;
+
+    juce::MemoryBlock block;
+    {
+        juce::FileInputStream fis(file);
+        if (!fis.openedOk())
+            return false;
+        juce::MemoryOutputStream mos;
+        if (!mos.writeFromInputStream(fis, fis.getTotalLength()))
+            return false;
+        block = mos.getMemoryBlock();
+    }
+
+    setStateInformation(block.getData(), (int) block.getSize());
+    return true;
 }

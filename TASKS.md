@@ -191,8 +191,8 @@
 
 **PRD:** §5.4  
 
-- [ ] Factory presets ship with binary or resource bundle.
-- [ ] User preset directory; names and optional tags.
+- [x] Factory presets ship with binary or resource bundle.
+- [x] User preset directory; names and optional tags.
 
 ---
 
@@ -200,8 +200,8 @@
 
 **PRD:** §10 P2, §4  
 
-- [ ] Visualize model data without full editor parity.
-- [ ] Performance: heavy work off audio thread.
+- [x] Visualize model data without full editor parity.
+- [x] Performance: heavy work off audio thread.
 
 ---
 
@@ -209,8 +209,8 @@
 
 **PRD:** §5.1, §5.5, §7  
 
-- [ ] Warnings when partial/frame counts exceed documented soft limits.
-- [ ] Cancel UX polished; host remains responsive.
+- [x] Warnings when partial/frame counts exceed documented soft limits.
+- [x] Cancel UX polished; host remains responsive.
 
 ---
 
@@ -218,7 +218,7 @@
 
 **PRD:** §5.5  
 
-- [ ] Tab order; minimum contrast; scaling under host DPI.
+- [x] Tab order; minimum contrast; scaling under host DPI.
 
 ---
 

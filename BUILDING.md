@@ -42,6 +42,13 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 - **Analysis type** (APVTS) is read when you press **Analyze**; change it before analyzing. Other synthesis APVTS parameters are exposed to the host; the editor includes sliders for partials gain, residual gain, and output trim only.
 - **VST2 replacement:** `JUCE_VST3_CAN_REPLACE_VST2=0` is set so a Steinberg VST2 SDK is not required.
 
+## Presets and model size (Phase 2)
+
+- **Factory presets** are small parameter recipes baked into the plug-in (partials/residual gains, frequency stretch, and related APVTS fields). They do **not** embed an analyzed ATS model; load a WAV and analyze as usual after choosing a factory curve.
+- **User presets** are full binary state snapshots (same format as host save/restore), extension **`.atspreset`**. They include APVTS parameters **and** the embedded ATS model when one was saved.
+- **User preset folder:** under the OS application-support area, `ATS Resynth/Presets` (the editor creates this directory when needed). On macOS this is typically `~/Library/Application Support/ATS Resynth/Presets`.
+- **Model size soft limit:** the UI warns when `partials * frames` exceeds **2,000,000** (informal guardrail only). Large models can make analysis, resynthesis, and memory use heavy; there is no hard cap in the MVP.
+
 ## Tests
 
 After building:

@@ -32,6 +32,8 @@ target_sources(
   PRIVATE PluginEntry.cpp
           PluginProcessor.cpp
           PluginEditor.cpp
+          PresetLibrary.cpp
+          SpectrogramPanel.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
           ../core/ResampleLinear.cpp)

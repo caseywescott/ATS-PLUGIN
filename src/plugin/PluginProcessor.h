@@ -68,6 +68,19 @@ public:
 
     float getAnalysisProgress() const { return analysisProgress.load(); }
 
+    int getModelRevision() const { return modelRevision.load(); }
+
+    /** Fills `out` (ARGB) with a downsampled log-amplitude map; returns false if no model. */
+    bool buildSpectrogramTexture(bool partialsMode, int width, int height, juce::Image& out);
+
+    bool isWorkerBusy() const;
+
+    /** Returns false if no model. */
+    bool getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const;
+
+    bool saveFullStatePreset(const juce::File& file);
+    bool loadFullStatePreset(const juce::File& file);
+
     static constexpr uint32_t stateMagic = 0x41545350u; // 'ATSP'
 
 private:
@@ -112,6 +125,8 @@ private:
     std::atomic<bool> resynthThreadRunning { false };
 
     double hostSampleRate = 44100.0;
+
+    std::atomic<int> modelRevision { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessor)
 };
