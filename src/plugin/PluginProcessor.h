@@ -40,7 +40,7 @@ public:
 
     const juce::String getName() const override { return "ATS Resynth"; }
 
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
@@ -81,6 +81,10 @@ public:
 
     bool saveFullStatePreset(const juce::File& file);
     bool loadFullStatePreset(const juce::File& file);
+
+    /** Native ATS file (Qatsh/ATSA ecosystem). Uses current analysis SMR/type for save. */
+    bool exportAtsFile(const juce::File& file, juce::String& error);
+    bool importAtsFile(const juce::File& file, juce::String& error);
 
     /** Multi-line script; see docs/MATHEXPR.md. Runs on a worker thread. */
     void startMathExpr(const juce::String& script);
@@ -145,6 +149,9 @@ private:
     double hostSampleRate = 44100.0;
 
     std::atomic<int> modelRevision { 0 };
+
+    /** Semitones relative to middle C (note 60) applied on top of the Freq APVTS factor. */
+    std::atomic<float> midiSemitoneOffset { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessor)
 };

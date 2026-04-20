@@ -37,6 +37,14 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     savePresetButton.onClick = [this] { saveUserPreset(); };
     addAndMakeVisible(savePresetButton);
 
+    importAtsButton.setHelpText("Load a native .ats file (Qatsh / ATSA interchange).");
+    importAtsButton.onClick = [this] { pickImportAts(); };
+    addAndMakeVisible(importAtsButton);
+
+    exportAtsButton.setHelpText("Save the current analyzed model as a native .ats file.");
+    exportAtsButton.onClick = [this] { pickExportAts(); };
+    addAndMakeVisible(exportAtsButton);
+
     statusLabel.setJustificationType(juce::Justification::centredLeft);
     statusLabel.setFont(juce::Font(15.0f, juce::Font::bold));
     statusLabel.setExplicitFocusOrder(6);
@@ -208,6 +216,12 @@ void SessionTabPanel::resized()
     top.removeFromLeft(sc(8));
     savePresetButton.setBounds(top.removeFromLeft(sc(110)));
 
+    r.removeFromTop(sc(6));
+    auto ioRow = r.removeFromTop(sc(28));
+    importAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
+    ioRow.removeFromLeft(sc(8));
+    exportAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
+
     r.removeFromTop(sc(10));
     statusLabel.setBounds(r.removeFromTop(sc(22)));
     r.removeFromTop(sc(6));
@@ -287,6 +301,36 @@ void SessionTabPanel::refreshFromProcessor()
     {
         cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
     }
+}
+
+void SessionTabPanel::pickImportAts()
+{
+    atsImportChooser = std::make_unique<juce::FileChooser>("Import ATS analysis", juce::File{}, "*.ats");
+    constexpr auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    atsImportChooser->launchAsync(flags, [this](const juce::FileChooser& fc) {
+        const auto f = fc.getResult();
+        if (!f.existsAsFile())
+            return;
+        juce::String err;
+        if (!audioProcessor.importAtsFile(f, err))
+            juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, "Import ATS", err.isEmpty() ? juce::String("Import failed.") : err);
+    });
+}
+
+void SessionTabPanel::pickExportAts()
+{
+    atsExportChooser = std::make_unique<juce::FileChooser>("Export ATS analysis", juce::File{}, "*.ats");
+    constexpr auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+    atsExportChooser->launchAsync(flags, [this](const juce::FileChooser& fc) {
+        auto f = fc.getResult();
+        if (f.getFullPathName().isEmpty())
+            return;
+        juce::String err;
+        if (!audioProcessor.exportAtsFile(f, err))
+            juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, "Export ATS", err.isEmpty() ? juce::String("Export failed.") : err);
+    });
 }
 
 void SessionTabPanel::pickFile()

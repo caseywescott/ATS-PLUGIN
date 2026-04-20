@@ -255,7 +255,7 @@
 
 **PRD:** §5.4  
 
-- [ ] Round-trip with Qatsh/ATSA where formats allow; tests for interchange.
+- [x] Round-trip with Qatsh/ATSA where formats allow; tests for interchange.
 
 ---
 
@@ -263,7 +263,7 @@
 
 **PRD:** §3.3, §10 P4  
 
-- [ ] Second format behind same core; shared serialization story.
+- [x] Second format behind same core; shared serialization story.
 
 ---
 
@@ -271,7 +271,7 @@
 
 **PRD:** §6.2, §10 P4, §4 scenario 2  
 
-- [ ] MIDI note → pitch/time mapping for frozen model; latency documented.
+- [x] MIDI note → pitch/time mapping for frozen model; latency documented.
 
 ---
 

@@ -18,6 +18,11 @@ This repository integrates software from several upstream projects. **This is no
 - Used for WAV (and other format) I/O in the Phase 0 offline tool and expected in later plugin tooling.
 - **License:** LGPL (typical distribution: dynamic link or comply with LGPL static-linking requirements).
 
+## JUCE (plugin UI and formats)
+
+- Fetched by CMake ([JUCE](https://juce.com/) / GPL or commercial license depending on your distribution model).
+- **Audio Unit (macOS):** the AU wrapper uses Apple’s Core Audio / Audio Toolbox stack; follow Apple and JUCE licensing terms for AU binaries you ship.
+
 ## VST3 SDK (future phases)
 
 - Not vendored in Phase 0. When added: follow [Steinberg VST3 SDK](https://developer.steinberg.help/) license terms, trademark guidelines, and acceptance of the proprietary-vs-GPL compatibility constraints of your chosen UI/DSP stack.

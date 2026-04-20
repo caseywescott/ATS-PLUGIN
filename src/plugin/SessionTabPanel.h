@@ -18,6 +18,8 @@ public:
 
 private:
     void pickFile();
+    void pickImportAts();
+    void pickExportAts();
     void rebuildPresetList();
     void onPresetComboChanged();
     void saveUserPreset();
@@ -29,6 +31,8 @@ private:
     juce::TextButton cancelButton { "Cancel" };
     juce::ComboBox presetCombo;
     juce::TextButton savePresetButton { "Save preset" };
+    juce::TextButton importAtsButton { "Import ATS…" };
+    juce::TextButton exportAtsButton { "Export ATS…" };
     juce::Label presetLabel;
     juce::Label statusLabel;
     juce::Label errorLabel;
@@ -40,6 +44,8 @@ private:
 
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::FileChooser> presetSaveChooser;
+    std::unique_ptr<juce::FileChooser> atsImportChooser;
+    std::unique_ptr<juce::FileChooser> atsExportChooser;
 
     juce::Array<juce::File> userPresetFiles;
 

@@ -36,7 +36,7 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 ## JUCE plugin (Phase 1)
 
 - **Option:** `-DBUILD_PLUGIN=ON` (default) builds **ATS Resynth** as **VST3** and **Standalone** via JUCE 7.0.12 (fetched by CMake). Turn off with `-DBUILD_PLUGIN=OFF` for tool-only CI or faster configures.
-- **Artifacts:** `build/src/plugin/AtsResynth_artefacts/Release/VST3/ATS Resynth.vst3` and `Standalone/ATS Resynth.app` (paths may vary slightly by generator).
+- **Artifacts:** `build/src/plugin/AtsResynth_artefacts/Release/VST3/ATS Resynth.vst3` and `Standalone/ATS Resynth.app` (paths may vary slightly by generator). On **macOS** the same build also emits **`AU/ATS Resynth.component`** when `BUILD_PLUGIN=ON`.
 - **RT path:** the audio callback only plays a **pre-rendered** stereo buffer; `tracker` / `do_synthesis` run on worker threads (see `src/core/AtsRtSafety.h`). Changing synthesis parameters triggers a **background re-render** via `AsyncUpdater` (no `do_synthesis` on the audio thread).
 - **Output trim** uses `juce::LinearSmoothedValue` (~20 ms ramp) to reduce zipper noise; other synthesis parameters require a full re-render.
 - **Analysis type** (APVTS) is read when you press **Analyze**; change it before analyzing. Other synthesis APVTS parameters are exposed to the host; the editor includes sliders for partials gain, residual gain, and output trim only.
@@ -53,6 +53,13 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 
 - **Session / Synthesis / Partials / Math** tabs: global synthesis APVTS on **Synthesis**; single-cell partial edits on **Partials**; multi-line `a`/`f`/`h` assignments on **Math** (offline worker thread).
 - Expression variables and functions are documented in **`docs/MATHEXPR.md`** (aligned with Qatsh `README.txt` where the MVP subset allows).
+
+## Interchange and formats (Phase 4)
+
+- **Native `.ats` files:** **Import ATS…** / **Export ATS…** on the Session tab use the same `ats_load` / `ats_save` path as Qatsh/ATSA. Export uses the current analysis **SMR** threshold and **analysis type** from the Synthesis tab. After import, the **Analysis type** control is updated from the file header when possible.
+- **Round-trip test:** `ctest` runs **`ats_roundtrip`**, which analyzes a short internal sine, saves and reloads via `.ats`, and compares synthesis buffers (`tools/ats_roundtrip.c`).
+- **AU (macOS only):** the CMake target also builds an **Audio Unit** beside VST3 and Standalone when `CMAKE_SYSTEM_NAME` is Darwin (Logic and other AU hosts).
+- **MIDI:** the plug-in accepts MIDI. **Note On** (velocity > 0) transposes resynthesis in **semitones relative to middle C (note 60)** on top of the **Freq** APVTS factor (`effective = freq * 2^((note-60)/12)`). **Note Off** clears the MIDI transpose. There is **no extra plug-in latency** beyond playback buffer behaviour already in Phase 1; this is not a low-latency live instrument path.
 
 ## Tests
 

@@ -248,7 +248,8 @@ ats::SynthParams AtsAudioProcessor::readSynthParamsFromApvts() const
     ats::SynthParams sp;
     sp.partialsGain = apvts.getRawParameterValue("partGain")->load();
     sp.residualGain = apvts.getRawParameterValue("resGain")->load();
-    sp.frequencyFactor = apvts.getRawParameterValue("freq")->load();
+    sp.frequencyFactor = (double) apvts.getRawParameterValue("freq")->load();
+    sp.frequencyFactor *= std::pow(2.0, (double) midiSemitoneOffset.load() / 12.0);
     sp.timeFactor = apvts.getRawParameterValue("timeStretch")->load();
     sp.startTime = apvts.getRawParameterValue("synStart")->load();
     sp.duration = apvts.getRawParameterValue("synDur")->load();
@@ -489,8 +490,25 @@ void AtsAudioProcessor::startResynthWorker()
 
 void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-    juce::ignoreUnused(midi);
     juce::ScopedNoDenormals noDenormals;
+
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        const float prev = midiSemitoneOffset.load();
+        float next = prev;
+        if (m.isNoteOn() && m.getVelocity() > 0)
+            next = (float) (m.getNoteNumber() - 60);
+        else if (m.isNoteOff())
+            next = 0.0f;
+
+        if (next != prev)
+        {
+            midiSemitoneOffset.store(next);
+            synthParamsDirty.store(true);
+            triggerAsyncUpdate();
+        }
+    }
 
     outputTrimSmoothed.setTargetValue(apvts.getRawParameterValue("outputTrim")->load());
 
@@ -896,5 +914,86 @@ bool AtsAudioProcessor::loadFullStatePreset(const juce::File& file)
     }
 
     setStateInformation(block.getData(), (int) block.getSize());
+    return true;
+}
+
+bool AtsAudioProcessor::exportAtsFile(const juce::File& file, juce::String& error)
+{
+    error.clear();
+    juce::File out = file;
+    if (!out.getFileName().endsWithIgnoreCase(".ats"))
+        out = out.withFileExtension("ats");
+
+    const auto parent = out.getParentDirectory();
+    if (parent.exists() && !parent.isDirectory())
+    {
+        error = "Export path is not a directory.";
+        return false;
+    }
+    if (!parent.exists())
+    {
+        if (!parent.createDirectory())
+        {
+            error = "Could not create export directory.";
+            return false;
+        }
+    }
+
+    const ats::AnalysisParams ap = readAnalysisParamsFromApvts();
+    const juce::ScopedLock ml(modelLock);
+    if (analyzedModel.get() == nullptr)
+    {
+        error = "No analyzed model to export.";
+        return false;
+    }
+
+    if (ats_save(analyzedModel.get(), out.getFullPathName().toUTF8(), ap.SMR_thres, ap.type) < 0)
+    {
+        error = "ats_save failed.";
+        return false;
+    }
+
+    return true;
+}
+
+bool AtsAudioProcessor::importAtsFile(const juce::File& file, juce::String& error)
+{
+    error.clear();
+    if (!file.existsAsFile())
+    {
+        error = "File does not exist.";
+        return false;
+    }
+
+    cancelJobs();
+    joinWorkers();
+
+    auto* raw = (ATS_SOUND*) std::calloc(1, sizeof(ATS_SOUND));
+    int loadedType = 1;
+    if (ats_load(raw, file.getFullPathName().toUTF8(), &loadedType) < 0)
+    {
+        std::free(raw);
+        error = "ats_load failed (not a valid ATS file for this build).";
+        return false;
+    }
+
+    {
+        const juce::ScopedLock ml(modelLock);
+        analyzedModel.reset(raw);
+    }
+
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+
+    if (auto* p = apvts.getParameter("analysisType"))
+        p->setValueNotifyingHost((float) (juce::jlimit(1, 4, loadedType) - 1) / 3.0f);
+
+    {
+        const juce::SpinLock::ScopedLockType sl(errorLock);
+        lastError.clear();
+    }
+
+    setUiState(AtsUiState::Analyzed);
+    synthParamsDirty.store(true);
+    triggerAsyncUpdate();
     return true;
 }
