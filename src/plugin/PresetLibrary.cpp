@@ -16,7 +16,7 @@ juce::File getUserPresetDirectory()
 
 juce::StringArray factoryPresetNames()
 {
-    return juce::StringArray("Default", "Bright partials", "Residual emphasis");
+    return juce::StringArray("Default", "Bright partials", "Residual emphasis", "Residuals only");
 }
 
 static void setNorm(juce::AudioProcessorValueTreeState& apvts, const char* id, float norm01)
@@ -62,6 +62,13 @@ void applyFactoryPreset(AtsAudioProcessor& proc, int factoryIndex)
         applyDefaults(proc);
         setNorm(apvts, "partGain", apvts.getParameterRange("partGain").convertTo0to1(0.55f));
         setNorm(apvts, "resGain", apvts.getParameterRange("resGain").convertTo0to1(1.75f));
+        break;
+    case 3:
+        applyDefaults(proc);
+        if (auto* p = apvts.getParameter("residualOnly"))
+            p->setValueNotifyingHost(1.0f);
+        setNorm(apvts, "resGain", apvts.getParameterRange("resGain").convertTo0to1(1.0f));
+        setNorm(apvts, "partGain", apvts.getParameterRange("partGain").convertTo0to1(0.0f));
         break;
     default:
         break;
