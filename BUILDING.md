@@ -49,6 +49,11 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 - **User preset folder:** under the OS application-support area, `ATS Resynth/Presets` (the editor creates this directory when needed). On macOS this is typically `~/Library/Application Support/ATS Resynth/Presets`.
 - **Model size soft limit:** the UI warns when `partials * frames` exceeds **2,000,000** (informal guardrail only). Large models can make analysis, resynthesis, and memory use heavy; there is no hard cap in the MVP.
 
+## Transforms (Phase 3)
+
+- **Session / Synthesis / Partials / Math** tabs: global synthesis APVTS on **Synthesis**; single-cell partial edits on **Partials**; multi-line `a`/`f`/`h` assignments on **Math** (offline worker thread).
+- Expression variables and functions are documented in **`docs/MATHEXPR.md`** (aligned with Qatsh `README.txt` where the MVP subset allows).
+
 ## Tests
 
 After building:

@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
+#include "AtsMathExpr.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -326,8 +328,11 @@ void AtsAudioProcessor::joinWorkers()
         analysisThread.join();
     if (resynthThread.joinable())
         resynthThread.join();
+    if (transformThread.joinable())
+        transformThread.join();
     analysisThreadRunning.store(false);
     resynthThreadRunning.store(false);
+    transformThreadRunning.store(false);
 }
 
 void AtsAudioProcessor::cancelJobs()
@@ -647,7 +652,152 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 
 bool AtsAudioProcessor::isWorkerBusy() const
 {
-    return analysisThreadRunning.load() || resynthThreadRunning.load();
+    return analysisThreadRunning.load() || resynthThreadRunning.load() || transformThreadRunning.load();
+}
+
+void AtsAudioProcessor::setMathStatus(const juce::String& s)
+{
+    const juce::SpinLock::ScopedLockType sl(mathStatusLock);
+    mathStatus = s;
+}
+
+juce::String AtsAudioProcessor::getMathStatus() const
+{
+    const juce::SpinLock::ScopedLockType sl(mathStatusLock);
+    return mathStatus;
+}
+
+bool AtsAudioProcessor::readPartialCell(int partialIdx,
+                                       int frameIdx,
+                                       double& amp,
+                                       double& freq,
+                                       double& phase,
+                                       bool& hasPhase)
+{
+    const juce::ScopedLock ml(modelLock);
+    auto* s = analyzedModel.get();
+    if (s == nullptr || s->amp == nullptr || s->frq == nullptr)
+        return false;
+    if (partialIdx < 0 || frameIdx < 0 || partialIdx >= s->partials || frameIdx >= s->frames)
+        return false;
+
+    amp = s->amp[partialIdx][frameIdx];
+    freq = s->frq[partialIdx][frameIdx];
+    hasPhase = (s->pha != nullptr);
+    phase = hasPhase ? s->pha[partialIdx][frameIdx] : 0.0;
+    return true;
+}
+
+bool AtsAudioProcessor::writePartialCell(int partialIdx, int frameIdx, double amp, double freq, juce::String& error)
+{
+    error.clear();
+    if (!std::isfinite(amp) || !std::isfinite(freq))
+    {
+        error = "Values must be finite numbers.";
+        return false;
+    }
+    if (amp < 0.0)
+    {
+        error = "Amplitude must be non-negative.";
+        return false;
+    }
+    if (freq <= 1e-6)
+    {
+        error = "Frequency must be greater than zero.";
+        return false;
+    }
+
+    const juce::ScopedLock ml(modelLock);
+    auto* s = analyzedModel.get();
+    if (s == nullptr || s->amp == nullptr || s->frq == nullptr)
+    {
+        error = "No model.";
+        return false;
+    }
+    if (partialIdx < 0 || frameIdx < 0 || partialIdx >= s->partials || frameIdx >= s->frames)
+    {
+        error = "Partial or frame index out of range.";
+        return false;
+    }
+
+    s->amp[partialIdx][frameIdx] = amp;
+    s->frq[partialIdx][frameIdx] = freq;
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+    synthParamsDirty.store(true);
+    triggerAsyncUpdate();
+    return true;
+}
+
+void AtsAudioProcessor::startMathExpr(const juce::String& script)
+{
+    cancelJobs();
+
+    const std::string srcCopy = script.toStdString();
+    if (srcCopy.empty())
+    {
+        setMathStatus("Empty script.");
+        return;
+    }
+
+    const uint64_t gen = jobGeneration.load();
+    transformThreadRunning.store(true);
+    setUiState(AtsUiState::ApplyingMath);
+    setMathStatus("Running…");
+
+    transformThread = std::thread([this, srcCopy, gen]() {
+        bool applied = false;
+        juce::String msg;
+
+        {
+            const juce::ScopedLock ml(modelLock);
+            if (jobGeneration.load() != gen)
+            {
+                transformThreadRunning.store(false);
+                setMathStatus("Cancelled.");
+                setUiState(AtsUiState::Analyzed);
+                return;
+            }
+
+            auto* s = analyzedModel.get();
+            if (s == nullptr)
+                msg = "No model.";
+            else
+            {
+                std::string err;
+                const auto shouldCancel = [this, gen]() -> bool {
+                    return jobGeneration.load() != gen;
+                };
+
+                if (ats::applyMathExprScript(s, srcCopy, err, shouldCancel))
+                {
+                    applied = true;
+                    msg = "Script applied OK.";
+                }
+                else
+                {
+                    msg = juce::String(err.c_str());
+                }
+            }
+        }
+
+        transformThreadRunning.store(false);
+
+        if (jobGeneration.load() != gen)
+        {
+            setMathStatus("Cancelled.");
+            setUiState(AtsUiState::Analyzed);
+            return;
+        }
+
+        setMathStatus(msg);
+        if (applied)
+        {
+            modelRevision.fetch_add(1, std::memory_order_relaxed);
+            synthParamsDirty.store(true);
+            triggerAsyncUpdate();
+        }
+        setUiState(AtsUiState::Analyzed);
+    });
 }
 
 bool AtsAudioProcessor::getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const

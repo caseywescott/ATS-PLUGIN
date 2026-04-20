@@ -228,7 +228,7 @@
 
 **PRD:** §5.3 Phase 1–2 (incremental)  
 
-- [ ] Expose transforms already implied by synthesis where appropriate; add any missing global ops.
+- [x] Expose transforms already implied by synthesis where appropriate; add any missing global ops.
 
 ---
 
@@ -236,7 +236,7 @@
 
 **PRD:** §5.3 Phase 2  
 
-- [ ] Selection, frame-level edits; validate against model invariants.
+- [x] Selection, frame-level edits; validate against model invariants.
 
 ---
 
@@ -244,8 +244,8 @@
 
 **PRD:** §5.3 Phase 3, §2.2  
 
-- [ ] Integrate or port MathExpr; run only off audio thread; user-triggered apply.
-- [ ] Document same variables/functions as Qatsh `README.txt`.
+- [x] Integrate or port MathExpr; run only off audio thread; user-triggered apply.
+- [x] Document same variables/functions as Qatsh `README.txt`.
 
 ---
 

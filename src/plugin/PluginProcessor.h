@@ -17,6 +17,7 @@ enum class AtsUiState
     Analyzing,
     Analyzed,
     Resynthesizing,
+    ApplyingMath,
     Error
 };
 
@@ -81,6 +82,17 @@ public:
     bool saveFullStatePreset(const juce::File& file);
     bool loadFullStatePreset(const juce::File& file);
 
+    /** Multi-line script; see docs/MATHEXPR.md. Runs on a worker thread. */
+    void startMathExpr(const juce::String& script);
+
+    /** Read one sinusoidal cell; returns false if out of range or no model. */
+    bool readPartialCell(int partialIdx, int frameIdx, double& amp, double& freq, double& phase, bool& hasPhase);
+
+    /** Write amplitude and frequency for one cell; validates invariants. */
+    bool writePartialCell(int partialIdx, int frameIdx, double amp, double freq, juce::String& error);
+
+    juce::String getMathStatus() const;
+
     static constexpr uint32_t stateMagic = 0x41545350u; // 'ATSP'
 
 private:
@@ -89,6 +101,7 @@ private:
 
     void setUiState(AtsUiState s);
     void setError(const juce::String& e);
+    void setMathStatus(const juce::String& s);
 
     void startResynthWorker();
     void joinWorkers();
@@ -121,8 +134,13 @@ private:
     std::atomic<uint64_t> jobGeneration { 0 };
     std::thread analysisThread;
     std::thread resynthThread;
+    std::thread transformThread;
     std::atomic<bool> analysisThreadRunning { false };
     std::atomic<bool> resynthThreadRunning { false };
+    std::atomic<bool> transformThreadRunning { false };
+
+    mutable juce::SpinLock mathStatusLock;
+    juce::String mathStatus;
 
     double hostSampleRate = 44100.0;
 

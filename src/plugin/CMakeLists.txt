@@ -32,11 +32,16 @@ target_sources(
   PRIVATE PluginEntry.cpp
           PluginProcessor.cpp
           PluginEditor.cpp
+          SessionTabPanel.cpp
+          SynthTabPanel.cpp
+          PartialEditPanel.cpp
+          MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
-          ../core/ResampleLinear.cpp)
+          ../core/ResampleLinear.cpp
+          ../core/AtsMathExpr.cpp)
 
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"
                                               "${ATS_ATSA_SOURCE_DIR}")
