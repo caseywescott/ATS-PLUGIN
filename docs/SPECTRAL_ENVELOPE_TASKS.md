@@ -28,9 +28,9 @@
 
 **PRD:** section 5.4, section 7.3
 
-- [ ] Implement a simple target-only amplitude scaling baseline for comparison.
-- [ ] Implement an offline decolor-plus-target-color reference script or test helper.
-- [ ] Add fixture expectations showing why double-coloring is a risk.
+- [x] Implement a simple target-only amplitude scaling baseline for comparison.
+- [x] Implement an offline decolor-plus-target-color reference script or test helper.
+- [x] Add fixture expectations showing why double-coloring is a risk.
 
 ---
 
