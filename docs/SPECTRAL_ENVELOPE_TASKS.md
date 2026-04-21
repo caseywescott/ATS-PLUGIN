@@ -1,0 +1,276 @@
+# Task List: Spectral-Envelope Transfer in Coherent Commits
+
+**Source:** [SPECTRAL_ENVELOPE_PRD.md](./SPECTRAL_ENVELOPE_PRD.md)
+**How to use:** Each section is intended to become one reviewable commit. Keep commits buildable and testable. If a section grows too large, split it along the same ownership boundary.
+
+---
+
+## Phase 0 - Planning, Fixtures, and Baselines
+
+### Commit 1 - `docs: add spectral envelope transfer requirements`
+
+**PRD:** section 1-section 9
+
+- [ ] Add/maintain the spectral-envelope PRD and this task list.
+- [ ] Record the default estimator decision: weighted regularized discrete cepstrum for ATS partial frames.
+- [ ] Record the non-speech requirement explicitly: no F0 or harmonic grid required by default.
+- [ ] Link the spectral-envelope plan from the modern ATSH planning docs if useful.
+
+### Commit 2 - `test: add spectral envelope fixture manifest`
+
+**PRD:** section 7.1-section 7.2
+
+- [ ] Define fixture categories: sustained pitched, voice, singing, inharmonic metal/bell, noisy texture, plucked/percussive, dense polyphony, sparse synthetic edge cases.
+- [ ] Document provenance and license for each fixture.
+- [ ] Define metrics: fit error, smoothness, shimmer, transfer discontinuities, residual energy preservation, transient sharpness.
+
+### Commit 3 - `test: add target-only versus decolor-transfer baselines`
+
+**PRD:** section 5.4, section 7.3
+
+- [ ] Implement a simple target-only amplitude scaling baseline for comparison.
+- [ ] Implement an offline decolor-plus-target-color reference script or test helper.
+- [ ] Add fixture expectations showing why double-coloring is a risk.
+
+---
+
+## Phase 1 - Envelope Data Model and Interface
+
+### Commit 4 - `feat(envelope): add frame envelope model and diagnostics`
+
+**PRD:** section 5.1, section 6.3
+
+- [ ] Add serializable frame-envelope structures with estimator id/version, frame id, frequency axis, coefficients or sampled values, and diagnostics.
+- [ ] Store fit point count, weighted error, fallback reason, and warning flags.
+- [ ] Add deterministic serialization tests.
+
+### Commit 5 - `feat(envelope): introduce estimator interface`
+
+**PRD:** section 5.3, section 6.1
+
+- [ ] Add a common estimator interface for prepare, estimate, evaluate, serialize, and diagnostics.
+- [ ] Implement an estimator registry with stable ids.
+- [ ] Add a no-op/sample envelope estimator for tests and UI scaffolding.
+
+### Commit 6 - `feat(envelope): add frequency warp utilities`
+
+**PRD:** section 5.2, section 5.5
+
+- [ ] Add linear, Bark, mel, ERB, and normalized-Nyquist frequency mapping helpers.
+- [ ] Add inverse/evaluate helpers where needed for display and lookup.
+- [ ] Add tests for monotonicity, range handling, and edge frequencies.
+
+---
+
+## Phase 2 - Weighted Regularized Discrete Cepstrum
+
+### Commit 7 - `feat(envelope): implement regularized discrete cepstrum solver`
+
+**PRD:** section 5.2
+
+- [ ] Fit log-amplitude/dB points using cosine cepstral basis functions.
+- [ ] Add Tikhonov regularization with first-derivative and second-derivative penalties.
+- [ ] Solve with numerically stable linear algebra available in the project/toolchain.
+- [ ] Add synthetic tests with known smooth envelopes.
+
+### Commit 8 - `feat(envelope): add ATS partial weighting policies`
+
+**PRD:** section 5.2
+
+- [ ] Derive weights from SMR, amplitude, track confidence, user selection, and optional stability data.
+- [ ] Add clamping and floor policies for low amplitudes and unreliable partials.
+- [ ] Add tests showing weak/noisy partials influence the envelope less under the default policy.
+
+### Commit 9 - `feat(envelope): handle sparse and ill-conditioned frames`
+
+**PRD:** section 5.2, section 8
+
+- [ ] Add order reduction when usable point count is low.
+- [ ] Increase regularization or fall back to sampled/interpolated envelopes when diagnostics fail.
+- [ ] Record fallback decisions in diagnostics.
+- [ ] Add tests for missing low bands, clustered partials, sparse high-pitch-like frames, and inharmonic partial sets.
+
+### Commit 10 - `feat(envelope): add temporal smoothing for envelope series`
+
+**PRD:** section 5.4, section 7.2
+
+- [ ] Smooth coefficients or sampled log-envelope values across frames.
+- [ ] Avoid smoothing across strong transient markers by default.
+- [ ] Add shimmer metrics for sustained fixtures.
+
+---
+
+## Phase 3 - Envelope Evaluation and Visualization Support
+
+### Commit 11 - `feat(envelope): evaluate envelopes at arbitrary frequencies`
+
+**PRD:** section 5.3, section 5.5
+
+- [ ] Evaluate fitted envelopes at source partial frequencies, target mapped frequencies, and visualization grids.
+- [ ] Guard out-of-range lookup with documented extrapolation policies.
+- [ ] Add tests for direct Hz, normalized, perceptual, and range-warped lookups.
+
+### Commit 12 - `feat(envelope): add sampled envelope cache`
+
+**PRD:** section 5.1, section 8
+
+- [ ] Add optional cache generation for UI overlays and render preparation.
+- [ ] Keep coefficients as the serialized source of truth where possible.
+- [ ] Add cache invalidation when estimator settings or source model ids change.
+
+### Commit 13 - `feat(ui): show source target and transfer envelope overlays`
+
+**PRD:** section 5.8
+
+- [ ] Add read-only overlays for source envelope, target envelope, and resulting transfer gain.
+- [ ] Display estimator warnings and unreliable frame states.
+- [ ] Keep visualization computation off the audio thread.
+
+---
+
+## Phase 4 - Hybridization Recipe and Transform
+
+### Commit 14 - `feat(hybrid): add spectral envelope transfer recipe`
+
+**PRD:** section 5.4, section 6.2
+
+- [ ] Add serializable recipe with source/target model ids, estimator settings, de-color amount, target-color amount, envelope mix, normalization, mapping, residual policy, and transient policy.
+- [ ] Keep recipe separate from source models and generated model snapshots.
+- [ ] Add state recall tests.
+
+### Commit 15 - `feat(hybrid): implement log-domain decolor and recolor`
+
+**PRD:** section 5.4, section 7.3
+
+- [ ] Apply source de-color and target color in log amplitude with amplitude floors.
+- [ ] Support target-only mode as an explicit creative option, not the default.
+- [ ] Add tests that compare transfer curves against known envelopes.
+
+### Commit 16 - `feat(hybrid): implement frequency mapping modes`
+
+**PRD:** section 5.5
+
+- [ ] Add direct Hz, normalized Nyquist, perceptual-warp, range-warp, and correspondence-based lookup modes.
+- [ ] Make harmonic-number mapping optional and gated by reliable harmonicity/F0 metadata.
+- [ ] Add non-harmonic fixture tests to ensure no harmonic assumption leaks into defaults.
+
+### Commit 17 - `feat(hybrid): add gain normalization policies`
+
+**PRD:** section 5.4, section 7.2
+
+- [ ] Add none, frame RMS, energy-preserving, and loudness-like normalization options.
+- [ ] Apply normalization separately for sinusoidal partials and residual/noise paths.
+- [ ] Add tests for avoiding large frame-to-frame gain jumps.
+
+---
+
+## Phase 5 - Residual, Noise, and Transient Policies
+
+### Commit 18 - `feat(hybrid): add residual envelope transfer policies`
+
+**PRD:** section 5.6
+
+- [ ] Support residual unchanged, target-colored, decolored-plus-colored, crossfaded, and independent residual-envelope morph policies.
+- [ ] Preserve orphan residual-band energy from modern ATSH models.
+- [ ] Add tests for noisy and residual-heavy fixtures.
+
+### Commit 19 - `feat(hybrid): add residual-band envelope estimator`
+
+**PRD:** section 5.6
+
+- [ ] Estimate a broad residual/noise color curve from critical-band energy.
+- [ ] Evaluate residual transfer independently from partial envelope transfer.
+- [ ] Add deterministic noise seed handling for render comparisons.
+
+### Commit 20 - `feat(hybrid): add transient-aware transfer policies`
+
+**PRD:** section 5.7
+
+- [ ] Consume transient markers from modern ATSH analysis.
+- [ ] Add preserve, target-color, crossfade, and bypass policies for transient windows.
+- [ ] Prevent default time smoothing across strong transients.
+- [ ] Add plucked/percussive fixture checks for attack smearing and clicks.
+
+---
+
+## Phase 6 - Optional Estimators and Comparisons
+
+### Commit 21 - `feat(envelope): add true-envelope estimator option`
+
+**PRD:** section 2.3, section 5.3
+
+- [ ] Implement or wrap an iterative true-envelope estimator for dense spectra or sampled model frames.
+- [ ] Add Hamming/lifter smoothing options if useful.
+- [ ] Compare against RDC on high-pitched/sparse and dense fixtures.
+
+### Commit 22 - `feat(envelope): add LPC envelope option`
+
+**PRD:** section 2.3
+
+- [ ] Add LPC/all-pole estimator as a lightweight option.
+- [ ] Document cases where it may overfit isolated partials.
+- [ ] Add fixture comparisons against RDC and true envelope.
+
+### Commit 23 - `research: evaluate F0-adaptive waveform envelope import`
+
+**PRD:** section 2.3, section 3.2
+
+- [ ] Prototype importing or generating CheapTrick/WORLD-style envelopes only when waveform and reliable F0 are available.
+- [ ] Keep this path optional and non-default.
+- [ ] Document where it helps singing/voice and where it fails general material.
+
+---
+
+## Phase 7 - Plugin Integration and Presets
+
+### Commit 24 - `feat(ui): add spectral envelope transfer workspace`
+
+**PRD:** section 5.8
+
+- [ ] Add source and target model slots.
+- [ ] Add estimator preset selector and transfer controls.
+- [ ] Add render/preview controls with A/B comparison.
+
+### Commit 25 - `feat(params): expose automatable envelope transfer controls`
+
+**PRD:** section 5.4, section 5.8
+
+- [ ] Expose de-color amount, target-color amount, envelope mix, residual mix/color, and transient policy where host automation makes sense.
+- [ ] Smooth control changes to avoid zippering in prepared renders or real-time snapshots.
+- [ ] Add state migration for older sessions.
+
+### Commit 26 - `feat(presets): add general-source envelope presets`
+
+**PRD:** section 5.8
+
+- [ ] Add presets for sustained instrument, voice/singing, inharmonic metal, noisy texture, plucked/percussive, and conservative all-purpose material.
+- [ ] Make the all-purpose preset non-speech-specific.
+- [ ] Store preset metadata explaining estimator, warp, regularization, residual, and transient choices.
+
+### Commit 27 - `perf(envelope): document fitting and render budgets`
+
+**PRD:** section 6.1, section 7.2-section 7.3
+
+- [ ] Profile envelope fitting and hybrid render preparation on representative fixtures.
+- [ ] Document soft limits for frames, partials, envelope order, and sampled cache size.
+- [ ] Add guardrails and UI warnings for expensive settings.
+
+---
+
+## Dependency Index
+
+| Concern | First commit |
+| --- | --- |
+| Non-speech default stance | 1 |
+| Fixture coverage | 2 |
+| Frame envelope model | 4 |
+| Estimator interface | 5 |
+| Frequency warps | 6 |
+| Weighted RDC estimator | 7 |
+| Sparse-frame fallback | 9 |
+| Hybrid recipe | 14 |
+| Decolor/recolor transform | 15 |
+| Residual/noise handling | 18 |
+| Transient-aware transfer | 20 |
+| Optional estimators | 21-23 |
+| Plugin workspace and presets | 24-26 |

@@ -2,7 +2,7 @@
 
 **Document status:** Draft
 **Last updated:** 2026-04-21
-**Related docs:** [PRD.md](../PRD.md), [MODERN_ATSH_TASKS.md](./MODERN_ATSH_TASKS.md)
+**Related docs:** [PRD.md](../PRD.md), [MODERN_ATSH_TASKS.md](./MODERN_ATSH_TASKS.md), [SPECTRAL_ENVELOPE_PRD.md](./SPECTRAL_ENVELOPE_PRD.md)
 
 ---
 
