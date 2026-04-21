@@ -17,4 +17,12 @@ target_include_directories(spectral_envelope_model_test PRIVATE ../src/core)
 target_compile_features(spectral_envelope_model_test PRIVATE cxx_std_17)
 add_test(NAME spectral_envelope_model_test COMMAND spectral_envelope_model_test)
 
+add_executable(spectral_envelope_estimator_test
+  spectral_envelope_estimator_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp)
+target_include_directories(spectral_envelope_estimator_test PRIVATE ../src/core)
+target_compile_features(spectral_envelope_estimator_test PRIVATE cxx_std_17)
+add_test(NAME spectral_envelope_estimator_test COMMAND spectral_envelope_estimator_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

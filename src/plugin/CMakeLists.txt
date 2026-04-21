@@ -47,6 +47,7 @@ target_sources(
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
           ../core/SpectralEnvelope.cpp
+          ../core/SpectralEnvelopeEstimator.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

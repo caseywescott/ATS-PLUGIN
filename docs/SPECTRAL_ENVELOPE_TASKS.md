@@ -48,9 +48,9 @@
 
 **PRD:** section 5.3, section 6.1
 
-- [ ] Add a common estimator interface for prepare, estimate, evaluate, serialize, and diagnostics.
-- [ ] Implement an estimator registry with stable ids.
-- [ ] Add a no-op/sample envelope estimator for tests and UI scaffolding.
+- [x] Add a common estimator interface for prepare, estimate, evaluate, serialize, and diagnostics.
+- [x] Implement an estimator registry with stable ids.
+- [x] Add a no-op/sample envelope estimator for tests and UI scaffolding.
 
 ### Commit 6 - `feat(envelope): add frequency warp utilities`
 
