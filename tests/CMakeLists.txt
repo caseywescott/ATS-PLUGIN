@@ -84,4 +84,16 @@ target_include_directories(envelope_evaluation_test PRIVATE ../src/core)
 target_compile_features(envelope_evaluation_test PRIVATE cxx_std_17)
 add_test(NAME envelope_evaluation_test COMMAND envelope_evaluation_test)
 
+add_executable(sampled_envelope_cache_test
+  sampled_envelope_cache_test.cpp
+  ../src/core/EnvelopeEvaluation.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SampledEnvelopeCache.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp)
+target_include_directories(sampled_envelope_cache_test PRIVATE ../src/core)
+target_compile_features(sampled_envelope_cache_test PRIVATE cxx_std_17)
+add_test(NAME sampled_envelope_cache_test COMMAND sampled_envelope_cache_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

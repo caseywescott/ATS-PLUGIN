@@ -114,9 +114,9 @@
 
 **PRD:** section 5.1, section 8
 
-- [ ] Add optional cache generation for UI overlays and render preparation.
-- [ ] Keep coefficients as the serialized source of truth where possible.
-- [ ] Add cache invalidation when estimator settings or source model ids change.
+- [x] Add optional cache generation for UI overlays and render preparation.
+- [x] Keep coefficients as the serialized source of truth where possible.
+- [x] Add cache invalidation when estimator settings or source model ids change.
 
 ### Commit 13 - `feat(ui): show source target and transfer envelope overlays`
 

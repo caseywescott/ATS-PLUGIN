@@ -47,6 +47,7 @@ target_sources(
           ../core/EnvelopeEvaluation.cpp
           ../core/FrequencyWarp.cpp
           ../core/RegularizedCepstrum.cpp
+          ../core/SampledEnvelopeCache.cpp
           ../core/SpectralEnvelopeSmoothing.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
