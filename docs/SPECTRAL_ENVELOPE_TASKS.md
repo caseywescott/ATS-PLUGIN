@@ -11,18 +11,18 @@
 
 **PRD:** section 1-section 9
 
-- [ ] Add/maintain the spectral-envelope PRD and this task list.
-- [ ] Record the default estimator decision: weighted regularized discrete cepstrum for ATS partial frames.
-- [ ] Record the non-speech requirement explicitly: no F0 or harmonic grid required by default.
-- [ ] Link the spectral-envelope plan from the modern ATSH planning docs if useful.
+- [x] Add/maintain the spectral-envelope PRD and this task list.
+- [x] Record the default estimator decision: weighted regularized discrete cepstrum for ATS partial frames.
+- [x] Record the non-speech requirement explicitly: no F0 or harmonic grid required by default.
+- [x] Link the spectral-envelope plan from the modern ATSH planning docs if useful.
 
 ### Commit 2 - `test: add spectral envelope fixture manifest`
 
 **PRD:** section 7.1-section 7.2
 
-- [ ] Define fixture categories: sustained pitched, voice, singing, inharmonic metal/bell, noisy texture, plucked/percussive, dense polyphony, sparse synthetic edge cases.
-- [ ] Document provenance and license for each fixture.
-- [ ] Define metrics: fit error, smoothness, shimmer, transfer discontinuities, residual energy preservation, transient sharpness.
+- [x] Define fixture categories: sustained pitched, voice, singing, inharmonic metal/bell, noisy texture, plucked/percussive, dense polyphony, sparse synthetic edge cases.
+- [x] Document provenance and license for each fixture.
+- [x] Define metrics: fit error, smoothness, shimmer, transfer discontinuities, residual energy preservation, transient sharpness.
 
 ### Commit 3 - `test: add target-only versus decolor-transfer baselines`
 
