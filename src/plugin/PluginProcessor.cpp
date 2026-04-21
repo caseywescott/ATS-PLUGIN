@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include "PresetLibrary.h"
+
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -178,6 +180,40 @@ AtsAudioProcessor::~AtsAudioProcessor()
     apvts.removeParameterListener("synDur", this);
     apvts.removeParameterListener("usePhase", this);
     apvts.removeParameterListener("useAllPartials", this);
+}
+
+int AtsAudioProcessor::getNumPrograms()
+{
+    return ats_preset::factoryPresetNames().size();
+}
+
+int AtsAudioProcessor::getCurrentProgram()
+{
+    return currentFactoryProgramIndex;
+}
+
+void AtsAudioProcessor::setCurrentProgram(int index)
+{
+    const int n = ats_preset::factoryPresetNames().size();
+    if (n <= 0)
+        return;
+
+    const int i = juce::jlimit(0, n - 1, index);
+    currentFactoryProgramIndex = i;
+    ats_preset::applyFactoryPreset(*this, i);
+}
+
+const juce::String AtsAudioProcessor::getProgramName(int index)
+{
+    const auto names = ats_preset::factoryPresetNames();
+    if (index >= 0 && index < names.size())
+        return names[index];
+    return {};
+}
+
+void AtsAudioProcessor::changeProgramName(int index, const juce::String& newName)
+{
+    juce::ignoreUnused(index, newName);
 }
 
 void AtsAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)

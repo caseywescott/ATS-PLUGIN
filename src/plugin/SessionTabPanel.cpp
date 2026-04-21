@@ -183,7 +183,7 @@ void SessionTabPanel::onPresetComboChanged()
     const int nFactory = ats_preset::factoryPresetNames().size();
     if (id <= nFactory)
     {
-        ats_preset::applyFactoryPreset(audioProcessor, id - 1);
+        audioProcessor.setCurrentProgram(id - 1);
         return;
     }
 
