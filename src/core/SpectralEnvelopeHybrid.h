@@ -92,6 +92,24 @@ struct SpectralEnvelopeTransferRecipe
                             std::string* errorMessage = nullptr);
 };
 
+struct HybridPartialInput
+{
+    double frequencyHz = 0.0;
+    double amplitude = 0.0;
+};
+
+struct HybridPartialOutput
+{
+    double frequencyHz = 0.0;
+    double sourceAmplitude = 0.0;
+    double outputAmplitude = 0.0;
+    double sourceAmplitudeDb = 0.0;
+    double sourceEnvelopeDb = 0.0;
+    double targetEnvelopeDb = 0.0;
+    double transferGainDb = 0.0;
+    bool ok = false;
+};
+
 [[nodiscard]] const char* toString(HybridFrequencyMapping mapping);
 [[nodiscard]] const char* toString(HybridNormalizationPolicy policy);
 [[nodiscard]] const char* toString(HybridResidualPolicy policy);
@@ -101,5 +119,17 @@ bool parseHybridFrequencyMapping(const std::string& text, HybridFrequencyMapping
 bool parseHybridNormalizationPolicy(const std::string& text, HybridNormalizationPolicy& out);
 bool parseHybridResidualPolicy(const std::string& text, HybridResidualPolicy& out);
 bool parseHybridTransientPolicy(const std::string& text, HybridTransientPolicy& out);
+
+[[nodiscard]] double dbToAmplitude(double db);
+[[nodiscard]] HybridPartialOutput applyLogDomainEnvelopeTransfer(double sourceAmplitude,
+                                                                 double frequencyHz,
+                                                                 double sourceEnvelopeDb,
+                                                                 double targetEnvelopeDb,
+                                                                 const SpectralEnvelopeTransferRecipe& recipe);
+[[nodiscard]] std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(
+    const std::vector<HybridPartialInput>& partials,
+    const FrameEnvelope& sourceEnvelope,
+    const FrameEnvelope& targetEnvelope,
+    const SpectralEnvelopeTransferRecipe& recipe);
 
 } // namespace ats

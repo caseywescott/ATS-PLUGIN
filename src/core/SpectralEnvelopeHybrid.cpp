@@ -1,6 +1,8 @@
 #include "SpectralEnvelopeHybrid.h"
 
 #include <charconv>
+#include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -488,6 +490,85 @@ bool SpectralEnvelopeTransferRecipe::deserialize(const std::string& text,
 
     out = std::move(parsed);
     return true;
+}
+
+double dbToAmplitude(const double db)
+{
+    return std::pow(10.0, db / 20.0);
+}
+
+HybridPartialOutput applyLogDomainEnvelopeTransfer(const double sourceAmplitude,
+                                                   const double frequencyHz,
+                                                   const double sourceEnvelopeDb,
+                                                   const double targetEnvelopeDb,
+                                                   const SpectralEnvelopeTransferRecipe& recipe)
+{
+    HybridPartialOutput out;
+    out.frequencyHz = frequencyHz;
+    out.sourceAmplitude = sourceAmplitude;
+    out.sourceEnvelopeDb = sourceEnvelopeDb;
+    out.targetEnvelopeDb = targetEnvelopeDb;
+
+    if (!std::isfinite(sourceAmplitude) || !std::isfinite(frequencyHz) ||
+        !std::isfinite(sourceEnvelopeDb) || !std::isfinite(targetEnvelopeDb) ||
+        sourceAmplitude < 0.0 || frequencyHz <= 0.0)
+    {
+        return out;
+    }
+
+    const double sourceDb = amplitudeToDb(sourceAmplitude, recipe.amplitudeFloor);
+    const double mix = std::clamp(recipe.envelopeMix, 0.0, 1.0);
+    const double mixedEnvelopeDb = sourceEnvelopeDb + mix * (targetEnvelopeDb - sourceEnvelopeDb);
+    const double outputDb = sourceDb
+                            - recipe.sourceDecolorAmount * sourceEnvelopeDb
+                            + recipe.targetColorAmount * mixedEnvelopeDb;
+
+    out.sourceAmplitudeDb = sourceDb;
+    out.transferGainDb = outputDb - sourceDb;
+    out.outputAmplitude = dbToAmplitude(outputDb);
+    out.ok = std::isfinite(out.outputAmplitude);
+    return out;
+}
+
+std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(const std::vector<HybridPartialInput>& partials,
+                                                            const FrameEnvelope& sourceEnvelope,
+                                                            const FrameEnvelope& targetEnvelope,
+                                                            const SpectralEnvelopeTransferRecipe& recipe)
+{
+    std::vector<HybridPartialOutput> out;
+    out.reserve(partials.size());
+
+    EnvelopeEvaluationOptions sourceEval;
+    sourceEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    sourceEval.extrapolation = recipe.extrapolation;
+    sourceEval.targetAxis = sourceEnvelope.frequencyAxis;
+
+    EnvelopeEvaluationOptions targetEval;
+    targetEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    targetEval.extrapolation = recipe.extrapolation;
+    targetEval.targetAxis = targetEnvelope.frequencyAxis;
+
+    for (const auto& partial : partials)
+    {
+        const auto sourceSample = evaluateEnvelopeAtFrequency(sourceEnvelope, partial.frequencyHz, sourceEval);
+        const auto targetSample = evaluateEnvelopeAtFrequency(targetEnvelope, partial.frequencyHz, targetEval);
+        if (!sourceSample.ok || !targetSample.ok)
+        {
+            HybridPartialOutput failed;
+            failed.frequencyHz = partial.frequencyHz;
+            failed.sourceAmplitude = partial.amplitude;
+            out.push_back(failed);
+            continue;
+        }
+
+        out.push_back(applyLogDomainEnvelopeTransfer(partial.amplitude,
+                                                     partial.frequencyHz,
+                                                     sourceSample.valueDb,
+                                                     targetSample.valueDb,
+                                                     recipe));
+    }
+
+    return out;
 }
 
 } // namespace ats

@@ -119,4 +119,16 @@ target_include_directories(hybrid_recipe_test PRIVATE ../src/core)
 target_compile_features(hybrid_recipe_test PRIVATE cxx_std_17)
 add_test(NAME hybrid_recipe_test COMMAND hybrid_recipe_test)
 
+add_executable(hybrid_transfer_test
+  hybrid_transfer_test.cpp
+  ../src/core/EnvelopeEvaluation.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/SpectralEnvelopeHybrid.cpp)
+target_include_directories(hybrid_transfer_test PRIVATE ../src/core)
+target_compile_features(hybrid_transfer_test PRIVATE cxx_std_17)
+add_test(NAME hybrid_transfer_test COMMAND hybrid_transfer_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

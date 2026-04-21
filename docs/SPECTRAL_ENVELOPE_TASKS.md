@@ -142,9 +142,9 @@
 
 **PRD:** section 5.4, section 7.3
 
-- [ ] Apply source de-color and target color in log amplitude with amplitude floors.
-- [ ] Support target-only mode as an explicit creative option, not the default.
-- [ ] Add tests that compare transfer curves against known envelopes.
+- [x] Apply source de-color and target color in log amplitude with amplitude floors.
+- [x] Support target-only mode as an explicit creative option, not the default.
+- [x] Add tests that compare transfer curves against known envelopes.
 
 ### Commit 16 - `feat(hybrid): implement frequency mapping modes`
 
