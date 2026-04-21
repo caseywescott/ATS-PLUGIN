@@ -44,6 +44,7 @@ target_sources(
           MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
+          ../core/FrequencyWarp.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
           ../core/SpectralEnvelope.cpp

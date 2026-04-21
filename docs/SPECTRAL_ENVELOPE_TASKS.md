@@ -56,9 +56,9 @@
 
 **PRD:** section 5.2, section 5.5
 
-- [ ] Add linear, Bark, mel, ERB, and normalized-Nyquist frequency mapping helpers.
-- [ ] Add inverse/evaluate helpers where needed for display and lookup.
-- [ ] Add tests for monotonicity, range handling, and edge frequencies.
+- [x] Add linear, Bark, mel, ERB, and normalized-Nyquist frequency mapping helpers.
+- [x] Add inverse/evaluate helpers where needed for display and lookup.
+- [x] Add tests for monotonicity, range handling, and edge frequencies.
 
 ---
 
