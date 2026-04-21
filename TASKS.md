@@ -1,6 +1,7 @@
 # Task list: PRD → coherent commits
 
 **Source:** [PRD.md](./PRD.md)  
+**Modern ATSH source:** [docs/MODERN_ATSH_PRD.md](./docs/MODERN_ATSH_PRD.md) and [docs/MODERN_ATSH_TASKS.md](./docs/MODERN_ATSH_TASKS.md)
 **How to use:** Complete the checkbox items within a section, then make **one commit** with the suggested subject line. Adjust wording to your conventional-commit style; merge sections only when a change set truly belongs together.
 
 ---

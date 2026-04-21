@@ -1,8 +1,9 @@
 # Product Requirements Document: ATS / Qatsh as a VST Plugin
 
 **Document status:** Draft  
-**Last updated:** 2026-04-20  
+**Last updated:** 2026-04-21
 **Related upstream projects:** [Qatsh](https://gitlab.com/dxarts/projects/ats/qatsh) (Qt front-end for ATS), [ATSA](https://gitlab.com/dxarts/projects/ats/atsa) (C library for ATS analysis API)
+**Related modernization plan:** [Modern ATSH analysis, morphing, and synthesis PRD](docs/MODERN_ATSH_PRD.md)
 
 ---
 
@@ -101,6 +102,7 @@ Expose at minimum the controls mirrored by Qatsh’s `ATSSynthesis` / `SPARAMS` 
 - **Phase 1 (optional MVP):** simple global transforms (transpose, time stretch factors already in synthesis).  
 - **Phase 2:** partial table editing parity with Qatsh (selection, frame editing).  
 - **Phase 3:** **MathExpr**-style formula transforms with the same variable semantics as `README.txt` in Qatsh (P, T, p, t, `A(p,t)`, etc.), executed **offline** or on explicit user action—not on the audio thread without a hard safety review.
+- **Modern ATSH extension:** source-to-source morphing, assignment-capable tracking, orphan residual-band preservation, and transient-aware synthesis are specified separately in [docs/MODERN_ATSH_PRD.md](docs/MODERN_ATSH_PRD.md).
 
 ### 5.4 Persistence and interchange
 
