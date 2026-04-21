@@ -122,9 +122,9 @@
 
 **PRD:** section 5.8
 
-- [ ] Add read-only overlays for source envelope, target envelope, and resulting transfer gain.
-- [ ] Display estimator warnings and unreliable frame states.
-- [ ] Keep visualization computation off the audio thread.
+- [x] Add read-only overlays for source envelope, target envelope, and resulting transfer gain.
+- [x] Display estimator warnings and unreliable frame states.
+- [x] Keep visualization computation off the audio thread.
 
 ---
 

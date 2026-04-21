@@ -42,9 +42,11 @@ target_sources(
           SynthTabPanel.cpp
           PartialEditPanel.cpp
           MathExprPanel.cpp
+          EnvelopeOverlayPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
           ../core/EnvelopeEvaluation.cpp
+          ../core/EnvelopeOverlay.cpp
           ../core/FrequencyWarp.cpp
           ../core/RegularizedCepstrum.cpp
           ../core/SampledEnvelopeCache.cpp

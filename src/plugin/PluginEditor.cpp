@@ -8,6 +8,7 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     , sessionTab(p)
     , synthTab(p)
     , partialTab(p)
+    , envelopeTab(p)
     , mathTab(p)
     , tabs(juce::TabbedButtonBar::TabsAtTop)
 {
@@ -34,6 +35,7 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     tabs.addTab("Session", juce::Colours::transparentBlack, &sessionTab, false);
     tabs.addTab("Synthesis", juce::Colours::transparentBlack, &synthTab, false);
     tabs.addTab("Partials", juce::Colours::transparentBlack, &partialTab, false);
+    tabs.addTab("Envelope", juce::Colours::transparentBlack, &envelopeTab, false);
     tabs.addTab("Math", juce::Colours::transparentBlack, &mathTab, false);
 
     // User request: default window roughly 70% smaller, but resizable.

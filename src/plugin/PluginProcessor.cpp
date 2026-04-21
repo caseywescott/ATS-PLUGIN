@@ -2,6 +2,7 @@
 
 #include "PresetLibrary.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -10,6 +11,7 @@
 #include <thread>
 
 #include "AtsMathExpr.h"
+#include "RegularizedCepstrum.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -1174,6 +1176,105 @@ bool AtsAudioProcessor::buildSpectrogramTexture(bool partialsMode, int width, in
         }
     }
 
+    return true;
+}
+
+bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOverlayData& out, juce::String& status)
+{
+    out = {};
+    status.clear();
+    if (gridSize <= 1)
+    {
+        status = "Invalid grid";
+        return false;
+    }
+
+    ats::EnvelopeFrameInput frame;
+    ats::EnvelopeAxisSpec axis;
+    int selectedFrame = 0;
+    {
+        const juce::ScopedLock ml(modelLock);
+        auto* s = analyzedModel.get();
+        if (s == nullptr || s->frames <= 0 || s->partials <= 0 || s->amp == nullptr || s->frq == nullptr)
+        {
+            status = "No model";
+            return false;
+        }
+
+        selectedFrame = juce::jlimit(0, s->frames - 1, s->frames / 2);
+        double maxFreq = 0.0;
+        for (int p = 0; p < s->partials; ++p)
+        {
+            const double amp = s->amp[p][selectedFrame];
+            const double freq = s->frq[p][selectedFrame];
+            if (!std::isfinite(amp) || !std::isfinite(freq) || amp <= 0.0 || freq <= 0.0)
+                continue;
+
+            ats::EnvelopePartialPoint point;
+            point.frequencyHz = freq;
+            point.amplitude = amp;
+            point.smr = 20.0;
+            point.confidence = 1.0;
+            point.selected = true;
+            frame.partials.push_back(point);
+            maxFreq = std::max(maxFreq, freq);
+        }
+
+        frame.sourceModelId = "active-model";
+        frame.frameIndex = static_cast<std::uint64_t>(selectedFrame);
+        frame.sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+
+        const double nyquist = frame.sampleRate > 0.0 ? frame.sampleRate * 0.5 : 22050.0;
+        axis.type = ats::EnvelopeFrequencyAxis::LinearHz;
+        axis.minFrequencyHz = 20.0;
+        axis.maxFrequencyHz = juce::jlimit(200.0, nyquist, std::max(1000.0, maxFreq * 1.05));
+        axis.sampleRate = frame.sampleRate;
+    }
+
+    if (frame.partials.size() < 2)
+    {
+        status = "Sparse frame";
+        return false;
+    }
+
+    ats::RegularizedCepstrumEstimatorOptions estimatorOptions;
+    estimatorOptions.fit.frequencyAxis = axis;
+    estimatorOptions.fit.order = 12;
+    estimatorOptions.fit.regularization = 0.05;
+    estimatorOptions.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
+    estimatorOptions.weights.useSmr = false;
+
+    ats::RegularizedCepstrumEnvelopeEstimator estimator(estimatorOptions);
+    ats::EnvelopeEstimatorContext context;
+    context.sampleRate = frame.sampleRate;
+    context.frequencyAxis = axis;
+    context.maxOrder = 12;
+
+    std::string error;
+    if (!estimator.prepare(context, &error))
+    {
+        status = juce::String(error.c_str());
+        return false;
+    }
+
+    ats::FrameEnvelope sourceEnvelope;
+    if (!estimator.estimate(frame, sourceEnvelope, &error))
+    {
+        status = juce::String(error.c_str());
+        return false;
+    }
+
+    ats::EnvelopeEvaluationOptions eval;
+    eval.mapping = ats::EnvelopeFrequencyMapping::DirectHz;
+    eval.extrapolation = ats::EnvelopeExtrapolationPolicy::Clamp;
+    eval.sourceAxis = axis;
+    eval.targetAxis = axis;
+
+    out = ats::buildEnvelopeTransferOverlay(sourceEnvelope, nullptr, gridSize, eval, eval);
+    out.source.label = std::string("Source frame ") + std::to_string(selectedFrame);
+    out.target.status = "Target pending";
+    out.transferGain.status = "Transfer pending";
+    status = juce::String("Frame ") + juce::String(selectedFrame);
     return true;
 }
 

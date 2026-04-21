@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 
+#include "EnvelopeOverlayPanel.h"
 #include "MathExprPanel.h"
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
@@ -30,6 +31,7 @@ private:
     SessionTabPanel sessionTab;
     SynthTabPanel synthTab;
     PartialEditPanel partialTab;
+    EnvelopeOverlayPanel envelopeTab;
     MathExprPanel mathTab;
 
     juce::TabbedComponent tabs;
