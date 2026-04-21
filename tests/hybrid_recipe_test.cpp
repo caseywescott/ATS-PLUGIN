@@ -42,6 +42,9 @@ int main()
     recipe.residualNormalization = ats::HybridNormalizationPolicy::LoudnessLike;
     recipe.residualPolicy = ats::HybridResidualPolicy::DecolorThenColor;
     recipe.transientPolicy = ats::HybridTransientPolicy::CrossfadeSource;
+    recipe.preserveOrphanResidual = false;
+    recipe.smoothAcrossTransients = true;
+    recipe.transientCrossfade = 0.25;
     recipe.harmonicMappingEnabled = true;
     recipe.harmonicityReliable = false;
     recipe.sourceF0Hz = 110.0;
@@ -86,7 +89,10 @@ int main()
         roundTrip.partialNormalization != recipe.partialNormalization ||
         roundTrip.residualNormalization != recipe.residualNormalization ||
         roundTrip.residualPolicy != recipe.residualPolicy ||
-        roundTrip.transientPolicy != recipe.transientPolicy)
+        roundTrip.transientPolicy != recipe.transientPolicy ||
+        roundTrip.preserveOrphanResidual != recipe.preserveOrphanResidual ||
+        roundTrip.smoothAcrossTransients != recipe.smoothAcrossTransients ||
+        !closeEnough(roundTrip.transientCrossfade, recipe.transientCrossfade))
     {
         return fail("policy settings did not round-trip");
     }

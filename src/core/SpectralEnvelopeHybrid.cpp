@@ -140,6 +140,17 @@ bool requireField(const std::unordered_map<std::string, std::string>& fields,
     return true;
 }
 
+bool optionalField(const std::unordered_map<std::string, std::string>& fields,
+                   const char* key,
+                   std::string& out)
+{
+    const auto it = fields.find(key);
+    if (it == fields.end())
+        return false;
+    out = it->second;
+    return true;
+}
+
 bool toEnvelopeMapping(const HybridFrequencyMapping mapping, EnvelopeFrequencyMapping& out)
 {
     switch (mapping)
@@ -308,6 +319,58 @@ void finishNormalizationStats(const std::vector<HybridPartialOutput>& outputs,
 
     if (stats.processedCount > 0)
         stats.outputRmsAfter = std::sqrt(stats.outputEnergyAfter / static_cast<double>(stats.processedCount));
+}
+
+double mixEnvelopeDb(const double sourceEnvelopeDb,
+                     const double targetEnvelopeDb,
+                     const SpectralEnvelopeTransferRecipe& recipe)
+{
+    const double mix = std::clamp(recipe.envelopeMix, 0.0, 1.0);
+    return sourceEnvelopeDb + mix * (targetEnvelopeDb - sourceEnvelopeDb);
+}
+
+double safeDbToAmplitude(const double db)
+{
+    const double amplitude = dbToAmplitude(db);
+    if (!std::isfinite(amplitude) || amplitude < 0.0)
+        return 0.0;
+    return amplitude;
+}
+
+double floorPositive(const double value)
+{
+    return std::max(value, std::numeric_limits<double>::min());
+}
+
+double transferResidualDb(const double sourceDb,
+                          const double sourceEnvelopeDb,
+                          const double targetEnvelopeDb,
+                          const HybridResidualPolicy policy,
+                          const SpectralEnvelopeTransferRecipe& recipe)
+{
+    const double mixedEnvelopeDb = mixEnvelopeDb(sourceEnvelopeDb, targetEnvelopeDb, recipe);
+    switch (policy)
+    {
+        case HybridResidualPolicy::Unchanged:
+            return sourceDb;
+        case HybridResidualPolicy::TargetColored:
+            return sourceDb + recipe.targetColorAmount * mixedEnvelopeDb;
+        case HybridResidualPolicy::DecolorThenColor:
+            return sourceDb
+                   - recipe.sourceDecolorAmount * sourceEnvelopeDb
+                   + recipe.targetColorAmount * mixedEnvelopeDb;
+        case HybridResidualPolicy::Crossfade:
+        {
+            const double decolorColoredDb = sourceDb
+                                            - recipe.sourceDecolorAmount * sourceEnvelopeDb
+                                            + recipe.targetColorAmount * mixedEnvelopeDb;
+            const double t = std::clamp(recipe.envelopeMix, 0.0, 1.0);
+            return sourceDb + t * (decolorColoredDb - sourceDb);
+        }
+        case HybridResidualPolicy::IndependentMorph:
+            return sourceDb + mixedEnvelopeDb;
+    }
+    return sourceDb;
 }
 
 } // namespace
@@ -522,6 +585,9 @@ std::string SpectralEnvelopeTransferRecipe::serialize() const
     appendField(os, "residual_normalization", toString(residualNormalization));
     appendField(os, "residual_policy", toString(residualPolicy));
     appendField(os, "transient_policy", toString(transientPolicy));
+    appendField(os, "preserve_orphan_residual", preserveOrphanResidual ? "true" : "false");
+    appendField(os, "smooth_across_transients", smoothAcrossTransients ? "true" : "false");
+    appendField(os, "transient_crossfade", doubleToString(transientCrossfade));
     appendField(os, "harmonic_mapping_enabled", harmonicMappingEnabled ? "true" : "false");
     appendField(os, "harmonicity_reliable", harmonicityReliable ? "true" : "false");
     appendField(os, "source_f0_hz", doubleToString(sourceF0Hz));
@@ -632,6 +698,22 @@ bool SpectralEnvelopeTransferRecipe::deserialize(const std::string& text,
         return false;
     if (!requireField(fields, "transient_policy", value, errorMessage) || !parseHybridTransientPolicy(value, parsed.transientPolicy))
         return false;
+    if (optionalField(fields, "preserve_orphan_residual", value))
+    {
+        if (!parseBool(value, parsed.preserveOrphanResidual))
+            return false;
+    }
+    if (optionalField(fields, "smooth_across_transients", value))
+    {
+        if (!parseBool(value, parsed.smoothAcrossTransients))
+            return false;
+    }
+    if (optionalField(fields, "transient_crossfade", value))
+    {
+        if (!parseDouble(value, parsed.transientCrossfade))
+            return false;
+    }
+    parsed.transientCrossfade = std::clamp(parsed.transientCrossfade, 0.0, 1.0);
     if (!requireField(fields, "harmonic_mapping_enabled", value, errorMessage) || !parseBool(value, parsed.harmonicMappingEnabled))
         return false;
     if (!requireField(fields, "harmonicity_reliable", value, errorMessage) || !parseBool(value, parsed.harmonicityReliable))
@@ -880,6 +962,208 @@ std::vector<HybridPartialOutput> applyEnvelopeTransferMapped(const std::vector<H
     }
 
     return out;
+}
+
+std::vector<HybridResidualBandOutput> applyResidualEnvelopeTransfer(
+    const std::vector<HybridResidualBandInput>& bands,
+    const FrameEnvelope& sourceResidualEnvelope,
+    const FrameEnvelope& targetResidualEnvelope,
+    const SpectralEnvelopeTransferRecipe& recipe)
+{
+    std::vector<HybridResidualBandOutput> out;
+    out.reserve(bands.size());
+
+    EnvelopeEvaluationOptions sourceEval;
+    sourceEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    sourceEval.extrapolation = recipe.extrapolation;
+    sourceEval.targetAxis = sourceResidualEnvelope.frequencyAxis;
+
+    EnvelopeEvaluationOptions targetEval;
+    targetEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    targetEval.extrapolation = recipe.extrapolation;
+    targetEval.targetAxis = targetResidualEnvelope.frequencyAxis;
+
+    const double floor = floorPositive(recipe.amplitudeFloor);
+    for (const auto& band : bands)
+    {
+        HybridResidualBandOutput result;
+        result.frequencyHz = band.frequencyHz;
+        result.sourceEnergy = band.energy;
+        result.outputEnergy = band.energy;
+        result.orphanBand = band.orphanBand;
+
+        if (!std::isfinite(band.frequencyHz) || band.frequencyHz <= 0.0 ||
+            !std::isfinite(band.energy) || band.energy < 0.0)
+        {
+            out.push_back(result);
+            continue;
+        }
+
+        if (band.orphanBand && recipe.preserveOrphanResidual)
+        {
+            result.ok = true;
+            out.push_back(result);
+            continue;
+        }
+
+        const auto sourceSample = evaluateEnvelopeAtFrequency(sourceResidualEnvelope, band.frequencyHz, sourceEval);
+        const auto targetSample = evaluateEnvelopeAtFrequency(targetResidualEnvelope, band.frequencyHz, targetEval);
+        if (!sourceSample.ok || !targetSample.ok)
+        {
+            out.push_back(result);
+            continue;
+        }
+
+        result.sourceEnvelopeDb = sourceSample.valueDb;
+        result.targetEnvelopeDb = targetSample.valueDb;
+        const double sourceDb = amplitudeToDb(std::sqrt(std::max(0.0, band.energy)), floor);
+        const double outputDb = transferResidualDb(sourceDb,
+                                                  sourceSample.valueDb,
+                                                  targetSample.valueDb,
+                                                  recipe.residualPolicy,
+                                                  recipe);
+        const double outputAmplitude = safeDbToAmplitude(outputDb);
+        result.outputEnergy = outputAmplitude * outputAmplitude;
+        result.transferGainDb = outputDb - sourceDb;
+        result.ok = std::isfinite(result.outputEnergy);
+        out.push_back(result);
+    }
+
+    return out;
+}
+
+ResidualEnvelopeEstimate estimateResidualEnvelopeFromCriticalBands(
+    const std::vector<ResidualEnvelopeBandPoint>& bands,
+    const double amplitudeFloor,
+    const double smoothing)
+{
+    ResidualEnvelopeEstimate out;
+    if (bands.empty())
+        return out;
+
+    std::vector<ResidualEnvelopeBandPoint> valid;
+    valid.reserve(bands.size());
+    for (const auto& band : bands)
+    {
+        if (!std::isfinite(band.frequencyHz) || !std::isfinite(band.energy) ||
+            band.frequencyHz <= 0.0 || band.energy < 0.0)
+        {
+            continue;
+        }
+        valid.push_back(band);
+    }
+
+    if (valid.empty())
+        return out;
+
+    std::sort(valid.begin(), valid.end(), [](const auto& a, const auto& b) {
+        return a.frequencyHz < b.frequencyHz;
+    });
+
+    const double floor = floorPositive(amplitudeFloor);
+    const double alpha = std::clamp(smoothing, 0.0, 1.0);
+    out.frequenciesHz.reserve(valid.size());
+    out.valuesDb.reserve(valid.size());
+
+    double previousDb = 0.0;
+    bool hasPrevious = false;
+    for (const auto& band : valid)
+    {
+        const double amplitude = std::sqrt(std::max(0.0, band.energy));
+        const double rawDb = amplitudeToDb(amplitude, floor);
+        const double smoothedDb = hasPrevious ? ((1.0 - alpha) * rawDb + alpha * previousDb) : rawDb;
+        out.frequenciesHz.push_back(band.frequencyHz);
+        out.valuesDb.push_back(smoothedDb);
+        previousDb = smoothedDb;
+        hasPrevious = true;
+    }
+
+    out.ok = true;
+    return out;
+}
+
+std::uint64_t makeDeterministicNoiseSeed(const std::uint64_t baseSeed,
+                                         const std::uint64_t frameIndex,
+                                         const std::uint64_t bandIndex)
+{
+    // splitmix64: deterministic and stable for render reproducibility.
+    std::uint64_t x = baseSeed + 0x9E3779B97F4A7C15ull;
+    x ^= frameIndex + 0xBF58476D1CE4E5B9ull + (x << 6u) + (x >> 2u);
+    x ^= bandIndex + 0x94D049BB133111EBull + (x << 6u) + (x >> 2u);
+    x ^= x >> 30u;
+    x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27u;
+    x *= 0x94D049BB133111EBull;
+    x ^= x >> 31u;
+    return x;
+}
+
+HybridPartialOutput applyTransientAwareEnvelopeTransfer(const double sourceAmplitude,
+                                                        const double frequencyHz,
+                                                        const double sourceEnvelopeDb,
+                                                        const double targetEnvelopeDb,
+                                                        const bool transientWindowActive,
+                                                        const SpectralEnvelopeTransferRecipe& recipe)
+{
+    if (!transientWindowActive)
+    {
+        return applyLogDomainEnvelopeTransfer(sourceAmplitude,
+                                              frequencyHz,
+                                              sourceEnvelopeDb,
+                                              targetEnvelopeDb,
+                                              recipe);
+    }
+
+    HybridPartialOutput preserved;
+    preserved.frequencyHz = frequencyHz;
+    preserved.targetFrequencyHz = frequencyHz;
+    preserved.sourceAmplitude = sourceAmplitude;
+    preserved.sourceAmplitudeDb = amplitudeToDb(sourceAmplitude, recipe.amplitudeFloor);
+    preserved.sourceEnvelopeDb = sourceEnvelopeDb;
+    preserved.targetEnvelopeDb = targetEnvelopeDb;
+    preserved.outputAmplitude = std::max(0.0, sourceAmplitude);
+    preserved.transferGainDb = 0.0;
+    preserved.ok = std::isfinite(sourceAmplitude) && sourceAmplitude >= 0.0 && std::isfinite(frequencyHz) && frequencyHz > 0.0;
+
+    switch (recipe.transientPolicy)
+    {
+        case HybridTransientPolicy::PreserveSource:
+        case HybridTransientPolicy::Bypass:
+            return preserved;
+
+        case HybridTransientPolicy::TargetColor:
+        {
+            SpectralEnvelopeTransferRecipe targetRecipe = recipe;
+            targetRecipe.sourceDecolorAmount = 0.0;
+            targetRecipe.envelopeMix = 1.0;
+            return applyLogDomainEnvelopeTransfer(sourceAmplitude,
+                                                  frequencyHz,
+                                                  sourceEnvelopeDb,
+                                                  targetEnvelopeDb,
+                                                  targetRecipe);
+        }
+
+        case HybridTransientPolicy::CrossfadeSource:
+        {
+            const auto transferred = applyLogDomainEnvelopeTransfer(sourceAmplitude,
+                                                                    frequencyHz,
+                                                                    sourceEnvelopeDb,
+                                                                    targetEnvelopeDb,
+                                                                    recipe);
+            if (!preserved.ok || !transferred.ok)
+                return preserved.ok ? preserved : transferred;
+            HybridPartialOutput blended = transferred;
+            const double t = std::clamp(recipe.transientCrossfade, 0.0, 1.0);
+            blended.outputAmplitude = preserved.outputAmplitude
+                                      + t * (transferred.outputAmplitude - preserved.outputAmplitude);
+            blended.transferGainDb = amplitudeToDb(std::max(blended.outputAmplitude, recipe.amplitudeFloor), recipe.amplitudeFloor)
+                                     - preserved.sourceAmplitudeDb;
+            blended.ok = std::isfinite(blended.outputAmplitude);
+            return blended;
+        }
+    }
+
+    return preserved;
 }
 
 HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialOutput>& outputs,

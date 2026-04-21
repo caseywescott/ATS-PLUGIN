@@ -80,6 +80,9 @@ struct SpectralEnvelopeTransferRecipe
     HybridNormalizationPolicy residualNormalization = HybridNormalizationPolicy::None;
     HybridResidualPolicy residualPolicy = HybridResidualPolicy::Unchanged;
     HybridTransientPolicy transientPolicy = HybridTransientPolicy::PreserveSource;
+    bool preserveOrphanResidual = true;
+    bool smoothAcrossTransients = false;
+    double transientCrossfade = 0.5;
 
     bool harmonicMappingEnabled = false;
     bool harmonicityReliable = false;
@@ -109,6 +112,38 @@ struct HybridPartialOutput
     double sourceEnvelopeDb = 0.0;
     double targetEnvelopeDb = 0.0;
     double transferGainDb = 0.0;
+    bool ok = false;
+};
+
+struct HybridResidualBandInput
+{
+    double frequencyHz = 0.0;
+    double energy = 0.0;
+    bool orphanBand = false;
+};
+
+struct HybridResidualBandOutput
+{
+    double frequencyHz = 0.0;
+    double sourceEnergy = 0.0;
+    double outputEnergy = 0.0;
+    double sourceEnvelopeDb = 0.0;
+    double targetEnvelopeDb = 0.0;
+    double transferGainDb = 0.0;
+    bool orphanBand = false;
+    bool ok = false;
+};
+
+struct ResidualEnvelopeBandPoint
+{
+    double frequencyHz = 0.0;
+    double energy = 0.0;
+};
+
+struct ResidualEnvelopeEstimate
+{
+    std::vector<double> frequenciesHz;
+    std::vector<double> valuesDb;
     bool ok = false;
 };
 
@@ -166,6 +201,24 @@ bool parseHybridTransientPolicy(const std::string& text, HybridTransientPolicy& 
     const FrameEnvelope& sourceEnvelope,
     const FrameEnvelope& targetEnvelope,
     const SpectralEnvelopeTransferRecipe& recipe);
+[[nodiscard]] std::vector<HybridResidualBandOutput> applyResidualEnvelopeTransfer(
+    const std::vector<HybridResidualBandInput>& bands,
+    const FrameEnvelope& sourceResidualEnvelope,
+    const FrameEnvelope& targetResidualEnvelope,
+    const SpectralEnvelopeTransferRecipe& recipe);
+[[nodiscard]] ResidualEnvelopeEstimate estimateResidualEnvelopeFromCriticalBands(
+    const std::vector<ResidualEnvelopeBandPoint>& bands,
+    double amplitudeFloor,
+    double smoothing);
+[[nodiscard]] std::uint64_t makeDeterministicNoiseSeed(std::uint64_t baseSeed,
+                                                       std::uint64_t frameIndex,
+                                                       std::uint64_t bandIndex);
+[[nodiscard]] HybridPartialOutput applyTransientAwareEnvelopeTransfer(double sourceAmplitude,
+                                                                      double frequencyHz,
+                                                                      double sourceEnvelopeDb,
+                                                                      double targetEnvelopeDb,
+                                                                      bool transientWindowActive,
+                                                                      const SpectralEnvelopeTransferRecipe& recipe);
 HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialOutput>& outputs,
                                                       HybridNormalizationPolicy policy,
                                                       double amplitudeFloor);
