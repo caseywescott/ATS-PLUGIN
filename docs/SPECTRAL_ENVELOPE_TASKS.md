@@ -170,26 +170,26 @@
 
 **PRD:** section 5.6
 
-- [ ] Support residual unchanged, target-colored, decolored-plus-colored, crossfaded, and independent residual-envelope morph policies.
-- [ ] Preserve orphan residual-band energy from modern ATSH models.
-- [ ] Add tests for noisy and residual-heavy fixtures.
+- [x] Support residual unchanged, target-colored, decolored-plus-colored, crossfaded, and independent residual-envelope morph policies.
+- [x] Preserve orphan residual-band energy from modern ATSH models.
+- [x] Add tests for noisy and residual-heavy fixtures.
 
 ### Commit 19 - `feat(hybrid): add residual-band envelope estimator`
 
 **PRD:** section 5.6
 
-- [ ] Estimate a broad residual/noise color curve from critical-band energy.
-- [ ] Evaluate residual transfer independently from partial envelope transfer.
-- [ ] Add deterministic noise seed handling for render comparisons.
+- [x] Estimate a broad residual/noise color curve from critical-band energy.
+- [x] Evaluate residual transfer independently from partial envelope transfer.
+- [x] Add deterministic noise seed handling for render comparisons.
 
 ### Commit 20 - `feat(hybrid): add transient-aware transfer policies`
 
 **PRD:** section 5.7
 
-- [ ] Consume transient markers from modern ATSH analysis.
-- [ ] Add preserve, target-color, crossfade, and bypass policies for transient windows.
-- [ ] Prevent default time smoothing across strong transients.
-- [ ] Add plucked/percussive fixture checks for attack smearing and clicks.
+- [x] Consume transient markers from modern ATSH analysis.
+- [x] Add preserve, target-color, crossfade, and bypass policies for transient windows.
+- [x] Prevent default time smoothing across strong transients.
+- [x] Add plucked/percussive fixture checks for attack smearing and clicks.
 
 ---
 
