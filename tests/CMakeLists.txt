@@ -110,6 +110,7 @@ add_test(NAME envelope_overlay_test COMMAND envelope_overlay_test)
 
 add_executable(hybrid_recipe_test
   hybrid_recipe_test.cpp
+  ../src/core/EnvelopeEvaluation.cpp
   ../src/core/FrequencyWarp.cpp
   ../src/core/RegularizedCepstrum.cpp
   ../src/core/SpectralEnvelope.cpp
@@ -142,5 +143,17 @@ add_executable(hybrid_mapping_test
 target_include_directories(hybrid_mapping_test PRIVATE ../src/core)
 target_compile_features(hybrid_mapping_test PRIVATE cxx_std_17)
 add_test(NAME hybrid_mapping_test COMMAND hybrid_mapping_test)
+
+add_executable(hybrid_normalization_test
+  hybrid_normalization_test.cpp
+  ../src/core/EnvelopeEvaluation.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/SpectralEnvelopeHybrid.cpp)
+target_include_directories(hybrid_normalization_test PRIVATE ../src/core)
+target_compile_features(hybrid_normalization_test PRIVATE cxx_std_17)
+add_test(NAME hybrid_normalization_test COMMAND hybrid_normalization_test)
 
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

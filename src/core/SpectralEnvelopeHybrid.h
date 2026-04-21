@@ -3,6 +3,7 @@
 #include "EnvelopeEvaluation.h"
 #include "RegularizedCepstrum.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -120,6 +121,20 @@ struct HybridFrequencyMappingResult
     std::string errorMessage;
 };
 
+struct HybridNormalizationStats
+{
+    std::size_t processedCount = 0;
+    double sourceEnergy = 0.0;
+    double outputEnergyBefore = 0.0;
+    double outputEnergyAfter = 0.0;
+    double sourceRms = 0.0;
+    double outputRmsBefore = 0.0;
+    double outputRmsAfter = 0.0;
+    double gainDb = 0.0;
+    bool applied = false;
+    bool ok = false;
+};
+
 [[nodiscard]] const char* toString(HybridFrequencyMapping mapping);
 [[nodiscard]] const char* toString(HybridNormalizationPolicy policy);
 [[nodiscard]] const char* toString(HybridResidualPolicy policy);
@@ -151,5 +166,8 @@ bool parseHybridTransientPolicy(const std::string& text, HybridTransientPolicy& 
     const FrameEnvelope& sourceEnvelope,
     const FrameEnvelope& targetEnvelope,
     const SpectralEnvelopeTransferRecipe& recipe);
+HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialOutput>& outputs,
+                                                      HybridNormalizationPolicy policy,
+                                                      double amplitudeFloor);
 
 } // namespace ats

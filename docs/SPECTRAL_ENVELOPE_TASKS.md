@@ -158,9 +158,9 @@
 
 **PRD:** section 5.4, section 7.2
 
-- [ ] Add none, frame RMS, energy-preserving, and loudness-like normalization options.
-- [ ] Apply normalization separately for sinusoidal partials and residual/noise paths.
-- [ ] Add tests for avoiding large frame-to-frame gain jumps.
+- [x] Add none, frame RMS, energy-preserving, and loudness-like normalization options.
+- [x] Apply normalization separately for sinusoidal partials and residual/noise paths.
+- [x] Add tests for avoiding large frame-to-frame gain jumps.
 
 ---
 

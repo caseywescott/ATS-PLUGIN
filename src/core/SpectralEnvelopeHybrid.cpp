@@ -248,6 +248,68 @@ bool mapCorrespondenceFrequency(const double sourceFrequencyHz,
     return false;
 }
 
+void accumulateNormalizationStats(const std::vector<HybridPartialOutput>& outputs,
+                                  HybridNormalizationStats& stats)
+{
+    for (const auto& output : outputs)
+    {
+        if (!output.ok ||
+            !std::isfinite(output.sourceAmplitude) ||
+            !std::isfinite(output.outputAmplitude) ||
+            output.sourceAmplitude < 0.0 ||
+            output.outputAmplitude < 0.0)
+        {
+            continue;
+        }
+
+        ++stats.processedCount;
+        stats.sourceEnergy += output.sourceAmplitude * output.sourceAmplitude;
+        stats.outputEnergyBefore += output.outputAmplitude * output.outputAmplitude;
+    }
+
+    if (stats.processedCount == 0)
+        return;
+
+    const double count = static_cast<double>(stats.processedCount);
+    stats.sourceRms = std::sqrt(stats.sourceEnergy / count);
+    stats.outputRmsBefore = std::sqrt(stats.outputEnergyBefore / count);
+}
+
+double loudnessLikeMean(const std::vector<HybridPartialOutput>& outputs,
+                        const bool useSourceAmplitude)
+{
+    constexpr double kPower = 0.6;
+    double sum = 0.0;
+    std::size_t count = 0;
+    for (const auto& output : outputs)
+    {
+        const double amplitude = useSourceAmplitude ? output.sourceAmplitude : output.outputAmplitude;
+        if (!output.ok || !std::isfinite(amplitude) || amplitude < 0.0)
+            continue;
+        sum += std::pow(amplitude, kPower);
+        ++count;
+    }
+
+    if (count == 0)
+        return 0.0;
+    return sum / static_cast<double>(count);
+}
+
+void finishNormalizationStats(const std::vector<HybridPartialOutput>& outputs,
+                              HybridNormalizationStats& stats)
+{
+    stats.outputEnergyAfter = 0.0;
+    for (const auto& output : outputs)
+    {
+        if (!output.ok || !std::isfinite(output.outputAmplitude) || output.outputAmplitude < 0.0)
+            continue;
+        stats.outputEnergyAfter += output.outputAmplitude * output.outputAmplitude;
+    }
+
+    if (stats.processedCount > 0)
+        stats.outputRmsAfter = std::sqrt(stats.outputEnergyAfter / static_cast<double>(stats.processedCount));
+}
+
 } // namespace
 
 const char* toString(const HybridFrequencyMapping mapping)
@@ -818,6 +880,86 @@ std::vector<HybridPartialOutput> applyEnvelopeTransferMapped(const std::vector<H
     }
 
     return out;
+}
+
+HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialOutput>& outputs,
+                                                      const HybridNormalizationPolicy policy,
+                                                      const double amplitudeFloor)
+{
+    HybridNormalizationStats stats;
+    accumulateNormalizationStats(outputs, stats);
+    if (stats.processedCount == 0)
+        return stats;
+
+    stats.ok = true;
+    if (policy == HybridNormalizationPolicy::None)
+    {
+        finishNormalizationStats(outputs, stats);
+        return stats;
+    }
+
+    const double floor = std::max(amplitudeFloor, std::numeric_limits<double>::min());
+    double scale = 1.0;
+    switch (policy)
+    {
+        case HybridNormalizationPolicy::None:
+            break;
+
+        case HybridNormalizationPolicy::FrameRms:
+            if (stats.outputRmsBefore <= floor)
+            {
+                stats.ok = false;
+                finishNormalizationStats(outputs, stats);
+                return stats;
+            }
+            scale = stats.sourceRms <= floor ? 0.0 : stats.sourceRms / stats.outputRmsBefore;
+            break;
+
+        case HybridNormalizationPolicy::EnergyPreserving:
+            if (stats.outputEnergyBefore <= floor)
+            {
+                stats.ok = false;
+                finishNormalizationStats(outputs, stats);
+                return stats;
+            }
+            scale = stats.sourceEnergy <= floor ? 0.0 : std::sqrt(stats.sourceEnergy / stats.outputEnergyBefore);
+            break;
+
+        case HybridNormalizationPolicy::LoudnessLike:
+        {
+            constexpr double kPower = 0.6;
+            const double sourceMean = loudnessLikeMean(outputs, true);
+            const double outputMean = loudnessLikeMean(outputs, false);
+            if (outputMean <= floor)
+            {
+                stats.ok = false;
+                finishNormalizationStats(outputs, stats);
+                return stats;
+            }
+            scale = sourceMean <= floor ? 0.0 : std::pow(sourceMean / outputMean, 1.0 / kPower);
+            break;
+        }
+    }
+
+    if (!std::isfinite(scale) || scale < 0.0)
+    {
+        stats.ok = false;
+        finishNormalizationStats(outputs, stats);
+        return stats;
+    }
+
+    stats.gainDb = amplitudeToDb(scale, floor);
+    for (auto& output : outputs)
+    {
+        if (!output.ok || !std::isfinite(output.outputAmplitude) || output.outputAmplitude < 0.0)
+            continue;
+        output.outputAmplitude *= scale;
+        output.transferGainDb += stats.gainDb;
+    }
+
+    stats.applied = true;
+    finishNormalizationStats(outputs, stats);
+    return stats;
 }
 
 } // namespace ats
