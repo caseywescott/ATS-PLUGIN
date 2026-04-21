@@ -46,6 +46,7 @@ target_sources(
           SpectrogramPanel.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
+          ../core/SpectralEnvelope.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

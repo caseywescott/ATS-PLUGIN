@@ -40,9 +40,9 @@
 
 **PRD:** section 5.1, section 6.3
 
-- [ ] Add serializable frame-envelope structures with estimator id/version, frame id, frequency axis, coefficients or sampled values, and diagnostics.
-- [ ] Store fit point count, weighted error, fallback reason, and warning flags.
-- [ ] Add deterministic serialization tests.
+- [x] Add serializable frame-envelope structures with estimator id/version, frame id, frequency axis, coefficients or sampled values, and diagnostics.
+- [x] Store fit point count, weighted error, fallback reason, and warning flags.
+- [x] Add deterministic serialization tests.
 
 ### Commit 5 - `feat(envelope): introduce estimator interface`
 
