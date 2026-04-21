@@ -46,6 +46,7 @@ target_sources(
           SpectrogramPanel.cpp
           ../core/FrequencyWarp.cpp
           ../core/RegularizedCepstrum.cpp
+          ../core/SpectralEnvelopeSmoothing.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
           ../core/SpectralEnvelope.cpp

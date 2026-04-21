@@ -94,9 +94,9 @@
 
 **PRD:** section 5.4, section 7.2
 
-- [ ] Smooth coefficients or sampled log-envelope values across frames.
-- [ ] Avoid smoothing across strong transient markers by default.
-- [ ] Add shimmer metrics for sustained fixtures.
+- [x] Smooth coefficients or sampled log-envelope values across frames.
+- [x] Avoid smoothing across strong transient markers by default.
+- [x] Add shimmer metrics for sustained fixtures.
 
 ---
 

@@ -65,4 +65,12 @@ target_include_directories(rdc_sparse_fallback_test PRIVATE ../src/core)
 target_compile_features(rdc_sparse_fallback_test PRIVATE cxx_std_17)
 add_test(NAME rdc_sparse_fallback_test COMMAND rdc_sparse_fallback_test)
 
+add_executable(envelope_smoothing_test
+  envelope_smoothing_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeSmoothing.cpp)
+target_include_directories(envelope_smoothing_test PRIVATE ../src/core)
+target_compile_features(envelope_smoothing_test PRIVATE cxx_std_17)
+add_test(NAME envelope_smoothing_test COMMAND envelope_smoothing_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
