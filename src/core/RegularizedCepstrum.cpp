@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <utility>
 
 namespace ats
 {
@@ -162,6 +163,94 @@ bool parseCepstrumPenalty(const std::string& text, CepstrumPenalty& out)
     return false;
 }
 
+double amplitudeToDb(const double amplitude, const double floor)
+{
+    const double safeFloor = std::max(floor, std::numeric_limits<double>::min());
+    return 20.0 * std::log10(std::max(std::abs(amplitude), safeFloor));
+}
+
+double computeAtsPartialWeight(const EnvelopePartialPoint& partial,
+                               const AtsPartialWeightOptions& options,
+                               bool* usable)
+{
+    if (options.useSelection && !partial.selected)
+    {
+        setOk(usable, false);
+        return 0.0;
+    }
+
+    if (!std::isfinite(partial.frequencyHz) || partial.frequencyHz <= 0.0 ||
+        !std::isfinite(partial.amplitude))
+    {
+        setOk(usable, false);
+        return 0.0;
+    }
+
+    double weight = 1.0;
+    if (options.useSmr)
+    {
+        const double span = std::max(1.0e-9, options.maxSmrDb - options.minSmrDb);
+        const double smrNorm = std::clamp((partial.smr - options.minSmrDb) / span, 0.0, 1.0);
+        weight *= smrNorm;
+    }
+
+    if (options.useAmplitude)
+    {
+        const double db = amplitudeToDb(partial.amplitude, options.amplitudeFloor);
+        const double span = std::max(1.0e-9, options.maxAmplitudeDb - options.minAmplitudeDb);
+        const double ampNorm = std::clamp((db - options.minAmplitudeDb) / span, 0.0, 1.0);
+        weight *= ampNorm;
+    }
+
+    if (options.useConfidence)
+        weight *= std::clamp(partial.confidence, 0.0, 1.0);
+
+    if (!std::isfinite(weight) || weight <= 0.0)
+    {
+        setOk(usable, false);
+        return 0.0;
+    }
+
+    setOk(usable, true);
+    return std::clamp(weight, std::max(0.0, options.minWeight), std::max(options.minWeight, options.maxWeight));
+}
+
+bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
+                                   const AtsPartialWeightOptions& options,
+                                   std::vector<RdcFitPoint>& out,
+                                   EnvelopeDiagnostics* diagnostics)
+{
+    out.clear();
+    if (diagnostics)
+        *diagnostics = {};
+
+    for (const auto& partial : frame.partials)
+    {
+        bool usable = false;
+        const double weight = computeAtsPartialWeight(partial, options, &usable);
+        if (!usable)
+            continue;
+
+        double amplitude = std::abs(partial.amplitude);
+        if (amplitude < options.amplitudeFloor)
+        {
+            amplitude = options.amplitudeFloor;
+            if (diagnostics)
+            {
+                ++diagnostics->clippedOrFlooredCount;
+                diagnostics->warningFlags |= EnvelopeWarningAmplitudeFloor;
+            }
+        }
+
+        out.push_back({ partial.frequencyHz, amplitudeToDb(amplitude, options.amplitudeFloor), weight });
+    }
+
+    if (diagnostics && diagnostics->clippedOrFlooredCount > 0)
+        diagnostics->warnings.push_back("one or more partial amplitudes were floored before log conversion");
+
+    return !out.empty();
+}
+
 bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                     const RdcFitOptions& options,
                                     RdcFitResult& result)
@@ -301,6 +390,119 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
     const double value = evaluateCoefficients(envelope.values, envelope.frequencyAxis, frequencyHz, evalOk);
     setOk(ok, evalOk);
     return value;
+}
+
+RegularizedCepstrumEnvelopeEstimator::RegularizedCepstrumEnvelopeEstimator(RegularizedCepstrumEstimatorOptions nextOptions)
+    : options(std::move(nextOptions))
+{
+}
+
+std::string RegularizedCepstrumEnvelopeEstimator::id() const
+{
+    return kId;
+}
+
+std::uint32_t RegularizedCepstrumEnvelopeEstimator::version() const
+{
+    return kVersion;
+}
+
+bool RegularizedCepstrumEnvelopeEstimator::prepare(const EnvelopeEstimatorContext& nextContext,
+                                                   std::string* errorMessage)
+{
+    if (nextContext.sampleRate <= 0.0)
+    {
+        if (errorMessage)
+            *errorMessage = "sample rate must be positive";
+        prepared = false;
+        return false;
+    }
+
+    context = nextContext;
+    if (!isValidFrequencyAxis(options.fit.frequencyAxis))
+        options.fit.frequencyAxis = nextContext.frequencyAxis;
+    if (options.fit.frequencyAxis.sampleRate <= 0.0)
+        options.fit.frequencyAxis.sampleRate = nextContext.sampleRate;
+
+    if (!isValidFrequencyAxis(options.fit.frequencyAxis))
+    {
+        if (errorMessage)
+            *errorMessage = "frequency axis is invalid";
+        prepared = false;
+        return false;
+    }
+
+    if (context.maxOrder > 0)
+        options.fit.order = std::min(options.fit.order, context.maxOrder);
+
+    lastDiagnostics = {};
+    prepared = true;
+    return true;
+}
+
+bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& frame,
+                                                    FrameEnvelope& out,
+                                                    std::string* errorMessage)
+{
+    if (!prepared)
+    {
+        if (errorMessage)
+            *errorMessage = "estimator is not prepared";
+        return false;
+    }
+
+    EnvelopeDiagnostics pointDiagnostics;
+    std::vector<RdcFitPoint> points;
+    if (!buildRdcFitPointsFromPartials(frame, options.weights, points, &pointDiagnostics))
+    {
+        if (errorMessage)
+            *errorMessage = "no usable weighted partial points";
+        lastDiagnostics = pointDiagnostics;
+        lastDiagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
+        lastDiagnostics.addWarning(EnvelopeWarningSparseFrame, "no usable weighted partial points");
+        return false;
+    }
+
+    RdcFitResult fit;
+    if (!fitRegularizedDiscreteCepstrum(points, options.fit, fit))
+    {
+        if (errorMessage)
+            *errorMessage = fit.errorMessage;
+        lastDiagnostics = fit.diagnostics;
+        return false;
+    }
+
+    out = std::move(fit.envelope);
+    out.estimatorId = id();
+    out.estimatorVersion = version();
+    out.sourceModelId = frame.sourceModelId;
+    out.frameIndex = frame.frameIndex;
+    out.sampleRate = frame.sampleRate > 0.0 ? frame.sampleRate : context.sampleRate;
+
+    out.diagnostics.clippedOrFlooredCount += pointDiagnostics.clippedOrFlooredCount;
+    out.diagnostics.warningFlags |= pointDiagnostics.warningFlags;
+    out.diagnostics.warnings.insert(out.diagnostics.warnings.end(),
+                                    pointDiagnostics.warnings.begin(),
+                                    pointDiagnostics.warnings.end());
+    lastDiagnostics = out.diagnostics;
+    return true;
+}
+
+double RegularizedCepstrumEnvelopeEstimator::evaluate(const FrameEnvelope& envelope,
+                                                      const double frequencyHz,
+                                                      bool* ok) const
+{
+    if (envelope.estimatorId != kId)
+    {
+        setOk(ok, false);
+        return 0.0;
+    }
+    return evaluateRegularizedDiscreteCepstrum(envelope, frequencyHz, ok);
+}
+
+EnvelopeDiagnostics RegularizedCepstrumEnvelopeEstimator::diagnostics() const
+{
+    return lastDiagnostics;
 }
 
 } // namespace ats

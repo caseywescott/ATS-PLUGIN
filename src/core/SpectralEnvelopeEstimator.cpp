@@ -1,5 +1,7 @@
 #include "SpectralEnvelopeEstimator.h"
 
+#include "RegularizedCepstrum.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -125,6 +127,9 @@ EnvelopeEstimatorRegistry createDefaultEnvelopeEstimatorRegistry()
     EnvelopeEstimatorRegistry registry;
     registry.registerFactory(NoOpEnvelopeEstimator::kId, [] {
         return std::make_unique<NoOpEnvelopeEstimator>();
+    });
+    registry.registerFactory(RegularizedCepstrumEnvelopeEstimator::kId, [] {
+        return std::make_unique<RegularizedCepstrumEnvelopeEstimator>();
     });
     return registry;
 }

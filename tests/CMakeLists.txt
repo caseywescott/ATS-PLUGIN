@@ -20,7 +20,9 @@ add_test(NAME spectral_envelope_model_test COMMAND spectral_envelope_model_test)
 add_executable(spectral_envelope_estimator_test
   spectral_envelope_estimator_test.cpp
   ../src/core/SpectralEnvelope.cpp
-  ../src/core/SpectralEnvelopeEstimator.cpp)
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp)
 target_include_directories(spectral_envelope_estimator_test PRIVATE ../src/core)
 target_compile_features(spectral_envelope_estimator_test PRIVATE cxx_std_17)
 add_test(NAME spectral_envelope_estimator_test COMMAND spectral_envelope_estimator_test)
@@ -37,9 +39,20 @@ add_executable(regularized_cepstrum_test
   regularized_cepstrum_test.cpp
   ../src/core/FrequencyWarp.cpp
   ../src/core/RegularizedCepstrum.cpp
-  ../src/core/SpectralEnvelope.cpp)
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp)
 target_include_directories(regularized_cepstrum_test PRIVATE ../src/core)
 target_compile_features(regularized_cepstrum_test PRIVATE cxx_std_17)
 add_test(NAME regularized_cepstrum_test COMMAND regularized_cepstrum_test)
+
+add_executable(rdc_weighting_test
+  rdc_weighting_test.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp)
+target_include_directories(rdc_weighting_test PRIVATE ../src/core)
+target_compile_features(rdc_weighting_test PRIVATE cxx_std_17)
+add_test(NAME rdc_weighting_test COMMAND rdc_weighting_test)
 
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

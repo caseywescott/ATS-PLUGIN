@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SpectralEnvelope.h"
+#include "SpectralEnvelopeEstimator.h"
 
 #include <string>
 #include <vector>
@@ -40,8 +41,38 @@ struct RdcFitResult
     std::string errorMessage;
 };
 
+struct AtsPartialWeightOptions
+{
+    double amplitudeFloor = 1.0e-12;
+    double minAmplitudeDb = -120.0;
+    double maxAmplitudeDb = 0.0;
+    double minSmrDb = -10.0;
+    double maxSmrDb = 30.0;
+    double minWeight = 1.0e-4;
+    double maxWeight = 1.0;
+    bool useSmr = true;
+    bool useAmplitude = true;
+    bool useConfidence = true;
+    bool useSelection = true;
+};
+
+struct RegularizedCepstrumEstimatorOptions
+{
+    RdcFitOptions fit;
+    AtsPartialWeightOptions weights;
+};
+
 [[nodiscard]] const char* toString(CepstrumPenalty penalty);
 [[nodiscard]] bool parseCepstrumPenalty(const std::string& text, CepstrumPenalty& out);
+
+[[nodiscard]] double amplitudeToDb(double amplitude, double floor);
+[[nodiscard]] double computeAtsPartialWeight(const EnvelopePartialPoint& partial,
+                                             const AtsPartialWeightOptions& options,
+                                             bool* usable = nullptr);
+bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
+                                   const AtsPartialWeightOptions& options,
+                                   std::vector<RdcFitPoint>& out,
+                                   EnvelopeDiagnostics* diagnostics = nullptr);
 
 bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                     const RdcFitOptions& options,
@@ -50,5 +81,27 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
 [[nodiscard]] double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
                                                          double frequencyHz,
                                                          bool* ok = nullptr);
+
+class RegularizedCepstrumEnvelopeEstimator final : public SpectralEnvelopeEstimator
+{
+public:
+    static constexpr const char* kId = "rdc/weighted";
+    static constexpr std::uint32_t kVersion = 1;
+
+    explicit RegularizedCepstrumEnvelopeEstimator(RegularizedCepstrumEstimatorOptions options = {});
+
+    [[nodiscard]] std::string id() const override;
+    [[nodiscard]] std::uint32_t version() const override;
+    bool prepare(const EnvelopeEstimatorContext& context, std::string* errorMessage = nullptr) override;
+    bool estimate(const EnvelopeFrameInput& frame, FrameEnvelope& out, std::string* errorMessage = nullptr) override;
+    [[nodiscard]] double evaluate(const FrameEnvelope& envelope, double frequencyHz, bool* ok = nullptr) const override;
+    [[nodiscard]] EnvelopeDiagnostics diagnostics() const override;
+
+private:
+    RegularizedCepstrumEstimatorOptions options;
+    EnvelopeEstimatorContext context;
+    EnvelopeDiagnostics lastDiagnostics;
+    bool prepared = false;
+};
 
 } // namespace ats

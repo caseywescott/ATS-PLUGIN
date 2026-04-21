@@ -77,9 +77,9 @@
 
 **PRD:** section 5.2
 
-- [ ] Derive weights from SMR, amplitude, track confidence, user selection, and optional stability data.
-- [ ] Add clamping and floor policies for low amplitudes and unreliable partials.
-- [ ] Add tests showing weak/noisy partials influence the envelope less under the default policy.
+- [x] Derive weights from SMR, amplitude, track confidence, user selection, and optional stability data.
+- [x] Add clamping and floor policies for low amplitudes and unreliable partials.
+- [x] Add tests showing weak/noisy partials influence the envelope less under the default policy.
 
 ### Commit 9 - `feat(envelope): handle sparse and ill-conditioned frames`
 
