@@ -85,10 +85,10 @@
 
 **PRD:** section 5.2, section 8
 
-- [ ] Add order reduction when usable point count is low.
-- [ ] Increase regularization or fall back to sampled/interpolated envelopes when diagnostics fail.
-- [ ] Record fallback decisions in diagnostics.
-- [ ] Add tests for missing low bands, clustered partials, sparse high-pitch-like frames, and inharmonic partial sets.
+- [x] Add order reduction when usable point count is low.
+- [x] Increase regularization or fall back to sampled/interpolated envelopes when diagnostics fail.
+- [x] Record fallback decisions in diagnostics.
+- [x] Add tests for missing low bands, clustered partials, sparse high-pitch-like frames, and inharmonic partial sets.
 
 ### Commit 10 - `feat(envelope): add temporal smoothing for envelope series`
 

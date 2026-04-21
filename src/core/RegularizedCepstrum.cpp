@@ -251,6 +251,158 @@ bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
     return !out.empty();
 }
 
+namespace
+{
+
+std::vector<RdcFitPoint> usableFitPoints(const std::vector<RdcFitPoint>& points,
+                                         const EnvelopeAxisSpec& axis)
+{
+    std::vector<RdcFitPoint> usable;
+    usable.reserve(points.size());
+    for (const auto& point : points)
+    {
+        if (!std::isfinite(point.frequencyHz) || !std::isfinite(point.logAmplitudeDb) ||
+            !std::isfinite(point.weight) || point.weight <= 0.0)
+        {
+            continue;
+        }
+
+        bool positionOk = false;
+        (void)normalizedPositionForFrequency(point.frequencyHz, axis, &positionOk);
+        if (positionOk)
+            usable.push_back(point);
+    }
+    return usable;
+}
+
+double weightedMeanDb(const std::vector<RdcFitPoint>& points)
+{
+    double weightedSum = 0.0;
+    double weightSum = 0.0;
+    for (const auto& point : points)
+    {
+        weightedSum += point.weight * point.logAmplitudeDb;
+        weightSum += point.weight;
+    }
+    return weightSum > 0.0 ? weightedSum / weightSum : 0.0;
+}
+
+bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
+                          const RdcFitOptions& options,
+                          const int order,
+                          const double regularization,
+                          std::vector<double>& coefficients,
+                          EnvelopeDiagnostics& diagnostics,
+                          std::string& errorMessage)
+{
+    const int coefficientCount = order + 1;
+    std::vector<std::vector<double>> matrix(static_cast<std::size_t>(coefficientCount),
+                                            std::vector<double>(static_cast<std::size_t>(coefficientCount), 0.0));
+    std::vector<double> rhs(static_cast<std::size_t>(coefficientCount), 0.0);
+
+    double weightSum = 0.0;
+    diagnostics.fitPointCount = 0;
+    for (const auto& point : points)
+    {
+        bool basisOk = false;
+        const auto basis = basisForFrequency(point.frequencyHz, options.frequencyAxis, order, basisOk);
+        if (!basisOk)
+            continue;
+
+        ++diagnostics.fitPointCount;
+        weightSum += point.weight;
+        for (int row = 0; row < coefficientCount; ++row)
+        {
+            const double weightedBasis = point.weight * basis[static_cast<std::size_t>(row)];
+            rhs[static_cast<std::size_t>(row)] += weightedBasis * point.logAmplitudeDb;
+            for (int col = 0; col <= row; ++col)
+            {
+                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] +=
+                    weightedBasis * basis[static_cast<std::size_t>(col)];
+            }
+        }
+    }
+
+    if (diagnostics.fitPointCount == 0 || weightSum <= 0.0)
+    {
+        errorMessage = "no usable fit points";
+        return false;
+    }
+
+    for (int row = 0; row < coefficientCount; ++row)
+    {
+        for (int col = 0; col < row; ++col)
+            matrix[static_cast<std::size_t>(col)][static_cast<std::size_t>(row)] =
+                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)];
+    }
+
+    for (int k = 0; k < coefficientCount; ++k)
+    {
+        matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k)] +=
+            std::max(0.0, options.ridge) + std::max(0.0, regularization) * penaltyDiagonal(k, options.penalty);
+    }
+
+    double pivotRatio = 0.0;
+    if (!solveSymmetricPositiveDefinite(matrix, rhs, coefficients, pivotRatio))
+    {
+        errorMessage = "cepstrum normal equations were not positive definite";
+        return false;
+    }
+
+    double weightedSquaredError = 0.0;
+    for (const auto& point : points)
+    {
+        bool evalOk = false;
+        const double predicted = evaluateCoefficients(coefficients, options.frequencyAxis, point.frequencyHz, evalOk);
+        if (!evalOk)
+            continue;
+        const double residual = predicted - point.logAmplitudeDb;
+        weightedSquaredError += point.weight * residual * residual;
+    }
+
+    diagnostics.weightedError = std::sqrt(weightedSquaredError / weightSum);
+    diagnostics.conditionEstimate = pivotRatio * pivotRatio;
+    return true;
+}
+
+void finishFitResult(RdcFitResult& result,
+                     const RdcFitOptions& options,
+                     const int effectiveOrder,
+                     const double effectiveRegularization,
+                     std::vector<double> coefficients)
+{
+    result.effectiveOrder = effectiveOrder;
+    result.envelope.frequencyAxis = options.frequencyAxis;
+    result.envelope.envelopeOrder = effectiveOrder;
+    result.envelope.regularization = effectiveRegularization;
+    result.envelope.penaltyType = toString(options.penalty);
+    result.envelope.storage = EnvelopeValueStorage::Coefficients;
+    result.envelope.values = std::move(coefficients);
+    result.envelope.diagnostics = result.diagnostics;
+    result.ok = true;
+}
+
+void finishConstantFallback(RdcFitResult& result,
+                            const RdcFitOptions& options,
+                            const double valueDb,
+                            const EnvelopeFallbackReason reason,
+                            const std::string& warning)
+{
+    result.effectiveOrder = 0;
+    result.diagnostics.fallbackReason = reason;
+    result.diagnostics.addWarning(EnvelopeWarningFallback, warning);
+    result.envelope.frequencyAxis = options.frequencyAxis;
+    result.envelope.envelopeOrder = 0;
+    result.envelope.regularization = 0.0;
+    result.envelope.penaltyType = "constant_fallback";
+    result.envelope.storage = EnvelopeValueStorage::Samples;
+    result.envelope.values = { valueDb };
+    result.envelope.diagnostics = result.diagnostics;
+    result.ok = true;
+}
+
+} // namespace
+
 bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                     const RdcFitOptions& options,
                                     RdcFitResult& result)
@@ -268,97 +420,101 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
         return false;
     }
 
-    const int coefficientCount = options.order + 1;
-    std::vector<std::vector<double>> matrix(static_cast<std::size_t>(coefficientCount),
-                                            std::vector<double>(static_cast<std::size_t>(coefficientCount), 0.0));
-    std::vector<double> rhs(static_cast<std::size_t>(coefficientCount), 0.0);
-
-    double weightSum = 0.0;
-    for (const auto& point : points)
+    const auto usable = usableFitPoints(points, options.frequencyAxis);
+    if (usable.empty())
     {
-        if (!std::isfinite(point.frequencyHz) || !std::isfinite(point.logAmplitudeDb) ||
-            !std::isfinite(point.weight) || point.weight <= 0.0)
-        {
-            continue;
-        }
-
-        bool basisOk = false;
-        const auto basis = basisForFrequency(point.frequencyHz, options.frequencyAxis, options.order, basisOk);
-        if (!basisOk)
-            continue;
-
-        ++result.diagnostics.fitPointCount;
-        weightSum += point.weight;
-        for (int row = 0; row < coefficientCount; ++row)
-        {
-            const double weightedBasis = point.weight * basis[static_cast<std::size_t>(row)];
-            rhs[static_cast<std::size_t>(row)] += weightedBasis * point.logAmplitudeDb;
-            for (int col = 0; col <= row; ++col)
-            {
-                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] +=
-                    weightedBasis * basis[static_cast<std::size_t>(col)];
-            }
-        }
-    }
-
-    if (result.diagnostics.fitPointCount == 0 || weightSum <= 0.0)
-    {
+        result.diagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
+        result.diagnostics.addWarning(EnvelopeWarningSparseFrame, "no usable in-range fit points");
         result.errorMessage = "no usable fit points";
         return false;
     }
 
-    for (int row = 0; row < coefficientCount; ++row)
+    int effectiveOrder = options.order;
+    double effectiveRegularization = options.regularization;
+    if (options.reduceOrderForSparseFrames && static_cast<int>(usable.size()) <= effectiveOrder)
     {
-        for (int col = 0; col < row; ++col)
-            matrix[static_cast<std::size_t>(col)][static_cast<std::size_t>(row)] =
-                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)];
-    }
-
-    for (int k = 0; k < coefficientCount; ++k)
-    {
-        matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k)] +=
-            std::max(0.0, options.ridge) + std::max(0.0, options.regularization) * penaltyDiagonal(k, options.penalty);
+        effectiveOrder = std::max(0, static_cast<int>(usable.size()) - 1);
+        effectiveRegularization = std::max(effectiveRegularization, options.sparseRegularizationFloor);
+        result.diagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
+        result.diagnostics.addWarning(EnvelopeWarningSparseFrame, "cepstrum order reduced for sparse frame");
     }
 
     std::vector<double> coefficients;
-    double pivotRatio = 0.0;
-    if (!solveSymmetricPositiveDefinite(matrix, rhs, coefficients, pivotRatio))
+    EnvelopeDiagnostics attemptDiagnostics;
+    std::string attemptError;
+    bool solved = solveCepstrumAttempt(usable,
+                                       options,
+                                       effectiveOrder,
+                                       effectiveRegularization,
+                                       coefficients,
+                                       attemptDiagnostics,
+                                       attemptError);
+
+    const bool retryForCondition = solved &&
+        attemptDiagnostics.conditionEstimate > options.illConditionedThreshold &&
+        options.retryIllConditionedWithRegularization;
+    if (!solved || retryForCondition)
     {
-        result.errorMessage = "cepstrum normal equations were not positive definite";
-        result.diagnostics.fallbackReason = EnvelopeFallbackReason::IllConditioned;
-        result.diagnostics.addWarning(EnvelopeWarningFallback, result.errorMessage);
+        const double retryRegularization = std::max({
+            effectiveRegularization * 10.0,
+            options.illConditionedRegularizationFloor,
+            options.sparseRegularizationFloor
+        });
+
+        EnvelopeDiagnostics retryDiagnostics;
+        std::vector<double> retryCoefficients;
+        std::string retryError;
+        if (options.retryIllConditionedWithRegularization &&
+            solveCepstrumAttempt(usable,
+                                 options,
+                                 effectiveOrder,
+                                 retryRegularization,
+                                 retryCoefficients,
+                                 retryDiagnostics,
+                                 retryError))
+        {
+            coefficients = std::move(retryCoefficients);
+            attemptDiagnostics = retryDiagnostics;
+            effectiveRegularization = retryRegularization;
+            result.diagnostics.fallbackReason = EnvelopeFallbackReason::IllConditioned;
+            result.diagnostics.addWarning(EnvelopeWarningFallback,
+                                          "regularization increased for ill-conditioned frame");
+            solved = true;
+        }
+        else if (!solved)
+        {
+            attemptError = retryError.empty() ? attemptError : retryError;
+        }
+    }
+
+    if (!solved)
+    {
+        result.errorMessage = attemptError.empty() ? "cepstrum fit failed" : attemptError;
+        result.diagnostics.fitPointCount = static_cast<int>(usable.size());
+        if (options.fallbackToConstantEnvelope)
+        {
+            finishConstantFallback(result,
+                                   options,
+                                   weightedMeanDb(usable),
+                                   EnvelopeFallbackReason::IllConditioned,
+                                   result.errorMessage);
+            return true;
+        }
         return false;
     }
 
-    double weightedSquaredError = 0.0;
-    for (const auto& point : points)
-    {
-        if (!std::isfinite(point.frequencyHz) || !std::isfinite(point.logAmplitudeDb) ||
-            !std::isfinite(point.weight) || point.weight <= 0.0)
-        {
-            continue;
-        }
+    const auto existingWarnings = result.diagnostics.warnings;
+    const auto existingFlags = result.diagnostics.warningFlags;
+    const auto existingFallback = result.diagnostics.fallbackReason;
+    result.diagnostics = attemptDiagnostics;
+    result.diagnostics.warningFlags |= existingFlags;
+    result.diagnostics.warnings.insert(result.diagnostics.warnings.end(),
+                                       existingWarnings.begin(),
+                                       existingWarnings.end());
+    if (existingFallback != EnvelopeFallbackReason::None)
+        result.diagnostics.fallbackReason = existingFallback;
 
-        bool evalOk = false;
-        const double predicted = evaluateCoefficients(coefficients, options.frequencyAxis, point.frequencyHz, evalOk);
-        if (!evalOk)
-            continue;
-        const double residual = predicted - point.logAmplitudeDb;
-        weightedSquaredError += point.weight * residual * residual;
-    }
-
-    result.diagnostics.weightedError = std::sqrt(weightedSquaredError / weightSum);
-    result.diagnostics.conditionEstimate = pivotRatio * pivotRatio;
-    result.effectiveOrder = options.order;
-
-    result.envelope.frequencyAxis = options.frequencyAxis;
-    result.envelope.envelopeOrder = options.order;
-    result.envelope.regularization = options.regularization;
-    result.envelope.penaltyType = toString(options.penalty);
-    result.envelope.storage = EnvelopeValueStorage::Coefficients;
-    result.envelope.values = std::move(coefficients);
-    result.envelope.diagnostics = result.diagnostics;
-    result.ok = true;
+    finishFitResult(result, options, effectiveOrder, effectiveRegularization, std::move(coefficients));
     return true;
 }
 

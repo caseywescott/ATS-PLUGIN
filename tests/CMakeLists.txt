@@ -55,4 +55,14 @@ target_include_directories(rdc_weighting_test PRIVATE ../src/core)
 target_compile_features(rdc_weighting_test PRIVATE cxx_std_17)
 add_test(NAME rdc_weighting_test COMMAND rdc_weighting_test)
 
+add_executable(rdc_sparse_fallback_test
+  rdc_sparse_fallback_test.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp)
+target_include_directories(rdc_sparse_fallback_test PRIVATE ../src/core)
+target_compile_features(rdc_sparse_fallback_test PRIVATE cxx_std_17)
+add_test(NAME rdc_sparse_fallback_test COMMAND rdc_sparse_fallback_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

@@ -30,6 +30,12 @@ struct RdcFitOptions
     double regularization = 1.0e-3;
     CepstrumPenalty penalty = CepstrumPenalty::SecondDerivative;
     double ridge = 1.0e-10;
+    bool reduceOrderForSparseFrames = true;
+    bool retryIllConditionedWithRegularization = true;
+    bool fallbackToConstantEnvelope = true;
+    double sparseRegularizationFloor = 1.0e-2;
+    double illConditionedRegularizationFloor = 1.0;
+    double illConditionedThreshold = 1.0e10;
 };
 
 struct RdcFitResult
