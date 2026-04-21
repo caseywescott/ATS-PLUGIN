@@ -101,6 +101,7 @@ struct HybridPartialInput
 struct HybridPartialOutput
 {
     double frequencyHz = 0.0;
+    double targetFrequencyHz = 0.0;
     double sourceAmplitude = 0.0;
     double outputAmplitude = 0.0;
     double sourceAmplitudeDb = 0.0;
@@ -108,6 +109,15 @@ struct HybridPartialOutput
     double targetEnvelopeDb = 0.0;
     double transferGainDb = 0.0;
     bool ok = false;
+};
+
+struct HybridFrequencyMappingResult
+{
+    double sourceFrequencyHz = 0.0;
+    double targetFrequencyHz = 0.0;
+    bool inRange = false;
+    bool ok = false;
+    std::string errorMessage;
 };
 
 [[nodiscard]] const char* toString(HybridFrequencyMapping mapping);
@@ -127,6 +137,16 @@ bool parseHybridTransientPolicy(const std::string& text, HybridTransientPolicy& 
                                                                  double targetEnvelopeDb,
                                                                  const SpectralEnvelopeTransferRecipe& recipe);
 [[nodiscard]] std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(
+    const std::vector<HybridPartialInput>& partials,
+    const FrameEnvelope& sourceEnvelope,
+    const FrameEnvelope& targetEnvelope,
+    const SpectralEnvelopeTransferRecipe& recipe);
+[[nodiscard]] HybridFrequencyMappingResult mapHybridTargetFrequency(
+    double sourceFrequencyHz,
+    const FrameEnvelope& sourceEnvelope,
+    const FrameEnvelope& targetEnvelope,
+    const SpectralEnvelopeTransferRecipe& recipe);
+[[nodiscard]] std::vector<HybridPartialOutput> applyEnvelopeTransferMapped(
     const std::vector<HybridPartialInput>& partials,
     const FrameEnvelope& sourceEnvelope,
     const FrameEnvelope& targetEnvelope,

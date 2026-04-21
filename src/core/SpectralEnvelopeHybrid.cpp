@@ -140,6 +140,114 @@ bool requireField(const std::unordered_map<std::string, std::string>& fields,
     return true;
 }
 
+bool toEnvelopeMapping(const HybridFrequencyMapping mapping, EnvelopeFrequencyMapping& out)
+{
+    switch (mapping)
+    {
+        case HybridFrequencyMapping::DirectHz:
+            out = EnvelopeFrequencyMapping::DirectHz;
+            return true;
+        case HybridFrequencyMapping::NormalizedNyquist:
+            out = EnvelopeFrequencyMapping::NormalizedNyquist;
+            return true;
+        case HybridFrequencyMapping::PerceptualWarp:
+            out = EnvelopeFrequencyMapping::PerceptualWarp;
+            return true;
+        case HybridFrequencyMapping::RangeWarp:
+            out = EnvelopeFrequencyMapping::RangeWarp;
+            return true;
+        case HybridFrequencyMapping::Correspondence:
+        case HybridFrequencyMapping::HarmonicNumber:
+            return false;
+    }
+    return false;
+}
+
+bool clampOrRejectToTargetAxis(const double frequencyHz,
+                               const FrameEnvelope& targetEnvelope,
+                               const EnvelopeExtrapolationPolicy extrapolation,
+                               double& mappedFrequencyHz,
+                               bool& inRange)
+{
+    EnvelopeEvaluationOptions direct;
+    direct.mapping = EnvelopeFrequencyMapping::DirectHz;
+    direct.extrapolation = extrapolation;
+    direct.targetAxis = targetEnvelope.frequencyAxis;
+    return mapEnvelopeLookupFrequency(frequencyHz, targetEnvelope, direct, mappedFrequencyHz, inRange);
+}
+
+bool isValidCorrespondencePoint(const HybridCorrespondencePoint& point)
+{
+    return std::isfinite(point.sourceFrequencyHz) &&
+           std::isfinite(point.targetFrequencyHz) &&
+           std::isfinite(point.confidence) &&
+           point.sourceFrequencyHz > 0.0 &&
+           point.targetFrequencyHz > 0.0 &&
+           point.confidence > 0.0;
+}
+
+bool mapCorrespondenceFrequency(const double sourceFrequencyHz,
+                                const std::vector<HybridCorrespondencePoint>& correspondence,
+                                const EnvelopeExtrapolationPolicy extrapolation,
+                                double& targetFrequencyHz,
+                                bool& inRange)
+{
+    std::vector<HybridCorrespondencePoint> valid;
+    valid.reserve(correspondence.size());
+    for (const auto& point : correspondence)
+    {
+        if (isValidCorrespondencePoint(point))
+            valid.push_back(point);
+    }
+
+    if (valid.empty() || !std::isfinite(sourceFrequencyHz) || sourceFrequencyHz <= 0.0)
+        return false;
+
+    std::sort(valid.begin(), valid.end(), [](const auto& a, const auto& b) {
+        return a.sourceFrequencyHz < b.sourceFrequencyHz;
+    });
+
+    constexpr double kExactToleranceHz = 1.0e-9;
+    for (const auto& point : valid)
+    {
+        if (std::abs(point.sourceFrequencyHz - sourceFrequencyHz) <= kExactToleranceHz)
+        {
+            targetFrequencyHz = point.targetFrequencyHz;
+            inRange = true;
+            return true;
+        }
+    }
+
+    const auto& first = valid.front();
+    const auto& last = valid.back();
+    inRange = sourceFrequencyHz >= first.sourceFrequencyHz && sourceFrequencyHz <= last.sourceFrequencyHz;
+    if (!inRange)
+    {
+        if (extrapolation == EnvelopeExtrapolationPolicy::Reject)
+            return false;
+        targetFrequencyHz = sourceFrequencyHz < first.sourceFrequencyHz ? first.targetFrequencyHz : last.targetFrequencyHz;
+        return true;
+    }
+
+    for (std::size_t i = 1; i < valid.size(); ++i)
+    {
+        const auto& lo = valid[i - 1];
+        const auto& hi = valid[i];
+        if (sourceFrequencyHz < lo.sourceFrequencyHz || sourceFrequencyHz > hi.sourceFrequencyHz)
+            continue;
+
+        const double span = hi.sourceFrequencyHz - lo.sourceFrequencyHz;
+        if (span <= 0.0)
+            continue;
+
+        const double t = (sourceFrequencyHz - lo.sourceFrequencyHz) / span;
+        targetFrequencyHz = lo.targetFrequencyHz + t * (hi.targetFrequencyHz - lo.targetFrequencyHz);
+        return std::isfinite(targetFrequencyHz) && targetFrequencyHz > 0.0;
+    }
+
+    return false;
+}
+
 } // namespace
 
 const char* toString(const HybridFrequencyMapping mapping)
@@ -505,6 +613,7 @@ HybridPartialOutput applyLogDomainEnvelopeTransfer(const double sourceAmplitude,
 {
     HybridPartialOutput out;
     out.frequencyHz = frequencyHz;
+    out.targetFrequencyHz = frequencyHz;
     out.sourceAmplitude = sourceAmplitude;
     out.sourceEnvelopeDb = sourceEnvelopeDb;
     out.targetEnvelopeDb = targetEnvelopeDb;
@@ -528,6 +637,91 @@ HybridPartialOutput applyLogDomainEnvelopeTransfer(const double sourceAmplitude,
     out.outputAmplitude = dbToAmplitude(outputDb);
     out.ok = std::isfinite(out.outputAmplitude);
     return out;
+}
+
+HybridFrequencyMappingResult mapHybridTargetFrequency(const double sourceFrequencyHz,
+                                                      const FrameEnvelope& sourceEnvelope,
+                                                      const FrameEnvelope& targetEnvelope,
+                                                      const SpectralEnvelopeTransferRecipe& recipe)
+{
+    HybridFrequencyMappingResult result;
+    result.sourceFrequencyHz = sourceFrequencyHz;
+
+    if (!std::isfinite(sourceFrequencyHz) || sourceFrequencyHz <= 0.0)
+    {
+        result.errorMessage = "invalid source frequency";
+        return result;
+    }
+
+    EnvelopeFrequencyMapping envelopeMapping;
+    if (toEnvelopeMapping(recipe.mapping, envelopeMapping))
+    {
+        EnvelopeEvaluationOptions options;
+        options.mapping = envelopeMapping;
+        options.extrapolation = recipe.extrapolation;
+        options.sourceAxis = sourceEnvelope.frequencyAxis;
+        options.targetAxis = targetEnvelope.frequencyAxis;
+        options.perceptualAxis = recipe.warpAxis;
+
+        result.ok = mapEnvelopeLookupFrequency(sourceFrequencyHz,
+                                               targetEnvelope,
+                                               options,
+                                               result.targetFrequencyHz,
+                                               result.inRange);
+        if (!result.ok)
+            result.errorMessage = "axis-based mapping failed";
+        return result;
+    }
+
+    double mappedFrequencyHz = 0.0;
+    bool inRange = false;
+    switch (recipe.mapping)
+    {
+        case HybridFrequencyMapping::Correspondence:
+            if (!mapCorrespondenceFrequency(sourceFrequencyHz,
+                                            recipe.correspondence,
+                                            recipe.extrapolation,
+                                            mappedFrequencyHz,
+                                            inRange))
+            {
+                result.errorMessage = "correspondence mapping failed";
+                return result;
+            }
+            break;
+
+        case HybridFrequencyMapping::HarmonicNumber:
+            if (!recipe.harmonicMappingEnabled || !recipe.harmonicityReliable)
+            {
+                result.errorMessage = "harmonic mapping requires reliable harmonicity metadata";
+                return result;
+            }
+            if (!std::isfinite(recipe.sourceF0Hz) || !std::isfinite(recipe.targetF0Hz) ||
+                recipe.sourceF0Hz <= 0.0 || recipe.targetF0Hz <= 0.0)
+            {
+                result.errorMessage = "harmonic mapping requires positive source and target F0";
+                return result;
+            }
+            mappedFrequencyHz = (sourceFrequencyHz / recipe.sourceF0Hz) * recipe.targetF0Hz;
+            inRange = true;
+            break;
+
+        case HybridFrequencyMapping::DirectHz:
+        case HybridFrequencyMapping::NormalizedNyquist:
+        case HybridFrequencyMapping::PerceptualWarp:
+        case HybridFrequencyMapping::RangeWarp:
+            result.errorMessage = "unsupported mapping";
+            return result;
+    }
+
+    result.ok = clampOrRejectToTargetAxis(mappedFrequencyHz,
+                                          targetEnvelope,
+                                          recipe.extrapolation,
+                                          result.targetFrequencyHz,
+                                          result.inRange);
+    result.inRange = result.inRange && inRange;
+    if (!result.ok)
+        result.errorMessage = "mapped frequency outside target envelope";
+    return result;
 }
 
 std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(const std::vector<HybridPartialInput>& partials,
@@ -566,6 +760,61 @@ std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(const std::vector<H
                                                      sourceSample.valueDb,
                                                      targetSample.valueDb,
                                                      recipe));
+    }
+
+    return out;
+}
+
+std::vector<HybridPartialOutput> applyEnvelopeTransferMapped(const std::vector<HybridPartialInput>& partials,
+                                                            const FrameEnvelope& sourceEnvelope,
+                                                            const FrameEnvelope& targetEnvelope,
+                                                            const SpectralEnvelopeTransferRecipe& recipe)
+{
+    std::vector<HybridPartialOutput> out;
+    out.reserve(partials.size());
+
+    EnvelopeEvaluationOptions sourceEval;
+    sourceEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    sourceEval.extrapolation = recipe.extrapolation;
+    sourceEval.targetAxis = sourceEnvelope.frequencyAxis;
+
+    EnvelopeEvaluationOptions targetEval;
+    targetEval.mapping = EnvelopeFrequencyMapping::DirectHz;
+    targetEval.extrapolation = recipe.extrapolation;
+    targetEval.targetAxis = targetEnvelope.frequencyAxis;
+
+    for (const auto& partial : partials)
+    {
+        const auto mapping = mapHybridTargetFrequency(partial.frequencyHz, sourceEnvelope, targetEnvelope, recipe);
+        const auto sourceSample = evaluateEnvelopeAtFrequency(sourceEnvelope, partial.frequencyHz, sourceEval);
+        if (!mapping.ok || !sourceSample.ok)
+        {
+            HybridPartialOutput failed;
+            failed.frequencyHz = partial.frequencyHz;
+            failed.targetFrequencyHz = mapping.targetFrequencyHz;
+            failed.sourceAmplitude = partial.amplitude;
+            out.push_back(failed);
+            continue;
+        }
+
+        const auto targetSample = evaluateEnvelopeAtFrequency(targetEnvelope, mapping.targetFrequencyHz, targetEval);
+        if (!targetSample.ok)
+        {
+            HybridPartialOutput failed;
+            failed.frequencyHz = partial.frequencyHz;
+            failed.targetFrequencyHz = mapping.targetFrequencyHz;
+            failed.sourceAmplitude = partial.amplitude;
+            out.push_back(failed);
+            continue;
+        }
+
+        auto transferred = applyLogDomainEnvelopeTransfer(partial.amplitude,
+                                                          partial.frequencyHz,
+                                                          sourceSample.valueDb,
+                                                          targetSample.valueDb,
+                                                          recipe);
+        transferred.targetFrequencyHz = mapping.targetFrequencyHz;
+        out.push_back(transferred);
     }
 
     return out;

@@ -150,9 +150,9 @@
 
 **PRD:** section 5.5
 
-- [ ] Add direct Hz, normalized Nyquist, perceptual-warp, range-warp, and correspondence-based lookup modes.
-- [ ] Make harmonic-number mapping optional and gated by reliable harmonicity/F0 metadata.
-- [ ] Add non-harmonic fixture tests to ensure no harmonic assumption leaks into defaults.
+- [x] Add direct Hz, normalized Nyquist, perceptual-warp, range-warp, and correspondence-based lookup modes.
+- [x] Make harmonic-number mapping optional and gated by reliable harmonicity/F0 metadata.
+- [x] Add non-harmonic fixture tests to ensure no harmonic assumption leaks into defaults.
 
 ### Commit 17 - `feat(hybrid): add gain normalization policies`
 
