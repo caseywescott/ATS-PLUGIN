@@ -134,9 +134,9 @@
 
 **PRD:** section 5.4, section 6.2
 
-- [ ] Add serializable recipe with source/target model ids, estimator settings, de-color amount, target-color amount, envelope mix, normalization, mapping, residual policy, and transient policy.
-- [ ] Keep recipe separate from source models and generated model snapshots.
-- [ ] Add state recall tests.
+- [x] Add serializable recipe with source/target model ids, estimator settings, de-color amount, target-color amount, envelope mix, normalization, mapping, residual policy, and transient policy.
+- [x] Keep recipe separate from source models and generated model snapshots.
+- [x] Add state recall tests.
 
 ### Commit 15 - `feat(hybrid): implement log-domain decolor and recolor`
 

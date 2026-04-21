@@ -50,6 +50,7 @@ target_sources(
           ../core/FrequencyWarp.cpp
           ../core/RegularizedCepstrum.cpp
           ../core/SampledEnvelopeCache.cpp
+          ../core/SpectralEnvelopeHybrid.cpp
           ../core/SpectralEnvelopeSmoothing.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
