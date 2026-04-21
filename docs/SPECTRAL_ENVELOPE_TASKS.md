@@ -106,9 +106,9 @@
 
 **PRD:** section 5.3, section 5.5
 
-- [ ] Evaluate fitted envelopes at source partial frequencies, target mapped frequencies, and visualization grids.
-- [ ] Guard out-of-range lookup with documented extrapolation policies.
-- [ ] Add tests for direct Hz, normalized, perceptual, and range-warped lookups.
+- [x] Evaluate fitted envelopes at source partial frequencies, target mapped frequencies, and visualization grids.
+- [x] Guard out-of-range lookup with documented extrapolation policies.
+- [x] Add tests for direct Hz, normalized, perceptual, and range-warped lookups.
 
 ### Commit 12 - `feat(envelope): add sampled envelope cache`
 

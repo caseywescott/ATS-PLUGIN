@@ -44,6 +44,7 @@ target_sources(
           MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
+          ../core/EnvelopeEvaluation.cpp
           ../core/FrequencyWarp.cpp
           ../core/RegularizedCepstrum.cpp
           ../core/SpectralEnvelopeSmoothing.cpp
