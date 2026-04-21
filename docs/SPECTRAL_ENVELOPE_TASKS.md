@@ -68,10 +68,10 @@
 
 **PRD:** section 5.2
 
-- [ ] Fit log-amplitude/dB points using cosine cepstral basis functions.
-- [ ] Add Tikhonov regularization with first-derivative and second-derivative penalties.
-- [ ] Solve with numerically stable linear algebra available in the project/toolchain.
-- [ ] Add synthetic tests with known smooth envelopes.
+- [x] Fit log-amplitude/dB points using cosine cepstral basis functions.
+- [x] Add Tikhonov regularization with first-derivative and second-derivative penalties.
+- [x] Solve with numerically stable linear algebra available in the project/toolchain.
+- [x] Add synthetic tests with known smooth envelopes.
 
 ### Commit 8 - `feat(envelope): add ATS partial weighting policies`
 

@@ -33,4 +33,13 @@ target_include_directories(frequency_warp_test PRIVATE ../src/core)
 target_compile_features(frequency_warp_test PRIVATE cxx_std_17)
 add_test(NAME frequency_warp_test COMMAND frequency_warp_test)
 
+add_executable(regularized_cepstrum_test
+  regularized_cepstrum_test.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp)
+target_include_directories(regularized_cepstrum_test PRIVATE ../src/core)
+target_compile_features(regularized_cepstrum_test PRIVATE cxx_std_17)
+add_test(NAME regularized_cepstrum_test COMMAND regularized_cepstrum_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
