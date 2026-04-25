@@ -24,7 +24,7 @@ extern "C" {
 
 namespace
 {
-constexpr int kStateVersion = 4;
+constexpr int kStateVersion = 5;
 constexpr int kMinReadableStateVersion = 2;
 
 void freeResidual(double*** res)
@@ -271,6 +271,25 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         "Analysis type",
         juce::StringArray { "1 amp+freq", "2 +phase", "3 +noise", "4 full" },
         3));
+
+    // Envelope transfer controls (v5+)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "envDecolor", "Envelope de-color amount",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "envRecolor", "Envelope target-color amount",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "envMix", "Envelope transfer mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "envResidualMix", "Residual envelope color mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "envTransientPolicy",
+        "Transient policy",
+        juce::StringArray { "Preserve source", "Target color", "Crossfade", "Bypass" },
+        0));
 
     return layout;
 }
@@ -837,6 +856,15 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (kStateVersion >= 4)
         mos.writeByte(apvts.getRawParameterValue("residualOnly")->load() > 0.5f ? (juce::uint8) 1 : (juce::uint8) 0);
 
+    if (kStateVersion >= 5)
+    {
+        mos.writeFloat(apvts.getRawParameterValue("envDecolor")->load());
+        mos.writeFloat(apvts.getRawParameterValue("envRecolor")->load());
+        mos.writeFloat(apvts.getRawParameterValue("envMix")->load());
+        mos.writeFloat(apvts.getRawParameterValue("envResidualMix")->load());
+        mos.writeByte((juce::uint8) juce::roundToInt(apvts.getRawParameterValue("envTransientPolicy")->load()));
+    }
+
     destData = mos.getMemoryBlock();
 }
 
@@ -878,6 +906,17 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     if (ver >= 4 && mis.getNumBytesRemaining() > 0)
         residualOnly = mis.readByte() != 0;
 
+    float envDecolor = 1.0f, envRecolor = 1.0f, envMix = 1.0f, envResidualMix = 0.0f;
+    int envTransientPolicy = 0;
+    if (ver >= 5 && mis.getNumBytesRemaining() >= (juce::int64)(4 * sizeof(float) + 1))
+    {
+        envDecolor = mis.readFloat();
+        envRecolor = mis.readFloat();
+        envMix = mis.readFloat();
+        envResidualMix = mis.readFloat();
+        envTransientPolicy = (int) mis.readByte();
+    }
+
     if (auto* p = apvts.getParameter("analysisType"))
         p->setValueNotifyingHost((float) (juce::jlimit(1, 4, ap.type) - 1) / 3.0f);
 
@@ -901,6 +940,17 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         p->setValueNotifyingHost(residualOnly ? 1.0f : 0.0f);
     if (auto* p = apvts.getParameter("outputTrim"))
         p->setValueNotifyingHost(apvts.getParameterRange("outputTrim").convertTo0to1(outputTrim));
+    if (auto* p = apvts.getParameter("envDecolor"))
+        p->setValueNotifyingHost(apvts.getParameterRange("envDecolor").convertTo0to1(envDecolor));
+    if (auto* p = apvts.getParameter("envRecolor"))
+        p->setValueNotifyingHost(apvts.getParameterRange("envRecolor").convertTo0to1(envRecolor));
+    if (auto* p = apvts.getParameter("envMix"))
+        p->setValueNotifyingHost(apvts.getParameterRange("envMix").convertTo0to1(envMix));
+    if (auto* p = apvts.getParameter("envResidualMix"))
+        p->setValueNotifyingHost(apvts.getParameterRange("envResidualMix").convertTo0to1(envResidualMix));
+    if (auto* p = apvts.getParameter("envTransientPolicy"))
+        p->setValueNotifyingHost(
+            (float) juce::jlimit(0, 3, envTransientPolicy) / 3.0f);
 
     if (atsData.getSize() > 0)
     {
@@ -1189,9 +1239,11 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
         return false;
     }
 
-    ats::EnvelopeFrameInput frame;
+    ats::EnvelopeFrameInput sourceFrame;
+    ats::EnvelopeFrameInput targetFrame;
     ats::EnvelopeAxisSpec axis;
-    int selectedFrame = 0;
+    int sourceFrameIndex = 0;
+    int targetFrameIndex = 0;
     {
         const juce::ScopedLock ml(modelLock);
         auto* s = analyzedModel.get();
@@ -1201,37 +1253,45 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
             return false;
         }
 
-        selectedFrame = juce::jlimit(0, s->frames - 1, s->frames / 2);
+        sourceFrameIndex = s->frames > 1 ? juce::jlimit(0, s->frames - 1, s->frames / 3) : 0;
+        targetFrameIndex = s->frames > 1 ? juce::jlimit(0, s->frames - 1, (2 * s->frames) / 3) : sourceFrameIndex;
+        if (s->frames > 1 && targetFrameIndex == sourceFrameIndex)
+            targetFrameIndex = (sourceFrameIndex + 1) % s->frames;
         double maxFreq = 0.0;
-        for (int p = 0; p < s->partials; ++p)
-        {
-            const double amp = s->amp[p][selectedFrame];
-            const double freq = s->frq[p][selectedFrame];
-            if (!std::isfinite(amp) || !std::isfinite(freq) || amp <= 0.0 || freq <= 0.0)
-                continue;
+        const auto collectFrame = [&](const int frameIndex, ats::EnvelopeFrameInput& frame) {
+            for (int p = 0; p < s->partials; ++p)
+            {
+                const double amp = s->amp[p][frameIndex];
+                const double freq = s->frq[p][frameIndex];
+                if (!std::isfinite(amp) || !std::isfinite(freq) || amp <= 0.0 || freq <= 0.0)
+                    continue;
 
-            ats::EnvelopePartialPoint point;
-            point.frequencyHz = freq;
-            point.amplitude = amp;
-            point.smr = 20.0;
-            point.confidence = 1.0;
-            point.selected = true;
-            frame.partials.push_back(point);
-            maxFreq = std::max(maxFreq, freq);
-        }
+                ats::EnvelopePartialPoint point;
+                point.frequencyHz = freq;
+                point.amplitude = amp;
+                point.smr = 20.0;
+                point.confidence = 1.0;
+                point.selected = true;
+                frame.partials.push_back(point);
+                maxFreq = std::max(maxFreq, freq);
+            }
 
-        frame.sourceModelId = "active-model";
-        frame.frameIndex = static_cast<std::uint64_t>(selectedFrame);
-        frame.sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+            frame.sourceModelId = "active-model";
+            frame.frameIndex = static_cast<std::uint64_t>(frameIndex);
+            frame.sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+        };
+        collectFrame(sourceFrameIndex, sourceFrame);
+        collectFrame(targetFrameIndex, targetFrame);
 
-        const double nyquist = frame.sampleRate > 0.0 ? frame.sampleRate * 0.5 : 22050.0;
+        const double sampleRate = sourceFrame.sampleRate > 0.0 ? sourceFrame.sampleRate : hostSampleRate;
+        const double nyquist = sampleRate > 0.0 ? sampleRate * 0.5 : 22050.0;
         axis.type = ats::EnvelopeFrequencyAxis::LinearHz;
         axis.minFrequencyHz = 20.0;
         axis.maxFrequencyHz = juce::jlimit(200.0, nyquist, std::max(1000.0, maxFreq * 1.05));
-        axis.sampleRate = frame.sampleRate;
+        axis.sampleRate = sampleRate;
     }
 
-    if (frame.partials.size() < 2)
+    if (sourceFrame.partials.size() < 2)
     {
         status = "Sparse frame";
         return false;
@@ -1246,7 +1306,7 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
 
     ats::RegularizedCepstrumEnvelopeEstimator estimator(estimatorOptions);
     ats::EnvelopeEstimatorContext context;
-    context.sampleRate = frame.sampleRate;
+    context.sampleRate = sourceFrame.sampleRate;
     context.frequencyAxis = axis;
     context.maxOrder = 12;
 
@@ -1258,10 +1318,22 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
     }
 
     ats::FrameEnvelope sourceEnvelope;
-    if (!estimator.estimate(frame, sourceEnvelope, &error))
+    if (!estimator.estimate(sourceFrame, sourceEnvelope, &error))
     {
         status = juce::String(error.c_str());
         return false;
+    }
+
+    ats::FrameEnvelope targetEnvelope;
+    ats::FrameEnvelope* targetEnvelopePtr = nullptr;
+    if (targetFrame.partials.size() >= 2)
+    {
+        ats::RegularizedCepstrumEnvelopeEstimator targetEstimator(estimatorOptions);
+        if (targetEstimator.prepare(context, &error) &&
+            targetEstimator.estimate(targetFrame, targetEnvelope, &error))
+        {
+            targetEnvelopePtr = &targetEnvelope;
+        }
     }
 
     ats::EnvelopeEvaluationOptions eval;
@@ -1270,11 +1342,19 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
     eval.sourceAxis = axis;
     eval.targetAxis = axis;
 
-    out = ats::buildEnvelopeTransferOverlay(sourceEnvelope, nullptr, gridSize, eval, eval);
-    out.source.label = std::string("Source frame ") + std::to_string(selectedFrame);
-    out.target.status = "Target pending";
-    out.transferGain.status = "Transfer pending";
-    status = juce::String("Frame ") + juce::String(selectedFrame);
+    ats::SpectralEnvelopeTransferRecipe recipe;
+    recipe.partialNormalization = ats::HybridNormalizationPolicy::None;
+    recipe.mapping = ats::HybridFrequencyMapping::DirectHz;
+    recipe.extrapolation = ats::EnvelopeExtrapolationPolicy::Clamp;
+
+    out = ats::buildEnvelopeTransferOverlay(sourceEnvelope, targetEnvelopePtr, gridSize, eval, eval, &recipe);
+    out.source.label = std::string("Source frame ") + std::to_string(sourceFrameIndex);
+    if (targetEnvelopePtr != nullptr)
+        out.target.label = std::string("Target frame ") + std::to_string(targetFrameIndex);
+    else
+        out.target.status = "Target frame sparse";
+
+    status = juce::String("Frame ") + juce::String(sourceFrameIndex) + " -> " + juce::String(targetFrameIndex);
     return true;
 }
 
@@ -1386,4 +1466,63 @@ bool AtsAudioProcessor::importAtsFile(const juce::File& file, juce::String& erro
     synthParamsDirty.store(true);
     triggerAsyncUpdate();
     return true;
+}
+
+ats::SpectralEnvelopeTransferRecipe AtsAudioProcessor::readEnvelopeTransferRecipeFromApvts() const
+{
+    ats::SpectralEnvelopeTransferRecipe recipe;
+
+    {
+        const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
+        recipe.sourceModelId = envelopeTransferSourceId.toStdString();
+        recipe.targetModelId = envelopeTransferTargetId.toStdString();
+    }
+
+    recipe.sourceDecolorAmount = (double) apvts.getRawParameterValue("envDecolor")->load();
+    recipe.targetColorAmount   = (double) apvts.getRawParameterValue("envRecolor")->load();
+    recipe.envelopeMix         = (double) apvts.getRawParameterValue("envMix")->load();
+
+    const int transientChoice = juce::roundToInt(apvts.getRawParameterValue("envTransientPolicy")->load());
+    switch (juce::jlimit(0, 3, transientChoice))
+    {
+    case 0: recipe.transientPolicy = ats::HybridTransientPolicy::PreserveSource; break;
+    case 1: recipe.transientPolicy = ats::HybridTransientPolicy::TargetColor;    break;
+    case 2: recipe.transientPolicy = ats::HybridTransientPolicy::CrossfadeSource; break;
+    case 3: recipe.transientPolicy = ats::HybridTransientPolicy::Bypass;          break;
+    default: break;
+    }
+
+    const float residualMix = apvts.getRawParameterValue("envResidualMix")->load();
+    if (residualMix < 0.05f)
+        recipe.residualPolicy = ats::HybridResidualPolicy::Unchanged;
+    else if (residualMix < 0.55f)
+        recipe.residualPolicy = ats::HybridResidualPolicy::Crossfade;
+    else
+        recipe.residualPolicy = ats::HybridResidualPolicy::DecolorThenColor;
+
+    return recipe;
+}
+
+void AtsAudioProcessor::setEnvelopeTransferSourceId(const juce::String& id)
+{
+    const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
+    envelopeTransferSourceId = id;
+}
+
+void AtsAudioProcessor::setEnvelopeTransferTargetId(const juce::String& id)
+{
+    const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
+    envelopeTransferTargetId = id;
+}
+
+juce::String AtsAudioProcessor::getEnvelopeTransferSourceId() const
+{
+    const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
+    return envelopeTransferSourceId;
+}
+
+juce::String AtsAudioProcessor::getEnvelopeTransferTargetId() const
+{
+    const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
+    return envelopeTransferTargetId;
 }

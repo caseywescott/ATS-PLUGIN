@@ -12,6 +12,7 @@
 #include "AtsModel.h"
 #include "AtsParams.h"
 #include "EnvelopeOverlay.h"
+#include "SpectralEnvelopeHybrid.h"
 
 enum class AtsUiState
 {
@@ -85,6 +86,15 @@ public:
 
     bool saveFullStatePreset(const juce::File& file);
     bool loadFullStatePreset(const juce::File& file);
+
+    /** Build a transfer recipe from the current APVTS envelope transfer params. */
+    ats::SpectralEnvelopeTransferRecipe readEnvelopeTransferRecipeFromApvts() const;
+
+    /** Source and target model IDs for the envelope transfer workspace (UI-set, non-automatable). */
+    void setEnvelopeTransferSourceId(const juce::String& id);
+    void setEnvelopeTransferTargetId(const juce::String& id);
+    juce::String getEnvelopeTransferSourceId() const;
+    juce::String getEnvelopeTransferTargetId() const;
 
     /** Native ATS file (Qatsh/ATSA ecosystem). Uses current analysis SMR/type for save. */
     bool exportAtsFile(const juce::File& file, juce::String& error);
@@ -184,6 +194,10 @@ private:
 
     /** Mirrors factory preset list for host program / preset menus. */
     int currentFactoryProgramIndex = 0;
+
+    juce::SpinLock envelopeTransferIdLock;
+    juce::String envelopeTransferSourceId;
+    juce::String envelopeTransferTargetId;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessor)
 };
