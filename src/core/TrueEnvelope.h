@@ -21,7 +21,7 @@ struct TrueEnvelopeEstimatorOptions
     AtsPartialWeightOptions weights;
     int sampleCount = 128;
     int lifterOrder = 16;
-    int iterations = 32;
+    int iterations = 10; // 10 is sufficient for most material; ≤20 for fine-pitch spectra
     double convergenceDb = 1.0e-3;
     int minFitPointCount = 6;
     double sparseDensityWarningThreshold = 0.12;

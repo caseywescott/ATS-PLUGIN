@@ -21,17 +21,32 @@ void setOk(bool* ok, const bool value)
         *ok = value;
 }
 
-std::vector<double> basisForFrequency(const double frequencyHz, const EnvelopeAxisSpec& axis, const int order, bool& ok)
+// Fills a pre-allocated basis buffer [0..order] for frequencyHz on axis.
+// out must have capacity >= order+1.  Returns false if the frequency is
+// outside the axis range and leaves out in an unspecified state.
+bool fillBasisForFrequency(const double frequencyHz,
+                           const EnvelopeAxisSpec& axis,
+                           const int order,
+                           std::vector<double>& out)
 {
     bool posOk = false;
     const double position = normalizedPositionForFrequency(frequencyHz, axis, &posOk);
-    ok = posOk;
+    if (!posOk)
+        return false;
 
-    std::vector<double> basis(static_cast<std::size_t>(order + 1), 0.0);
-    basis[0] = 1.0;
+    out[0] = 1.0;
     const double theta = kPi * position;
     for (int k = 1; k <= order; ++k)
-        basis[static_cast<std::size_t>(k)] = 2.0 * std::cos(static_cast<double>(k) * theta);
+        out[static_cast<std::size_t>(k)] = 2.0 * std::cos(static_cast<double>(k) * theta);
+    return true;
+}
+
+// Kept for the evaluate path which only needs a single basis vector and is not
+// on a hot path (one call per query, not N calls per frame).
+std::vector<double> basisForFrequency(const double frequencyHz, const EnvelopeAxisSpec& axis, const int order, bool& ok)
+{
+    std::vector<double> basis(static_cast<std::size_t>(order + 1), 0.0);
+    ok = fillBasisForFrequency(frequencyHz, axis, order, basis);
     return basis;
 }
 
@@ -53,13 +68,17 @@ double penaltyDiagonal(const int coefficientIndex, const CepstrumPenalty penalty
     return 0.0;
 }
 
-bool solveSymmetricPositiveDefinite(const std::vector<std::vector<double>>& matrix,
+// Cholesky (L L^T) solve for a symmetric positive-definite system.
+// matrix is stored as a flat row-major upper triangle (matrix[i*n+j] for i<=j),
+// which avoids n separate heap allocations for the inner rows.
+bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
                                     const std::vector<double>& rhs,
                                     std::vector<double>& solution,
                                     double& pivotRatio)
 {
     const std::size_t n = rhs.size();
-    std::vector<std::vector<double>> lower(n, std::vector<double>(n, 0.0));
+    // Flat lower-triangular Cholesky factor: lower[i*n+j], j <= i.
+    std::vector<double> lower(n * n, 0.0);
     double minPivot = std::numeric_limits<double>::infinity();
     double maxPivot = 0.0;
 
@@ -67,21 +86,21 @@ bool solveSymmetricPositiveDefinite(const std::vector<std::vector<double>>& matr
     {
         for (std::size_t j = 0; j <= i; ++j)
         {
-            double sum = matrix[i][j];
+            double sum = matrix[i * n + j];
             for (std::size_t k = 0; k < j; ++k)
-                sum -= lower[i][k] * lower[j][k];
+                sum -= lower[i * n + k] * lower[j * n + k];
 
             if (i == j)
             {
                 if (!std::isfinite(sum) || sum <= 1.0e-18)
                     return false;
-                lower[i][j] = std::sqrt(sum);
-                minPivot = std::min(minPivot, lower[i][j]);
-                maxPivot = std::max(maxPivot, lower[i][j]);
+                lower[i * n + j] = std::sqrt(sum);
+                minPivot = std::min(minPivot, lower[i * n + j]);
+                maxPivot = std::max(maxPivot, lower[i * n + j]);
             }
             else
             {
-                lower[i][j] = sum / lower[j][j];
+                lower[i * n + j] = sum / lower[j * n + j];
             }
         }
     }
@@ -91,8 +110,8 @@ bool solveSymmetricPositiveDefinite(const std::vector<std::vector<double>>& matr
     {
         double sum = rhs[i];
         for (std::size_t k = 0; k < i; ++k)
-            sum -= lower[i][k] * y[k];
-        y[i] = sum / lower[i][i];
+            sum -= lower[i * n + k] * y[k];
+        y[i] = sum / lower[i * n + i];
     }
 
     solution.assign(n, 0.0);
@@ -100,8 +119,8 @@ bool solveSymmetricPositiveDefinite(const std::vector<std::vector<double>>& matr
     {
         double sum = y[ii];
         for (std::size_t k = ii + 1; k < n; ++k)
-            sum -= lower[k][ii] * solution[k];
-        solution[ii] = sum / lower[ii][ii];
+            sum -= lower[k * n + ii] * solution[k];
+        solution[ii] = sum / lower[ii * n + ii];
     }
 
     pivotRatio = minPivot > 0.0 ? maxPivot / minPivot : std::numeric_limits<double>::infinity();
@@ -295,31 +314,30 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
                           EnvelopeDiagnostics& diagnostics,
                           std::string& errorMessage)
 {
-    const int coefficientCount = order + 1;
-    std::vector<std::vector<double>> matrix(static_cast<std::size_t>(coefficientCount),
-                                            std::vector<double>(static_cast<std::size_t>(coefficientCount), 0.0));
-    std::vector<double> rhs(static_cast<std::size_t>(coefficientCount), 0.0);
+    const std::size_t n = static_cast<std::size_t>(order + 1);
+    // Flat row-major symmetric matrix (upper triangle populated, then mirrored).
+    std::vector<double> matrix(n * n, 0.0);
+    std::vector<double> rhs(n, 0.0);
+
+    // Pre-allocate one basis buffer and reuse it for every partial point,
+    // avoiding O(N_partials) heap allocations in the inner loop.
+    std::vector<double> basis(n, 0.0);
 
     double weightSum = 0.0;
     diagnostics.fitPointCount = 0;
     for (const auto& point : points)
     {
-        bool basisOk = false;
-        const auto basis = basisForFrequency(point.frequencyHz, options.frequencyAxis, order, basisOk);
-        if (!basisOk)
+        if (!fillBasisForFrequency(point.frequencyHz, options.frequencyAxis, order, basis))
             continue;
 
         ++diagnostics.fitPointCount;
         weightSum += point.weight;
-        for (int row = 0; row < coefficientCount; ++row)
+        for (std::size_t row = 0; row < n; ++row)
         {
-            const double weightedBasis = point.weight * basis[static_cast<std::size_t>(row)];
-            rhs[static_cast<std::size_t>(row)] += weightedBasis * point.logAmplitudeDb;
-            for (int col = 0; col <= row; ++col)
-            {
-                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] +=
-                    weightedBasis * basis[static_cast<std::size_t>(col)];
-            }
+            const double weightedBasis = point.weight * basis[row];
+            rhs[row] += weightedBasis * point.logAmplitudeDb;
+            for (std::size_t col = 0; col <= row; ++col)
+                matrix[row * n + col] += weightedBasis * basis[col];
         }
     }
 
@@ -329,17 +347,15 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
         return false;
     }
 
-    for (int row = 0; row < coefficientCount; ++row)
+    // Mirror lower triangle to upper and add regularization on diagonal.
+    for (std::size_t row = 0; row < n; ++row)
     {
-        for (int col = 0; col < row; ++col)
-            matrix[static_cast<std::size_t>(col)][static_cast<std::size_t>(row)] =
-                matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)];
-    }
+        for (std::size_t col = 0; col < row; ++col)
+            matrix[col * n + row] = matrix[row * n + col];
 
-    for (int k = 0; k < coefficientCount; ++k)
-    {
-        matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k)] +=
-            std::max(0.0, options.ridge) + std::max(0.0, regularization) * penaltyDiagonal(k, options.penalty);
+        matrix[row * n + row] +=
+            std::max(0.0, options.ridge) +
+            std::max(0.0, regularization) * penaltyDiagonal(static_cast<int>(row), options.penalty);
     }
 
     double pivotRatio = 0.0;
