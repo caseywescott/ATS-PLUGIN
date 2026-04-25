@@ -116,6 +116,73 @@ int main()
     if (firstDerivativeResult.diagnostics.fitPointCount != static_cast<int>(points.size()))
         return fail("fit point count mismatch");
 
+    // Zero-weight points must be excluded from the fit
+    {
+        auto zeroWeightPoints = points;
+        for (auto& p : zeroWeightPoints)
+            p.weight = 0.0;
+
+        ats::RdcFitOptions zeroOpts = options;
+        ats::RdcFitResult zeroResult;
+        // With all weights zero the fit should either fail gracefully or succeed with 0 fit points
+        const bool zeroOk = ats::fitRegularizedDiscreteCepstrum(zeroWeightPoints, zeroOpts, zeroResult);
+        if (zeroOk && zeroResult.ok)
+        {
+            if (zeroResult.diagnostics.fitPointCount != 0)
+                return fail("zero-weight points should not count as fit points");
+        }
+        // If it returns false, that is also acceptable — it must not crash or produce garbage
+    }
+
+    // Degenerate single-point fit: should succeed with heavy regularization providing smoothness
+    {
+        const std::vector<ats::RdcFitPoint> singlePoint = { { 1000.0, -20.0, 1.0 } };
+        ats::RdcFitOptions singleOpts = options;
+        singleOpts.order = 4;
+        singleOpts.regularization = 10.0;
+        ats::RdcFitResult singleResult;
+        if (!ats::fitRegularizedDiscreteCepstrum(singlePoint, singleOpts, singleResult))
+            return fail("single-point fit with heavy regularization should succeed: " + singleResult.errorMessage);
+        if (!singleResult.ok)
+            return fail("single-point result was not marked ok");
+        // Evaluate at the fit point — should be close to the input value (within 5 dB with strong regularization)
+        bool ok = false;
+        const double ev = ats::evaluateRegularizedDiscreteCepstrum(singleResult.envelope, 1000.0, &ok);
+        if (!ok)
+            return fail("single-point evaluate failed");
+        if (std::abs(ev - (-20.0)) > 5.0)
+            return fail("single-point fit evaluated value too far from input");
+    }
+
+    // High-order fit with tight regularization: strong penalty suppresses high-order coefficients.
+    // Use enough points so order-reduction does not fire (need > order points).
+    {
+        // Build a dense fixture with 20 points so order=12 is not reduced
+        std::vector<ats::RdcFitPoint> densePoints;
+        for (int i = 0; i < 20; ++i)
+        {
+            const double freq = 100.0 + (8000.0 - 100.0) * static_cast<double>(i) / 19.0;
+            densePoints.push_back({ freq, knownEnvelopeDb(freq), 1.0 });
+        }
+
+        ats::RdcFitOptions highOpts = options;
+        highOpts.order = 12;
+        highOpts.regularization = 100.0;
+        highOpts.penalty = ats::CepstrumPenalty::SecondDerivative;
+        ats::RdcFitResult highResult;
+        if (!ats::fitRegularizedDiscreteCepstrum(densePoints, highOpts, highResult))
+            return fail("high-order regularized fit failed: " + highResult.errorMessage);
+        if (highResult.envelope.values.empty())
+            return fail("high-order fit produced no coefficients");
+        if (highResult.envelope.storage != ats::EnvelopeValueStorage::Coefficients)
+            return fail("high-order fit should use coefficient storage");
+        // DC coefficient (index 0) should dominate over the highest-order coefficient
+        const double c0   = std::abs(highResult.envelope.values[0]);
+        const double cN   = std::abs(highResult.envelope.values.back());
+        if (!(cN < c0))
+            return fail("strong regularization should suppress high-order coefficients below DC term");
+    }
+
     std::cout << "ok: regularized discrete cepstrum solver\n";
     return 0;
 }
