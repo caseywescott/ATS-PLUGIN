@@ -6,6 +6,7 @@
 #include "MathExprPanel.h"
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
+#include "SpectralEnvelopeWorkspacePanel.h"
 #include "SynthTabPanel.h"
 
 class AtsAudioProcessor;
@@ -32,6 +33,7 @@ private:
     SynthTabPanel synthTab;
     PartialEditPanel partialTab;
     EnvelopeOverlayPanel envelopeTab;
+    SpectralEnvelopeWorkspacePanel transferTab;
     MathExprPanel mathTab;
 
     juce::TabbedComponent tabs;

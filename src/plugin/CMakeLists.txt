@@ -43,15 +43,19 @@ target_sources(
           PartialEditPanel.cpp
           MathExprPanel.cpp
           EnvelopeOverlayPanel.cpp
+          SpectralEnvelopeWorkspacePanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
           ../core/EnvelopeEvaluation.cpp
           ../core/EnvelopeOverlay.cpp
+          ../core/F0AdaptiveEnvelope.cpp
           ../core/FrequencyWarp.cpp
+          ../core/LpcEnvelope.cpp
           ../core/RegularizedCepstrum.cpp
           ../core/SampledEnvelopeCache.cpp
           ../core/SpectralEnvelopeHybrid.cpp
           ../core/SpectralEnvelopeSmoothing.cpp
+          ../core/TrueEnvelope.cpp
           ../core/AtsModel.cpp
           ../core/AtsParams.cpp
           ../core/SpectralEnvelope.cpp
