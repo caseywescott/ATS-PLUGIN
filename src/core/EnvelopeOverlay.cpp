@@ -1,15 +1,31 @@
 #include "EnvelopeOverlay.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace ats
 {
+namespace
+{
+
+double overlayTransferGainDb(const double sourceEnvelopeDb,
+                             const double targetEnvelopeDb,
+                             const SpectralEnvelopeTransferRecipe& recipe)
+{
+    const double mix = std::clamp(recipe.envelopeMix, 0.0, 1.0);
+    const double mixedEnvelopeDb = sourceEnvelopeDb + mix * (targetEnvelopeDb - sourceEnvelopeDb);
+    return -recipe.sourceDecolorAmount * sourceEnvelopeDb +
+           recipe.targetColorAmount * mixedEnvelopeDb;
+}
+
+} // namespace
 
 EnvelopeOverlayData buildEnvelopeTransferOverlay(const FrameEnvelope& sourceEnvelope,
                                                  const FrameEnvelope* targetEnvelope,
                                                  const int gridSize,
                                                  const EnvelopeEvaluationOptions& sourceOptions,
-                                                 const EnvelopeEvaluationOptions& targetOptions)
+                                                 const EnvelopeEvaluationOptions& targetOptions,
+                                                 const SpectralEnvelopeTransferRecipe* recipe)
 {
     EnvelopeOverlayData data;
     data.source.label = "Source";
@@ -43,16 +59,40 @@ EnvelopeOverlayData buildEnvelopeTransferOverlay(const FrameEnvelope& sourceEnve
     if (!data.target.reliable)
         data.target.status = "Target envelope has diagnostics";
 
-    const auto n = std::min(data.source.samples.size(), data.target.samples.size());
-    data.transferGain.samples.reserve(n);
-    for (std::size_t i = 0; i < n; ++i)
+    SpectralEnvelopeTransferRecipe directRecipe;
+    directRecipe.extrapolation = targetOptions.extrapolation;
+    const auto& activeRecipe = recipe != nullptr ? *recipe : directRecipe;
+
+    EnvelopeEvaluationOptions mappedTargetOptions;
+    mappedTargetOptions.mapping = EnvelopeFrequencyMapping::DirectHz;
+    mappedTargetOptions.extrapolation = activeRecipe.extrapolation;
+    mappedTargetOptions.targetAxis = targetEnvelope->frequencyAxis;
+
+    data.transferGain.samples.reserve(data.source.samples.size());
+    for (const auto& sourceSample : data.source.samples)
     {
         EnvelopeEvaluationSample sample;
-        sample.inputFrequencyHz = data.source.samples[i].inputFrequencyHz;
-        sample.lookupFrequencyHz = data.target.samples[i].lookupFrequencyHz;
-        sample.inRange = data.source.samples[i].inRange && data.target.samples[i].inRange;
-        sample.ok = data.source.samples[i].ok && data.target.samples[i].ok;
-        sample.valueDb = sample.ok ? data.target.samples[i].valueDb - data.source.samples[i].valueDb : 0.0;
+        sample.inputFrequencyHz = sourceSample.inputFrequencyHz;
+        if (sourceSample.ok)
+        {
+            const auto mapping = mapHybridTargetFrequency(sourceSample.inputFrequencyHz,
+                                                          sourceEnvelope,
+                                                          *targetEnvelope,
+                                                          activeRecipe);
+            if (mapping.ok)
+            {
+                const auto targetSample = evaluateEnvelopeAtFrequency(*targetEnvelope,
+                                                                       mapping.targetFrequencyHz,
+                                                                       mappedTargetOptions);
+                sample.lookupFrequencyHz = mapping.targetFrequencyHz;
+                sample.inRange = sourceSample.inRange && mapping.inRange && targetSample.inRange;
+                sample.ok = targetSample.ok;
+                sample.valueDb = targetSample.ok ? overlayTransferGainDb(sourceSample.valueDb,
+                                                                         targetSample.valueDb,
+                                                                         activeRecipe)
+                                                 : 0.0;
+            }
+        }
         data.transferGain.samples.push_back(sample);
     }
     data.transferGain.reliable = !data.transferGain.samples.empty() && data.source.reliable && data.target.reliable;

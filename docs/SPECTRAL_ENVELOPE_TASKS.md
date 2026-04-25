@@ -199,25 +199,25 @@
 
 **PRD:** section 2.3, section 5.3
 
-- [ ] Implement or wrap an iterative true-envelope estimator for dense spectra or sampled model frames.
-- [ ] Add Hamming/lifter smoothing options if useful.
-- [ ] Compare against RDC on high-pitched/sparse and dense fixtures.
+- [x] Implement or wrap an iterative true-envelope estimator for dense spectra or sampled model frames.
+- [x] Add Hamming/lifter smoothing options if useful.
+- [x] Compare against RDC on high-pitched/sparse and dense fixtures.
 
 ### Commit 22 - `feat(envelope): add LPC envelope option`
 
 **PRD:** section 2.3
 
-- [ ] Add LPC/all-pole estimator as a lightweight option.
-- [ ] Document cases where it may overfit isolated partials.
-- [ ] Add fixture comparisons against RDC and true envelope.
+- [x] Add LPC/all-pole estimator as a lightweight option.
+- [x] Document cases where it may overfit isolated partials.
+- [x] Add fixture comparisons against RDC and true envelope.
 
 ### Commit 23 - `research: evaluate F0-adaptive waveform envelope import`
 
 **PRD:** section 2.3, section 3.2
 
-- [ ] Prototype importing or generating CheapTrick/WORLD-style envelopes only when waveform and reliable F0 are available.
-- [ ] Keep this path optional and non-default.
-- [ ] Document where it helps singing/voice and where it fails general material.
+- [x] Prototype importing or generating CheapTrick/WORLD-style envelopes only when waveform and reliable F0 are available.
+- [x] Keep this path optional and non-default.
+- [x] Document where it helps singing/voice and where it fails general material.
 
 ---
 
@@ -227,33 +227,33 @@
 
 **PRD:** section 5.8
 
-- [ ] Add source and target model slots.
-- [ ] Add estimator preset selector and transfer controls.
-- [ ] Add render/preview controls with A/B comparison.
+- [x] Add source and target model slots.
+- [x] Add estimator preset selector and transfer controls.
+- [x] Add render/preview controls with A/B comparison.
 
 ### Commit 25 - `feat(params): expose automatable envelope transfer controls`
 
 **PRD:** section 5.4, section 5.8
 
-- [ ] Expose de-color amount, target-color amount, envelope mix, residual mix/color, and transient policy where host automation makes sense.
-- [ ] Smooth control changes to avoid zippering in prepared renders or real-time snapshots.
-- [ ] Add state migration for older sessions.
+- [x] Expose de-color amount, target-color amount, envelope mix, residual mix/color, and transient policy where host automation makes sense.
+- [x] Smooth control changes to avoid zippering in prepared renders or real-time snapshots.
+- [x] Add state migration for older sessions.
 
 ### Commit 26 - `feat(presets): add general-source envelope presets`
 
 **PRD:** section 5.8
 
-- [ ] Add presets for sustained instrument, voice/singing, inharmonic metal, noisy texture, plucked/percussive, and conservative all-purpose material.
-- [ ] Make the all-purpose preset non-speech-specific.
-- [ ] Store preset metadata explaining estimator, warp, regularization, residual, and transient choices.
+- [x] Add presets for sustained instrument, voice/singing, inharmonic metal, noisy texture, plucked/percussive, and conservative all-purpose material.
+- [x] Make the all-purpose preset non-speech-specific.
+- [x] Store preset metadata explaining estimator, warp, regularization, residual, and transient choices.
 
 ### Commit 27 - `perf(envelope): document fitting and render budgets`
 
 **PRD:** section 6.1, section 7.2-section 7.3
 
-- [ ] Profile envelope fitting and hybrid render preparation on representative fixtures.
-- [ ] Document soft limits for frames, partials, envelope order, and sampled cache size.
-- [ ] Add guardrails and UI warnings for expensive settings.
+- [x] Profile envelope fitting and hybrid render preparation on representative fixtures.
+- [x] Document soft limits for frames, partials, envelope order, and sampled cache size.
+- [x] Add guardrails and UI warnings for expensive settings.
 
 ---
 

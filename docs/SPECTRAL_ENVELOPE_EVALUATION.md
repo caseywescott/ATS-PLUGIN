@@ -24,3 +24,19 @@ These mappings do not require F0 or harmonic numbering.
 - **Reject:** out-of-range requests fail evaluation and return `ok = false`.
 
 The default policy is clamp, because UI grids and hybrid mappings often need stable edge behavior. Destructive transforms can choose reject when silent failure would be safer than boundary coloring.
+
+---
+
+## Optional LPC / All-Pole Estimator
+
+The LPC estimator is available as a lightweight, non-default comparison path. It resamples the frame's weighted log-amplitude points onto the configured envelope axis, derives an autocorrelation from that power spectrum, solves a Levinson-Durbin all-pole model, and stores the evaluated envelope as sampled log-amplitude values.
+
+LPC is useful for broad resonant, formant-like contours when the frame has enough support across frequency. It should be treated carefully on sparse ATS partial frames: isolated high-energy partials, missing bands, high-pitched material, and inharmonic partial clusters can pull the all-pole model into narrow resonances that read as overfit rather than a general spectral envelope. Sparse LPC fits report diagnostics so presets and UI warnings can steer users back toward RDC or true-envelope comparisons when appropriate.
+
+---
+
+## Research Prototype: F0-Adaptive Waveform Envelope
+
+The F0-adaptive waveform prototype is intentionally optional and non-default. It is exposed as `f0-adaptive/waveform-prototype`, but it only estimates when the frame includes waveform-derived spectrum samples plus reliable F0 metadata. Partial-only ATS frames, missing waveform data, out-of-range F0 values, low F0 confidence, and sparse spectra are rejected with diagnostics instead of silently falling back to a speech-oriented assumption.
+
+The prototype follows the CheapTrick/WORLD design idea at a high level: smooth a dense waveform spectrum using a frequency bandwidth tied to the current F0, then store the result as sampled log-amplitude envelope values. This can help singing, spoken voice, and monophonic pitched instruments where F0 is reliable and the waveform spectrum contains enough harmonic detail. It is not a general replacement for RDC: inharmonic sources, dense polyphony, noisy textures, percussive frames, missing waveform input, or uncertain F0 should continue to use the default sparse-partial estimator or another explicit comparison estimator.

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -39,6 +40,26 @@ ats::FrameEnvelope makeEnvelope(const double dc, const double tilt)
     return envelope;
 }
 
+ats::FrameEnvelope makeSampledEnvelope(const std::string& modelId,
+                                       const double minHz,
+                                       const double maxHz,
+                                       const std::vector<double>& values)
+{
+    ats::FrameEnvelope envelope;
+    envelope.estimatorId = ats::RegularizedCepstrumEnvelopeEstimator::kId;
+    envelope.estimatorVersion = ats::RegularizedCepstrumEnvelopeEstimator::kVersion;
+    envelope.sourceModelId = modelId;
+    envelope.frameIndex = 0;
+    envelope.sampleRate = 48000.0;
+    envelope.frequencyAxis = axis();
+    envelope.frequencyAxis.minFrequencyHz = minHz;
+    envelope.frequencyAxis.maxFrequencyHz = maxHz;
+    envelope.envelopeOrder = 0;
+    envelope.storage = ats::EnvelopeValueStorage::Samples;
+    envelope.values = values;
+    return envelope;
+}
+
 } // namespace
 
 int main()
@@ -67,6 +88,31 @@ int main()
         return fail("source overlay missing when target is unavailable");
     if (pending.target.reliable || pending.transferGain.reliable)
         return fail("pending target/transfer curves should be unreliable");
+
+    ats::SpectralEnvelopeTransferRecipe recipe;
+    recipe.mapping = ats::HybridFrequencyMapping::RangeWarp;
+    recipe.partialNormalization = ats::HybridNormalizationPolicy::None;
+    const auto sampledSource = makeSampledEnvelope("sampled-source", 100.0, 500.0, { -30.0, -20.0 });
+    const auto sampledTarget = makeSampledEnvelope("sampled-target", 1000.0, 5000.0, { -10.0, -4.0 });
+    ats::EnvelopeEvaluationOptions sourceOptions = options;
+    sourceOptions.sourceAxis = sampledSource.frequencyAxis;
+    sourceOptions.targetAxis = sampledSource.frequencyAxis;
+    ats::EnvelopeEvaluationOptions targetOptions = options;
+    targetOptions.sourceAxis = sampledTarget.frequencyAxis;
+    targetOptions.targetAxis = sampledTarget.frequencyAxis;
+    const auto mapped = ats::buildEnvelopeTransferOverlay(sampledSource,
+                                                          &sampledTarget,
+                                                          3,
+                                                          sourceOptions,
+                                                          targetOptions,
+                                                          &recipe);
+    if (mapped.transferGain.samples.size() != 3 || !mapped.transferGain.samples[1].ok)
+        return fail("mapped sampled transfer overlay missing samples");
+    if (std::abs(mapped.transferGain.samples[1].lookupFrequencyHz - 3000.0) > 1.0e-6 ||
+        std::abs(mapped.transferGain.samples[1].valueDb - 18.0) > 1.0e-9)
+    {
+        return fail("mapped sampled transfer overlay did not use source-grid frequency mapping");
+    }
 
     std::cout << "ok: envelope overlay data\n";
     return 0;

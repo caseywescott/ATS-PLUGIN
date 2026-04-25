@@ -321,6 +321,76 @@ void finishNormalizationStats(const std::vector<HybridPartialOutput>& outputs,
         stats.outputRmsAfter = std::sqrt(stats.outputEnergyAfter / static_cast<double>(stats.processedCount));
 }
 
+void accumulateResidualNormalizationStats(const std::vector<HybridResidualBandOutput>& outputs,
+                                          const bool preserveOrphanResidual,
+                                          HybridNormalizationStats& stats)
+{
+    for (const auto& output : outputs)
+    {
+        if ((preserveOrphanResidual && output.orphanBand) ||
+            !output.ok ||
+            !std::isfinite(output.sourceEnergy) ||
+            !std::isfinite(output.outputEnergy) ||
+            output.sourceEnergy < 0.0 ||
+            output.outputEnergy < 0.0)
+        {
+            continue;
+        }
+
+        ++stats.processedCount;
+        stats.sourceEnergy += output.sourceEnergy;
+        stats.outputEnergyBefore += output.outputEnergy;
+    }
+
+    if (stats.processedCount == 0)
+        return;
+
+    const double count = static_cast<double>(stats.processedCount);
+    stats.sourceRms = std::sqrt(stats.sourceEnergy / count);
+    stats.outputRmsBefore = std::sqrt(stats.outputEnergyBefore / count);
+}
+
+double residualLoudnessLikeMean(const std::vector<HybridResidualBandOutput>& outputs,
+                                const bool useSourceEnergy)
+{
+    constexpr double kPower = 0.6;
+    double sum = 0.0;
+    std::size_t count = 0;
+    for (const auto& output : outputs)
+    {
+        const double energy = useSourceEnergy ? output.sourceEnergy : output.outputEnergy;
+        if (!output.ok || !std::isfinite(energy) || energy < 0.0)
+            continue;
+        sum += std::pow(std::sqrt(energy), kPower);
+        ++count;
+    }
+
+    if (count == 0)
+        return 0.0;
+    return sum / static_cast<double>(count);
+}
+
+void finishResidualNormalizationStats(const std::vector<HybridResidualBandOutput>& outputs,
+                                      const bool preserveOrphanResidual,
+                                      HybridNormalizationStats& stats)
+{
+    stats.outputEnergyAfter = 0.0;
+    for (const auto& output : outputs)
+    {
+        if ((preserveOrphanResidual && output.orphanBand) ||
+            !output.ok ||
+            !std::isfinite(output.outputEnergy) ||
+            output.outputEnergy < 0.0)
+        {
+            continue;
+        }
+        stats.outputEnergyAfter += output.outputEnergy;
+    }
+
+    if (stats.processedCount > 0)
+        stats.outputRmsAfter = std::sqrt(stats.outputEnergyAfter / static_cast<double>(stats.processedCount));
+}
+
 double mixEnvelopeDb(const double sourceEnvelopeDb,
                      const double targetEnvelopeDb,
                      const SpectralEnvelopeTransferRecipe& recipe)
@@ -906,6 +976,7 @@ std::vector<HybridPartialOutput> applyEnvelopeTransferDirect(const std::vector<H
                                                      recipe));
     }
 
+    (void)applyHybridGainNormalization(out, recipe.partialNormalization, recipe.amplitudeFloor);
     return out;
 }
 
@@ -961,6 +1032,7 @@ std::vector<HybridPartialOutput> applyEnvelopeTransferMapped(const std::vector<H
         out.push_back(transferred);
     }
 
+    (void)applyHybridGainNormalization(out, recipe.partialNormalization, recipe.amplitudeFloor);
     return out;
 }
 
@@ -1029,6 +1101,10 @@ std::vector<HybridResidualBandOutput> applyResidualEnvelopeTransfer(
         out.push_back(result);
     }
 
+    (void)applyHybridResidualGainNormalization(out,
+                                               recipe.residualNormalization,
+                                               recipe.amplitudeFloor,
+                                               recipe.preserveOrphanResidual);
     return out;
 }
 
@@ -1243,6 +1319,93 @@ HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialO
 
     stats.applied = true;
     finishNormalizationStats(outputs, stats);
+    return stats;
+}
+
+HybridNormalizationStats applyHybridResidualGainNormalization(std::vector<HybridResidualBandOutput>& outputs,
+                                                              const HybridNormalizationPolicy policy,
+                                                              const double amplitudeFloor,
+                                                              const bool preserveOrphanResidual)
+{
+    HybridNormalizationStats stats;
+    accumulateResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+    if (stats.processedCount == 0)
+        return stats;
+
+    stats.ok = true;
+    if (policy == HybridNormalizationPolicy::None)
+    {
+        finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+        return stats;
+    }
+
+    const double floor = std::max(amplitudeFloor, std::numeric_limits<double>::min());
+    double amplitudeScale = 1.0;
+    switch (policy)
+    {
+        case HybridNormalizationPolicy::None:
+            break;
+
+        case HybridNormalizationPolicy::FrameRms:
+            if (stats.outputRmsBefore <= floor)
+            {
+                stats.ok = false;
+                finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+                return stats;
+            }
+            amplitudeScale = stats.sourceRms <= floor ? 0.0 : stats.sourceRms / stats.outputRmsBefore;
+            break;
+
+        case HybridNormalizationPolicy::EnergyPreserving:
+            if (stats.outputEnergyBefore <= floor)
+            {
+                stats.ok = false;
+                finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+                return stats;
+            }
+            amplitudeScale = stats.sourceEnergy <= floor ? 0.0 : std::sqrt(stats.sourceEnergy / stats.outputEnergyBefore);
+            break;
+
+        case HybridNormalizationPolicy::LoudnessLike:
+        {
+            constexpr double kPower = 0.6;
+            const double sourceMean = residualLoudnessLikeMean(outputs, true);
+            const double outputMean = residualLoudnessLikeMean(outputs, false);
+            if (outputMean <= floor)
+            {
+                stats.ok = false;
+                finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+                return stats;
+            }
+            amplitudeScale = sourceMean <= floor ? 0.0 : std::pow(sourceMean / outputMean, 1.0 / kPower);
+            break;
+        }
+    }
+
+    if (!std::isfinite(amplitudeScale) || amplitudeScale < 0.0)
+    {
+        stats.ok = false;
+        finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
+        return stats;
+    }
+
+    stats.gainDb = amplitudeToDb(amplitudeScale, floor);
+    const double energyScale = amplitudeScale * amplitudeScale;
+    for (auto& output : outputs)
+    {
+        if ((preserveOrphanResidual && output.orphanBand) ||
+            !output.ok ||
+            !std::isfinite(output.outputEnergy) ||
+            output.outputEnergy < 0.0)
+        {
+            continue;
+        }
+        output.outputEnergy *= energyScale;
+        output.transferGainDb += stats.gainDb;
+    }
+
+    stats.applied = true;
+    finishResidualNormalizationStats(outputs, preserveOrphanResidual, stats);
     return stats;
 }
 

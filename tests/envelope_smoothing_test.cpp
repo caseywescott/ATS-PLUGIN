@@ -27,6 +27,8 @@ ats::FrameEnvelope makeEnvelope(const std::uint64_t frameIndex, const double off
     envelope.frequencyAxis.maxFrequencyHz = 8000.0;
     envelope.frequencyAxis.sampleRate = 48000.0;
     envelope.envelopeOrder = 2;
+    envelope.regularization = 0.05;
+    envelope.penaltyType = "second_derivative";
     envelope.storage = ats::EnvelopeValueStorage::Coefficients;
     envelope.values = { -20.0 + offset, 1.5 - offset * 0.25, -0.5 + offset * 0.1 };
     return envelope;
@@ -92,6 +94,27 @@ int main()
     const auto sampleSmoothed = ats::smoothEnvelopeFrame(sampleA, sampleB, options);
     if (std::abs(sampleSmoothed.values.front() - (-9.9)) > 1.0e-12)
         return fail("sample envelope smoothing mismatch");
+
+    ats::FrameEnvelope incompatible = makeEnvelope(12, 2.0);
+    incompatible.frequencyAxis.maxFrequencyHz = 12000.0;
+    if (ats::canSmoothEnvelopes(sampleA, incompatible))
+        return fail("sample and coefficient envelopes should not be smoothable");
+    if (ats::canSmoothEnvelopes(makeEnvelope(11, 0.0), incompatible))
+        return fail("different frequency ranges should not be smoothable");
+
+    incompatible = makeEnvelope(12, 2.0);
+    incompatible.sourceModelId = "other-model";
+    if (ats::canSmoothEnvelopes(makeEnvelope(11, 0.0), incompatible))
+        return fail("different source models should not be smoothable");
+
+    incompatible = makeEnvelope(12, 2.0);
+    incompatible.regularization = 0.1;
+    if (ats::canSmoothEnvelopes(makeEnvelope(11, 0.0), incompatible))
+        return fail("different regularization settings should not be smoothable");
+
+    const auto blocked = ats::smoothEnvelopeFrame(makeEnvelope(11, 0.0), incompatible, options);
+    if (!sameValues(blocked, incompatible) || blocked.smoothingAmount != 0.0)
+        return fail("incompatible envelopes should pass through unsmoothed");
 
     std::cout << "ok: spectral envelope temporal smoothing\n";
     return 0;

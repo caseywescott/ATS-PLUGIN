@@ -42,6 +42,15 @@ ats::FrameEnvelope makeEnvelope()
     return envelope;
 }
 
+ats::FrameEnvelope makeSampledEnvelope()
+{
+    auto envelope = makeEnvelope();
+    envelope.envelopeOrder = 0;
+    envelope.storage = ats::EnvelopeValueStorage::Samples;
+    envelope.values = { -30.0, -20.0, -10.0 };
+    return envelope;
+}
+
 } // namespace
 
 int main()
@@ -97,6 +106,18 @@ int main()
     auto grid = ats::evaluateEnvelopeOnGrid(envelope, 9, direct);
     if (grid.size() != 9 || !grid.front().ok || !grid.back().ok)
         return fail("visualization grid evaluation failed");
+
+    const auto sampled = makeSampledEnvelope();
+    auto sampledLow = ats::evaluateEnvelopeAtFrequency(sampled, 100.0, direct);
+    auto sampledMid = ats::evaluateEnvelopeAtFrequency(sampled, 4050.0, direct);
+    auto sampledHigh = ats::evaluateEnvelopeAtFrequency(sampled, 8000.0, direct);
+    if (!sampledLow.ok || !sampledMid.ok || !sampledHigh.ok ||
+        std::abs(sampledLow.valueDb - (-30.0)) > 1.0e-12 ||
+        std::abs(sampledMid.valueDb - (-20.0)) > 1.0e-12 ||
+        std::abs(sampledHigh.valueDb - (-10.0)) > 1.0e-12)
+    {
+        return fail("sampled envelope interpolation failed");
+    }
 
     std::cout << "ok: envelope evaluation and mapping\n";
     return 0;

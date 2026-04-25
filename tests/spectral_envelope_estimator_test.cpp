@@ -1,5 +1,8 @@
 #include "SpectralEnvelopeEstimator.h"
+#include "F0AdaptiveEnvelope.h"
+#include "LpcEnvelope.h"
 #include "RegularizedCepstrum.h"
+#include "TrueEnvelope.h"
 
 #include <cmath>
 #include <iostream>
@@ -23,8 +26,11 @@ int main()
         return fail("default registry is missing no-op estimator");
 
     const auto ids = registry.ids();
-    if (ids.size() != 2 || ids[0] != ats::NoOpEnvelopeEstimator::kId ||
-        ids[1] != ats::RegularizedCepstrumEnvelopeEstimator::kId)
+    if (ids.size() != 5 || ids[0] != ats::NoOpEnvelopeEstimator::kId ||
+        ids[1] != ats::RegularizedCepstrumEnvelopeEstimator::kId ||
+        ids[2] != ats::TrueEnvelopeEstimator::kId ||
+        ids[3] != ats::LpcEnvelopeEstimator::kId ||
+        ids[4] != ats::F0AdaptiveEnvelopeEstimator::kId)
         return fail("default registry ids are not stable");
 
     if (!registry.create("missing/estimator"))

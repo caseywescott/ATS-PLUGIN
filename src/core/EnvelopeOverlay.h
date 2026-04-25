@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EnvelopeEvaluation.h"
+#include "SpectralEnvelopeHybrid.h"
 
 #include <string>
 #include <vector>
@@ -29,6 +29,7 @@ struct EnvelopeOverlayData
     const FrameEnvelope* targetEnvelope,
     int gridSize,
     const EnvelopeEvaluationOptions& sourceOptions,
-    const EnvelopeEvaluationOptions& targetOptions);
+    const EnvelopeEvaluationOptions& targetOptions,
+    const SpectralEnvelopeTransferRecipe* recipe = nullptr);
 
 } // namespace ats

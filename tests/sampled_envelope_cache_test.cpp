@@ -41,6 +41,15 @@ ats::FrameEnvelope makeEnvelope()
     return envelope;
 }
 
+ats::FrameEnvelope makeSampledEnvelope()
+{
+    auto envelope = makeEnvelope();
+    envelope.envelopeOrder = 0;
+    envelope.storage = ats::EnvelopeValueStorage::Samples;
+    envelope.values = { -24.0, -18.0, -12.0, -6.0 };
+    return envelope;
+}
+
 } // namespace
 
 int main()
@@ -93,6 +102,17 @@ int main()
 
     if (!cache.getOrBuild(valueChanged, options, 32, cachedAgain) || cache.reusedLastBuild())
         return fail("cache did not rebuild after coefficient change");
+
+    auto sampled = makeSampledEnvelope();
+    ats::SampledEnvelopeCacheEntry sampledEntry;
+    if (!ats::buildSampledEnvelopeCacheEntry(sampled, options, 4, sampledEntry))
+        return fail("failed to build cache entry from sampled envelope");
+    if (sampledEntry.samples.size() != 4 ||
+        std::abs(sampledEntry.samples.front().valueDb - (-24.0)) > 1.0e-12 ||
+        std::abs(sampledEntry.samples.back().valueDb - (-6.0)) > 1.0e-12)
+    {
+        return fail("sampled envelope cache interpolation mismatch");
+    }
 
     std::cout << "ok: sampled envelope cache\n";
     return 0;

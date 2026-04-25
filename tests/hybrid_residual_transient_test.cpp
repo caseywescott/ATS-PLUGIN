@@ -87,6 +87,21 @@ int main()
     if (closeEnough(residualOut[1].outputEnergy, residualBands[1].energy))
         return fail("orphan residual band should be transformable when preservation disabled");
 
+    recipe.residualNormalization = ats::HybridNormalizationPolicy::EnergyPreserving;
+    residualOut = ats::applyResidualEnvelopeTransfer(residualBands, sourceResidual, targetResidual, recipe);
+    double sourceResidualEnergy = 0.0;
+    double outputResidualEnergy = 0.0;
+    for (const auto& band : residualOut)
+    {
+        if (!band.ok)
+            continue;
+        sourceResidualEnergy += band.sourceEnergy;
+        outputResidualEnergy += band.outputEnergy;
+    }
+    if (!closeEnough(sourceResidualEnergy, outputResidualEnergy, 1.0e-8))
+        return fail("residual normalization policy was not applied by transfer API");
+    recipe.residualNormalization = ats::HybridNormalizationPolicy::None;
+
     const std::vector<ats::ResidualEnvelopeBandPoint> criticalBands = {
         { 300.0, 0.04 },
         { 800.0, 0.09 },

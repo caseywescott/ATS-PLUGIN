@@ -5,14 +5,33 @@
 
 namespace ats
 {
+namespace
+{
+
+bool sameAxisSpec(const EnvelopeAxisSpec& a, const EnvelopeAxisSpec& b)
+{
+    return a.type == b.type &&
+           a.minFrequencyHz == b.minFrequencyHz &&
+           a.maxFrequencyHz == b.maxFrequencyHz &&
+           a.sampleRate == b.sampleRate &&
+           a.customMin == b.customMin &&
+           a.customMax == b.customMax;
+}
+
+} // namespace
 
 bool canSmoothEnvelopes(const FrameEnvelope& previous, const FrameEnvelope& current)
 {
     return previous.estimatorId == current.estimatorId &&
+           previous.estimatorVersion == current.estimatorVersion &&
+           previous.sourceModelId == current.sourceModelId &&
+           previous.sampleRate == current.sampleRate &&
            previous.storage == current.storage &&
            previous.values.size() == current.values.size() &&
-           previous.frequencyAxis.type == current.frequencyAxis.type &&
-           previous.envelopeOrder == current.envelopeOrder;
+           sameAxisSpec(previous.frequencyAxis, current.frequencyAxis) &&
+           previous.envelopeOrder == current.envelopeOrder &&
+           previous.regularization == current.regularization &&
+           previous.penaltyType == current.penaltyType;
 }
 
 FrameEnvelope smoothEnvelopeFrame(const FrameEnvelope& previous,

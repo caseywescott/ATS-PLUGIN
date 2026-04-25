@@ -222,5 +222,9 @@ bool parseHybridTransientPolicy(const std::string& text, HybridTransientPolicy& 
 HybridNormalizationStats applyHybridGainNormalization(std::vector<HybridPartialOutput>& outputs,
                                                       HybridNormalizationPolicy policy,
                                                       double amplitudeFloor);
+HybridNormalizationStats applyHybridResidualGainNormalization(std::vector<HybridResidualBandOutput>& outputs,
+                                                              HybridNormalizationPolicy policy,
+                                                              double amplitudeFloor,
+                                                              bool preserveOrphanResidual = false);
 
 } // namespace ats

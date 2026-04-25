@@ -534,6 +534,21 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
             setOk(ok, true);
             return envelope.values.front();
         }
+
+        bool positionOk = false;
+        const double position = normalizedPositionForFrequency(frequencyHz, envelope.frequencyAxis, &positionOk);
+        if (!positionOk)
+        {
+            setOk(ok, false);
+            return 0.0;
+        }
+
+        const double scaled = position * static_cast<double>(envelope.values.size() - 1u);
+        const auto lo = static_cast<std::size_t>(std::floor(scaled));
+        const auto hi = std::min(lo + 1u, envelope.values.size() - 1u);
+        const double t = scaled - static_cast<double>(lo);
+        setOk(ok, true);
+        return envelope.values[lo] + t * (envelope.values[hi] - envelope.values[lo]);
     }
 
     if (envelope.storage != EnvelopeValueStorage::Coefficients || envelope.values.empty())

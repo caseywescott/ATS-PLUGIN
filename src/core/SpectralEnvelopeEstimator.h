@@ -19,6 +19,12 @@ struct EnvelopePartialPoint
     bool selected = true;
 };
 
+struct EnvelopeSpectrumPoint
+{
+    double frequencyHz = 0.0;
+    double amplitude = 0.0;
+};
+
 struct EnvelopeEstimatorContext
 {
     double sampleRate = 0.0;
@@ -33,6 +39,10 @@ struct EnvelopeFrameInput
     std::uint64_t frameIndex = 0;
     double sampleRate = 0.0;
     std::vector<EnvelopePartialPoint> partials;
+    bool waveformAvailable = false;
+    double fundamentalFrequencyHz = 0.0;
+    double f0Confidence = 0.0;
+    std::vector<EnvelopeSpectrumPoint> waveformSpectrum;
 };
 
 class SpectralEnvelopeEstimator

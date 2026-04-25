@@ -39,6 +39,15 @@ ats::FrameEnvelope constantEnvelope(const std::string& modelId, const double db)
     return envelope;
 }
 
+ats::FrameEnvelope sampledEnvelope(const std::string& modelId, const std::vector<double>& values)
+{
+    auto envelope = constantEnvelope(modelId, values.empty() ? 0.0 : values.front());
+    envelope.envelopeOrder = 0;
+    envelope.storage = ats::EnvelopeValueStorage::Samples;
+    envelope.values = values;
+    return envelope;
+}
+
 bool closeEnough(const double a, const double b, const double tolerance = 1.0e-9)
 {
     return std::abs(a - b) <= tolerance * std::max(1.0, std::max(std::abs(a), std::abs(b)));
@@ -53,6 +62,7 @@ int main()
     recipe.sourceDecolorAmount = 1.0;
     recipe.targetColorAmount = 1.0;
     recipe.envelopeMix = 1.0;
+    recipe.partialNormalization = ats::HybridNormalizationPolicy::None;
 
     const double fineDetailDb = -3.0;
     const double sourceEnvDb = -12.0;
@@ -97,6 +107,30 @@ int main()
     {
         if (!output.ok || !closeEnough(output.transferGainDb, targetEnvDb - sourceEnvDb))
             return fail("direct transfer gain mismatch");
+    }
+
+    recipe.partialNormalization = ats::HybridNormalizationPolicy::FrameRms;
+    const auto normalized = ats::applyEnvelopeTransferDirect(partials,
+                                                            constantEnvelope("source", sourceEnvDb),
+                                                            constantEnvelope("target", targetEnvDb),
+                                                            recipe);
+    if (normalized.size() != partials.size())
+        return fail("normalized transfer output count mismatch");
+    for (std::size_t i = 0; i < normalized.size(); ++i)
+    {
+        if (!normalized[i].ok || !closeEnough(normalized[i].outputAmplitude, partials[i].amplitude))
+            return fail("partial normalization policy was not applied by transfer API");
+    }
+
+    recipe.partialNormalization = ats::HybridNormalizationPolicy::None;
+    const auto sampledOutputs = ats::applyEnvelopeTransferDirect({ { 2550.0, ats::dbToAmplitude(-21.0) } },
+                                                                 sampledEnvelope("sampled-source", { -30.0, -20.0, -10.0 }),
+                                                                 sampledEnvelope("sampled-target", { -12.0, -6.0, 0.0 }),
+                                                                 recipe);
+    if (sampledOutputs.size() != 1 || !sampledOutputs.front().ok ||
+        !closeEnough(sampledOutputs.front().transferGainDb, 14.0))
+    {
+        return fail("hybrid transfer did not evaluate interpolated sampled envelopes");
     }
 
     std::cout << "ok: log-domain envelope transfer\n";
