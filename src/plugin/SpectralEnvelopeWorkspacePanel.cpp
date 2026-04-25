@@ -50,17 +50,17 @@ SpectralEnvelopeWorkspacePanel::SpectralEnvelopeWorkspacePanel(AtsAudioProcessor
     setTargetButton.setHelpText("Assign the currently analyzed ATS model as the target for envelope re-coloring.");
 
     setSourceButton.onClick = [this] {
-        const auto id = processor.getEnvelopeTransferSourceId().isEmpty()
-                            ? juce::String("model-") + juce::String(juce::Time::currentTimeMillis())
-                            : processor.getEnvelopeTransferSourceId();
+        // Tag the currently analyzed model as the source using its revision number,
+        // which is stable across UI refreshes but changes when a new model is loaded.
+        const auto rev = processor.getModelRevision();
+        const auto id = juce::String("model-rev-") + juce::String(rev);
         processor.setEnvelopeTransferSourceId(id);
         sourceIdLabel.setText(id, juce::dontSendNotification);
     };
 
     setTargetButton.onClick = [this] {
-        const auto id = processor.getEnvelopeTransferTargetId().isEmpty()
-                            ? juce::String("model-") + juce::String(juce::Time::currentTimeMillis())
-                            : processor.getEnvelopeTransferTargetId();
+        const auto rev = processor.getModelRevision();
+        const auto id = juce::String("model-rev-") + juce::String(rev);
         processor.setEnvelopeTransferTargetId(id);
         targetIdLabel.setText(id, juce::dontSendNotification);
     };

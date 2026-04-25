@@ -195,7 +195,7 @@ private:
     /** Mirrors factory preset list for host program / preset menus. */
     int currentFactoryProgramIndex = 0;
 
-    juce::SpinLock envelopeTransferIdLock;
+    mutable juce::SpinLock envelopeTransferIdLock;
     juce::String envelopeTransferSourceId;
     juce::String envelopeTransferTargetId;
 

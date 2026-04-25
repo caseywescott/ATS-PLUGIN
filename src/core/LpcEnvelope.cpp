@@ -340,7 +340,7 @@ bool fitLpcEnvelopeFromPoints(const std::vector<RdcFitPoint>& points,
     result.envelope.penaltyType = "lpc_all_pole";
     result.envelope.storage = EnvelopeValueStorage::Samples;
     result.envelope.values = std::move(values);
-    result.envelope.diagnostics = result.diagnostics;
+    // Compute weighted error after building the sampled output so we can evaluate it.
     result.diagnostics.weightedError = weightedMeanPointError(points, result.envelope, options.amplitudeFloor);
     result.envelope.diagnostics = result.diagnostics;
     result.ok = true;
