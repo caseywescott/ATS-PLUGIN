@@ -2,6 +2,8 @@
 
 #include "PluginProcessor.h"
 
+#include "AtsModernModel.h"
+
 namespace
 {
 constexpr int kTexW = 256;
@@ -61,6 +63,32 @@ void SpectrogramPanel::rebuildImageAsync()
     img.clear(juce::Rectangle<int>(kTexW, kTexH), juce::Colours::black);
     processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
     spectroImage = img;
+
+    lifecycleLines.clear();
+    std::vector<AtsAudioProcessor::ModernLifecycleMarker> markers;
+    if (processor.getModernLifecycleMarkers(markers))
+    {
+        for (const auto& m : markers)
+        {
+            juce::Colour col;
+            switch (m.kind)
+            {
+                case ats::ModernAtsLifecycleKind::Birth:
+                    col = juce::Colour(0x9900cc44); // green, semi-transparent
+                    break;
+                case ats::ModernAtsLifecycleKind::Death:
+                    col = juce::Colour(0x99cc3300); // red, semi-transparent
+                    break;
+                case ats::ModernAtsLifecycleKind::GapFill:
+                    col = juce::Colour(0x66ccaa00); // amber, more transparent
+                    break;
+                default:
+                    continue;
+            }
+            lifecycleLines.push_back({ m.normalizedTime, col });
+        }
+    }
+
     repaint();
 }
 
@@ -80,6 +108,14 @@ void SpectrogramPanel::paint(juce::Graphics& g)
     {
         g.setColour(juce::Colours::grey);
         g.drawText("No model", plot, juce::Justification::centred);
+    }
+
+    // Overlay track lifecycle markers from the modern model.
+    for (const auto& [normTime, col] : lifecycleLines)
+    {
+        const int x = plot.getX() + juce::roundToInt(normTime * static_cast<float>(plot.getWidth() - 1));
+        g.setColour(col);
+        g.drawVerticalLine(x, static_cast<float>(plot.getY()), static_cast<float>(plot.getBottom()));
     }
 
     g.setColour(juce::Colour(0xffb0b0c0));

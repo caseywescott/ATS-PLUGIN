@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -10,6 +11,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "AtsModel.h"
+#include "AtsModernModel.h"
 #include "AtsParams.h"
 
 enum class AtsUiState
@@ -80,6 +82,16 @@ public:
 
     /** Returns false if no model. */
     bool getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const;
+    bool getModernDiagnosticsSummary(juce::String& outSummary, juce::String& outWarnings) const;
+
+    /** Lifecycle marker for spectrogram overlay; normalizedTime is in [0, 1]. */
+    struct ModernLifecycleMarker
+    {
+        float normalizedTime = 0.0f;
+        ats::ModernAtsLifecycleKind kind = ats::ModernAtsLifecycleKind::Birth;
+    };
+    /** Returns false if no modern model; filters to Birth, Death, and GapFill events only. */
+    bool getModernLifecycleMarkers(std::vector<ModernLifecycleMarker>& out) const;
 
     bool saveFullStatePreset(const juce::File& file);
     bool loadFullStatePreset(const juce::File& file);
@@ -123,6 +135,9 @@ private:
     /** Freq/time/phase flags only; caller sets partialsGain and residualGain for layer renders. */
     ats::SynthParams readCoreSynthParamsFromApvts() const;
     ats::AnalysisParams readAnalysisParamsFromApvts() const;
+    juce::String currentAnalysisModeId() const;
+    juce::String currentTrackerModeId() const;
+    juce::String currentPeakEstimatorId() const;
 
     std::atomic<AtsUiState> uiState { AtsUiState::NoSource };
     std::atomic<float> analysisProgress { 0.0f };
@@ -134,9 +149,16 @@ private:
     juce::CriticalSection sourceLock;
     std::vector<double> sourceMono;
     int sourceSampleRate = 0;
+    int sourceChannelCount = 0;
 
     juce::CriticalSection modelLock;
     ats::AtsSoundPtr analyzedModel;
+    std::vector<ats::ModernAtsTrackLifecycleEvent> latestTrackLifecycle;
+    ats::ModernAtsModel latestModernModel;
+    ats::ModernAtsModel previousModernModel;
+    bool latestModernModelValid = false;
+    bool previousModernModelValid = false;
+    std::vector<juce::String> analysisWarnings;
 
     /** Host-rate partial / residual layers; skip re-synthesis when core + model revision unchanged. */
     bool previewLayerCacheValid = false;

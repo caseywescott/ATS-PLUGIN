@@ -1,0 +1,280 @@
+#include "AtsModernSynth.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace
+{
+
+int failures = 0;
+
+void expect(bool condition, const char* message)
+{
+    if (!condition)
+    {
+        std::cerr << message << '\n';
+        ++failures;
+    }
+}
+
+ats::ModernAtsModel makeBaseModel(int partialCount = 1, int frameCount = 4)
+{
+    ats::ModernAtsModel model;
+    model.header.schemaVersion = ats::kModernAtsSchemaVersion;
+    model.header.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    model.header.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    model.header.sampleRate = 48000;
+    model.header.hopSizeSamples = 64;
+    model.header.windowSizeSamples = 256;
+    model.header.parameterHash = "synth-params";
+    model.header.sourceHash = "synth-source";
+
+    std::vector<int> activeIds;
+    for (int p = 0; p < partialCount; ++p)
+        activeIds.push_back(p);
+
+    for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+    {
+        ats::ModernAtsFrame frame;
+        frame.timeSeconds = (double)(frameIndex * model.header.hopSizeSamples)
+                            / (double)model.header.sampleRate;
+        frame.activePartialIds = activeIds;
+        frame.orphanResidualBandEnergy.assign(ats::kModernAtsDefaultResidualBands, 0.0);
+        model.frames.push_back(frame);
+    }
+
+    for (int p = 0; p < partialCount; ++p)
+    {
+        ats::ModernAtsPartial partial;
+        partial.id = p;
+        partial.label = "p" + std::to_string(p);
+        for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+        {
+            partial.frames.push_back({ 0.05 + 0.001 * (double)(p % 7),
+                                       110.0 + 13.0 * (double)p,
+                                       0.0,
+                                       50.0,
+                                       0.0,
+                                       1.0,
+                                       frameIndex == 0 ? ats::ModernAtsFrameReason::Born
+                                                       : ats::ModernAtsFrameReason::Matched });
+        }
+        model.partials.push_back(partial);
+    }
+
+    return model;
+}
+
+float peakAbs(const std::vector<float>& samples)
+{
+    float peak = 0.0f;
+    for (const float sample : samples)
+        peak = std::max(peak, std::abs(sample));
+    return peak;
+}
+
+void testSnapshotRenderAndSafety()
+{
+    const auto model = makeBaseModel();
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 64;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+
+    ats::ModernAtsRenderPlan plan;
+    std::string error;
+    expect(ats::prepareModernAtsRenderPlan(model, config, plan, error), error.c_str());
+    expect(plan.totalSamples == 256, "render plan total samples mismatch");
+
+    const auto safety = ats::checkModernAtsRealtimeSafety(plan);
+    expect(safety.renderIntoCallerOwnedBuffer, "modern render plan should use caller-owned output");
+    expect(!safety.allocatesDuringRender, "modern render should not allocate in renderInto");
+    expect(!safety.locksDuringRender, "modern render should not lock in renderInto");
+    expect(!safety.performsFileIoDuringRender, "modern render should not perform file I/O");
+    expect(!safety.performsAnalysisDuringRender, "modern render should not perform analysis");
+
+    std::vector<float> output((std::size_t)plan.totalSamples, 0.0f);
+    expect(ats::renderModernAtsPlanIntoBuffer(plan, output.data(), (int)output.size()),
+           "renderInto failed for modern snapshot");
+    expect(peakAbs(output) > 0.0f, "modern snapshot render should be non-zero");
+    expect(!ats::hasDenormalOrNonFiniteSamples(output.data(), (int)output.size()),
+           "modern snapshot render produced denormal/non-finite samples");
+}
+
+void testOrphanResidualGainAndSeed()
+{
+    auto model = makeBaseModel(0, 3);
+    for (auto& frame : model.frames)
+        frame.orphanResidualBandEnergy[4] = 0.25;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 32;
+    config.partialGain = 0.0;
+    config.transientGain = 0.0;
+    config.orphanResidualGain = 0.5;
+    config.deterministicNoiseSeed = 12345u;
+
+    const auto a = ats::renderModernAtsModel(model, config);
+    const auto b = ats::renderModernAtsModel(model, config);
+    expect(a == b, "orphan residual render should be deterministic with fixed seed");
+    expect(peakAbs(a) > 0.0f, "orphan residual render should be non-zero");
+
+    config.deterministicNoiseSeed = 54321u;
+    const auto c = ats::renderModernAtsModel(model, config);
+    expect(a != c, "orphan residual render should change when seed changes");
+
+    config.orphanResidualGain = 0.0;
+    const auto muted = ats::renderModernAtsModel(model, config);
+    expect(peakAbs(muted) == 0.0f, "orphan residual gain should mute orphan residual render");
+}
+
+void testTransientBufferCrossfadeAndGain()
+{
+    auto model = makeBaseModel(0, 2);
+    model.transients.push_back({ 0, 0, 0.0, 0.0, 0.00033333333333333332, 0.5 });
+    ats::ModernAtsTransientBuffer buffer;
+    buffer.markerIndex = 0;
+    buffer.sampleRate = 48000;
+    buffer.gain = 0.75;
+    buffer.samples.assign(16, 1.0f);
+    model.transientBuffers.push_back(buffer);
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 16;
+    config.partialGain = 0.0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 2.0;
+    config.transientCrossfadeSamples = 4;
+
+    const auto rendered = ats::renderModernAtsModel(model, config);
+    expect(rendered.size() >= 16, "transient render too short");
+    expect(rendered.front() == 0.0f, "transient crossfade should start at zero");
+    expect(std::abs(rendered[8] - 0.75f) < 1.0e-5f, "transient gain path mismatch");
+    expect(rendered[15] == 0.0f, "transient crossfade should end at zero");
+
+    config.transientGain = 0.0;
+    const auto muted = ats::renderModernAtsModel(model, config);
+    expect(peakAbs(muted) == 0.0f, "transient gain should mute transient playback");
+}
+
+void testDenormalAndSilenceEdges()
+{
+    auto model = makeBaseModel(1, 2);
+    for (auto& frame : model.partials[0].frames)
+        frame.amplitude = 1.0e-30;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 32;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+    config.denormalClamp = 1.0e-20;
+
+    const auto rendered = ats::renderModernAtsModel(model, config);
+    expect(!rendered.empty(), "tiny-amplitude model should still render buffer length");
+    expect(peakAbs(rendered) == 0.0f, "tiny-amplitude render should clamp to silence");
+    expect(!ats::hasDenormalOrNonFiniteSamples(rendered.data(), (int)rendered.size()),
+           "tiny-amplitude render produced denormal/non-finite samples");
+
+    model.partials.clear();
+    for (auto& frame : model.frames)
+        frame.activePartialIds.clear();
+    const auto silence = ats::renderModernAtsModel(model, config);
+    expect(!silence.empty(), "empty modern model should preserve timeline length");
+    expect(peakAbs(silence) == 0.0f, "empty modern model should render silence");
+}
+
+ats::ModernAtsModel makeBudgetModel(int partialCount, int frameCount, bool residual, bool transient)
+{
+    auto model = makeBaseModel(partialCount, frameCount);
+    model.header.hopSizeSamples = 256;
+    model.header.windowSizeSamples = 1024;
+    for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+    {
+        model.frames[(std::size_t)frameIndex].timeSeconds = (double)(frameIndex * 256) / 48000.0;
+        if (residual)
+            model.frames[(std::size_t)frameIndex]
+                .orphanResidualBandEnergy[(std::size_t)(frameIndex % ats::kModernAtsDefaultResidualBands)] = 0.0001;
+    }
+    if (transient)
+    {
+        for (int frameIndex = 0; frameIndex < frameCount; frameIndex += 48)
+        {
+            const double onset = (double)(frameIndex * 256) / 48000.0;
+            const int markerIndex = (int)model.transients.size();
+            model.transients.push_back({ frameIndex, markerIndex, onset, onset, onset + 0.02, 0.5 });
+            ats::ModernAtsTransientBuffer buffer;
+            buffer.markerIndex = markerIndex;
+            buffer.sampleRate = 48000;
+            buffer.gain = 0.5;
+            buffer.samples.assign(256, 0.01f);
+            model.transientBuffers.push_back(buffer);
+        }
+    }
+    return model;
+}
+
+void testRepresentativeBudgets()
+{
+    struct Shape
+    {
+        const char* name;
+        int partials;
+        int frames;
+        bool residual;
+        bool transient;
+        double maxCpuRatio;
+    };
+
+    const Shape shapes[] = {
+        { "sustained", 32, 180, true, false, 2.0 },
+        { "vibrato", 40, 360, true, false, 2.5 },
+        { "close_crossing_partials", 48, 300, true, false, 2.5 },
+        { "plucked_percussive", 64, 240, true, true, 3.0 },
+        { "noisy_voice_flute", 48, 300, true, false, 2.5 },
+        { "dense_polyphony", 128, 480, true, false, 5.0 },
+        { "percussive_hit", 96, 180, true, true, 4.0 },
+    };
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 256;
+    config.partialGain = 0.5;
+    config.orphanResidualGain = 0.25;
+    config.transientGain = 0.5;
+    config.deterministicNoiseSeed = 42u;
+
+    for (const auto& shape : shapes)
+    {
+        const auto model = makeBudgetModel(shape.partials, shape.frames, shape.residual, shape.transient);
+        ats::ModernAtsRenderStats stats;
+        const auto rendered = ats::renderModernAtsModel(model, config, &stats);
+        std::cout << "modern_synth_budget " << shape.name << " samples=" << stats.totalSamples
+                  << " state_bytes=" << stats.modelStateBytes << " output_bytes=" << stats.outputBytes
+                  << " render_seconds=" << stats.renderSeconds
+                  << " cpu_ratio=" << stats.cpuRatioAtRealtime << " peak=" << stats.peakAbs << '\n';
+        expect(!rendered.empty(), "budget render produced empty output");
+        expect(stats.cpuRatioAtRealtime < shape.maxCpuRatio, "budget render exceeded realtime CPU guardrail");
+        expect(!ats::hasDenormalOrNonFiniteSamples(rendered.data(), (int)rendered.size()),
+               "budget render produced denormal/non-finite samples");
+    }
+}
+
+} // namespace
+
+int main()
+{
+    testSnapshotRenderAndSafety();
+    testOrphanResidualGainAndSeed();
+    testTransientBufferCrossfadeAndGain();
+    testDenormalAndSilenceEdges();
+    testRepresentativeBudgets();
+    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}

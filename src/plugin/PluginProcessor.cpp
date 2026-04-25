@@ -2,14 +2,19 @@
 
 #include "PresetLibrary.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <thread>
+#include <utility>
 
+#include "AtsAnalysisPipeline.h"
 #include "AtsMathExpr.h"
+#include "AtsModernMorph.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -22,20 +27,18 @@ extern "C" {
 
 namespace
 {
-constexpr int kStateVersion = 4;
+constexpr int kStateVersion = 6;
 constexpr int kMinReadableStateVersion = 2;
 
-void freeResidual(double*** res)
-{
-    if (res == nullptr || *res == nullptr)
-        return;
-    if ((*res)[0] != nullptr)
-        std::free((*res)[0]);
-    if ((*res)[1] != nullptr)
-        std::free((*res)[1]);
-    std::free(*res);
-    *res = nullptr;
-}
+constexpr int kAnalysisModeClassic = 0;
+constexpr int kAnalysisModeModern = 1;
+constexpr int kTrackerModeClassic = 0;
+constexpr int kTrackerModeAssignment = 1;
+constexpr int kPeakEstimatorClassic = 0;
+constexpr int kPeakEstimatorExperimental = 1;
+constexpr int kMorphSourceCurrent = 0;
+constexpr int kMorphSourcePrevious = 1;
+constexpr int kMorphSourceDisabled = 2;
 
 juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::SynthParams& sp)
 {
@@ -154,6 +157,335 @@ bool samePreviewLayerCore(const ats::SynthParams& a, const ats::SynthParams& b)
            && (std::abs(a.duration - b.duration) < 1e-8);
 }
 
+const char* analysisModeIdForIndex(int idx)
+{
+    return idx == kAnalysisModeModern ? "modern_ats" : "classic_ats";
+}
+
+const char* trackerModeIdForIndex(int idx)
+{
+    return idx == kTrackerModeAssignment ? "modern_assignment" : "classic_recursive_frequency_smr";
+}
+
+const char* peakEstimatorIdForIndex(int idx)
+{
+    return idx == kPeakEstimatorExperimental ? "experimental_reassigned_peak_estimator"
+                                             : "classic_stft_peak_estimator";
+}
+
+double atsCell(double** table, int row, int column)
+{
+    if (table == nullptr || row < 0 || column < 0 || table[row] == nullptr)
+        return 0.0;
+    const double value = table[row][column];
+    return std::isfinite(value) ? value : 0.0;
+}
+
+bool atsPartialActive(const ATS_SOUND& sound, int partialIndex, int frameIndex)
+{
+    return atsCell(sound.amp, partialIndex, frameIndex) > 0.0
+           && atsCell(sound.frq, partialIndex, frameIndex) > 0.0;
+}
+
+double atsFrameTime(const ATS_SOUND& sound, int frameIndex)
+{
+    const double stored = atsCell(sound.time, 0, frameIndex);
+    if (stored > 0.0 || frameIndex == 0)
+        return stored;
+    if (sound.srate > 0 && sound.frame_size > 0)
+        return (double) frameIndex * (double) sound.frame_size / (double) sound.srate;
+    return (double) frameIndex;
+}
+
+std::vector<double> residualBandsForFrame(const ATS_SOUND& sound, int frameIndex)
+{
+    std::vector<double> bands;
+    if (sound.band_energy == nullptr)
+        return bands;
+
+    bands.assign(ats::kModernAtsDefaultResidualBands, 0.0);
+    for (int band = 0; band < ats::kModernAtsDefaultResidualBands; ++band)
+        bands[(std::size_t) band] = std::max(0.0, atsCell(sound.band_energy, band, frameIndex));
+    return bands;
+}
+
+double frameEnergy(const ATS_SOUND& sound, int frameIndex)
+{
+    double energy = 0.0;
+    for (int partial = 0; partial < sound.partials; ++partial)
+    {
+        const double amp = atsCell(sound.amp, partial, frameIndex);
+        energy += std::max(0.0, amp * amp);
+    }
+    if (sound.band_energy != nullptr)
+    {
+        for (int band = 0; band < ats::kModernAtsDefaultResidualBands; ++band)
+            energy += std::max(0.0, atsCell(sound.band_energy, band, frameIndex));
+    }
+    return energy;
+}
+
+int activePartialCount(const ATS_SOUND& sound, int frameIndex)
+{
+    int active = 0;
+    for (int partial = 0; partial < sound.partials; ++partial)
+    {
+        if (atsPartialActive(sound, partial, frameIndex))
+            ++active;
+    }
+    return active;
+}
+
+std::vector<ats::TransientFeatureFrame> transientFeaturesFromAtsSound(const ATS_SOUND& sound)
+{
+    std::vector<ats::TransientFeatureFrame> features;
+    features.reserve((std::size_t) std::max(0, sound.frames));
+
+    double previousEnergy = 0.0;
+    int previousActive = 0;
+    for (int frame = 0; frame < sound.frames; ++frame)
+    {
+        const double energy = frameEnergy(sound, frame);
+        const int active = activePartialCount(sound, frame);
+
+        ats::TransientFeatureFrame feature;
+        feature.timeSeconds = atsFrameTime(sound, frame);
+        feature.energy = energy;
+        feature.spectralFlux = frame == 0 ? 0.0 : std::max(0.0, energy - previousEnergy);
+        feature.modelDiscontinuity =
+            frame == 0 || sound.partials <= 0 ? 0.0
+                                              : std::abs((double) active - (double) previousActive)
+                                                    / (double) std::max(1, sound.partials);
+        features.push_back(feature);
+
+        previousEnergy = energy;
+        previousActive = active;
+    }
+
+    return features;
+}
+
+std::vector<ats::TrackingPeakFrame> trackingPeakFramesFromAtsSound(const ATS_SOUND& sound)
+{
+    std::vector<ats::TrackingPeakFrame> frames((std::size_t) std::max(0, sound.frames));
+    for (int frame = 0; frame < sound.frames; ++frame)
+    {
+        auto& peaks = frames[(std::size_t) frame];
+        for (int partial = 0; partial < sound.partials; ++partial)
+        {
+            if (!atsPartialActive(sound, partial, frame))
+                continue;
+
+            ats::TrackingPeak peak;
+            peak.sourceIndex = partial;
+            peak.frequencyHz = atsCell(sound.frq, partial, frame);
+            peak.amplitude = atsCell(sound.amp, partial, frame);
+            peak.smrDb = atsCell(sound.smr, partial, frame);
+            peak.phaseRadians = atsCell(sound.pha, partial, frame);
+            peaks.push_back(peak);
+        }
+    }
+    return frames;
+}
+
+ats::ModernAtsPartialFrame modernFrameFromAtsCell(const ATS_SOUND& sound,
+                                                  int partialIndex,
+                                                  int frameIndex,
+                                                  bool previousActive)
+{
+    const bool active = atsPartialActive(sound, partialIndex, frameIndex);
+    ats::ModernAtsPartialFrame frame;
+    frame.amplitude = active ? std::max(0.0, atsCell(sound.amp, partialIndex, frameIndex)) : 0.0;
+    frame.frequencyHz = active ? std::max(0.0, atsCell(sound.frq, partialIndex, frameIndex)) : 0.0;
+    frame.phaseRadians = active ? atsCell(sound.pha, partialIndex, frameIndex) : 0.0;
+    frame.smrDb = active ? atsCell(sound.smr, partialIndex, frameIndex) : 0.0;
+    frame.noiseEnergy = active ? std::max(0.0, atsCell(sound.res, partialIndex, frameIndex)) : 0.0;
+    frame.confidence = active ? 1.0 : 0.0;
+    frame.reason = !active ? ats::ModernAtsFrameReason::Slept
+                           : (previousActive ? ats::ModernAtsFrameReason::Matched
+                                             : ats::ModernAtsFrameReason::Born);
+    return frame;
+}
+
+std::vector<ats::ModernAtsPartial> classicPartialsAsModern(const ATS_SOUND& sound)
+{
+    std::vector<ats::ModernAtsPartial> partials;
+    partials.reserve((std::size_t) std::max(0, sound.partials));
+    for (int partialIndex = 0; partialIndex < sound.partials; ++partialIndex)
+    {
+        ats::ModernAtsPartial partial;
+        partial.id = partialIndex;
+        partial.label = "classic_" + std::to_string(partialIndex);
+        partial.frames.reserve((std::size_t) std::max(0, sound.frames));
+
+        bool previousActive = false;
+        for (int frameIndex = 0; frameIndex < sound.frames; ++frameIndex)
+        {
+            partial.frames.push_back(modernFrameFromAtsCell(sound, partialIndex, frameIndex, previousActive));
+            previousActive = atsPartialActive(sound, partialIndex, frameIndex);
+        }
+
+        partials.push_back(std::move(partial));
+    }
+    return partials;
+}
+
+void populateModernFramesFromPartials(ats::ModernAtsModel& model, const ATS_SOUND& sound)
+{
+    model.frames.clear();
+    model.frames.reserve((std::size_t) std::max(0, sound.frames));
+    for (int frameIndex = 0; frameIndex < sound.frames; ++frameIndex)
+    {
+        ats::ModernAtsFrame frame;
+        frame.timeSeconds = atsFrameTime(sound, frameIndex);
+        frame.orphanResidualBandEnergy = residualBandsForFrame(sound, frameIndex);
+        for (const auto& partial : model.partials)
+        {
+            if (frameIndex >= (int) partial.frames.size())
+                continue;
+            const auto& pf = partial.frames[(std::size_t) frameIndex];
+            if (pf.amplitude > 0.0 && pf.frequencyHz > 0.0
+                && pf.reason != ats::ModernAtsFrameReason::Slept
+                && pf.reason != ats::ModernAtsFrameReason::Pruned
+                && pf.reason != ats::ModernAtsFrameReason::Rejected)
+            {
+                frame.activePartialIds.push_back(partial.id);
+            }
+        }
+        model.frames.push_back(std::move(frame));
+    }
+}
+
+ats::ModernAtsModel buildModernModelFromClassicAtsSound(
+    const ATS_SOUND& sound,
+    const ats::AnalysisParams& analysisParams,
+    int analysisModeIndex,
+    int trackerModeIndex,
+    int peakEstimatorIndex,
+    int inputChannelCount,
+    const std::vector<ats::ModernAtsTrackLifecycleEvent>& classicLifecycle)
+{
+    ats::ModernAtsModel model;
+    model.header.analysisMode = peakEstimatorIndex == kPeakEstimatorExperimental
+                                    ? ats::ModernAtsAnalysisMode::Experimental
+                                    : (analysisModeIndex == kAnalysisModeModern
+                                           ? ats::ModernAtsAnalysisMode::ModernAts
+                                           : ats::ModernAtsAnalysisMode::ClassicAts);
+    model.header.trackerMode = trackerModeIndex == kTrackerModeAssignment
+                                   ? ats::ModernAtsTrackerMode::ModernAssignment
+                                   : ats::ModernAtsTrackerMode::ClassicRecursiveFrequencySmr;
+    model.header.sampleRate = sound.srate;
+    model.header.hopSizeSamples = std::max(1, sound.frame_size);
+    model.header.windowSizeSamples = std::max(1, sound.window_size);
+    model.header.inputChannelCount = std::max(1, inputChannelCount);
+    model.header.channelPolicy =
+        ats::defaultModernAtsChannelPolicyForInput(model.header.inputChannelCount);
+    model.header.parameterHash = "plugin:type=" + std::to_string(analysisParams.type)
+                                 + ";tracker=" + trackerModeIdForIndex(trackerModeIndex)
+                                 + ";peak=" + peakEstimatorIdForIndex(peakEstimatorIndex);
+    model.header.sourceHash = "classic:" + std::to_string(sound.srate) + ":" + std::to_string(sound.frames)
+                              + ":" + std::to_string(sound.partials);
+
+    auto transientFeatures = transientFeaturesFromAtsSound(sound);
+    ats::TransientDetectionDiagnostics transientDiagnostics;
+    model.transients = ats::detectTransientMarkers(transientFeatures, ats::TransientDetectionConfig {}, transientDiagnostics);
+
+    if (trackerModeIndex == kTrackerModeAssignment)
+    {
+        ats::AssignmentTrackerConfig config;
+        config.analysisMode = model.header.analysisMode;
+        for (const auto& marker : model.transients)
+            config.transientBreakFrameIndices.push_back(marker.frameIndex);
+
+        auto assignment = ats::runAssignmentTrackerPrototype(trackingPeakFramesFromAtsSound(sound), config);
+        model.partials = std::move(assignment.partials);
+        model.trackLifecycle = std::move(assignment.trackLifecycle);
+        model.assignmentCosts = std::move(assignment.assignmentCosts);
+    }
+    else
+    {
+        model.partials = classicPartialsAsModern(sound);
+        model.trackLifecycle = classicLifecycle;
+    }
+
+    populateModernFramesFromPartials(model, sound);
+
+    if (analysisModeIndex == kAnalysisModeModern)
+    {
+        model.warnings.push_back(trackerModeIndex == kTrackerModeAssignment
+                                     ? "Modern assignment tracker applied to derived ATS peak frames."
+                                     : "Modern ATS mode using classic recursive frequency/SMR tracking.");
+    }
+    if (peakEstimatorIndex == kPeakEstimatorExperimental)
+    {
+        model.warnings.push_back(
+            "Experimental reassigned/DDM estimator selected; plugin snapshot is tagged experimental.");
+    }
+
+    return model;
+}
+
+ats::MorphRecipe morphRecipeFromApvts(const juce::AudioProcessorValueTreeState& apvts)
+{
+    const int recipeIndex =
+        juce::jlimit(0, 3, juce::roundToInt(apvts.getRawParameterValue("morphRecipe")->load()));
+
+    ats::MorphRecipe recipe;
+    recipe.recipeId = "plugin_morph_" + std::to_string(recipeIndex);
+    recipe.sourceModelId = "source";
+    recipe.targetModelId = "target";
+    recipe.envelopes = ats::makeDefaultMorphEnvelopeSet();
+    recipe.envelopes.frequency = ats::makeConstantMorphEnvelope(
+        "frequency", apvts.getRawParameterValue("morphFreqEnv")->load());
+    recipe.envelopes.amplitude = ats::makeConstantMorphEnvelope(
+        "amplitude", apvts.getRawParameterValue("morphAmpEnv")->load());
+    recipe.envelopes.partialNoise = ats::makeConstantMorphEnvelope(
+        "partial_noise", apvts.getRawParameterValue("morphNoiseEnv")->load());
+    recipe.envelopes.orphanResidual = ats::makeConstantMorphEnvelope(
+        "orphan_residual", apvts.getRawParameterValue("morphOrphanEnv")->load());
+    recipe.envelopes.time = ats::makeConstantMorphEnvelope(
+        "time", apvts.getRawParameterValue("morphTimeEnv")->load());
+
+    switch (recipeIndex)
+    {
+    case 1:
+        recipe.correspondenceStrategy = ats::MorphCorrespondenceStrategy::HarmonicNumber;
+        recipe.sourceFundamentalHz = 110.0;
+        recipe.targetFundamentalHz = 110.0;
+        recipe.sourceHarmonicity = 0.9;
+        recipe.targetHarmonicity = 0.9;
+        break;
+    case 2:
+        recipe.correspondenceStrategy = ats::MorphCorrespondenceStrategy::Automatic;
+        recipe.transientMode = ats::MorphTransientMode::BlendBoth;
+        recipe.protectTransientWindows = true;
+        break;
+    case 3:
+        recipe.correspondenceStrategy = ats::MorphCorrespondenceStrategy::NearestFrequency;
+        recipe.sourceUnmatchedPolicy = ats::MorphUnmatchedPolicy::Hold;
+        recipe.targetUnmatchedPolicy = ats::MorphUnmatchedPolicy::FadeIn;
+        break;
+    default:
+        recipe.correspondenceStrategy = ats::MorphCorrespondenceStrategy::Automatic;
+        break;
+    }
+
+    return recipe;
+}
+
+const ats::ModernAtsModel* selectMorphSource(int sourceIndex,
+                                             const ats::ModernAtsModel& latest,
+                                             bool latestValid,
+                                             const ats::ModernAtsModel& previous,
+                                             bool previousValid)
+{
+    if (sourceIndex == kMorphSourceCurrent)
+        return latestValid ? &latest : nullptr;
+    if (sourceIndex == kMorphSourcePrevious)
+        return previousValid ? &previous : nullptr;
+    return nullptr;
+}
+
 } // namespace
 
 AtsAudioProcessor::AtsAudioProcessor()
@@ -265,10 +597,50 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         "outputTrim", "Output trim", juce::NormalisableRange<float>(0.0f, 2.0f, 0.0001f), 1.0f));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "analysisMode",
+        "Analysis mode",
+        juce::StringArray { "Classic ATS", "Modern ATS" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "trackerMode",
+        "Tracker mode",
+        juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
         "analysisType",
         "Analysis type",
         juce::StringArray { "1 amp+freq", "2 +phase", "3 +noise", "4 full" },
         3));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "peakEstimator",
+        "Peak estimator",
+        juce::StringArray { "Classic STFT", "Experimental reassigned/DDM" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "morphSourceA",
+        "Morph source A",
+        juce::StringArray { "Current modern model", "Previous modern model", "Disabled" },
+        1));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "morphSourceB",
+        "Morph source B",
+        juce::StringArray { "Current modern model", "Previous modern model", "Disabled" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        "morphRecipe",
+        "Morph recipe",
+        juce::StringArray { "Linear blend", "Harmonic lock", "Percussive protect", "Texture drift" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "morphFreqEnv", "Morph frequency envelope", juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f), 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "morphAmpEnv", "Morph amplitude envelope", juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f), 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "morphNoiseEnv", "Morph partial noise envelope", juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f), 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "morphOrphanEnv", "Morph orphan residual envelope", juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f), 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "morphTimeEnv", "Morph time envelope", juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f), 0.5f));
 
     return layout;
 }
@@ -338,6 +710,24 @@ ats::AnalysisParams AtsAudioProcessor::readAnalysisParamsFromApvts() const
     return a;
 }
 
+juce::String AtsAudioProcessor::currentAnalysisModeId() const
+{
+    const int idx = juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
+    return analysisModeIdForIndex(idx);
+}
+
+juce::String AtsAudioProcessor::currentTrackerModeId() const
+{
+    const int idx = juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("trackerMode")->load()));
+    return trackerModeIdForIndex(idx);
+}
+
+juce::String AtsAudioProcessor::currentPeakEstimatorId() const
+{
+    const int idx = juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+    return peakEstimatorIdForIndex(idx);
+}
+
 void AtsAudioProcessor::loadSourceFile(const juce::File& file)
 {
     cancelJobs();
@@ -378,11 +768,18 @@ void AtsAudioProcessor::loadSourceFile(const juce::File& file)
         const juce::ScopedLock sl(sourceLock);
         sourceMono = std::move(mono);
         sourceSampleRate = (int) fileSr;
+        sourceChannelCount = nCh;
     }
 
     {
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(nullptr);
+        latestTrackLifecycle.clear();
+        latestModernModel = {};
+        previousModernModel = {};
+        latestModernModelValid = false;
+        previousModernModelValid = false;
+        analysisWarnings.clear();
     }
     activePlaybackBufferIndex.store(-1, std::memory_order_release);
     previewPlaying.store(false, std::memory_order_release);
@@ -435,6 +832,7 @@ void AtsAudioProcessor::startAnalysis()
 
     std::vector<double> localMono;
     int fileSr = 0;
+    int fileChannelCount = 0;
     {
         const juce::ScopedLock sl(sourceLock);
         if (sourceMono.empty())
@@ -444,6 +842,7 @@ void AtsAudioProcessor::startAnalysis()
         }
         localMono = sourceMono;
         fileSr = sourceSampleRate;
+        fileChannelCount = sourceChannelCount;
     }
 
     if (fileSr <= 0)
@@ -453,40 +852,98 @@ void AtsAudioProcessor::startAnalysis()
     }
 
     const uint64_t gen = jobGeneration.load();
+    const int selectedAnalysisMode =
+        juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
+    const int selectedTrackerMode =
+        juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("trackerMode")->load()));
+    const int selectedPeakEstimator =
+        juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+    const ats::AnalysisParams selectedAnalysisParams = readAnalysisParamsFromApvts();
 
     setUiState(AtsUiState::Analyzing);
     analysisProgress.store(0.05f);
     analysisThreadRunning.store(true);
 
-    analysisThread = std::thread([this, localMono, fileSr, gen]() {
-        ats::AnalysisParams ap = readAnalysisParamsFromApvts();
-        ANARGS an {};
-        ap.toAnargs(an);
-
-        auto* samples = const_cast<double*>(localMono.data());
-        double** residual = nullptr;
-        int resLen = 0;
-
+    analysisThread = std::thread([this,
+                                  localMono,
+                                  fileSr,
+                                  gen,
+                                  selectedAnalysisMode,
+                                  selectedTrackerMode,
+                                  selectedPeakEstimator,
+                                  fileChannelCount,
+                                  selectedAnalysisParams]() {
+        ats::AnalysisParams ap = selectedAnalysisParams;
         analysisProgress.store(0.15f);
-        ATS_SOUND* raw = tracker(&an, samples, fileSr, (int) localMono.size(), &residual, &resLen);
-        freeResidual(&residual);
+        auto result = ats::runClassicAtsAnalysis(ap, localMono, fileSr);
 
         if (jobGeneration.load() != gen)
         {
-            if (raw != nullptr)
-            {
-                free_sound(raw);
-                std::free(raw);
-            }
             analysisThreadRunning.store(false);
+            return;
+        }
+
+        if (!result.sound)
+        {
+            analysisThreadRunning.store(false);
+            setError(result.errorMessage.empty() ? juce::String("Classic ATS analysis failed.")
+                                                 : juce::String(result.errorMessage));
             return;
         }
 
         analysisProgress.store(0.85f);
 
+        ats::ModernAtsModel modernModel;
+        bool modernModelValid = false;
+        std::string modernValidationError;
+        if (selectedAnalysisMode == kAnalysisModeModern || selectedPeakEstimator == kPeakEstimatorExperimental)
+        {
+            modernModel = buildModernModelFromClassicAtsSound(*result.sound.get(),
+                                                              ap,
+                                                              selectedAnalysisMode,
+                                                              selectedTrackerMode,
+                                                              selectedPeakEstimator,
+                                                              fileChannelCount,
+                                                              result.trackLifecycle);
+            modernModelValid = ats::validateModernAtsModel(modernModel, modernValidationError);
+        }
+
         {
             const juce::ScopedLock ml(modelLock);
-            analyzedModel.reset(raw);
+            analyzedModel = std::move(result.sound);
+            latestTrackLifecycle = std::move(result.trackLifecycle);
+            analysisWarnings.clear();
+
+            if (modernModelValid)
+            {
+                if (latestModernModelValid)
+                {
+                    previousModernModel = latestModernModel;
+                    previousModernModelValid = true;
+                }
+                latestModernModel = std::move(modernModel);
+                latestModernModelValid = true;
+            }
+            else
+            {
+                latestModernModel = {};
+                previousModernModel = {};
+                latestModernModelValid = false;
+                previousModernModelValid = false;
+            }
+
+            if (selectedAnalysisMode == kAnalysisModeModern)
+            {
+                analysisWarnings.push_back(selectedTrackerMode == kTrackerModeAssignment
+                                               ? "Modern assignment tracker routed into the modern diagnostics model."
+                                               : "Modern mode using classic tracker for compatibility.");
+            }
+            if (selectedPeakEstimator == kPeakEstimatorExperimental)
+                analysisWarnings.push_back("Experimental reassigned/DDM peak estimator selected.");
+            if (!modernModelValid && (selectedAnalysisMode == kAnalysisModeModern
+                                      || selectedPeakEstimator == kPeakEstimatorExperimental))
+                analysisWarnings.push_back("Modern diagnostics unavailable: "
+                                           + juce::String(modernValidationError));
         }
 
         modelRevision.fetch_add(1, std::memory_order_relaxed);
@@ -834,6 +1291,20 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 
     if (kStateVersion >= 4)
         mos.writeByte(apvts.getRawParameterValue("residualOnly")->load() > 0.5f ? (juce::uint8) 1 : (juce::uint8) 0);
+    if (kStateVersion >= 5)
+    {
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("trackerMode")->load()));
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphSourceA")->load()));
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphSourceB")->load()));
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphRecipe")->load()));
+        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+        mos.writeFloat(apvts.getRawParameterValue("morphFreqEnv")->load());
+        mos.writeFloat(apvts.getRawParameterValue("morphAmpEnv")->load());
+        mos.writeFloat(apvts.getRawParameterValue("morphNoiseEnv")->load());
+        mos.writeFloat(apvts.getRawParameterValue("morphOrphanEnv")->load());
+        mos.writeFloat(apvts.getRawParameterValue("morphTimeEnv")->load());
+    }
 
     destData = mos.getMemoryBlock();
 }
@@ -875,6 +1346,44 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     bool residualOnly = false;
     if (ver >= 4 && mis.getNumBytesRemaining() > 0)
         residualOnly = mis.readByte() != 0;
+    int analysisMode = 0;
+    int trackerMode = 0;
+    int morphSourceA = 0;
+    int morphSourceB = 0;
+    int morphRecipe = 0;
+    int peakEstimator = 0;
+    float morphFreqEnv = 0.5f;
+    float morphAmpEnv = 0.5f;
+    float morphNoiseEnv = 0.5f;
+    float morphOrphanEnv = 0.5f;
+    float morphTimeEnv = 0.5f;
+    if (ver >= 6 && mis.getNumBytesRemaining() >= (juce::int64) (sizeof(int) * 6 + sizeof(float) * 5))
+    {
+        analysisMode = mis.readInt();
+        trackerMode = mis.readInt();
+        morphSourceA = mis.readInt();
+        morphSourceB = mis.readInt();
+        morphRecipe = mis.readInt();
+        peakEstimator = mis.readInt();
+        morphFreqEnv = mis.readFloat();
+        morphAmpEnv = mis.readFloat();
+        morphNoiseEnv = mis.readFloat();
+        morphOrphanEnv = mis.readFloat();
+        morphTimeEnv = mis.readFloat();
+    }
+    else if (ver == 5 && mis.getNumBytesRemaining() >= (juce::int64) (sizeof(int) * 5 + sizeof(float) * 5))
+    {
+        analysisMode = mis.readInt();
+        trackerMode = mis.readInt();
+        morphSourceA = mis.readInt();
+        morphSourceB = mis.readInt();
+        morphRecipe = mis.readInt();
+        morphFreqEnv = mis.readFloat();
+        morphAmpEnv = mis.readFloat();
+        morphNoiseEnv = mis.readFloat();
+        morphOrphanEnv = mis.readFloat();
+        morphTimeEnv = mis.readFloat();
+    }
 
     if (auto* p = apvts.getParameter("analysisType"))
         p->setValueNotifyingHost((float) (juce::jlimit(1, 4, ap.type) - 1) / 3.0f);
@@ -899,6 +1408,28 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         p->setValueNotifyingHost(residualOnly ? 1.0f : 0.0f);
     if (auto* p = apvts.getParameter("outputTrim"))
         p->setValueNotifyingHost(apvts.getParameterRange("outputTrim").convertTo0to1(outputTrim));
+    if (auto* p = apvts.getParameter("analysisMode"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 1, analysisMode));
+    if (auto* p = apvts.getParameter("trackerMode"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 1, trackerMode));
+    if (auto* p = apvts.getParameter("morphSourceA"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 2, morphSourceA) / 2.0f);
+    if (auto* p = apvts.getParameter("morphSourceB"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 2, morphSourceB) / 2.0f);
+    if (auto* p = apvts.getParameter("morphRecipe"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 3, morphRecipe) / 3.0f);
+    if (auto* p = apvts.getParameter("peakEstimator"))
+        p->setValueNotifyingHost((float) juce::jlimit(0, 1, peakEstimator));
+    if (auto* p = apvts.getParameter("morphFreqEnv"))
+        p->setValueNotifyingHost(apvts.getParameterRange("morphFreqEnv").convertTo0to1(morphFreqEnv));
+    if (auto* p = apvts.getParameter("morphAmpEnv"))
+        p->setValueNotifyingHost(apvts.getParameterRange("morphAmpEnv").convertTo0to1(morphAmpEnv));
+    if (auto* p = apvts.getParameter("morphNoiseEnv"))
+        p->setValueNotifyingHost(apvts.getParameterRange("morphNoiseEnv").convertTo0to1(morphNoiseEnv));
+    if (auto* p = apvts.getParameter("morphOrphanEnv"))
+        p->setValueNotifyingHost(apvts.getParameterRange("morphOrphanEnv").convertTo0to1(morphOrphanEnv));
+    if (auto* p = apvts.getParameter("morphTimeEnv"))
+        p->setValueNotifyingHost(apvts.getParameterRange("morphTimeEnv").convertTo0to1(morphTimeEnv));
 
     if (atsData.getSize() > 0)
     {
@@ -910,6 +1441,12 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         {
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(raw);
+            latestTrackLifecycle.clear();
+            latestModernModel = {};
+            previousModernModel = {};
+            latestModernModelValid = false;
+            previousModernModelValid = false;
+            analysisWarnings.clear();
             activePlaybackBufferIndex.store(-1, std::memory_order_release);
             previewPlaying.store(false, std::memory_order_release);
             modelRevision.fetch_add(1, std::memory_order_relaxed);
@@ -922,6 +1459,12 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
             std::free(raw);
             const juce::ScopedLock ml(modelLock);
             analyzedModel.reset(nullptr);
+            latestTrackLifecycle.clear();
+            latestModernModel = {};
+            previousModernModel = {};
+            latestModernModelValid = false;
+            previousModernModelValid = false;
+            analysisWarnings.clear();
             activePlaybackBufferIndex.store(-1, std::memory_order_release);
             previewPlaying.store(false, std::memory_order_release);
             modelRevision.fetch_add(1, std::memory_order_relaxed);
@@ -940,6 +1483,12 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(nullptr);
+        latestTrackLifecycle.clear();
+        latestModernModel = {};
+        previousModernModel = {};
+        latestModernModelValid = false;
+        previousModernModelValid = false;
+        analysisWarnings.clear();
         activePlaybackBufferIndex.store(-1, std::memory_order_release);
         previewPlaying.store(false, std::memory_order_release);
         modelRevision.fetch_add(1, std::memory_order_relaxed);
@@ -1117,6 +1666,121 @@ bool AtsAudioProcessor::getModelFootprint(int& partials, int& frames, bool& hasR
     return true;
 }
 
+bool AtsAudioProcessor::getModernDiagnosticsSummary(juce::String& outSummary, juce::String& outWarnings) const
+{
+    const juce::ScopedLock ml(modelLock);
+    if (!latestModernModelValid)
+        return false;
+
+    double orphanResidualEnergy = 0.0;
+    for (const auto& frame : latestModernModel.frames)
+    {
+        for (const double energy : frame.orphanResidualBandEnergy)
+            orphanResidualEnergy += std::max(0.0, energy);
+    }
+
+    int births = 0;
+    int deaths = 0;
+    int gapFills = 0;
+    int pruned = 0;
+    for (const auto& event : latestModernModel.trackLifecycle)
+    {
+        switch (event.kind)
+        {
+        case ats::ModernAtsLifecycleKind::Birth: ++births; break;
+        case ats::ModernAtsLifecycleKind::Death: ++deaths; break;
+        case ats::ModernAtsLifecycleKind::GapFill: ++gapFills; break;
+        case ats::ModernAtsLifecycleKind::Pruned: ++pruned; break;
+        default: break;
+        }
+    }
+
+    outSummary = "Modern diagnostics - partials: " + juce::String((int) latestModernModel.partials.size())
+                 + ", frames: " + juce::String((int) latestModernModel.frames.size())
+                 + ", transient markers: " + juce::String((int) latestModernModel.transients.size())
+                 + ", orphan residual energy: " + juce::String(orphanResidualEnergy, 3)
+                 + ", lifecycle [birth " + juce::String(births) + ", death " + juce::String(deaths)
+                 + ", gap-fill " + juce::String(gapFills) + ", pruned " + juce::String(pruned) + "]";
+
+    const int sourceA =
+        juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("morphSourceA")->load()));
+    const int sourceB =
+        juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("morphSourceB")->load()));
+    const auto* morphSource = selectMorphSource(sourceA,
+                                                latestModernModel,
+                                                latestModernModelValid,
+                                                previousModernModel,
+                                                previousModernModelValid);
+    const auto* morphTarget = selectMorphSource(sourceB,
+                                                latestModernModel,
+                                                latestModernModelValid,
+                                                previousModernModel,
+                                                previousModernModelValid);
+    if (sourceA == kMorphSourceDisabled || sourceB == kMorphSourceDisabled)
+    {
+        outSummary << "\nMorph - disabled";
+    }
+    else if (morphSource == nullptr || morphTarget == nullptr)
+    {
+        outSummary << "\nMorph - waiting for current and previous modern analyses";
+    }
+    else
+    {
+        auto recipe = morphRecipeFromApvts(apvts);
+        auto correspondences = ats::buildAutomaticCorrespondence(*morphSource, *morphTarget, recipe);
+        int matched = 0;
+        int unmatchedSource = 0;
+        int unmatchedTarget = 0;
+        for (const auto& c : correspondences)
+        {
+            if (c.sourcePartialId >= 0 && c.targetPartialId >= 0)
+                ++matched;
+            else if (c.sourcePartialId >= 0)
+                ++unmatchedSource;
+            else if (c.targetPartialId >= 0)
+                ++unmatchedTarget;
+        }
+
+        outSummary << "\nMorph - matched: " << matched
+                   << ", unmatched A: " << unmatchedSource
+                   << ", unmatched B: " << unmatchedTarget
+                   << ", candidate partials: " << (matched + unmatchedSource + unmatchedTarget);
+    }
+
+    outWarnings.clear();
+    for (int i = 0; i < (int) analysisWarnings.size(); ++i)
+    {
+        if (i > 0)
+            outWarnings << "\n";
+        outWarnings << "- " << analysisWarnings[(size_t) i];
+    }
+    return true;
+}
+
+bool AtsAudioProcessor::getModernLifecycleMarkers(std::vector<ModernLifecycleMarker>& out) const
+{
+    const juce::ScopedLock ml(modelLock);
+    if (!latestModernModelValid || latestModernModel.frames.empty())
+        return false;
+    out.clear();
+    const int frameCount = static_cast<int>(latestModernModel.frames.size());
+    for (const auto& event : latestModernModel.trackLifecycle)
+    {
+        if (event.kind != ats::ModernAtsLifecycleKind::Birth
+            && event.kind != ats::ModernAtsLifecycleKind::Death
+            && event.kind != ats::ModernAtsLifecycleKind::GapFill)
+            continue;
+        if (event.frameIndex < 0 || event.frameIndex >= frameCount)
+            continue;
+        ModernLifecycleMarker marker;
+        marker.normalizedTime =
+            frameCount > 1 ? static_cast<float>(event.frameIndex) / static_cast<float>(frameCount - 1) : 0.0f;
+        marker.kind = event.kind;
+        out.push_back(marker);
+    }
+    return !out.empty();
+}
+
 bool AtsAudioProcessor::buildSpectrogramTexture(bool partialsMode, int width, int height, juce::Image& out)
 {
     if (width <= 0 || height <= 0)
@@ -1267,6 +1931,12 @@ bool AtsAudioProcessor::importAtsFile(const juce::File& file, juce::String& erro
     {
         const juce::ScopedLock ml(modelLock);
         analyzedModel.reset(raw);
+        latestTrackLifecycle.clear();
+        latestModernModel = {};
+        previousModernModel = {};
+        latestModernModelValid = false;
+        previousModernModelValid = false;
+        analysisWarnings.clear();
         activePlaybackBufferIndex.store(-1, std::memory_order_release);
         previewPlaying.store(false, std::memory_order_release);
     }
