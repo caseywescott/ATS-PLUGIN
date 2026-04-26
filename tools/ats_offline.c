@@ -26,7 +26,8 @@ static void usage(const char *prog)
 {
   fprintf(stderr,
           "Usage: %s [--type <1-4>] [--analysis-mode classic_ats]"
-          " [--metadata <analysis.json>] <input.wav> <output.wav>\n"
+          " [--metadata <analysis.json>] [--dump-frames <frames.json>]"
+          " <input.wav> <output.wav>\n"
           "  Analysis type matches ATSA/Qatsh (default %d).\n",
           prog, ATSA_TYPE);
 }
@@ -160,6 +161,70 @@ static double compute_orphan_residual_ratio(const ATS_SOUND *sound)
   if (band_sum + amp_sum < 1e-30)
     return 0.0;
   return band_sum / (band_sum + amp_sum);
+}
+
+/* ---------------------------------------------------------------------------
+ * Frame-data JSON dump
+ * Writes per-frame partial (freq, amp, smr) arrays for envelope visualization.
+ * Only active partials (amp > 0) are emitted to keep the file compact.
+ * ------------------------------------------------------------------------- */
+
+static int write_frame_dump_json(const char *path,
+                                 const ANARGS *a,
+                                 const ATS_SOUND *sound)
+{
+  FILE *f = fopen(path, "w");
+  int frame, p;
+  if (!f) {
+    fprintf(stderr, "Could not open frame-dump path '%s'.\n", path);
+    return -1;
+  }
+
+  fprintf(f, "{\n");
+  fprintf(f, "  \"schema_version\": 1,\n");
+  fprintf(f, "  \"sample_rate\": %d,\n", sound->srate);
+  fprintf(f, "  \"frame_size\": %d,\n", sound->frame_size);
+  fprintf(f, "  \"window_size\": %d,\n", sound->window_size);
+  fprintf(f, "  \"partials\": %d,\n", sound->partials);
+  fprintf(f, "  \"frames\": %d,\n", sound->frames);
+  fprintf(f, "  \"duration_seconds\": %.17g,\n", sound->dur);
+  fprintf(f, "  \"lowest_freq_hz\": %.17g,\n", a->lowest_freq);
+  fprintf(f, "  \"highest_freq_hz\": %.17g,\n", a->highest_freq);
+  fprintf(f, "  \"analysis_type\": %d,\n", a->type);
+  fprintf(f, "  \"frame_data\": [\n");
+
+  for (frame = 0; frame < sound->frames; ++frame) {
+    double time_s = (sound->time && sound->time[0]) ? sound->time[0][frame] : 0.0;
+    int first_partial = 1;
+
+    fprintf(f, "    {\"index\": %d, \"time_s\": %.6g, \"partials\": [", frame, time_s);
+
+    for (p = 0; p < sound->partials; ++p) {
+      double a_val = sound->amp[p][frame];
+      double f_val = sound->frq[p][frame];
+      double s_val = (sound->smr && sound->smr[p]) ? sound->smr[p][frame] : 0.0;
+      if (a_val <= 0.0)
+        continue;
+      if (!first_partial)
+        fprintf(f, ", ");
+      fprintf(f, "[%.6g, %.10g, %.4g]", f_val, a_val, s_val);
+      first_partial = 0;
+    }
+
+    fprintf(f, "]}");
+    if (frame + 1 < sound->frames)
+      fprintf(f, ",");
+    fprintf(f, "\n");
+  }
+
+  fprintf(f, "  ]\n");
+  fprintf(f, "}\n");
+
+  if (fclose(f) != 0) {
+    fprintf(stderr, "Could not finish writing frame-dump path '%s'.\n", path);
+    return -1;
+  }
+  return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -385,11 +450,12 @@ static void free_residual(double ***res)
 
 int main(int argc, char **argv)
 {
-  const char *in_path       = NULL;
-  const char *out_path      = NULL;
-  const char *metadata_path = NULL;
-  const char *analysis_mode = "classic_ats";
-  int analysis_type         = ATSA_TYPE;
+  const char *in_path         = NULL;
+  const char *out_path        = NULL;
+  const char *metadata_path   = NULL;
+  const char *frame_dump_path = NULL;
+  const char *analysis_mode   = "classic_ats";
+  int analysis_type           = ATSA_TYPE;
   int i = 1;
 
   while (i < argc) {
@@ -402,6 +468,12 @@ int main(int argc, char **argv)
     if (strcmp(argv[i], "--metadata") == 0) {
       if (i + 1 >= argc) { usage(argv[0]); return 1; }
       metadata_path = argv[i + 1];
+      i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--dump-frames") == 0) {
+      if (i + 1 >= argc) { usage(argv[0]); return 1; }
+      frame_dump_path = argv[i + 1];
       i += 2;
       continue;
     }
@@ -475,6 +547,8 @@ int main(int argc, char **argv)
   if (wr == 0 && metadata_path)
     wr = write_metadata_json(metadata_path, &anargs, sound, analysis_mode,
                              source_hash, frames, sr, n_out);
+  if (wr == 0 && frame_dump_path)
+    wr = write_frame_dump_json(frame_dump_path, &anargs, sound);
 
   free(out);
   free_sound(sound);
