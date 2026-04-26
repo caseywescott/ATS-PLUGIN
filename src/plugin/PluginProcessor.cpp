@@ -15,6 +15,7 @@
 #include "AtsAnalysisPipeline.h"
 #include "AtsMathExpr.h"
 #include "AtsModernMorph.h"
+#include "AtsModernSynth.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -1000,6 +1001,8 @@ void AtsAudioProcessor::startResynthWorker()
         int modelSr = 44100;
         int modelRevSnapshot = -1;
         bool useLayerCache = false;
+        bool useModernSynth = false;
+        ats::ModernAtsModel modernModelSnapshot;
 
         {
             const juce::ScopedLock ml(modelLock);
@@ -1017,19 +1020,64 @@ void AtsAudioProcessor::startResynthWorker()
                             && samePreviewLayerCore(previewLayerCacheCore, core)
                             && (!previewLayerCachePartials.empty() || !previewLayerCacheResidual.empty());
 
+            useModernSynth = latestModernModelValid;
+            if (useModernSynth)
+                modernModelSnapshot = latestModernModel;
+
             if (!useLayerCache)
             {
-                modelSr = analyzedModel.get()->srate;
+                if (useModernSynth)
+                {
+                    modelSr = modernModelSnapshot.header.sampleRate > 0
+                                  ? modernModelSnapshot.header.sampleRate
+                                  : analyzedModel.get()->srate;
+                }
+                else
+                {
+                    modelSr = analyzedModel.get()->srate;
 
-                ats::SynthParams spPartials = core;
-                spPartials.partialsGain = 1.0;
-                spPartials.residualGain = 0.0;
-                ats::SynthParams spResidual = core;
-                spResidual.partialsGain = 0.0;
-                spResidual.residualGain = 1.0;
+                    ats::SynthParams spPartials = core;
+                    spPartials.partialsGain = 1.0;
+                    spPartials.residualGain = 0.0;
+                    ats::SynthParams spResidual = core;
+                    spResidual.partialsGain = 0.0;
+                    spResidual.residualGain = 1.0;
 
-                monoP = runDoSynthesis(analyzedModel.get(), spPartials);
-                monoR = runDoSynthesis(analyzedModel.get(), spResidual);
+                    monoP = runDoSynthesis(analyzedModel.get(), spPartials);
+                    monoR = runDoSynthesis(analyzedModel.get(), spResidual);
+                }
+            }
+        }
+
+        if (!useLayerCache && useModernSynth)
+        {
+            ats::ModernAtsSynthConfig cfgP;
+            cfgP.outputSampleRate = modelSr;
+            cfgP.partialGain = 1.0;
+            cfgP.orphanResidualGain = 0.0;
+            cfgP.transientGain = 0.0;
+            cfgP.useStoredPhase = core.usePartialsPhase;
+
+            auto partialsVec = ats::renderModernAtsModel(modernModelSnapshot, cfgP);
+            if (!partialsVec.empty())
+            {
+                monoP.setSize(1, static_cast<int>(partialsVec.size()));
+                for (int i = 0; i < static_cast<int>(partialsVec.size()); ++i)
+                    monoP.setSample(0, i, partialsVec[i]);
+            }
+
+            ats::ModernAtsSynthConfig cfgR;
+            cfgR.outputSampleRate = modelSr;
+            cfgR.partialGain = 0.0;
+            cfgR.orphanResidualGain = 1.0;
+            cfgR.transientGain = 1.0;
+
+            auto residualVec = ats::renderModernAtsModel(modernModelSnapshot, cfgR);
+            if (!residualVec.empty())
+            {
+                monoR.setSize(1, static_cast<int>(residualVec.size()));
+                for (int i = 0; i < static_cast<int>(residualVec.size()); ++i)
+                    monoR.setSample(0, i, residualVec[i]);
             }
         }
 

@@ -11,6 +11,57 @@ int scaledUi(int px)
         return juce::roundToInt((float) px * disp->scale);
     return px;
 }
+
+juce::String wrapTextToWidth(const juce::String& text, const juce::Font& font, int maxWidth)
+{
+    if (text.isEmpty() || maxWidth <= 16)
+        return text;
+
+    juce::StringArray words;
+    words.addTokens(text, " ", {});
+    words.removeEmptyStrings();
+    if (words.isEmpty())
+        return text;
+
+    juce::String wrapped;
+    juce::String line;
+    for (const auto& word : words)
+    {
+        const juce::String candidate = line.isEmpty() ? word : (line + " " + word);
+        if (!line.isEmpty() && font.getStringWidth(candidate) > maxWidth)
+        {
+            if (wrapped.isNotEmpty())
+                wrapped << "\n";
+            wrapped << line;
+            line = word;
+        }
+        else
+        {
+            line = candidate;
+        }
+    }
+
+    if (line.isNotEmpty())
+    {
+        if (wrapped.isNotEmpty())
+            wrapped << "\n";
+        wrapped << line;
+    }
+    return wrapped;
+}
+
+int countWrappedLines(const juce::String& text)
+{
+    if (text.isEmpty())
+        return 1;
+    int lines = 1;
+    for (int i = 0; i < text.length(); ++i)
+    {
+        if (text[i] == '\n')
+            ++lines;
+    }
+    return lines;
+}
 } // namespace
 
 SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
@@ -20,7 +71,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     loadButton.setExplicitFocusOrder(1);
     loadButton.setHelpText("Choose a mono or stereo WAV file to analyze.");
     analyzeButton.setExplicitFocusOrder(2);
-    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread).");
+    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread). Synthesis will use the matching Classic or Modern path.");
     cancelButton.setExplicitFocusOrder(3);
     cancelButton.setHelpText("Stop the current analysis or resynthesis job.");
     presetCombo.setExplicitFocusOrder(4);
@@ -66,6 +117,16 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     errorLabel.setExplicitFocusOrder(7);
     errorLabel.setHelpText("Most recent error from analysis, resynthesis, or file I/O.");
     addAndMakeVisible(errorLabel);
+    modeWarningLabel.setJustificationType(juce::Justification::topLeft);
+    modeWarningLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffd180));
+    addAndMakeVisible(modeWarningLabel);
+    presetMetadataLabel.setJustificationType(juce::Justification::topLeft);
+    presetMetadataLabel.setFont(juce::Font(12.0f));
+    presetMetadataLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc5e1ff));
+    addAndMakeVisible(presetMetadataLabel);
+    diagnosticsLabel.setJustificationType(juce::Justification::topLeft);
+    diagnosticsLabel.setColour(juce::Label::textColourId, juce::Colour(0xff9dd7ff));
+    addAndMakeVisible(diagnosticsLabel);
 
     cpuWarningLabel.setJustificationType(juce::Justification::centredLeft);
     cpuWarningLabel.setFont(juce::Font(12.0f, juce::Font::italic));
@@ -138,6 +199,19 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
+    analysisModeLabel.setText("Analysis & Synth mode", juce::dontSendNotification);
+    trackerModeLabel.setText("Tracker", juce::dontSendNotification);
+    analysisModeCombo.addItemList(juce::StringArray { "Classic ATS", "Modern ATS" }, 1);
+    analysisModeCombo.setHelpText("Classic ATS uses the original ATSA/Qatsh analysis and do_synthesis. Modern ATS uses the assignment tracker and renders via the modern synthesizer (orphan residuals + transient playback).");
+    trackerModeCombo.addItemList(juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" }, 1);
+    addAndMakeVisible(analysisModeLabel);
+    addAndMakeVisible(analysisModeCombo);
+    addAndMakeVisible(trackerModeLabel);
+    addAndMakeVisible(trackerModeCombo);
+    analysisModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "analysisMode", analysisModeCombo);
+    trackerModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "trackerMode", trackerModeCombo);
 
     spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
@@ -177,12 +251,14 @@ void SessionTabPanel::rebuildPresetList()
 void SessionTabPanel::onPresetComboChanged()
 {
     const int id = presetCombo.getSelectedId();
+    setPresetMetadataText({});
     if (id <= 0)
         return;
 
     const int nFactory = ats_preset::factoryPresetNames().size();
     if (id <= nFactory)
     {
+        setPresetMetadataText(ats_preset::factoryPresetMetadata(id - 1));
         audioProcessor.setCurrentProgram(id - 1);
         return;
     }
@@ -191,7 +267,10 @@ void SessionTabPanel::onPresetComboChanged()
     {
         const int idx = id - kUserPresetComboIdBase;
         if (juce::isPositiveAndBelow(idx, userPresetFiles.size()))
+        {
+            setPresetMetadataText("User full-state preset (.atspreset): restores analysis/tracker mode and model snapshot.");
             audioProcessor.loadFullStatePreset(userPresetFiles.getReference(idx));
+        }
     }
 }
 
@@ -259,8 +338,19 @@ void SessionTabPanel::resized()
     r.removeFromTop(sc(10));
     statusLabel.setBounds(r.removeFromTop(sc(22)));
     r.removeFromTop(sc(6));
-    errorLabel.setBounds(r.removeFromTop(sc(40)));
+    errorLabel.setBounds(r.removeFromTop(sc(38)));
     r.removeFromTop(sc(6));
+    modeWarningLabel.setBounds(r.removeFromTop(sc(28)));
+    r.removeFromTop(sc(4));
+    const int metadataW = r.getWidth();
+    const auto metadataWrapped =
+        wrapTextToWidth(rawPresetMetadataText, presetMetadataLabel.getFont(), juce::jmax(sc(100), metadataW));
+    const int metadataLines = countWrappedLines(metadataWrapped);
+    const int metadataH = juce::jlimit(sc(20), sc(78), metadataLines * sc(14) + sc(4));
+    presetMetadataLabel.setBounds(r.removeFromTop(metadataH));
+    r.removeFromTop(sc(4));
+    diagnosticsLabel.setBounds(r.removeFromTop(sc(52)));
+    r.removeFromTop(sc(4));
     cpuWarningLabel.setBounds(r.removeFromTop(sc(20)));
     r.removeFromTop(sc(8));
     progressBar.setBounds(r.removeFromTop(sc(14)));
@@ -284,6 +374,15 @@ void SessionTabPanel::resized()
     placeColumn(partGainLabel, partGainSlider);
     placeColumn(resGainLabel, resGainSlider);
     placeColumn(outputTrimLabel, outputTrimSlider);
+    body.removeFromTop(sc(8));
+    auto modeRow = body.removeFromTop(sc(24));
+    analysisModeLabel.setBounds(modeRow.removeFromLeft(sc(132)));
+    analysisModeCombo.setBounds(modeRow.removeFromLeft(sc(160)));
+    modeRow.removeFromLeft(sc(8));
+    trackerModeLabel.setBounds(modeRow.removeFromLeft(sc(56)));
+    trackerModeCombo.setBounds(modeRow.removeFromLeft(sc(220)));
+
+    refreshPresetMetadataWrapping();
 }
 
 void SessionTabPanel::refreshFromProcessor()
@@ -324,6 +423,27 @@ void SessionTabPanel::refreshFromProcessor()
     const auto err = audioProcessor.getLastError();
     errorLabel.setText(err.isEmpty() ? juce::String() : ("Last error: " + err),
                        juce::dontSendNotification);
+    juce::String diagnostics;
+    juce::String warnings;
+    if (audioProcessor.getModernDiagnosticsSummary(diagnostics, warnings))
+    {
+        diagnosticsLabel.setText(diagnostics, juce::dontSendNotification);
+        modeWarningLabel.setText(warnings, juce::dontSendNotification);
+    }
+    else
+    {
+        diagnosticsLabel.setText({}, juce::dontSendNotification);
+        modeWarningLabel.setText({}, juce::dontSendNotification);
+    }
+
+    const bool modernMode = analysisModeCombo.getSelectedId() == 2;
+    trackerModeLabel.setEnabled(modernMode);
+    trackerModeCombo.setEnabled(modernMode);
+    if (!modernMode)
+    {
+        modeWarningLabel.setText("Tracker selector is enabled only when Analysis mode is Modern ATS.",
+                                 juce::dontSendNotification);
+    }
 
     int partials = 0;
     int frames = 0;
@@ -391,4 +511,17 @@ void SessionTabPanel::pickFile()
         if (f.existsAsFile())
             audioProcessor.loadSourceFile(f);
     });
+}
+
+void SessionTabPanel::setPresetMetadataText(const juce::String& text)
+{
+    rawPresetMetadataText = text;
+    refreshPresetMetadataWrapping();
+}
+
+void SessionTabPanel::refreshPresetMetadataWrapping()
+{
+    const int width = juce::jmax(80, presetMetadataLabel.getWidth());
+    const auto wrapped = wrapTextToWidth(rawPresetMetadataText, presetMetadataLabel.getFont(), width);
+    presetMetadataLabel.setText(wrapped, juce::dontSendNotification);
 }
