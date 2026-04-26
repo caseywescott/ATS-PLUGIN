@@ -66,6 +66,42 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
 
     analysisTypeBox.addItemList(juce::StringArray { "1 amp+freq", "2 +phase", "3 +noise", "4 full" }, 1);
     addAndMakeVisible(analysisTypeBox);
+    peakEstimatorLabel.setText("Peak estimator (next Analyze)", juce::dontSendNotification);
+    peakEstimatorLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(peakEstimatorLabel);
+    peakEstimatorBox.addItemList(juce::StringArray { "Classic STFT", "Experimental reassigned/DDM" }, 1);
+    peakEstimatorBox.setHelpText("Experimental mode candidate for reassigned/DDM-style peak localization.");
+    addAndMakeVisible(peakEstimatorBox);
+    morphHeaderLabel.setText("A/B Morph workspace", juce::dontSendNotification);
+    addAndMakeVisible(morphHeaderLabel);
+    morphSourceALabel.setText("Source A", juce::dontSendNotification);
+    morphSourceBLabel.setText("Source B", juce::dontSendNotification);
+    morphRecipeLabel.setText("Recipe", juce::dontSendNotification);
+    morphSourceABox.addItemList(juce::StringArray { "Current modern model", "Previous modern model", "Disabled" }, 1);
+    morphSourceBBox.addItemList(juce::StringArray { "Current modern model", "Previous modern model", "Disabled" }, 1);
+    morphRecipeBox.addItemList(juce::StringArray { "Linear blend", "Harmonic lock", "Percussive protect", "Texture drift" }, 1);
+    addAndMakeVisible(morphSourceALabel);
+    addAndMakeVisible(morphSourceBLabel);
+    addAndMakeVisible(morphRecipeLabel);
+    addAndMakeVisible(morphSourceABox);
+    addAndMakeVisible(morphSourceBBox);
+    addAndMakeVisible(morphRecipeBox);
+
+    auto setupMorph = [](juce::Slider& s, const juce::String& nm) {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 18);
+        s.setName(nm);
+    };
+    setupMorph(morphFreqSlider, "Morph frequency envelope");
+    setupMorph(morphAmpSlider, "Morph amplitude envelope");
+    setupMorph(morphNoiseSlider, "Morph partial-noise envelope");
+    setupMorph(morphOrphanSlider, "Morph orphan-residual envelope");
+    setupMorph(morphTimeSlider, "Morph time envelope");
+    addAndMakeVisible(morphFreqSlider);
+    addAndMakeVisible(morphAmpSlider);
+    addAndMakeVisible(morphNoiseSlider);
+    addAndMakeVisible(morphOrphanSlider);
+    addAndMakeVisible(morphTimeSlider);
 
     freqAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "freq", freqSlider);
@@ -83,6 +119,24 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "residualOnly", residualOnlyButton);
     analysisAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "analysisType", analysisTypeBox);
+    peakEstimatorAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "peakEstimator", peakEstimatorBox);
+    morphSourceAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "morphSourceA", morphSourceABox);
+    morphSourceBAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "morphSourceB", morphSourceBBox);
+    morphRecipeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "morphRecipe", morphRecipeBox);
+    morphFreqAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morphFreqEnv", morphFreqSlider);
+    morphAmpAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morphAmpEnv", morphAmpSlider);
+    morphNoiseAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morphNoiseEnv", morphNoiseSlider);
+    morphOrphanAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morphOrphanEnv", morphOrphanSlider);
+    morphTimeAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, "morphTimeEnv", morphTimeSlider);
 }
 
 void SynthTabPanel::resized()
@@ -115,5 +169,25 @@ void SynthTabPanel::resized()
     residualOnlyButton.setBounds(row2.removeFromLeft(240));
     row2.removeFromLeft(16);
     analysisTypeLabel.setBounds(row2.removeFromLeft(200));
-    analysisTypeBox.setBounds(row2.removeFromLeft(juce::jmin(220, row2.getWidth())));
+    analysisTypeBox.setBounds(row2.removeFromLeft(180));
+    row2.removeFromLeft(12);
+    peakEstimatorLabel.setBounds(row2.removeFromLeft(210));
+    peakEstimatorBox.setBounds(row2.removeFromLeft(juce::jmin(240, row2.getWidth())));
+    r.removeFromTop(12);
+    morphHeaderLabel.setBounds(r.removeFromTop(24));
+    auto srcRow = r.removeFromTop(24);
+    morphSourceALabel.setBounds(srcRow.removeFromLeft(64));
+    morphSourceABox.setBounds(srcRow.removeFromLeft(180));
+    srcRow.removeFromLeft(10);
+    morphSourceBLabel.setBounds(srcRow.removeFromLeft(64));
+    morphSourceBBox.setBounds(srcRow.removeFromLeft(180));
+    srcRow.removeFromLeft(10);
+    morphRecipeLabel.setBounds(srcRow.removeFromLeft(56));
+    morphRecipeBox.setBounds(srcRow.removeFromLeft(180));
+    r.removeFromTop(8);
+    morphFreqSlider.setBounds(r.removeFromTop(24));
+    morphAmpSlider.setBounds(r.removeFromTop(24));
+    morphNoiseSlider.setBounds(r.removeFromTop(24));
+    morphOrphanSlider.setBounds(r.removeFromTop(24));
+    morphTimeSlider.setBounds(r.removeFromTop(24));
 }

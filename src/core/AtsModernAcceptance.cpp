@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <sstream>
 
@@ -406,6 +407,211 @@ ModernAtsAcceptanceReport evaluateModernAtsAcceptanceGates(
              inputs.renderStats.cpuRatioAtRealtime,
              thresholds.maxRenderCpuRatio,
              "modern synthesis should stay inside the configured CPU budget");
+
+    return report;
+}
+
+// ---------------------------------------------------------------------------
+// External fixture support (Phase 7)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+// Minimal flat-JSON value extractor for our known summary schema.
+// Handles: "key": number and "key": "string" patterns (one key per line,
+// no nested objects).  We control the format via generate_atsa_references.py.
+
+static std::string jsonStringValue(const std::string& json, const std::string& key)
+{
+    const std::string search = "\"" + key + "\":";
+    auto pos = json.find(search);
+    if (pos == std::string::npos)
+        return {};
+    auto afterColon = json.find_first_not_of(" \t", pos + search.size());
+    if (afterColon == std::string::npos || json[afterColon] != '"')
+        return {};
+    const auto start = afterColon + 1;
+    const auto end = json.find('"', start);
+    if (end == std::string::npos)
+        return {};
+    return json.substr(start, end - start);
+}
+
+static double jsonDoubleValue(const std::string& json, const std::string& key, double defaultVal)
+{
+    const std::string search = "\"" + key + "\":";
+    auto pos = json.find(search);
+    if (pos == std::string::npos)
+        return defaultVal;
+    auto afterColon = json.find_first_not_of(" \t", pos + search.size());
+    if (afterColon == std::string::npos)
+        return defaultVal;
+    try
+    {
+        return std::stod(json.substr(afterColon));
+    }
+    catch (...)
+    {
+        return defaultVal;
+    }
+}
+
+static int jsonIntValue(const std::string& json, const std::string& key, int defaultVal)
+{
+    const double d = jsonDoubleValue(json, key, static_cast<double>(defaultVal));
+    return static_cast<int>(d);
+}
+
+} // namespace (internal)
+
+bool parseExternalFixtureGate(const std::string& name, ExternalFixtureGate& out)
+{
+    if (name == "classic_parity")
+    {
+        out = ExternalFixtureGate::ClassicParity;
+        return true;
+    }
+    if (name == "tracker_continuity")
+    {
+        out = ExternalFixtureGate::TrackerContinuity;
+        return true;
+    }
+    if (name == "residual_energy_preservation")
+    {
+        out = ExternalFixtureGate::ResidualEnergyPreservation;
+        return true;
+    }
+    if (name == "transient_preservation")
+    {
+        out = ExternalFixtureGate::TransientPreservation;
+        return true;
+    }
+    return false;
+}
+
+bool loadExternalFixtureReferenceMetrics(const std::string& path,
+                                         ExternalFixtureReferenceMetrics& out,
+                                         std::string& errorOut)
+{
+    std::ifstream file(path);
+    if (!file.is_open())
+    {
+        errorOut = "cannot open: " + path;
+        return false;
+    }
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    const std::string json = ss.str();
+
+    if (json.find("\"schema_version\"") == std::string::npos)
+    {
+        errorOut = "missing schema_version field in: " + path;
+        return false;
+    }
+
+    out.fixtureId = jsonStringValue(json, "fixture_id");
+    out.normalizedRmsError = jsonDoubleValue(json, "normalized_rms_error", 0.0);
+    out.spectralDistanceDb = jsonDoubleValue(json, "spectral_distance_db", 0.0);
+    out.continuityScore = jsonDoubleValue(json, "continuity_score", -1.0);
+    out.identityErrors = jsonIntValue(json, "identity_errors", -1);
+    out.orphanResidualRatio = jsonDoubleValue(json, "orphan_residual_ratio", -1.0);
+    out.attackSharpness = jsonDoubleValue(json, "attack_sharpness", -1.0);
+    out.maxBufferStep = jsonDoubleValue(json, "max_buffer_step", -1.0);
+    return true;
+}
+
+ModernAtsAcceptanceReport evaluateExternalFixtureGates(
+    const ExternalFixtureReferenceMetrics& our,
+    const ExternalFixtureReferenceMetrics& reference,
+    const std::vector<ExternalFixtureGate>& enabledGates,
+    const ExternalFixtureThresholds& thresholds)
+{
+    ModernAtsAcceptanceReport report;
+    const std::string& id = our.fixtureId.empty() ? reference.fixtureId : our.fixtureId;
+
+    for (const auto gate : enabledGates)
+    {
+        switch (gate)
+        {
+        case ExternalFixtureGate::ClassicParity:
+        {
+            const double nrmsDelta = std::abs(our.normalizedRmsError - reference.normalizedRmsError);
+            addCheck(report,
+                     id + ".classic_parity.normalized_rms_error",
+                     nrmsDelta <= thresholds.maxNormalizedRmsErrorDelta,
+                     nrmsDelta,
+                     thresholds.maxNormalizedRmsErrorDelta,
+                     "normalized RMS error delta vs ATSA reference (fixture=" + id + ")");
+
+            const double specDelta = std::abs(our.spectralDistanceDb - reference.spectralDistanceDb);
+            addCheck(report,
+                     id + ".classic_parity.spectral_distance_db",
+                     specDelta <= thresholds.maxSpectralDistanceDbDelta,
+                     specDelta,
+                     thresholds.maxSpectralDistanceDbDelta,
+                     "spectral distance delta vs ATSA reference (fixture=" + id + ")");
+            break;
+        }
+
+        case ExternalFixtureGate::TrackerContinuity:
+        {
+            if (our.continuityScore >= 0.0 && reference.continuityScore >= 0.0)
+            {
+                const double regression = reference.continuityScore - our.continuityScore;
+                addCheck(report,
+                         id + ".tracker_continuity.continuity_score",
+                         regression <= thresholds.maxContinuityRegression,
+                         our.continuityScore,
+                         reference.continuityScore - thresholds.maxContinuityRegression,
+                         "tracker continuity regression vs ATSA reference (fixture=" + id + ")");
+            }
+            if (our.identityErrors >= 0 && reference.identityErrors >= 0)
+            {
+                const int increase = our.identityErrors - reference.identityErrors;
+                addCheck(report,
+                         id + ".tracker_continuity.identity_errors",
+                         increase <= thresholds.maxIdentityErrorIncrease,
+                         static_cast<double>(our.identityErrors),
+                         static_cast<double>(reference.identityErrors
+                                             + thresholds.maxIdentityErrorIncrease),
+                         "tracker identity error increase vs ATSA reference (fixture=" + id + ")");
+            }
+            break;
+        }
+
+        case ExternalFixtureGate::ResidualEnergyPreservation:
+        {
+            if (our.orphanResidualRatio >= 0.0 && reference.orphanResidualRatio >= 0.0)
+            {
+                const double delta =
+                    std::abs(our.orphanResidualRatio - reference.orphanResidualRatio);
+                addCheck(report,
+                         id + ".residual_energy_preservation.orphan_residual_ratio",
+                         delta <= thresholds.maxOrphanResidualRatioDelta,
+                         delta,
+                         thresholds.maxOrphanResidualRatioDelta,
+                         "orphan residual ratio delta vs ATSA reference (fixture=" + id + ")");
+            }
+            break;
+        }
+
+        case ExternalFixtureGate::TransientPreservation:
+        {
+            if (our.attackSharpness >= 0.0 && reference.attackSharpness > 0.0)
+            {
+                const double ratio = our.attackSharpness / reference.attackSharpness;
+                addCheck(report,
+                         id + ".transient_preservation.attack_sharpness",
+                         ratio >= thresholds.minTransientSharpnessRatio,
+                         ratio,
+                         thresholds.minTransientSharpnessRatio,
+                         "attack sharpness ratio vs ATSA reference (fixture=" + id + ")");
+            }
+            break;
+        }
+        }
+    }
 
     return report;
 }

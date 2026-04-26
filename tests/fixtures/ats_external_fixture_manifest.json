@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "scope": "modern-atsh-phase-7-external",
+  "description": "External real-audio acceptance fixtures for side-by-side comparison with original ATSA/Qatsh. Audio assets are NOT committed to the repository. See per-fixture provenance and license fields before adding any audio file.",
+  "license_policy": "All audio fixtures must carry a redistribution-compatible license (CC0, CC-BY, or equivalent) and explicit credit before being committed. PENDING fixtures are placeholders only.",
+  "reference_dir": "reference",
+  "audio_dir": "audio",
+  "fixtures": [
+    {
+      "id": "external_sustained_flute",
+      "description": "Sustained single flute note — classic parity and residual energy checks.",
+      "category": "noisy_voice_flute",
+      "input_audio": "audio/sustained_flute.wav",
+      "provenance": {
+        "description": "Curated real recording of a sustained flute note at approximately A4 (440 Hz). Asset pending license clearance.",
+        "license": "PENDING — do not commit audio file without an explicit redistribution-compatible license.",
+        "source_url": ""
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "enabled_gates": ["classic_parity", "residual_energy_preservation"],
+      "threshold_overrides": {},
+      "atsa_reference": {
+        "metadata": "reference/external_sustained_flute_atsa_metadata.json",
+        "summary_metrics": "reference/external_sustained_flute_summary.json"
+      }
+    },
+    {
+      "id": "external_plucked_guitar",
+      "description": "Single plucked nylon string guitar note — transient preservation and tracker continuity checks.",
+      "category": "plucked_percussive",
+      "input_audio": "audio/plucked_guitar.wav",
+      "provenance": {
+        "description": "Curated real recording of a single plucked nylon guitar note. Asset pending license clearance.",
+        "license": "PENDING — do not commit audio file without an explicit redistribution-compatible license.",
+        "source_url": ""
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "enabled_gates": ["transient_preservation", "tracker_continuity"],
+      "threshold_overrides": {
+        "min_transient_sharpness_improvement": 0.03
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_plucked_guitar_atsa_metadata.json",
+        "summary_metrics": "reference/external_plucked_guitar_summary.json"
+      }
+    },
+    {
+      "id": "external_sung_vowel",
+      "description": "Sustained sung vowel — classic parity, tracker continuity, and residual energy checks.",
+      "category": "noisy_voice_flute",
+      "input_audio": "audio/sung_vowel.wav",
+      "provenance": {
+        "description": "Curated real recording of a sustained sung vowel (e.g. 'ah' at a comfortable pitch). Asset pending license clearance.",
+        "license": "PENDING — do not commit audio file without an explicit redistribution-compatible license.",
+        "source_url": ""
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "enabled_gates": ["classic_parity", "tracker_continuity", "residual_energy_preservation"],
+      "threshold_overrides": {},
+      "atsa_reference": {
+        "metadata": "reference/external_sung_vowel_atsa_metadata.json",
+        "summary_metrics": "reference/external_sung_vowel_summary.json"
+      }
+    },
+    {
+      "id": "external_drum_hit",
+      "description": "Broadband percussive drum hit — transient and residual energy gate checks.",
+      "category": "percussive_hit",
+      "input_audio": "audio/drum_hit.wav",
+      "provenance": {
+        "description": "Curated real recording of a single broadband percussive hit (e.g. snare or hand drum). Asset pending license clearance.",
+        "license": "PENDING — do not commit audio file without an explicit redistribution-compatible license.",
+        "source_url": ""
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "enabled_gates": ["transient_preservation", "residual_energy_preservation"],
+      "threshold_overrides": {
+        "min_residual_energy_ratio": 0.95
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_drum_hit_atsa_metadata.json",
+        "summary_metrics": "reference/external_drum_hit_summary.json"
+      }
+    },
+    {
+      "id": "external_crossing_strings",
+      "description": "Two simultaneous string notes with converging pitches — tracker identity and crossing-partial checks.",
+      "category": "close_crossing_partials",
+      "input_audio": "audio/crossing_strings.wav",
+      "provenance": {
+        "description": "Curated real recording of two instrument voices with crossing fundamental frequencies. Asset pending license clearance.",
+        "license": "PENDING — do not commit audio file without an explicit redistribution-compatible license.",
+        "source_url": ""
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "enabled_gates": ["tracker_continuity", "classic_parity"],
+      "threshold_overrides": {
+        "max_continuity_regression": 0.08
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_crossing_strings_atsa_metadata.json",
+        "summary_metrics": "reference/external_crossing_strings_summary.json"
+      }
+    }
+  ]
+}

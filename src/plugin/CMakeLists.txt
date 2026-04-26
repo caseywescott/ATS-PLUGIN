@@ -44,7 +44,12 @@ target_sources(
           MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
+          ../core/AtsAnalysisPipeline.cpp
+          ../core/AtsModernAcceptance.cpp
           ../core/AtsModel.cpp
+          ../core/AtsModernMorph.cpp
+          ../core/AtsModernModel.cpp
+          ../core/AtsModernSynth.cpp
           ../core/AtsParams.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)

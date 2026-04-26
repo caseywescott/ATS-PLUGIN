@@ -311,6 +311,20 @@ The `ats_modern_morph` CTest records morph fixture metrics for output partials, 
 
 Implemented in `src/core/AtsModernAcceptance.h` / `.cpp` and covered by the `ats_modern_acceptance` CTest. Notes are in [MODERN_ATSH_ACCEPTANCE.md](./MODERN_ATSH_ACCEPTANCE.md).
 
+### Commit 32 - `test(acceptance): extend acceptance gate for real-audio ATSA comparison`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Add external fixture manifest (`tests/fixtures/ats_external_fixture_manifest.json`) with schema version 1, per-fixture provenance/license, enabled gates, and ATSA reference artifact paths.
+- [x] Add reference generation script (`tests/generate_atsa_references.py`) that runs `ats_offline --metadata` on fixture audio, writes stable sorted JSON artifacts, and fails loudly on missing assets or unresolved license fields.
+- [x] Extend `AtsModernAcceptance.h/.cpp` with `ExternalFixtureReferenceMetrics`, `ExternalFixtureThresholds`, `ExternalFixtureGate`, `parseExternalFixtureGate`, `loadExternalFixtureReferenceMetrics`, and `evaluateExternalFixtureGates` for per-fixture, per-gate comparison with fixture id in every check id.
+- [x] Add `ats_modern_acceptance_external_test` C++ binary (always builds, exercises gate logic with synthetic data, registered as `ats_modern_acceptance_external_gates` CTest).
+- [x] Add `run_external_acceptance.py` Python CTest driver that loads the manifest, checks for audio and reference assets, runs `ats_offline`, and compares against reference metrics per enabled gate.
+- [x] Gate the real-audio CTest (`ats_modern_acceptance_external`) behind `ATS_ENABLE_EXTERNAL_FIXTURES=OFF` (default) so default `ctest` remains fully deterministic.
+- [x] Five placeholder fixtures defined: sustained_flute, plucked_guitar, sung_vowel, drum_hit, crossing_strings — all with PENDING license status pending audio procurement.
+
+Notes and gate documentation are in [MODERN_ATSH_ACCEPTANCE.md](./MODERN_ATSH_ACCEPTANCE.md).
+
 ---
 
 ## Phase 8 - Risk Closure and Release Policy
@@ -340,4 +354,5 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Plugin UI exposure | 24-27 |
 | Experimental reassignment/STN/DDSP | 28-30 |
 | Quality and release acceptance | 31 |
-| Stereo/multichannel policy | 32 |
+| External real-audio ATSA comparison | 32 |
+| Stereo/multichannel policy | 33 |

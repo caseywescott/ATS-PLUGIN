@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include <sndfile.h>
 
@@ -17,9 +18,153 @@
 static void usage(const char *prog)
 {
   fprintf(stderr,
-          "Usage: %s [--type <1-4>] <input.wav> <output.wav>\n"
+          "Usage: %s [--type <1-4>] [--analysis-mode classic_ats] [--metadata <analysis.json>] <input.wav> <output.wav>\n"
           "  Analysis type matches ATSA/Qatsh (default %d).\n",
           prog, ATSA_TYPE);
+}
+
+static void fnv1a64_update(uint64_t *hash, const unsigned char *data, size_t n)
+{
+  size_t i;
+  for (i = 0; i < n; ++i) {
+    *hash ^= (uint64_t)data[i];
+    *hash *= 1099511628211ULL;
+  }
+}
+
+static void fnv1a64_to_hex(uint64_t hash, char out_hex[17])
+{
+  snprintf(out_hex, 17, "%016llx", (unsigned long long)hash);
+}
+
+static int fnv1a64_file(const char *path, char out_hex[17])
+{
+  FILE *f = fopen(path, "rb");
+  unsigned char buf[4096];
+  uint64_t hash = 1469598103934665603ULL;
+  size_t n;
+
+  if (!f) {
+    fprintf(stderr, "Could not hash '%s'.\n", path);
+    return -1;
+  }
+
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+    fnv1a64_update(&hash, buf, n);
+  }
+
+  if (ferror(f)) {
+    fclose(f);
+    fprintf(stderr, "Could not read '%s' while hashing.\n", path);
+    return -1;
+  }
+
+  fclose(f);
+  fnv1a64_to_hex(hash, out_hex);
+  return 0;
+}
+
+static void parameter_hash_fnv1a64(const ANARGS *a, char out_hex[17])
+{
+  char buf[1024];
+  uint64_t hash = 1469598103934665603ULL;
+  int n = snprintf(buf,
+                   sizeof(buf),
+                   "%.17g|%.17g|%.17g|%.17g|%.17g|%d|%d|%d|%.17g|%.17g|%d|%d|%d|%.17g|%.17g|%.17g|%.17g|%d|%d|%d|%d",
+                   a->start,
+                   a->duration,
+                   a->lowest_freq,
+                   a->highest_freq,
+                   a->freq_dev,
+                   a->win_cycles,
+                   a->win_type,
+                   a->win_size,
+                   a->hop_size,
+                   a->lowest_mag,
+                   a->track_len,
+                   a->min_seg_len,
+                   a->min_gap_len,
+                   a->SMR_thres,
+                   a->min_seg_SMR,
+                   a->last_peak_cont,
+                   a->SMR_cont,
+                   a->type,
+                   a->hop_smp,
+                   a->fft_size,
+                   a->frames);
+  if (n < 0)
+    n = 0;
+  if (n >= (int)sizeof(buf))
+    n = (int)sizeof(buf) - 1;
+  fnv1a64_update(&hash, (const unsigned char *)buf, (size_t)n);
+  fnv1a64_to_hex(hash, out_hex);
+}
+
+static int write_metadata_json(const char *path,
+                               const ANARGS *a,
+                               const ATS_SOUND *sound,
+                               const char *analysis_mode,
+                               const char *source_hash,
+                               sf_count_t input_frames,
+                               int input_sr,
+                               int rendered_frames)
+{
+  char parameter_hash[17];
+  parameter_hash_fnv1a64(a, parameter_hash);
+
+  FILE *f = fopen(path, "w");
+  if (!f) {
+    fprintf(stderr, "Could not open metadata path '%s'.\n", path);
+    return -1;
+  }
+
+  fprintf(f, "{\n");
+  fprintf(f, "  \"schema_version\": 1,\n");
+  fprintf(f, "  \"analysis_mode\": \"%s\",\n", analysis_mode);
+  fprintf(f, "  \"tracker_mode\": \"classic_recursive_frequency_smr\",\n");
+  fprintf(f, "  \"source_hash_fnv1a64\": \"%s\",\n", source_hash);
+  fprintf(f, "  \"parameter_hash_fnv1a64\": \"%s\",\n", parameter_hash);
+  fprintf(f, "  \"input_sample_rate\": %d,\n", input_sr);
+  fprintf(f, "  \"input_frames\": %lld,\n", (long long)input_frames);
+  fprintf(f, "  \"rendered_frames\": %d,\n", rendered_frames);
+  fprintf(f, "  \"model\": {\n");
+  fprintf(f, "    \"sample_rate\": %d,\n", sound->srate);
+  fprintf(f, "    \"frame_size\": %d,\n", sound->frame_size);
+  fprintf(f, "    \"window_size\": %d,\n", sound->window_size);
+  fprintf(f, "    \"partials\": %d,\n", sound->partials);
+  fprintf(f, "    \"frames\": %d,\n", sound->frames);
+  fprintf(f, "    \"duration_seconds\": %.17g\n", sound->dur);
+  fprintf(f, "  },\n");
+  fprintf(f, "  \"analysis_params\": {\n");
+  fprintf(f, "    \"start\": %.17g,\n", a->start);
+  fprintf(f, "    \"duration\": %.17g,\n", a->duration);
+  fprintf(f, "    \"lowest_freq\": %.17g,\n", a->lowest_freq);
+  fprintf(f, "    \"highest_freq\": %.17g,\n", a->highest_freq);
+  fprintf(f, "    \"freq_dev\": %.17g,\n", a->freq_dev);
+  fprintf(f, "    \"win_cycles\": %d,\n", a->win_cycles);
+  fprintf(f, "    \"win_type\": %d,\n", a->win_type);
+  fprintf(f, "    \"win_size\": %d,\n", a->win_size);
+  fprintf(f, "    \"hop_size\": %.17g,\n", a->hop_size);
+  fprintf(f, "    \"lowest_mag\": %.17g,\n", a->lowest_mag);
+  fprintf(f, "    \"track_len\": %d,\n", a->track_len);
+  fprintf(f, "    \"min_seg_len\": %d,\n", a->min_seg_len);
+  fprintf(f, "    \"min_gap_len\": %d,\n", a->min_gap_len);
+  fprintf(f, "    \"SMR_thres\": %.17g,\n", a->SMR_thres);
+  fprintf(f, "    \"min_seg_SMR\": %.17g,\n", a->min_seg_SMR);
+  fprintf(f, "    \"last_peak_cont\": %.17g,\n", a->last_peak_cont);
+  fprintf(f, "    \"SMR_cont\": %.17g,\n", a->SMR_cont);
+  fprintf(f, "    \"type\": %d,\n", a->type);
+  fprintf(f, "    \"computed_hop_smp\": %d,\n", a->hop_smp);
+  fprintf(f, "    \"computed_fft_size\": %d,\n", a->fft_size);
+  fprintf(f, "    \"computed_frames\": %d\n", a->frames);
+  fprintf(f, "  }\n");
+  fprintf(f, "}\n");
+
+  if (fclose(f) != 0) {
+    fprintf(stderr, "Could not finish writing metadata path '%s'.\n", path);
+    return -1;
+  }
+  return 0;
 }
 
 static int load_mono_wav(const char *path, double **out_samples, sf_count_t *out_frames, int *out_sr)
@@ -153,6 +298,8 @@ int main(int argc, char **argv)
 {
   const char *in_path = NULL;
   const char *out_path = NULL;
+  const char *metadata_path = NULL;
+  const char *analysis_mode = "classic_ats";
   int analysis_type = ATSA_TYPE;
   int i = 1;
 
@@ -163,6 +310,29 @@ int main(int argc, char **argv)
         return 1;
       }
       analysis_type = atoi(argv[i + 1]);
+      i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--metadata") == 0) {
+      if (i + 1 >= argc) {
+        usage(argv[0]);
+        return 1;
+      }
+      metadata_path = argv[i + 1];
+      i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--analysis-mode") == 0) {
+      if (i + 1 >= argc) {
+        usage(argv[0]);
+        return 1;
+      }
+      if (strcmp(argv[i + 1], "classic") == 0 || strcmp(argv[i + 1], "classic_ats") == 0) {
+        analysis_mode = "classic_ats";
+      } else {
+        fprintf(stderr, "Only analysis mode 'classic_ats' is supported by ats_offline in Phase 2.\n");
+        return 1;
+      }
       i += 2;
       continue;
     }
@@ -184,6 +354,15 @@ int main(int argc, char **argv)
     usage(argv[0]);
     return 1;
   }
+
+  if (analysis_type < 1 || analysis_type > 4) {
+    usage(argv[0]);
+    return 1;
+  }
+
+  char source_hash[17] = "0000000000000000";
+  if (metadata_path && fnv1a64_file(in_path, source_hash) != 0)
+    return 1;
 
   double *samples = NULL;
   sf_count_t frames = 0;
@@ -217,17 +396,21 @@ int main(int argc, char **argv)
   do_synthesis(sound, &sp, &timenv, NULL, &out, &n_out);
   curve_free(&timenv);
 
-  free_sound(sound);
-  free(sound);
-
   if (!out || n_out <= 0) {
     fprintf(stderr, "Synthesis produced no samples.\n");
     if (out)
       free(out);
+    free_sound(sound);
+    free(sound);
     return 1;
   }
 
   int wr = write_mono_wav(out_path, out, n_out, sr);
+  if (wr == 0 && metadata_path)
+    wr = write_metadata_json(metadata_path, &anargs, sound, analysis_mode, source_hash, frames, sr, n_out);
+
   free(out);
+  free_sound(sound);
+  free(sound);
   return wr != 0 ? 1 : 0;
 }
