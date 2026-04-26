@@ -30,8 +30,6 @@ private:
     juce::ToggleButton residualOnlyButton;
     juce::Label analysisTypeLabel;
     juce::ComboBox analysisTypeBox;
-    juce::Label peakEstimatorLabel;
-    juce::ComboBox peakEstimatorBox;
     juce::Label morphHeaderLabel;
     juce::Label morphSourceALabel;
     juce::ComboBox morphSourceABox;
@@ -53,7 +51,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> useAllAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> residualOnlyAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> analysisAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> peakEstimatorAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphSourceAAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphSourceBAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphRecipeAttach;

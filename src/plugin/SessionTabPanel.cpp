@@ -71,7 +71,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     loadButton.setExplicitFocusOrder(1);
     loadButton.setHelpText("Choose a mono or stereo WAV file to analyze.");
     analyzeButton.setExplicitFocusOrder(2);
-    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread). Synthesis will use the matching Classic or Modern path.");
+    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread). Synthesis and diagnostics follow the selected Classic, Modern, or Experimental analysis path.");
     cancelButton.setExplicitFocusOrder(3);
     cancelButton.setHelpText("Stop the current analysis or resynthesis job.");
     presetCombo.setExplicitFocusOrder(4);
@@ -199,10 +199,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
-    analysisModeLabel.setText("Analysis & Synth mode", juce::dontSendNotification);
+    analysisModeLabel.setText("Analysis", juce::dontSendNotification);
     trackerModeLabel.setText("Tracker", juce::dontSendNotification);
-    analysisModeCombo.addItemList(juce::StringArray { "Classic ATS", "Modern ATS" }, 1);
-    analysisModeCombo.setHelpText("Classic ATS uses the original ATSA/Qatsh analysis and do_synthesis. Modern ATS uses the assignment tracker and renders via the modern synthesizer (orphan residuals + transient playback).");
+    analysisModeCombo.addItemList(
+        juce::StringArray { "Classic ATS", "Modern ATS", "Experimental reassigned/DDM" }, 1);
+    analysisModeCombo.setHelpText("Classic ATS uses the original ATSA/Qatsh analysis and do_synthesis. Modern ATS renders through the modern snapshot path. Experimental reassigned/DDM also renders through the modern snapshot path but tags the result experimental.");
     trackerModeCombo.addItemList(juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" }, 1);
     addAndMakeVisible(analysisModeLabel);
     addAndMakeVisible(analysisModeCombo);
@@ -376,8 +377,8 @@ void SessionTabPanel::resized()
     placeColumn(outputTrimLabel, outputTrimSlider);
     body.removeFromTop(sc(8));
     auto modeRow = body.removeFromTop(sc(24));
-    analysisModeLabel.setBounds(modeRow.removeFromLeft(sc(132)));
-    analysisModeCombo.setBounds(modeRow.removeFromLeft(sc(160)));
+    analysisModeLabel.setBounds(modeRow.removeFromLeft(sc(96)));
+    analysisModeCombo.setBounds(modeRow.removeFromLeft(sc(248)));
     modeRow.removeFromLeft(sc(8));
     trackerModeLabel.setBounds(modeRow.removeFromLeft(sc(56)));
     trackerModeCombo.setBounds(modeRow.removeFromLeft(sc(220)));
@@ -436,12 +437,13 @@ void SessionTabPanel::refreshFromProcessor()
         modeWarningLabel.setText({}, juce::dontSendNotification);
     }
 
-    const bool modernMode = analysisModeCombo.getSelectedId() == 2;
-    trackerModeLabel.setEnabled(modernMode);
-    trackerModeCombo.setEnabled(modernMode);
-    if (!modernMode)
+    const int selectedAnalysisId = analysisModeCombo.getSelectedId();
+    const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
+    trackerModeLabel.setEnabled(trackerSelectable);
+    trackerModeCombo.setEnabled(trackerSelectable);
+    if (!trackerSelectable)
     {
-        modeWarningLabel.setText("Tracker selector is enabled only when Analysis mode is Modern ATS.",
+        modeWarningLabel.setText("Tracker selector is enabled only when Analysis mode is Modern ATS or Experimental reassigned/DDM.",
                                  juce::dontSendNotification);
     }
 

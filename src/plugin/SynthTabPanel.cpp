@@ -6,7 +6,7 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     : audioProcessor(p)
 {
     hint.setText("These parameters mirror SPARAMS-style global synthesis (transpose, time window, phase). "
-                 "Analysis type is read when you press Analyze on the Session tab.",
+                 "Choose the analysis family on the Session tab; analysis type here is read the next time you press Analyze.",
                  juce::dontSendNotification);
     hint.setJustificationType(juce::Justification::topLeft);
     hint.setFont(juce::Font(13.0f));
@@ -66,12 +66,6 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
 
     analysisTypeBox.addItemList(juce::StringArray { "1 amp+freq", "2 +phase", "3 +noise", "4 full" }, 1);
     addAndMakeVisible(analysisTypeBox);
-    peakEstimatorLabel.setText("Peak estimator (next Analyze)", juce::dontSendNotification);
-    peakEstimatorLabel.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(peakEstimatorLabel);
-    peakEstimatorBox.addItemList(juce::StringArray { "Classic STFT", "Experimental reassigned/DDM" }, 1);
-    peakEstimatorBox.setHelpText("Experimental mode candidate for reassigned/DDM-style peak localization.");
-    addAndMakeVisible(peakEstimatorBox);
     morphHeaderLabel.setText("A/B Morph workspace", juce::dontSendNotification);
     addAndMakeVisible(morphHeaderLabel);
     morphSourceALabel.setText("Source A", juce::dontSendNotification);
@@ -119,8 +113,6 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "residualOnly", residualOnlyButton);
     analysisAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "analysisType", analysisTypeBox);
-    peakEstimatorAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "peakEstimator", peakEstimatorBox);
     morphSourceAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, "morphSourceA", morphSourceABox);
     morphSourceBAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -170,9 +162,6 @@ void SynthTabPanel::resized()
     row2.removeFromLeft(16);
     analysisTypeLabel.setBounds(row2.removeFromLeft(200));
     analysisTypeBox.setBounds(row2.removeFromLeft(180));
-    row2.removeFromLeft(12);
-    peakEstimatorLabel.setBounds(row2.removeFromLeft(210));
-    peakEstimatorBox.setBounds(row2.removeFromLeft(juce::jmin(240, row2.getWidth())));
     r.removeFromTop(12);
     morphHeaderLabel.setBounds(r.removeFromTop(24));
     auto srcRow = r.removeFromTop(24);

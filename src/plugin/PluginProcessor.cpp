@@ -33,6 +33,7 @@ constexpr int kMinReadableStateVersion = 2;
 
 constexpr int kAnalysisModeClassic = 0;
 constexpr int kAnalysisModeModern = 1;
+constexpr int kAnalysisModeExperimental = 2;
 constexpr int kTrackerModeClassic = 0;
 constexpr int kTrackerModeAssignment = 1;
 constexpr int kPeakEstimatorClassic = 0;
@@ -160,7 +161,28 @@ bool samePreviewLayerCore(const ats::SynthParams& a, const ats::SynthParams& b)
 
 const char* analysisModeIdForIndex(int idx)
 {
-    return idx == kAnalysisModeModern ? "modern_ats" : "classic_ats";
+    switch (idx)
+    {
+    case kAnalysisModeModern: return "modern_ats";
+    case kAnalysisModeExperimental: return "experimental";
+    default: return "classic_ats";
+    }
+}
+
+int peakEstimatorIndexForAnalysisMode(int analysisModeIndex)
+{
+    return analysisModeIndex == kAnalysisModeExperimental ? kPeakEstimatorExperimental
+                                                          : kPeakEstimatorClassic;
+}
+
+const char* analysisModeDisplayNameForIndex(int idx)
+{
+    switch (idx)
+    {
+    case kAnalysisModeModern: return "Modern ATS";
+    case kAnalysisModeExperimental: return "Experimental reassigned/DDM";
+    default: return "Classic ATS";
+    }
 }
 
 const char* trackerModeIdForIndex(int idx)
@@ -367,7 +389,7 @@ ats::ModernAtsModel buildModernModelFromClassicAtsSound(
     const std::vector<ats::ModernAtsTrackLifecycleEvent>& classicLifecycle)
 {
     ats::ModernAtsModel model;
-    model.header.analysisMode = peakEstimatorIndex == kPeakEstimatorExperimental
+    model.header.analysisMode = analysisModeIndex == kAnalysisModeExperimental
                                     ? ats::ModernAtsAnalysisMode::Experimental
                                     : (analysisModeIndex == kAnalysisModeModern
                                            ? ats::ModernAtsAnalysisMode::ModernAts
@@ -417,7 +439,7 @@ ats::ModernAtsModel buildModernModelFromClassicAtsSound(
                                      ? "Modern assignment tracker applied to derived ATS peak frames."
                                      : "Modern ATS mode using classic recursive frequency/SMR tracking.");
     }
-    if (peakEstimatorIndex == kPeakEstimatorExperimental)
+    if (analysisModeIndex == kAnalysisModeExperimental)
     {
         model.warnings.push_back(
             "Experimental reassigned/DDM estimator selected; plugin snapshot is tagged experimental.");
@@ -600,7 +622,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "analysisMode",
         "Analysis mode",
-        juce::StringArray { "Classic ATS", "Modern ATS" },
+        juce::StringArray { "Classic ATS", "Modern ATS", "Experimental reassigned/DDM" },
         0));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "trackerMode",
@@ -713,7 +735,7 @@ ats::AnalysisParams AtsAudioProcessor::readAnalysisParamsFromApvts() const
 
 juce::String AtsAudioProcessor::currentAnalysisModeId() const
 {
-    const int idx = juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
+    const int idx = juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
     return analysisModeIdForIndex(idx);
 }
 
@@ -725,7 +747,8 @@ juce::String AtsAudioProcessor::currentTrackerModeId() const
 
 juce::String AtsAudioProcessor::currentPeakEstimatorId() const
 {
-    const int idx = juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+    const int idx = peakEstimatorIndexForAnalysisMode(
+        juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load())));
     return peakEstimatorIdForIndex(idx);
 }
 
@@ -854,11 +877,10 @@ void AtsAudioProcessor::startAnalysis()
 
     const uint64_t gen = jobGeneration.load();
     const int selectedAnalysisMode =
-        juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
+        juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()));
     const int selectedTrackerMode =
         juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("trackerMode")->load()));
-    const int selectedPeakEstimator =
-        juce::jlimit(0, 1, juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+    const int selectedPeakEstimator = peakEstimatorIndexForAnalysisMode(selectedAnalysisMode);
     const ats::AnalysisParams selectedAnalysisParams = readAnalysisParamsFromApvts();
 
     setUiState(AtsUiState::Analyzing);
@@ -897,7 +919,7 @@ void AtsAudioProcessor::startAnalysis()
         ats::ModernAtsModel modernModel;
         bool modernModelValid = false;
         std::string modernValidationError;
-        if (selectedAnalysisMode == kAnalysisModeModern || selectedPeakEstimator == kPeakEstimatorExperimental)
+        if (selectedAnalysisMode != kAnalysisModeClassic)
         {
             modernModel = buildModernModelFromClassicAtsSound(*result.sound.get(),
                                                               ap,
@@ -939,11 +961,14 @@ void AtsAudioProcessor::startAnalysis()
                                                ? "Modern assignment tracker routed into the modern diagnostics model."
                                                : "Modern mode using classic tracker for compatibility.");
             }
-            if (selectedPeakEstimator == kPeakEstimatorExperimental)
-                analysisWarnings.push_back("Experimental reassigned/DDM peak estimator selected.");
-            if (!modernModelValid && (selectedAnalysisMode == kAnalysisModeModern
-                                      || selectedPeakEstimator == kPeakEstimatorExperimental))
-                analysisWarnings.push_back("Modern diagnostics unavailable: "
+            else if (selectedAnalysisMode == kAnalysisModeExperimental)
+            {
+                analysisWarnings.push_back(selectedTrackerMode == kTrackerModeAssignment
+                                               ? "Experimental reassigned/DDM mode using the modern assignment tracker."
+                                               : "Experimental reassigned/DDM mode using the classic tracker.");
+            }
+            if (!modernModelValid && selectedAnalysisMode != kAnalysisModeClassic)
+                analysisWarnings.push_back("Analysis diagnostics unavailable: "
                                            + juce::String(modernValidationError));
         }
 
@@ -1346,7 +1371,8 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
         mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphSourceA")->load()));
         mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphSourceB")->load()));
         mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("morphRecipe")->load()));
-        mos.writeInt(juce::roundToInt(apvts.getRawParameterValue("peakEstimator")->load()));
+        mos.writeInt(peakEstimatorIndexForAnalysisMode(
+            juce::jlimit(0, 2, juce::roundToInt(apvts.getRawParameterValue("analysisMode")->load()))));
         mos.writeFloat(apvts.getRawParameterValue("morphFreqEnv")->load());
         mos.writeFloat(apvts.getRawParameterValue("morphAmpEnv")->load());
         mos.writeFloat(apvts.getRawParameterValue("morphNoiseEnv")->load());
@@ -1456,8 +1482,13 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         p->setValueNotifyingHost(residualOnly ? 1.0f : 0.0f);
     if (auto* p = apvts.getParameter("outputTrim"))
         p->setValueNotifyingHost(apvts.getParameterRange("outputTrim").convertTo0to1(outputTrim));
+    analysisMode = juce::jlimit(0, 2, analysisMode);
+    if (peakEstimator == kPeakEstimatorExperimental && analysisMode != kAnalysisModeExperimental)
+        analysisMode = kAnalysisModeExperimental;
+    peakEstimator = peakEstimatorIndexForAnalysisMode(analysisMode);
+
     if (auto* p = apvts.getParameter("analysisMode"))
-        p->setValueNotifyingHost((float) juce::jlimit(0, 1, analysisMode));
+        p->setValueNotifyingHost((float) analysisMode / 2.0f);
     if (auto* p = apvts.getParameter("trackerMode"))
         p->setValueNotifyingHost((float) juce::jlimit(0, 1, trackerMode));
     if (auto* p = apvts.getParameter("morphSourceA"))
@@ -1743,7 +1774,18 @@ bool AtsAudioProcessor::getModernDiagnosticsSummary(juce::String& outSummary, ju
         }
     }
 
-    outSummary = "Modern diagnostics - partials: " + juce::String((int) latestModernModel.partials.size())
+    outSummary = "Analysis diagnostics - mode: "
+                 + juce::String(analysisModeDisplayNameForIndex(
+                     latestModernModel.header.analysisMode == ats::ModernAtsAnalysisMode::Experimental
+                         ? kAnalysisModeExperimental
+                         : (latestModernModel.header.analysisMode == ats::ModernAtsAnalysisMode::ModernAts
+                                ? kAnalysisModeModern
+                                : kAnalysisModeClassic)))
+                 + ", tracker: "
+                 + juce::String(latestModernModel.header.trackerMode == ats::ModernAtsTrackerMode::ModernAssignment
+                                    ? "Modern assignment"
+                                    : "Classic recursive freq/SMR")
+                 + ", partials: " + juce::String((int) latestModernModel.partials.size())
                  + ", frames: " + juce::String((int) latestModernModel.frames.size())
                  + ", transient markers: " + juce::String((int) latestModernModel.transients.size())
                  + ", orphan residual energy: " + juce::String(orphanResidualEnergy, 3)

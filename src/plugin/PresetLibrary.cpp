@@ -5,6 +5,15 @@
 namespace ats_preset
 {
 
+namespace
+{
+void setChoiceIndex(juce::AudioProcessorValueTreeState& apvts, const char* id, int index, int maxIndex)
+{
+    if (auto* p = apvts.getParameter(id))
+        p->setValueNotifyingHost((float) juce::jlimit(0, maxIndex, index) / (float) juce::jmax(1, maxIndex));
+}
+}
+
 juce::File getUserPresetDirectory()
 {
     auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
@@ -66,10 +75,8 @@ static void applyDefaults(AtsAudioProcessor& proc)
     if (auto* p = apvts.getParameter("residualOnly"))
         p->setValueNotifyingHost(0.0f);
     setNorm(apvts, "outputTrim", apvts.getParameterRange("outputTrim").convertTo0to1(1.0f));
-    if (auto* p = apvts.getParameter("analysisMode"))
-        p->setValueNotifyingHost(0.0f);
-    if (auto* p = apvts.getParameter("trackerMode"))
-        p->setValueNotifyingHost(0.0f);
+    setChoiceIndex(apvts, "analysisMode", 0, 2);
+    setChoiceIndex(apvts, "trackerMode", 0, 1);
 }
 
 void applyFactoryPreset(AtsAudioProcessor& proc, int factoryIndex)
@@ -101,42 +108,33 @@ void applyFactoryPreset(AtsAudioProcessor& proc, int factoryIndex)
         break;
     case 4: // voice
         applyDefaults(proc);
-        if (auto* p = apvts.getParameter("analysisMode"))
-            p->setValueNotifyingHost(1.0f);
-        if (auto* p = apvts.getParameter("trackerMode"))
-            p->setValueNotifyingHost(0.0f);
+        setChoiceIndex(apvts, "analysisMode", 1, 2);
+        setChoiceIndex(apvts, "trackerMode", 0, 1);
         setNorm(apvts, "partGain", apvts.getParameterRange("partGain").convertTo0to1(1.2f));
         setNorm(apvts, "resGain", apvts.getParameterRange("resGain").convertTo0to1(0.8f));
         break;
     case 5: // sustained
         applyDefaults(proc);
-        if (auto* p = apvts.getParameter("analysisMode"))
-            p->setValueNotifyingHost(1.0f);
-        if (auto* p = apvts.getParameter("trackerMode"))
-            p->setValueNotifyingHost(1.0f);
+        setChoiceIndex(apvts, "analysisMode", 1, 2);
+        setChoiceIndex(apvts, "trackerMode", 1, 1);
         setNorm(apvts, "usePhase", 1.0f);
         break;
     case 6: // plucked/percussive
         applyDefaults(proc);
-        if (auto* p = apvts.getParameter("analysisMode"))
-            p->setValueNotifyingHost(1.0f);
-        if (auto* p = apvts.getParameter("trackerMode"))
-            p->setValueNotifyingHost(1.0f);
+        setChoiceIndex(apvts, "analysisMode", 1, 2);
+        setChoiceIndex(apvts, "trackerMode", 1, 1);
         setNorm(apvts, "resGain", apvts.getParameterRange("resGain").convertTo0to1(1.35f));
         break;
     case 7: // noisy texture
         applyDefaults(proc);
-        if (auto* p = apvts.getParameter("analysisMode"))
-            p->setValueNotifyingHost(1.0f);
+        setChoiceIndex(apvts, "analysisMode", 1, 2);
         setNorm(apvts, "partGain", apvts.getParameterRange("partGain").convertTo0to1(0.5f));
         setNorm(apvts, "resGain", apvts.getParameterRange("resGain").convertTo0to1(1.8f));
         break;
     case 8: // polyphonic
         applyDefaults(proc);
-        if (auto* p = apvts.getParameter("analysisMode"))
-            p->setValueNotifyingHost(1.0f);
-        if (auto* p = apvts.getParameter("trackerMode"))
-            p->setValueNotifyingHost(1.0f);
+        setChoiceIndex(apvts, "analysisMode", 1, 2);
+        setChoiceIndex(apvts, "trackerMode", 1, 1);
         setNorm(apvts, "useAllPartials", 1.0f);
         break;
     default:
