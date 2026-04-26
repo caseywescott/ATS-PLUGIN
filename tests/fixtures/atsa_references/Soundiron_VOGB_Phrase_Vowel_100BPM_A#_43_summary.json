@@ -1,0 +1,17 @@
+{
+  "analysis_mode": "classic_ats",
+  "continuity_score": 0.12098380966731964,
+  "duration_seconds": 6.45,
+  "fixture_id": "Soundiron_VOGB_Phrase_Vowel_100BPM_A#_43",
+  "frames": 129,
+  "identity_errors": 0,
+  "normalized_rms_error": 1.0899215133912614,
+  "orphan_residual_ratio": 0.9995611897463157,
+  "parameter_hash_fnv1a64": "0b7782d38d9bf90d",
+  "partials": 463,
+  "sample_rate": 48000,
+  "schema_version": 1,
+  "source_hash_fnv1a64": "7fbcbfedae83e57a",
+  "spectral_distance_db": 19.821019001488178,
+  "tracker_mode": "classic_recursive_frequency_smr"
+}

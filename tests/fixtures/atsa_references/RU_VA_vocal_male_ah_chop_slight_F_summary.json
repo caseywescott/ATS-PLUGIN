@@ -1,0 +1,17 @@
+{
+  "analysis_mode": "classic_ats",
+  "continuity_score": 0.21678321678321677,
+  "duration_seconds": 0.2,
+  "fixture_id": "RU_VA_vocal_male_ah_chop_slight_F",
+  "frames": 4,
+  "identity_errors": 0,
+  "normalized_rms_error": 1.1269748391776802,
+  "orphan_residual_ratio": 0.9977717378870484,
+  "parameter_hash_fnv1a64": "a5b752004fcaf64f",
+  "partials": 143,
+  "sample_rate": 44100,
+  "schema_version": 1,
+  "source_hash_fnv1a64": "c1371d71b5838489",
+  "spectral_distance_db": 13.227460894050704,
+  "tracker_mode": "classic_recursive_frequency_smr"
+}

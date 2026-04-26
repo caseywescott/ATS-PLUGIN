@@ -1,0 +1,17 @@
+{
+  "analysis_mode": "classic_ats",
+  "continuity_score": 0.03206131767775603,
+  "duration_seconds": 7,
+  "fixture_id": "RT_Daniel_Sadownick_Degraw_Creative_Percussion_Crotale_One_Shots_2",
+  "frames": 140,
+  "identity_errors": 0,
+  "normalized_rms_error": 1.1132692749962187,
+  "orphan_residual_ratio": 0.9977575076340518,
+  "parameter_hash_fnv1a64": "674e4dfbc565aaa6",
+  "partials": 219,
+  "sample_rate": 44100,
+  "schema_version": 1,
+  "source_hash_fnv1a64": "94beef47e010e556",
+  "spectral_distance_db": 3.1993213271942365,
+  "tracker_mode": "classic_recursive_frequency_smr"
+}

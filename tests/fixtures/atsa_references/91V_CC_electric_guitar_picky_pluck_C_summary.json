@@ -1,0 +1,17 @@
+{
+  "analysis_mode": "classic_ats",
+  "continuity_score": 0.04354354354354354,
+  "duration_seconds": 0.3,
+  "fixture_id": "91V_CC_electric_guitar_picky_pluck_C",
+  "frames": 6,
+  "identity_errors": 0,
+  "normalized_rms_error": 1.1232999892517366,
+  "orphan_residual_ratio": 0.9942208882937896,
+  "parameter_hash_fnv1a64": "259c808e31ccc816",
+  "partials": 111,
+  "sample_rate": 44100,
+  "schema_version": 1,
+  "source_hash_fnv1a64": "56226e31a4d5ae33",
+  "spectral_distance_db": 4.338882279870331,
+  "tracker_mode": "classic_recursive_frequency_smr"
+}
