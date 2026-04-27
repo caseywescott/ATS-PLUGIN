@@ -69,6 +69,10 @@ struct RegularizedCepstrumEstimatorOptions
     AtsPartialWeightOptions weights;
     bool autoSwitchToTrueEnvelope = true;
     int autoSwitchThreshold = 40;
+    bool enableCrossFrameVirtualPoints = true;
+    double crossFrameVirtualPointWeightScale = 0.05;
+    double crossFrameVirtualPointMinGap = 0.1;
+    int crossFrameVirtualPointMaxCount = 6;
 };
 
 [[nodiscard]] const char* toString(CepstrumPenalty penalty);
@@ -110,6 +114,10 @@ private:
     RegularizedCepstrumEstimatorOptions options;
     EnvelopeEstimatorContext context;
     EnvelopeDiagnostics lastDiagnostics;
+    FrameEnvelope previousEnvelope;
+    std::string previousSourceModelId;
+    std::uint64_t previousFrameIndex = 0;
+    bool hasPreviousEnvelope = false;
     bool prepared = false;
 };
 

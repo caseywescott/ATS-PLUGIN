@@ -323,6 +323,70 @@ int testAutoSwitchBoundary()
     return 0;
 }
 
+// ── Tier 3.8 ─────────────────────────────────────────────────────────────────
+// Adjacent frames with clustered partials should borrow low-weight virtual
+// support points from the previous frame to improve conditioning.
+int testCrossFrameVirtualGapFill()
+{
+    const auto supportFreqs = std::vector<double>{ 100.0, 220.0, 440.0, 880.0, 1760.0, 3520.0, 7040.0 };
+    const auto clusteredFreqs = std::vector<double>{ 960.0, 990.0, 1020.0, 1050.0, 1080.0 };
+
+    auto supportFrame = makeFrame(supportFreqs, 18.0);
+    supportFrame.frameIndex = 0;
+    auto clusteredFrame = makeFrame(clusteredFreqs, 18.0);
+    clusteredFrame.frameIndex = 1;
+
+    ats::EnvelopeEstimatorContext ctx;
+    ctx.sampleRate = 44100.0;
+    ctx.frequencyAxis = makeBarkAxis();
+    ctx.maxOrder = 12;
+
+    ats::RegularizedCepstrumEstimatorOptions withoutFill;
+    withoutFill.fit.frequencyAxis = makeBarkAxis();
+    withoutFill.fit.order = 6;
+    withoutFill.fit.useBicOrderSelection = false;
+    withoutFill.fit.reduceOrderForSparseFrames = false;
+    withoutFill.fit.regularization = 1.0e-5;
+    withoutFill.fit.illConditionedThreshold = 1.0e4;
+    withoutFill.fit.illConditionedRegularizationFloor = 1.0;
+    withoutFill.autoSwitchToTrueEnvelope = false;
+    withoutFill.enableCrossFrameVirtualPoints = false;
+
+    ats::RegularizedCepstrumEstimatorOptions withFill = withoutFill;
+    withFill.enableCrossFrameVirtualPoints = true;
+    withFill.crossFrameVirtualPointWeightScale = 0.05;
+    withFill.crossFrameVirtualPointMinGap = 0.08;
+    withFill.crossFrameVirtualPointMaxCount = 6;
+
+    std::string err;
+    ats::RegularizedCepstrumEnvelopeEstimator noFillEstimator(withoutFill);
+    if (!noFillEstimator.prepare(ctx, &err))
+        return fail("Tier 3.8: no-fill prepare failed: " + err);
+    ats::FrameEnvelope tmp;
+    if (!noFillEstimator.estimate(supportFrame, tmp, &err))
+        return fail("Tier 3.8: no-fill support estimate failed: " + err);
+    if (!noFillEstimator.estimate(clusteredFrame, tmp, &err))
+        return fail("Tier 3.8: no-fill clustered estimate failed: " + err);
+    const ats::EnvelopeDiagnostics noFillDiag = noFillEstimator.diagnostics();
+
+    ats::RegularizedCepstrumEnvelopeEstimator fillEstimator(withFill);
+    if (!fillEstimator.prepare(ctx, &err))
+        return fail("Tier 3.8: fill prepare failed: " + err);
+    if (!fillEstimator.estimate(supportFrame, tmp, &err))
+        return fail("Tier 3.8: fill support estimate failed: " + err);
+    if (!fillEstimator.estimate(clusteredFrame, tmp, &err))
+        return fail("Tier 3.8: fill clustered estimate failed: " + err);
+    const ats::EnvelopeDiagnostics fillDiag = fillEstimator.diagnostics();
+
+    if (fillDiag.fitPointCount <= static_cast<int>(clusteredFrame.partials.size()))
+        return fail("Tier 3.8: virtual support points were not added on clustered frame");
+    if (!(fillDiag.conditionEstimate < noFillDiag.conditionEstimate))
+        return fail("Tier 3.8: virtual support points did not improve conditioning");
+
+    std::cout << "pass: Tier 3.8 - cross-frame virtual gap fill\n";
+    return 0;
+}
+
 int main()
 {
     int result = 0;
@@ -332,6 +396,7 @@ int main()
     result |= testBicOrderSelection();
     result |= testAutoSwitchTrueEnvelope();
     result |= testAutoSwitchBoundary();
+    result |= testCrossFrameVirtualGapFill();
 
     if (result == 0)
         std::cout << "ok: all spectral envelope improvements\n";

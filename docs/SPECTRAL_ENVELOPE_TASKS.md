@@ -98,6 +98,14 @@
 - [x] Avoid smoothing across strong transient markers by default.
 - [x] Add shimmer metrics for sustained fixtures.
 
+### Research follow-up - `research(envelope): perceptual curvature and gap fill`
+
+**PRD:** section 5.2, section 8
+
+- [x] Replace the old second-derivative `k^4` coefficient prior with an explicit curvature penalty measured on a Bark-warped frequency grid.
+- [x] Reuse the previous frame's fitted envelope as low-weight virtual support points when the current frame is spatially clustered.
+- [x] Add regression coverage for Bark-space curvature reduction and cross-frame conditioning improvement.
+
 ---
 
 ## Phase 3 - Envelope Evaluation and Visualization Support

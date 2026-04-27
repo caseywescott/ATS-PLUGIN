@@ -1,7 +1,9 @@
+#include "FrequencyWarp.h"
 #include "RegularizedCepstrum.h"
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -37,13 +39,33 @@ double knownEnvelopeDb(const double freqHz)
     return -18.0 + 2.5 * std::cos(theta) - 1.25 * std::cos(2.0 * theta) + 0.7 * std::cos(3.0 * theta);
 }
 
-double roughness(const std::vector<double>& values)
+double barkCurvatureEnergy(const ats::FrameEnvelope& envelope)
 {
-    double sum = 0.0;
-    for (std::size_t i = 1; i < values.size(); ++i)
+    ats::EnvelopeAxisSpec barkAxis = envelope.frequencyAxis;
+    barkAxis.type = ats::EnvelopeFrequencyAxis::Bark;
+
+    constexpr int kSamples = 41;
+    constexpr double kStep = 1.0 / static_cast<double>(kSamples - 1);
+    std::vector<double> samples;
+    samples.reserve(kSamples);
+    for (int i = 0; i < kSamples; ++i)
     {
-        const double k = static_cast<double>(i);
-        sum += k * k * k * k * values[i] * values[i];
+        bool freqOk = false;
+        const double freqHz = ats::frequencyForNormalizedPosition(static_cast<double>(i) * kStep,
+                                                                  barkAxis,
+                                                                  &freqOk);
+        bool evalOk = false;
+        const double value = ats::evaluateRegularizedDiscreteCepstrum(envelope, freqHz, &evalOk);
+        if (!freqOk || !evalOk)
+            return std::numeric_limits<double>::infinity();
+        samples.push_back(value);
+    }
+
+    double sum = 0.0;
+    for (std::size_t i = 1; i + 1 < samples.size(); ++i)
+    {
+        const double curvature = (samples[i - 1] - 2.0 * samples[i] + samples[i + 1]) / (kStep * kStep);
+        sum += curvature * curvature;
     }
     return sum;
 }
@@ -103,8 +125,8 @@ int main()
     if (!ats::fitRegularizedDiscreteCepstrum(noisyPoints, regularized, regularizedResult))
         return fail("regularized fit failed: " + regularizedResult.errorMessage);
 
-    if (!(roughness(regularizedResult.envelope.values) < roughness(unregularizedResult.envelope.values)))
-        return fail("second-derivative regularization did not reduce coefficient roughness");
+    if (!(barkCurvatureEnergy(regularizedResult.envelope) < barkCurvatureEnergy(unregularizedResult.envelope)))
+        return fail("second-derivative regularization did not reduce Bark-space curvature");
 
     ats::RdcFitOptions firstDerivative = options;
     firstDerivative.order = 5;
@@ -154,10 +176,9 @@ int main()
             return fail("single-point fit evaluated value too far from input");
     }
 
-    // High-order fit with tight regularization: strong penalty suppresses high-order coefficients.
-    // Use enough points so order-reduction does not fire (need > order points).
+    // High-order fit with tight regularization: strong penalty should reduce
+    // Bark-space curvature relative to the unregularized solution.
     {
-        // Build a dense fixture with 20 points so order=12 is not reduced
         std::vector<ats::RdcFitPoint> densePoints;
         for (int i = 0; i < 20; ++i)
         {
@@ -165,10 +186,20 @@ int main()
             densePoints.push_back({ freq, knownEnvelopeDb(freq), 1.0 });
         }
 
+        ats::RdcFitOptions looseOpts = options;
+        looseOpts.order = 12;
+        looseOpts.regularization = 0.0;
+        looseOpts.penalty = ats::CepstrumPenalty::None;
+
         ats::RdcFitOptions highOpts = options;
         highOpts.order = 12;
         highOpts.regularization = 100.0;
         highOpts.penalty = ats::CepstrumPenalty::SecondDerivative;
+
+        ats::RdcFitResult looseResult;
+        if (!ats::fitRegularizedDiscreteCepstrum(densePoints, looseOpts, looseResult))
+            return fail("unregularized high-order fit failed: " + looseResult.errorMessage);
+
         ats::RdcFitResult highResult;
         if (!ats::fitRegularizedDiscreteCepstrum(densePoints, highOpts, highResult))
             return fail("high-order regularized fit failed: " + highResult.errorMessage);
@@ -176,11 +207,8 @@ int main()
             return fail("high-order fit produced no coefficients");
         if (highResult.envelope.storage != ats::EnvelopeValueStorage::Coefficients)
             return fail("high-order fit should use coefficient storage");
-        // DC coefficient (index 0) should dominate over the highest-order coefficient
-        const double c0   = std::abs(highResult.envelope.values[0]);
-        const double cN   = std::abs(highResult.envelope.values.back());
-        if (!(cN < c0))
-            return fail("strong regularization should suppress high-order coefficients below DC term");
+        if (!(barkCurvatureEnergy(highResult.envelope) < barkCurvatureEnergy(looseResult.envelope)))
+            return fail("strong regularization should reduce Bark-space curvature for high-order fits");
     }
 
     std::cout << "ok: regularized discrete cepstrum solver\n";

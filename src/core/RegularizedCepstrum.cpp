@@ -42,6 +42,14 @@ bool fillBasisForFrequency(const double frequencyHz,
     return true;
 }
 
+void fillBasisForNormalizedPosition(const double position, const int order, std::vector<double>& out)
+{
+    out[0] = 1.0;
+    const double theta = kPi * std::clamp(position, 0.0, 1.0);
+    for (int k = 1; k <= order; ++k)
+        out[static_cast<std::size_t>(k)] = 2.0 * std::cos(static_cast<double>(k) * theta);
+}
+
 // Kept for the evaluate path which only needs a single basis vector and is not
 // on a hot path (one call per query, not N calls per frame).
 std::vector<double> basisForFrequency(const double frequencyHz, const EnvelopeAxisSpec& axis, const int order, bool& ok)
@@ -67,6 +75,112 @@ double penaltyDiagonal(const int coefficientIndex, const CepstrumPenalty penalty
             return k * k * k * k;
     }
     return 0.0;
+}
+
+EnvelopeAxisSpec barkPenaltyAxisFor(const EnvelopeAxisSpec& axis)
+{
+    EnvelopeAxisSpec barkAxis = axis;
+    barkAxis.type = EnvelopeFrequencyAxis::Bark;
+    return barkAxis;
+}
+
+int penaltySampleCountForOrder(const int order)
+{
+    return std::max(17, 4 * (order + 1) + 1);
+}
+
+bool buildSmoothnessPenaltyMatrix(const EnvelopeAxisSpec& fitAxis,
+                                  const CepstrumPenalty penalty,
+                                  const int order,
+                                  std::vector<double>& matrix)
+{
+    const std::size_t n = static_cast<std::size_t>(order + 1);
+    matrix.assign(n * n, 0.0);
+    if (penalty == CepstrumPenalty::None || order <= 0)
+        return true;
+
+    const EnvelopeAxisSpec penaltyAxis = barkPenaltyAxisFor(fitAxis);
+    if (!isValidFrequencyAxis(penaltyAxis))
+        return false;
+
+    const int sampleCount = penaltySampleCountForOrder(order);
+    const double step = 1.0 / static_cast<double>(sampleCount - 1);
+    std::vector<double> basisRow(n, 0.0);
+    std::vector<double> basisSamples(static_cast<std::size_t>(sampleCount) * n, 0.0);
+
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const double position = static_cast<double>(i) * step;
+        bool freqOk = false;
+        const double frequencyHz = frequencyForNormalizedPosition(position, penaltyAxis, &freqOk);
+        if (!freqOk || !fillBasisForFrequency(frequencyHz, fitAxis, order, basisRow))
+            return false;
+
+        std::copy(basisRow.begin(),
+                  basisRow.end(),
+                  basisSamples.begin() + static_cast<std::size_t>(i) * n);
+    }
+
+    std::vector<double> derivative(n, 0.0);
+    const int edge = penalty == CepstrumPenalty::FirstDerivative ? 1 : 2;
+    for (int i = edge; i < sampleCount - edge; ++i)
+    {
+        const double* prev2 = basisSamples.data() + static_cast<std::size_t>(i - 2) * n;
+        const double* prev1 = basisSamples.data() + static_cast<std::size_t>(i - 1) * n;
+        const double* curr = basisSamples.data() + static_cast<std::size_t>(i) * n;
+        const double* next1 = basisSamples.data() + static_cast<std::size_t>(i + 1) * n;
+        const double* next2 = basisSamples.data() + static_cast<std::size_t>(i + 2) * n;
+
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            if (penalty == CepstrumPenalty::FirstDerivative)
+                derivative[k] = (next1[k] - prev1[k]) / (2.0 * step);
+            else
+                derivative[k] = (-next2[k] + 16.0 * next1[k] - 30.0 * curr[k] + 16.0 * prev1[k] - prev2[k])
+                              / (12.0 * step * step);
+        }
+
+        for (std::size_t row = 0; row < n; ++row)
+        {
+            const double value = derivative[row];
+            if (value == 0.0)
+                continue;
+            for (std::size_t col = 0; col <= row; ++col)
+                matrix[row * n + col] += value * derivative[col] * step;
+        }
+    }
+
+    for (std::size_t row = 0; row < n; ++row)
+    {
+        for (std::size_t col = 0; col < row; ++col)
+            matrix[col * n + row] = matrix[row * n + col];
+    }
+
+    double scaleNumerator = 0.0;
+    double scaleDenominator = 0.0;
+    for (int k = 1; k <= order; ++k)
+    {
+        const double legacy = penaltyDiagonal(k, penalty);
+        if (legacy <= 0.0)
+            continue;
+        const double diagonal = matrix[static_cast<std::size_t>(k) * n + static_cast<std::size_t>(k)];
+        if (diagonal <= 0.0)
+            continue;
+        scaleNumerator += diagonal;
+        scaleDenominator += legacy;
+    }
+
+    if (scaleNumerator > 0.0 && scaleDenominator > 0.0)
+    {
+        const double scale = scaleNumerator / scaleDenominator;
+        if (scale > 0.0)
+        {
+            for (double& value : matrix)
+                value /= scale;
+        }
+    }
+
+    return true;
 }
 
 // Cholesky (L L^T) solve for a symmetric positive-definite system.
@@ -325,6 +439,158 @@ double weightedMeanDb(const std::vector<RdcFitPoint>& points)
     return weightSum > 0.0 ? weightedSum / weightSum : 0.0;
 }
 
+double meanWeight(const std::vector<RdcFitPoint>& points)
+{
+    if (points.empty())
+        return 0.0;
+
+    double sum = 0.0;
+    for (const auto& point : points)
+        sum += point.weight;
+    return sum / static_cast<double>(points.size());
+}
+
+std::vector<double> normalizedPositionsForPoints(const std::vector<RdcFitPoint>& points,
+                                                 const EnvelopeAxisSpec& axis)
+{
+    std::vector<double> positions;
+    positions.reserve(points.size());
+    for (const auto& point : points)
+    {
+        bool ok = false;
+        const double position = normalizedPositionForFrequency(point.frequencyHz, axis, &ok);
+        if (ok)
+            positions.push_back(position);
+    }
+    std::sort(positions.begin(), positions.end());
+    return positions;
+}
+
+double nearestGapDistance(const std::vector<double>& positions, const double target)
+{
+    if (positions.empty())
+        return 1.0;
+
+    const auto it = std::lower_bound(positions.begin(), positions.end(), target);
+    double best = 1.0;
+    if (it != positions.end())
+        best = std::min(best, std::abs(*it - target));
+    if (it != positions.begin())
+        best = std::min(best, std::abs(*std::prev(it) - target));
+    return best;
+}
+
+std::vector<RdcFitPoint> makeEnvelopeSupportPoints(const FrameEnvelope& envelope,
+                                                   const EnvelopeAxisSpec& fitAxis,
+                                                   const int count)
+{
+    std::vector<RdcFitPoint> support;
+    if (count <= 0 || !isValidFrequencyAxis(fitAxis))
+        return support;
+
+    const EnvelopeAxisSpec barkAxis = barkPenaltyAxisFor(fitAxis);
+    if (!isValidFrequencyAxis(barkAxis))
+        return support;
+
+    support.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i)
+    {
+        const double position = count == 1 ? 0.5 : static_cast<double>(i) / static_cast<double>(count - 1);
+        bool freqOk = false;
+        const double frequencyHz = frequencyForNormalizedPosition(position, barkAxis, &freqOk);
+        bool evalOk = false;
+        const double valueDb = evaluateRegularizedDiscreteCepstrum(envelope, frequencyHz, &evalOk);
+        if (!freqOk || !evalOk)
+            continue;
+        support.push_back({ frequencyHz, valueDb, 1.0 });
+    }
+
+    return support;
+}
+
+bool shouldReusePreviousFrame(const FrameEnvelope& previousEnvelope,
+                              const bool hasPreviousEnvelope,
+                              const std::string& previousSourceModelId,
+                              const std::uint64_t previousFrameIndex,
+                              const EnvelopeFrameInput& frame)
+{
+    return hasPreviousEnvelope &&
+           previousEnvelope.storage != EnvelopeValueStorage::Samples &&
+           previousSourceModelId == frame.sourceModelId &&
+           frame.frameIndex == previousFrameIndex + 1;
+}
+
+void appendCrossFrameVirtualPoints(const FrameEnvelope& previousEnvelope,
+                                   const std::vector<RdcFitPoint>& previousSupportPoints,
+                                   const EnvelopeAxisSpec& fitAxis,
+                                   const double weightScale,
+                                   const double minGap,
+                                   const int maxCount,
+                                   std::vector<RdcFitPoint>& points)
+{
+    if (previousSupportPoints.empty() || points.empty() || maxCount <= 0 || weightScale <= 0.0)
+        return;
+
+    const auto currentPositions = normalizedPositionsForPoints(points, barkPenaltyAxisFor(fitAxis));
+    if (currentPositions.empty())
+        return;
+
+    struct Candidate
+    {
+        RdcFitPoint point;
+        double position = 0.0;
+        double gap = 0.0;
+    };
+
+    std::vector<Candidate> candidates;
+    candidates.reserve(previousSupportPoints.size());
+    const double baseWeight = meanWeight(points) * weightScale;
+    const EnvelopeAxisSpec gapAxis = barkPenaltyAxisFor(fitAxis);
+    for (const auto& supportPoint : previousSupportPoints)
+    {
+        bool posOk = false;
+        const double position = normalizedPositionForFrequency(supportPoint.frequencyHz, gapAxis, &posOk);
+        if (!posOk)
+            continue;
+
+        const double gap = nearestGapDistance(currentPositions, position);
+        if (gap < minGap)
+            continue;
+
+        bool evalOk = false;
+        const double valueDb = evaluateRegularizedDiscreteCepstrum(previousEnvelope,
+                                                                   supportPoint.frequencyHz,
+                                                                   &evalOk);
+        if (!evalOk)
+            continue;
+
+        Candidate candidate;
+        candidate.point.frequencyHz = supportPoint.frequencyHz;
+        candidate.point.logAmplitudeDb = valueDb;
+        candidate.point.weight = std::max(1.0e-6, baseWeight);
+        candidate.position = position;
+        candidate.gap = gap;
+        candidates.push_back(candidate);
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.gap > b.gap;
+    });
+
+    std::vector<double> takenPositions = currentPositions;
+    for (const auto& candidate : candidates)
+    {
+        if (static_cast<int>(points.size()) >= maxCount + static_cast<int>(currentPositions.size()))
+            break;
+        if (nearestGapDistance(takenPositions, candidate.position) < minGap * 0.5)
+            continue;
+
+        points.push_back(candidate.point);
+        takenPositions.push_back(candidate.position);
+        std::sort(takenPositions.begin(), takenPositions.end());
+    }
+}
+
 bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
                           const RdcFitOptions& options,
                           const int order,
@@ -341,6 +607,12 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
     // Pre-allocate one basis buffer and reuse it for every partial point,
     // avoiding O(N_partials) heap allocations in the inner loop.
     std::vector<double> basis(n, 0.0);
+    std::vector<double> penaltyMatrix;
+    if (!buildSmoothnessPenaltyMatrix(options.frequencyAxis, options.penalty, order, penaltyMatrix))
+    {
+        errorMessage = "failed to build smoothness penalty matrix";
+        return false;
+    }
 
     double weightSum = 0.0;
     diagnostics.fitPointCount = 0;
@@ -372,9 +644,14 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
         for (std::size_t col = 0; col < row; ++col)
             matrix[col * n + row] = matrix[row * n + col];
 
-        matrix[row * n + row] +=
-            std::max(0.0, options.ridge) +
-            std::max(0.0, regularization) * penaltyDiagonal(static_cast<int>(row), options.penalty);
+        matrix[row * n + row] += std::max(0.0, options.ridge);
+    }
+
+    if (!penaltyMatrix.empty() && regularization > 0.0)
+    {
+        const double lambda = std::max(0.0, regularization);
+        for (std::size_t i = 0; i < matrix.size(); ++i)
+            matrix[i] += lambda * penaltyMatrix[i];
     }
 
     double pivotRatio = 0.0;
@@ -675,6 +952,10 @@ bool RegularizedCepstrumEnvelopeEstimator::prepare(const EnvelopeEstimatorContex
         options.fit.order = std::min(options.fit.order, context.maxOrder);
 
     lastDiagnostics = {};
+    previousEnvelope = {};
+    previousSourceModelId.clear();
+    previousFrameIndex = 0;
+    hasPreviousEnvelope = false;
     prepared = true;
     return true;
 }
@@ -691,8 +972,8 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
     }
 
     EnvelopeDiagnostics pointDiagnostics;
-    std::vector<RdcFitPoint> points;
-    if (!buildRdcFitPointsFromPartials(frame, options.weights, points, &pointDiagnostics))
+    std::vector<RdcFitPoint> realPoints;
+    if (!buildRdcFitPointsFromPartials(frame, options.weights, realPoints, &pointDiagnostics))
     {
         if (errorMessage)
             *errorMessage = "no usable weighted partial points";
@@ -700,6 +981,26 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
         lastDiagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
         lastDiagnostics.addWarning(EnvelopeWarningSparseFrame, "no usable weighted partial points");
         return false;
+    }
+
+    std::vector<RdcFitPoint> points = realPoints;
+    if (options.enableCrossFrameVirtualPoints &&
+        shouldReusePreviousFrame(previousEnvelope,
+                                 hasPreviousEnvelope,
+                                 previousSourceModelId,
+                                 previousFrameIndex,
+                                 frame))
+    {
+        const int maxCount = std::max(0, options.crossFrameVirtualPointMaxCount);
+        appendCrossFrameVirtualPoints(previousEnvelope,
+                                      makeEnvelopeSupportPoints(previousEnvelope,
+                                                                options.fit.frequencyAxis,
+                                                                maxCount),
+                                      options.fit.frequencyAxis,
+                                      options.crossFrameVirtualPointWeightScale,
+                                      std::max(0.0, options.crossFrameVirtualPointMinGap),
+                                      maxCount,
+                                      points);
     }
 
     // Auto-switch to True Envelope for dense frames — it is more accurate
@@ -725,6 +1026,10 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                             pointDiagnostics.warnings.begin(),
                                             pointDiagnostics.warnings.end());
             lastDiagnostics = out.diagnostics;
+            previousEnvelope = out;
+            previousSourceModelId = frame.sourceModelId;
+            previousFrameIndex = frame.frameIndex;
+            hasPreviousEnvelope = true;
             return true;
         }
         // Fall through to RDC if True Envelope fails
@@ -752,6 +1057,10 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                     pointDiagnostics.warnings.begin(),
                                     pointDiagnostics.warnings.end());
     lastDiagnostics = out.diagnostics;
+    previousEnvelope = out;
+    previousSourceModelId = frame.sourceModelId;
+    previousFrameIndex = frame.frameIndex;
+    hasPreviousEnvelope = true;
     return true;
 }
 
