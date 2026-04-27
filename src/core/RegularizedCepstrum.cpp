@@ -1,6 +1,7 @@
 #include "RegularizedCepstrum.h"
 
 #include "FrequencyWarp.h"
+#include "TrueEnvelope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -243,15 +244,33 @@ bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
     if (diagnostics)
         *diagnostics = {};
 
+    // Disable SMR contribution when all SMR values are zero — applying the
+    // 0.25× downweight equally across all partials provides no discrimination.
+    AtsPartialWeightOptions effectiveOptions = options;
+    if (effectiveOptions.useSmr)
+    {
+        bool allSmrZero = true;
+        for (const auto& partial : frame.partials)
+        {
+            if (partial.smr != 0.0)
+            {
+                allSmrZero = false;
+                break;
+            }
+        }
+        if (allSmrZero)
+            effectiveOptions.useSmr = false;
+    }
+
     for (const auto& partial : frame.partials)
     {
         bool usable = false;
-        const double weight = computeAtsPartialWeight(partial, options, &usable);
+        const double weight = computeAtsPartialWeight(partial, effectiveOptions, &usable);
         if (!usable)
             continue;
 
         double amplitude = std::abs(partial.amplitude);
-        if (amplitude < options.amplitudeFloor)
+        if (amplitude < effectiveOptions.amplitudeFloor)
         {
             amplitude = options.amplitudeFloor;
             if (diagnostics)
@@ -261,7 +280,7 @@ bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
             }
         }
 
-        out.push_back({ partial.frequencyHz, amplitudeToDb(amplitude, options.amplitudeFloor), weight });
+        out.push_back({ partial.frequencyHz, amplitudeToDb(amplitude, effectiveOptions.amplitudeFloor), weight });
     }
 
     if (diagnostics && diagnostics->clippedOrFlooredCount > 0)
@@ -453,6 +472,39 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
         effectiveRegularization = std::max(effectiveRegularization, options.sparseRegularizationFloor);
         result.diagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
         result.diagnostics.addWarning(EnvelopeWarningSparseFrame, "cepstrum order reduced for sparse frame");
+    }
+
+    // BIC-based order selection: try orders 1..effectiveOrder and pick the
+    // one with the lowest Bayesian Information Criterion.
+    if (options.useBicOrderSelection && effectiveOrder > 1)
+    {
+        int bestOrder = effectiveOrder;
+        double bestBic = std::numeric_limits<double>::infinity();
+        for (int o = 1; o <= effectiveOrder; ++o)
+        {
+            std::vector<double> trialCoeffs;
+            EnvelopeDiagnostics trialDiag;
+            std::string trialErr;
+            if (!solveCepstrumAttempt(usable, options, o, effectiveRegularization, trialCoeffs, trialDiag, trialErr))
+                continue;
+
+            // Skip ill-conditioned trial orders so the normal ill-condition
+            // retry path is not bypassed by BIC selecting a lower order.
+            if (trialDiag.conditionEstimate > options.illConditionedThreshold)
+                continue;
+
+            const int n = trialDiag.fitPointCount;
+            const int k = o + 1;
+            const double sigma2 = std::max(trialDiag.weightedError * trialDiag.weightedError, 1.0e-30);
+            const double bic = static_cast<double>(n) * std::log(sigma2)
+                             + static_cast<double>(k) * std::log(static_cast<double>(std::max(n, 1)));
+            if (bic < bestBic)
+            {
+                bestBic = bic;
+                bestOrder = o;
+            }
+        }
+        effectiveOrder = bestOrder;
     }
 
     std::vector<double> coefficients;
@@ -648,6 +700,34 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
         lastDiagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
         lastDiagnostics.addWarning(EnvelopeWarningSparseFrame, "no usable weighted partial points");
         return false;
+    }
+
+    // Auto-switch to True Envelope for dense frames — it is more accurate
+    // in the high-partial-count regime and is already implemented.
+    if (options.autoSwitchToTrueEnvelope &&
+        static_cast<int>(points.size()) > options.autoSwitchThreshold)
+    {
+        TrueEnvelopeEstimatorOptions teOpts;
+        teOpts.frequencyAxis = options.fit.frequencyAxis;
+        teOpts.weights = options.weights;
+        TrueEnvelopeFitResult teResult;
+        if (fitTrueEnvelopeFromPoints(points, teOpts, teResult) && teResult.ok)
+        {
+            out = std::move(teResult.envelope);
+            out.estimatorId = id();
+            out.estimatorVersion = version();
+            out.sourceModelId = frame.sourceModelId;
+            out.frameIndex = frame.frameIndex;
+            out.sampleRate = frame.sampleRate > 0.0 ? frame.sampleRate : context.sampleRate;
+            out.diagnostics.clippedOrFlooredCount += pointDiagnostics.clippedOrFlooredCount;
+            out.diagnostics.warningFlags |= pointDiagnostics.warningFlags;
+            out.diagnostics.warnings.insert(out.diagnostics.warnings.end(),
+                                            pointDiagnostics.warnings.begin(),
+                                            pointDiagnostics.warnings.end());
+            lastDiagnostics = out.diagnostics;
+            return true;
+        }
+        // Fall through to RDC if True Envelope fails
     }
 
     RdcFitResult fit;

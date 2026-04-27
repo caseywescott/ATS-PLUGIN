@@ -17,7 +17,8 @@ public:
     enum class Mode
     {
         Partials,
-        Residual
+        Residual,
+        PartialDensity
     };
 
     void setMode(Mode m);

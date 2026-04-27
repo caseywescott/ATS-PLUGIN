@@ -1229,6 +1229,57 @@ bool AtsAudioProcessor::buildSpectrogramTexture(bool partialsMode, int width, in
     return true;
 }
 
+bool AtsAudioProcessor::buildPartialDensityTexture(int width, int height, juce::Image& out)
+{
+    if (width <= 0 || height <= 0)
+        return false;
+
+    out = juce::Image(juce::Image::ARGB, width, height, true);
+    out.clear(juce::Rectangle<int>(width, height), juce::Colours::black);
+
+    const juce::ScopedLock ml(modelLock);
+    auto* s = analyzedModel.get();
+    if (s == nullptr || s->frames <= 0 || s->partials <= 0 || s->amp == nullptr)
+        return false;
+
+    // Count active partials (amplitude above floor) in each (x, y) cell.
+    // y maps to frequency bin (partial index), x maps to frame.
+    constexpr double kAmpFloor = 1.0e-7;
+    std::vector<int> counts(static_cast<std::size_t>(width * height), 0);
+    int maxCount = 1;
+
+    for (int par = 0; par < s->partials; ++par)
+    {
+        const int y = juce::jmin(height - 1, (int) ((int64_t) par * (int64_t) height / (int64_t) s->partials));
+        for (int fr = 0; fr < s->frames; ++fr)
+        {
+            if (s->amp[par][fr] > kAmpFloor)
+            {
+                const int x = juce::jmin(width - 1, (int) ((int64_t) fr * (int64_t) width / (int64_t) s->frames));
+                const int idx = y * width + x;
+                counts[static_cast<std::size_t>(idx)]++;
+                if (counts[static_cast<std::size_t>(idx)] > maxCount)
+                    maxCount = counts[static_cast<std::size_t>(idx)];
+            }
+        }
+    }
+
+    juce::Image::BitmapData bd(out, juce::Image::BitmapData::writeOnly);
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            const float t = juce::jlimit(0.0f, 1.0f,
+                static_cast<float>(counts[static_cast<std::size_t>(y * width + x)]) / static_cast<float>(maxCount));
+            // Cool-to-warm heatmap: dark blue (empty) → cyan → yellow → red (dense)
+            const auto col = juce::Colour::fromHSV(0.67f - 0.67f * t, 0.6f + 0.4f * t, 0.1f + 0.85f * t, 1.0f);
+            bd.setPixelColour(x, y, col);
+        }
+    }
+
+    return true;
+}
+
 bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOverlayData& out, juce::String& status)
 {
     out = {};

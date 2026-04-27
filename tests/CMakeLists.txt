@@ -288,4 +288,17 @@ target_include_directories(spectral_envelope_registry_test PRIVATE ../src/core)
 target_compile_features(spectral_envelope_registry_test PRIVATE cxx_std_17)
 add_test(NAME spectral_envelope_registry_test COMMAND spectral_envelope_registry_test)
 
+add_executable(spectral_envelope_improvements_test
+  spectral_envelope_improvements_test.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/F0AdaptiveEnvelope.cpp
+  ../src/core/LpcEnvelope.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/TrueEnvelope.cpp)
+target_include_directories(spectral_envelope_improvements_test PRIVATE ../src/core)
+target_compile_features(spectral_envelope_improvements_test PRIVATE cxx_std_17)
+add_test(NAME spectral_envelope_improvements_test COMMAND spectral_envelope_improvements_test)
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

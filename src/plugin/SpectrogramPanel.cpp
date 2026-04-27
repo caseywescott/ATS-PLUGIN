@@ -17,11 +17,13 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
 
     modeBox.addItem("Partials (amp)", 1);
     modeBox.addItem("Residual (bands)", 2);
+    modeBox.addItem("Partial density", 3);
     modeBox.setSelectedId(1, juce::dontSendNotification);
     modeBox.setName("Spectrogram mode");
-    modeBox.setHelpText("Choose partial amplitudes or residual critical-band energy.");
+    modeBox.setHelpText("Choose partial amplitudes, residual critical-band energy, or partial density heatmap.");
     modeBox.onChange = [this] {
-        setMode(modeBox.getSelectedId() == 2 ? Mode::Residual : Mode::Partials);
+        const int sel = modeBox.getSelectedId();
+        setMode(sel == 2 ? Mode::Residual : (sel == 3 ? Mode::PartialDensity : Mode::Partials));
     };
     addAndMakeVisible(modeBox);
 
@@ -59,7 +61,10 @@ void SpectrogramPanel::rebuildImageAsync()
 {
     juce::Image img(juce::Image::ARGB, kTexW, kTexH, true);
     img.clear(juce::Rectangle<int>(kTexW, kTexH), juce::Colours::black);
-    processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
+    if (mode == Mode::PartialDensity)
+        processor.buildPartialDensityTexture(kTexW, kTexH, img);
+    else
+        processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
     spectroImage = img;
     repaint();
 }
@@ -84,7 +89,10 @@ void SpectrogramPanel::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0xffb0b0c0));
     g.setFont(juce::Font(12.0f));
-    g.drawText("Read-only spectrogram (downsampled)", plot.removeFromBottom(16), juce::Justification::centredLeft);
+    const char* label = mode == Mode::PartialDensity
+                        ? "Partial density heatmap (active partials per cell)"
+                        : "Read-only spectrogram (downsampled)";
+    g.drawText(label, plot.removeFromBottom(16), juce::Justification::centredLeft);
 }
 
 void SpectrogramPanel::resized()

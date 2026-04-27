@@ -77,6 +77,8 @@ public:
 
     /** Fills `out` (ARGB) with a downsampled log-amplitude map; returns false if no model. */
     bool buildSpectrogramTexture(bool partialsMode, int width, int height, juce::Image& out);
+    /** Fills `out` with a partial-density heatmap (count of active partials per cell). */
+    bool buildPartialDensityTexture(int width, int height, juce::Image& out);
     bool buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOverlayData& out, juce::String& status);
 
     bool isWorkerBusy() const;

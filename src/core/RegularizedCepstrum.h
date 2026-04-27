@@ -25,7 +25,7 @@ struct RdcFitPoint
 
 struct RdcFitOptions
 {
-    EnvelopeAxisSpec frequencyAxis;
+    EnvelopeAxisSpec frequencyAxis = { EnvelopeFrequencyAxis::Bark };
     int order = 16;
     double regularization = 1.0e-3;
     CepstrumPenalty penalty = CepstrumPenalty::SecondDerivative;
@@ -33,9 +33,10 @@ struct RdcFitOptions
     bool reduceOrderForSparseFrames = true;
     bool retryIllConditionedWithRegularization = true;
     bool fallbackToConstantEnvelope = true;
+    bool useBicOrderSelection = true;
     double sparseRegularizationFloor = 1.0e-2;
     double illConditionedRegularizationFloor = 1.0;
-    double illConditionedThreshold = 1.0e10;
+    double illConditionedThreshold = 1.0e7;
 };
 
 struct RdcFitResult
@@ -66,6 +67,8 @@ struct RegularizedCepstrumEstimatorOptions
 {
     RdcFitOptions fit;
     AtsPartialWeightOptions weights;
+    bool autoSwitchToTrueEnvelope = true;
+    int autoSwitchThreshold = 40;
 };
 
 [[nodiscard]] const char* toString(CepstrumPenalty penalty);
