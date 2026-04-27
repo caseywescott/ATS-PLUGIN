@@ -387,6 +387,168 @@ int testCrossFrameVirtualGapFill()
     return 0;
 }
 
+// ── Tier 4.A ─────────────────────────────────────────────────────────────────
+// Density-based BIC minimum order: a dense frame (30 partials) must not have
+// its BIC order collapse below ceil(fitPoints * bicMinOrderPartialDensity).
+int testBicDensityFloor()
+{
+    // Build 30 partials on a smooth cosine envelope — same construction as
+    // testBicOrderSelection but with more points so density floor fires.
+    const auto freqs = makeFrequencies(30, 80.0, 8000.0);
+    std::vector<ats::RdcFitPoint> points;
+    for (const double f : freqs)
+        points.push_back({ f, smoothEnvDb(f), 1.0 });
+
+    // With no density floor, BIC may select a very low order for a smooth signal.
+    ats::RdcFitOptions noFloorOpts;
+    noFloorOpts.frequencyAxis = makeBarkAxis();
+    noFloorOpts.order = 12;
+    noFloorOpts.regularization = 1.0e-4;
+    noFloorOpts.ridge = 1.0e-12;
+    noFloorOpts.penalty = ats::CepstrumPenalty::SecondDerivative;
+    noFloorOpts.useBicOrderSelection = true;
+    noFloorOpts.minBicOrder = 0;
+
+    ats::RdcFitResult noFloorResult;
+    if (!ats::fitRegularizedDiscreteCepstrum(points, noFloorOpts, noFloorResult))
+        return fail("Tier 4.A: no-floor fit failed: " + noFloorResult.errorMessage);
+
+    // With density floor of 0.15 on 30 points => ceil(30*0.15) = 5.
+    ats::RdcFitOptions floorOpts = noFloorOpts;
+    floorOpts.minBicOrder = static_cast<int>(std::ceil(30.0 * 0.15)); // = 5
+
+    ats::RdcFitResult floorResult;
+    if (!ats::fitRegularizedDiscreteCepstrum(points, floorOpts, floorResult))
+        return fail("Tier 4.A: density-floor fit failed: " + floorResult.errorMessage);
+
+    if (floorResult.effectiveOrder < floorOpts.minBicOrder)
+        return fail("Tier 4.A: BIC selected order " + std::to_string(floorResult.effectiveOrder)
+                    + " below density floor " + std::to_string(floorOpts.minBicOrder));
+
+    // Via estimator: bicMinOrderPartialDensity should enforce the same floor.
+    ats::RegularizedCepstrumEstimatorOptions estimOpts;
+    estimOpts.fit.frequencyAxis = makeBarkAxis();
+    estimOpts.fit.order = 12;
+    estimOpts.fit.regularization = 1.0e-4;
+    estimOpts.fit.ridge = 1.0e-12;
+    estimOpts.fit.useBicOrderSelection = true;
+    estimOpts.bicMinOrderPartialDensity = 0.15;
+    estimOpts.autoSwitchToTrueEnvelope = false;
+    estimOpts.enableCrossFrameVirtualPoints = false;
+
+    ats::RegularizedCepstrumEnvelopeEstimator estimator(estimOpts);
+    ats::EnvelopeEstimatorContext ctx;
+    ctx.sampleRate = 44100.0;
+    ctx.frequencyAxis = makeBarkAxis();
+    ctx.maxOrder = 32;
+    std::string err;
+    if (!estimator.prepare(ctx, &err))
+        return fail("Tier 4.A: prepare failed: " + err);
+
+    const auto frame = makeFrame(freqs, 20.0);
+    ats::FrameEnvelope envelope;
+    if (!estimator.estimate(frame, envelope, &err))
+        return fail("Tier 4.A: estimate failed: " + err);
+
+    if (envelope.envelopeOrder < floorOpts.minBicOrder)
+        return fail("Tier 4.A: estimator BIC order " + std::to_string(envelope.envelopeOrder)
+                    + " below density floor " + std::to_string(floorOpts.minBicOrder));
+
+    std::cout << "pass: Tier 4.A - BIC density floor (selected " << floorResult.effectiveOrder
+              << ", estimator " << envelope.envelopeOrder
+              << ", floor " << floorOpts.minBicOrder << ")\n";
+    return 0;
+}
+
+// ── Tier 4.B ─────────────────────────────────────────────────────────────────
+// Amplitude-delta gate: when current-frame partials have shifted substantially
+// relative to the previous envelope, virtual gap points must NOT be injected.
+int testVirtualPointAmplitudeDeltaGate()
+{
+    // Frame 0: 7 well-spread partials at moderate amplitude.
+    const auto supportFreqs = std::vector<double>{ 100.0, 220.0, 440.0, 880.0, 1760.0, 3520.0, 7040.0 };
+    auto supportFrame = makeFrame(supportFreqs, 18.0);
+    supportFrame.frameIndex = 0;
+
+    // Frame 1: only 2 partials at 440 Hz and 1760 Hz, 30 dB lower than the
+    // support-frame envelope at those frequencies.  The gaps at 100, 220, 880,
+    // 3520, 7040 Hz mean the ungated estimator should inject virtual points.
+    // The 30 dB amplitude drop exceeds the 12 dB gate so the gated estimator
+    // must stay silent.
+    const std::vector<double> decayFreqs = { 440.0, 1760.0 };
+    ats::EnvelopeFrameInput decayFrame;
+    decayFrame.sourceModelId = "test";
+    decayFrame.frameIndex = 1;
+    decayFrame.sampleRate = 44100.0;
+    for (const double f : decayFreqs)
+    {
+        ats::EnvelopePartialPoint p;
+        p.frequencyHz = f;
+        // 30 dB lower than the smoothEnvDb value used in supportFrame
+        p.amplitude = std::pow(10.0, (smoothEnvDb(f) - 30.0) / 20.0);
+        p.smr = 18.0;
+        p.confidence = 1.0;
+        p.selected = true;
+        decayFrame.partials.push_back(p);
+    }
+
+    ats::EnvelopeEstimatorContext ctx;
+    ctx.sampleRate = 44100.0;
+    ctx.frequencyAxis = makeBarkAxis();
+    ctx.maxOrder = 12;
+
+    // Estimator with delta gate enabled (threshold = 12 dB, real delta ≈ 30 dB).
+    ats::RegularizedCepstrumEstimatorOptions gatedOpts;
+    gatedOpts.fit.frequencyAxis = makeBarkAxis();
+    gatedOpts.fit.order = 6;
+    gatedOpts.fit.useBicOrderSelection = false;
+    gatedOpts.fit.reduceOrderForSparseFrames = true;
+    gatedOpts.autoSwitchToTrueEnvelope = false;
+    gatedOpts.enableCrossFrameVirtualPoints = true;
+    gatedOpts.crossFrameVirtualPointWeightScale = 0.05;
+    gatedOpts.crossFrameVirtualPointMinGap = 0.08;
+    gatedOpts.crossFrameVirtualPointMaxCount = 6;
+    gatedOpts.crossFrameVirtualPointMaxDeltaDb = 12.0; // gate threshold
+
+    // Estimator with delta gate disabled (threshold = 0 → never gate).
+    ats::RegularizedCepstrumEstimatorOptions ungatedOpts = gatedOpts;
+    ungatedOpts.crossFrameVirtualPointMaxDeltaDb = 0.0; // disabled
+
+    std::string err;
+
+    ats::RegularizedCepstrumEnvelopeEstimator gatedEstimator(gatedOpts);
+    if (!gatedEstimator.prepare(ctx, &err))
+        return fail("Tier 4.B: gated prepare failed: " + err);
+    ats::FrameEnvelope tmp;
+    if (!gatedEstimator.estimate(supportFrame, tmp, &err))
+        return fail("Tier 4.B: gated support estimate failed: " + err);
+    if (!gatedEstimator.estimate(decayFrame, tmp, &err))
+        return fail("Tier 4.B: gated decay estimate failed: " + err);
+    const ats::EnvelopeDiagnostics gatedDiag = gatedEstimator.diagnostics();
+
+    ats::RegularizedCepstrumEnvelopeEstimator ungatedEstimator(ungatedOpts);
+    if (!ungatedEstimator.prepare(ctx, &err))
+        return fail("Tier 4.B: ungated prepare failed: " + err);
+    if (!ungatedEstimator.estimate(supportFrame, tmp, &err))
+        return fail("Tier 4.B: ungated support estimate failed: " + err);
+    if (!ungatedEstimator.estimate(decayFrame, tmp, &err))
+        return fail("Tier 4.B: ungated decay estimate failed: " + err);
+    const ats::EnvelopeDiagnostics ungatedDiag = ungatedEstimator.diagnostics();
+
+    // Gated estimator must have no more fit points than the real partial count
+    // (virtual points were blocked by the 30 dB delta), while ungated estimator
+    // must have injected points into the 5 gaps left by only 2 decay partials.
+    const int realPartialCount = static_cast<int>(decayFreqs.size());
+    if (gatedDiag.fitPointCount > realPartialCount)
+        return fail("Tier 4.B: gated estimator injected virtual points despite >12 dB delta");
+    if (ungatedDiag.fitPointCount <= realPartialCount)
+        return fail("Tier 4.B: ungated estimator did not inject virtual points");
+
+    std::cout << "pass: Tier 4.B - amplitude-delta gate (gated=" << gatedDiag.fitPointCount
+              << " pts, ungated=" << ungatedDiag.fitPointCount << " pts)\n";
+    return 0;
+}
+
 int main()
 {
     int result = 0;
@@ -397,6 +559,8 @@ int main()
     result |= testAutoSwitchTrueEnvelope();
     result |= testAutoSwitchBoundary();
     result |= testCrossFrameVirtualGapFill();
+    result |= testBicDensityFloor();
+    result |= testVirtualPointAmplitudeDeltaGate();
 
     if (result == 0)
         std::cout << "ok: all spectral envelope improvements\n";

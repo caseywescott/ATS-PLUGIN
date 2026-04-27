@@ -34,6 +34,7 @@ struct TrueEnvelopeFitResult
     FrameEnvelope envelope;
     EnvelopeDiagnostics diagnostics;
     int iterationsUsed = 0;
+    bool didConverge = false;
     std::string errorMessage;
 };
 

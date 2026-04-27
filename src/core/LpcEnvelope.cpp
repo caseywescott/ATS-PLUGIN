@@ -127,10 +127,14 @@ bool levinsonDurbin(const std::vector<double>& autocorrelation,
                     std::vector<double>& predictor,
                     double& predictionError,
                     int& effectiveOrder,
-                    EnvelopeDiagnostics& diagnostics)
+                    EnvelopeDiagnostics& diagnostics,
+                    bool* anyReflectionClamped = nullptr)
 {
     if (autocorrelation.empty() || autocorrelation[0] <= 0.0 || !std::isfinite(autocorrelation[0]))
         return false;
+
+    if (anyReflectionClamped)
+        *anyReflectionClamped = false;
 
     const int order = std::min(requestedOrder, static_cast<int>(autocorrelation.size()) - 1);
     predictor.assign(static_cast<std::size_t>(order + 1), 0.0);
@@ -156,6 +160,8 @@ bool levinsonDurbin(const std::vector<double>& autocorrelation,
         if (std::abs(reflection) > reflectionLimit)
         {
             reflection = std::copysign(reflectionLimit, reflection);
+            if (anyReflectionClamped)
+                *anyReflectionClamped = true;
             diagnostics.addWarning(EnvelopeWarningFallback,
                                    "LPC reflection coefficient was clamped for stability");
         }
@@ -272,8 +278,22 @@ bool fitLpcEnvelopeFromPoints(const std::vector<RdcFitPoint>& points,
     }
 
     result.diagnostics.fitPointCount = static_cast<int>(usable.size());
-    if (static_cast<int>(usable.size()) < options.minFitPointCount ||
-        static_cast<int>(usable.size()) < options.order * 2)
+
+    // Reduce LPC order for sparse frames — mirrors RDC's reduceOrderForSparseFrames logic.
+    // When the number of usable points is at or below the requested order, the autocorrelation
+    // estimate is underdetermined and Levinson-Durbin will produce meaningless poles.
+    int effectiveLpcOrder = options.order;
+    double effectiveRegularization = options.regularization;
+    if (static_cast<int>(usable.size()) <= effectiveLpcOrder)
+    {
+        effectiveLpcOrder = std::max(1, static_cast<int>(usable.size()) - 1);
+        effectiveRegularization = std::max(effectiveRegularization, 1.0e-2);
+        result.diagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
+        result.diagnostics.addWarning(EnvelopeWarningSparseFrame,
+                                      "LPC order reduced for sparse frame");
+    }
+    else if (static_cast<int>(usable.size()) < options.minFitPointCount ||
+             static_cast<int>(usable.size()) < options.order * 2)
     {
         result.diagnostics.fallbackReason = EnvelopeFallbackReason::TooFewPoints;
         result.diagnostics.addWarning(EnvelopeWarningSparseFrame,
@@ -290,26 +310,65 @@ bool fitLpcEnvelopeFromPoints(const std::vector<RdcFitPoint>& points,
 
     const auto logSpectrum = interpolateLogSpectrum(usable, options.sampleCount);
     auto autocorrelation = autocorrelationFromLogSpectrum(logSpectrum,
-                                                          options.order,
+                                                          effectiveLpcOrder,
                                                           options.amplitudeFloor);
-    autocorrelation[0] += std::max(0.0, options.regularization) *
+    autocorrelation[0] += std::max(0.0, effectiveRegularization) *
                           std::max(autocorrelation[0], options.amplitudeFloor * options.amplitudeFloor);
 
     std::vector<double> predictor;
     double predictionError = 0.0;
     int effectiveOrder = 0;
+    bool anyReflectionClamped = false;
     if (!levinsonDurbin(autocorrelation,
-                        options.order,
+                        effectiveLpcOrder,
                         options.maxReflectionCoefficient,
                         predictor,
                         predictionError,
                         effectiveOrder,
-                        result.diagnostics))
+                        result.diagnostics,
+                        &anyReflectionClamped))
     {
         result.diagnostics.fallbackReason = EnvelopeFallbackReason::IllConditioned;
         result.diagnostics.addWarning(EnvelopeWarningFallback, "LPC Levinson-Durbin solve failed");
         result.errorMessage = "LPC solve failed";
         return false;
+    }
+
+    // Reflection-coefficient retry: if any coefficient was clamped the poles may sit
+    // dangerously close to the unit circle.  Re-run with 10× regularization so the
+    // autocorrelation diagonal is pulled back from the stability boundary.
+    if (anyReflectionClamped)
+    {
+        const double retryReg = std::max(effectiveRegularization * 10.0, 1.0e-2);
+        auto retryAutocorrelation = autocorrelationFromLogSpectrum(logSpectrum,
+                                                                   effectiveLpcOrder,
+                                                                   options.amplitudeFloor);
+        retryAutocorrelation[0] += retryReg *
+                                   std::max(retryAutocorrelation[0],
+                                            options.amplitudeFloor * options.amplitudeFloor);
+
+        std::vector<double> retryPredictor;
+        double retryPredictionError = 0.0;
+        int retryEffectiveOrder = 0;
+        bool retryClamped = false;
+        EnvelopeDiagnostics retryDiag;
+        if (levinsonDurbin(retryAutocorrelation,
+                           effectiveLpcOrder,
+                           options.maxReflectionCoefficient,
+                           retryPredictor,
+                           retryPredictionError,
+                           retryEffectiveOrder,
+                           retryDiag,
+                           &retryClamped) && !retryClamped)
+        {
+            predictor = std::move(retryPredictor);
+            predictionError = retryPredictionError;
+            effectiveOrder = retryEffectiveOrder;
+            effectiveRegularization = retryReg;
+            result.diagnostics.fallbackReason = EnvelopeFallbackReason::IllConditioned;
+            result.diagnostics.addWarning(EnvelopeWarningFallback,
+                                          "LPC regularization increased after reflection coefficient clamping");
+        }
     }
 
     std::vector<double> values(static_cast<std::size_t>(options.sampleCount), 0.0);
@@ -336,7 +395,7 @@ bool fitLpcEnvelopeFromPoints(const std::vector<RdcFitPoint>& points,
     result.predictionError = predictionError;
     result.envelope.frequencyAxis = options.frequencyAxis;
     result.envelope.envelopeOrder = effectiveOrder;
-    result.envelope.regularization = options.regularization;
+    result.envelope.regularization = effectiveRegularization;
     result.envelope.penaltyType = "lpc_all_pole";
     result.envelope.storage = EnvelopeValueStorage::Samples;
     result.envelope.values = std::move(values);

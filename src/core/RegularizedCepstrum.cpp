@@ -751,13 +751,14 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
         result.diagnostics.addWarning(EnvelopeWarningSparseFrame, "cepstrum order reduced for sparse frame");
     }
 
-    // BIC-based order selection: try orders 1..effectiveOrder and pick the
-    // one with the lowest Bayesian Information Criterion.
+    // BIC-based order selection: try orders minBicOrder..effectiveOrder and pick
+    // the one with the lowest Bayesian Information Criterion.
     if (options.useBicOrderSelection && effectiveOrder > 1)
     {
+        const int bicFloor = std::max(1, std::min(options.minBicOrder, effectiveOrder));
         int bestOrder = effectiveOrder;
         double bestBic = std::numeric_limits<double>::infinity();
-        for (int o = 1; o <= effectiveOrder; ++o)
+        for (int o = bicFloor; o <= effectiveOrder; ++o)
         {
             std::vector<double> trialCoeffs;
             EnvelopeDiagnostics trialDiag;
@@ -991,16 +992,46 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                  previousFrameIndex,
                                  frame))
     {
-        const int maxCount = std::max(0, options.crossFrameVirtualPointMaxCount);
-        appendCrossFrameVirtualPoints(previousEnvelope,
-                                      makeEnvelopeSupportPoints(previousEnvelope,
-                                                                options.fit.frequencyAxis,
-                                                                maxCount),
-                                      options.fit.frequencyAxis,
-                                      options.crossFrameVirtualPointWeightScale,
-                                      std::max(0.0, options.crossFrameVirtualPointMinGap),
-                                      maxCount,
-                                      points);
+        // Amplitude-delta gate: compute mean |predicted - actual| in dB across the
+        // real fit points.  If the current frame's partials have shifted substantially
+        // from the previous envelope (onset, decay, transient) the previous-frame
+        // support is stale and should not be injected — doing so anchors the fit to
+        // spectral content that no longer exists.
+        double virtualWeightScale = options.crossFrameVirtualPointWeightScale;
+        if (options.crossFrameVirtualPointMaxDeltaDb > 0.0 && !realPoints.empty())
+        {
+            double deltaSum = 0.0;
+            int deltaCount = 0;
+            for (const auto& rp : realPoints)
+            {
+                bool evalOk = false;
+                const double predicted = evaluateRegularizedDiscreteCepstrum(previousEnvelope,
+                                                                             rp.frequencyHz,
+                                                                             &evalOk);
+                if (evalOk)
+                {
+                    deltaSum += std::abs(rp.logAmplitudeDb - predicted);
+                    ++deltaCount;
+                }
+            }
+            const double meanDeltaDb = deltaCount > 0 ? deltaSum / static_cast<double>(deltaCount) : 0.0;
+            if (meanDeltaDb > options.crossFrameVirtualPointMaxDeltaDb)
+                virtualWeightScale = 0.0;
+        }
+
+        if (virtualWeightScale > 0.0)
+        {
+            const int maxCount = std::max(0, options.crossFrameVirtualPointMaxCount);
+            appendCrossFrameVirtualPoints(previousEnvelope,
+                                          makeEnvelopeSupportPoints(previousEnvelope,
+                                                                    options.fit.frequencyAxis,
+                                                                    maxCount),
+                                          options.fit.frequencyAxis,
+                                          virtualWeightScale,
+                                          std::max(0.0, options.crossFrameVirtualPointMinGap),
+                                          maxCount,
+                                          points);
+        }
     }
 
     // Auto-switch to True Envelope for dense frames — it is more accurate
@@ -1035,8 +1066,20 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
         // Fall through to RDC if True Envelope fails
     }
 
+    // Density-based BIC minimum order: for frames with many fit points (voice,
+    // dense strings) require BIC to select at least ceil(N * density) to avoid
+    // collapsing to order 1-3 when meaningful timbral/formant structure exists.
+    RdcFitOptions fitOptions = options.fit;
+    if (fitOptions.useBicOrderSelection && options.bicMinOrderPartialDensity > 0.0)
+    {
+        const int densityFloor = static_cast<int>(std::ceil(
+            static_cast<double>(points.size()) * options.bicMinOrderPartialDensity));
+        fitOptions.minBicOrder = std::max(fitOptions.minBicOrder,
+                                          std::min(densityFloor, fitOptions.order));
+    }
+
     RdcFitResult fit;
-    if (!fitRegularizedDiscreteCepstrum(points, options.fit, fit))
+    if (!fitRegularizedDiscreteCepstrum(points, fitOptions, fit))
     {
         if (errorMessage)
             *errorMessage = fit.errorMessage;

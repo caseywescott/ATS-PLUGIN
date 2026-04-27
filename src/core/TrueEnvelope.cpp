@@ -326,7 +326,8 @@ bool fitTrueEnvelopeFromPoints(const std::vector<RdcFitPoint>& points,
     }
 
     const double undershoot = maxObservedUndershoot(envelope, spectrum);
-    if (undershoot > options.convergenceDb)
+    result.didConverge = undershoot <= options.convergenceDb;
+    if (!result.didConverge)
     {
         for (std::size_t i = 0; i < envelope.size(); ++i)
         {

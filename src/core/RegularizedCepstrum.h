@@ -34,6 +34,7 @@ struct RdcFitOptions
     bool retryIllConditionedWithRegularization = true;
     bool fallbackToConstantEnvelope = true;
     bool useBicOrderSelection = true;
+    int minBicOrder = 0; // hard lower bound for BIC order search (0 = no floor)
     double sparseRegularizationFloor = 1.0e-2;
     double illConditionedRegularizationFloor = 1.0;
     double illConditionedThreshold = 1.0e7;
@@ -73,6 +74,15 @@ struct RegularizedCepstrumEstimatorOptions
     double crossFrameVirtualPointWeightScale = 0.05;
     double crossFrameVirtualPointMinGap = 0.1;
     int crossFrameVirtualPointMaxCount = 6;
+    // Gate virtual points when real partials have shifted by more than this many dB
+    // on average relative to the previous frame's envelope.  On onset/decay frames
+    // where spectral content changes rapidly the previous-frame support is stale and
+    // injecting it degrades rather than stabilises the fit.
+    double crossFrameVirtualPointMaxDeltaDb = 12.0;
+    // When BIC order selection is enabled, enforce a minimum order equal to
+    // ceil(fitPointCount * bicMinOrderPartialDensity).  Prevents order collapse
+    // to 1-3 on dense frames that carry meaningful formant or timbral structure.
+    double bicMinOrderPartialDensity = 0.15;
 };
 
 [[nodiscard]] const char* toString(CepstrumPenalty penalty);
