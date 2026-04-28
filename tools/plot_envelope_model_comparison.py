@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Batch spectral-envelope comparison plots for fixture WAVs.
 
-Generates a per-fixture PNG that overlays:
-  - legacy linear-Hz RDC from tools/visualize_envelopes.py
-  - legacy Bark-warped RDC from tools/visualize_envelopes.py
-  - the current branch RDC model: Bark fit axis + Bark-space curvature prior
-    + adjacent-frame low-weight virtual gap points
+Generates a per-fixture PNG that overlays four models:
+  1. Legacy RDC (linear Hz) — orange solid
+  2. Legacy RDC (Bark) — green dashed
+  3. New RDC (Bark + curvature prior + BIC + gap fill) — purple bold
+  4. New RDC + GCV λ — cyan bold dotted
 
 The input WAVs are analyzed with ats_offline --dump-frames. A representative
 frame is selected per fixture by the largest mean absolute deviation between
@@ -61,39 +61,46 @@ def _plot_fixture(result: dict[str, Any], output_path: Path) -> None:
     partial_dbs = result["partial_dbs"]
     axis.plot(partial_freqs, partial_dbs, "o", color="#4a9fd5", markersize=4, alpha=0.8, label="Partials")
     axis.plot(result["linear_grid_hz"], result["linear_grid_db"], "-", color="#e05c2a", linewidth=1.6,
-              label="Legacy RDC (linear)")
+              label=f"Linear RDC  err={result['linear_diag']['weighted_error_db']:.2f} dB")
     axis.plot(result["bark_grid_hz"], result["bark_grid_db"], "--", color="#2ab07a", linewidth=1.5,
-              label="Legacy RDC (Bark)")
+              label=f"Bark RDC (legacy)  err={result['bark_diag']['weighted_error_db']:.2f} dB")
     axis.plot(result["new_grid_hz"], result["new_grid_db"], "-", color="#5a3fc0", linewidth=2.2,
-              label="New RDC (Bark curvature + gap fill)")
+              label=f"New RDC (curvature+BIC+fill)  err={result['new_diag']['weighted_error_db']:.2f} dB")
+    axis.plot(result["gcv_grid_hz"], result["gcv_grid_db"], "-.", color="#00bcd4", linewidth=2.0,
+              label=f"New RDC + GCV λ={result['gcv_diag'].get('gcv_lambda', 0.0):.2e}  "
+                    f"err={result['gcv_diag']['weighted_error_db']:.2f} dB")
     axis.legend(loc="upper right", fontsize=8)
 
     axis.set_title(
         f"{result['fixture_id']}  |  frame {result['frame_index']} at {result['time_s']:.4f}s\n"
-        f"selected by max mean |new-Bark| across frames",
+        f"selected by max mean |new-Bark| across frames  |  {len(partial_freqs)} active partials",
         fontsize=10,
     )
 
-    all_values = partial_dbs + result["linear_grid_db"] + result["bark_grid_db"] + result["new_grid_db"]
+    all_values = (partial_dbs + result["linear_grid_db"] + result["bark_grid_db"]
+                  + result["new_grid_db"] + result["gcv_grid_db"])
     if all_values:
         axis.set_ylim(min(all_values) - 4.0, max(all_values) + 4.0)
 
+    nd = result["new_diag"]
+    gd = result["gcv_diag"]
+    gcv_lam_str = f"{gd.get('gcv_lambda', 0.0):.2e}" if gd.get("gcv_lambda") else "N/A"
     info = (
-        f"Active partials: {len(partial_freqs)}\n"
-        f"Legacy linear: err={result['linear_diag']['weighted_error_db']:.2f} dB, "
-        f"cond={result['linear_diag']['condition_estimate']:.2e}, "
+        f"Linear RDC :  err={result['linear_diag']['weighted_error_db']:.2f} dB  "
+        f"cond={result['linear_diag']['condition_estimate']:.1e}  "
         f"fallback={result['linear_diag'].get('fallback') or 'none'}\n"
-        f"Legacy Bark: err={result['bark_diag']['weighted_error_db']:.2f} dB, "
-        f"cond={result['bark_diag']['condition_estimate']:.2e}, "
+        f"Bark RDC   :  err={result['bark_diag']['weighted_error_db']:.2f} dB  "
+        f"cond={result['bark_diag']['condition_estimate']:.1e}  "
         f"fallback={result['bark_diag'].get('fallback') or 'none'}\n"
-        f"New model: err={result['new_diag']['weighted_error_db']:.2f} dB, "
-        f"cond={result['new_diag']['condition_estimate']:.2e}, "
-        f"virtual_pts={result['new_diag']['virtual_points']}, "
-        f"fallback={result['new_diag'].get('fallback') or 'none'}\n"
-        f"mean |new-linear|={result['delta_new_linear_db']:.2f} dB, "
-        f"mean |new-Bark|={result['delta_new_bark_db']:.2f} dB"
+        f"New RDC    :  err={nd['weighted_error_db']:.2f} dB  "
+        f"cond={nd['condition_estimate']:.1e}  virt={nd['virtual_points']}  "
+        f"order={nd['effective_order']}  fallback={nd.get('fallback') or 'none'}\n"
+        f"New+GCV    :  err={gd['weighted_error_db']:.2f} dB  "
+        f"cond={gd['condition_estimate']:.1e}  virt={gd['virtual_points']}  "
+        f"order={gd['effective_order']}  λ={gcv_lam_str}  fallback={gd.get('fallback') or 'none'}"
     )
-    axis.text(0.01, 0.01, info, transform=axis.transAxes, va="bottom", fontsize=8, family="monospace")
+    axis.text(0.01, 0.01, info, transform=axis.transAxes, va="bottom", fontsize=7.5,
+              family="monospace", bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7))
 
     figure.savefig(output_path, dpi=160)
     plt.close(figure)
@@ -142,6 +149,16 @@ def analyze_fixture(wav_path: Path,
             regularization=regularization,
             previous_model=previous_model,
         )
+        gcv_grid_hz, gcv_grid_db, gcv_diag, _ = fit_new_model(
+            frame["partials"],
+            sample_rate,
+            lowest_freq_hz,
+            highest_freq_hz,
+            order=order,
+            regularization=regularization,
+            previous_model=previous_model,
+            use_gcv=True,
+        )
 
         partial_freqs = [float(entry[0]) for entry in frame["partials"] if float(entry[1]) > 0.0]
         partial_dbs = [20.0 * math.log10(max(float(entry[1]), 1.0e-12))
@@ -160,9 +177,12 @@ def analyze_fixture(wav_path: Path,
             "bark_grid_db": bark_grid_db,
             "new_grid_hz": new_grid_hz,
             "new_grid_db": new_grid_db,
+            "gcv_grid_hz": gcv_grid_hz,
+            "gcv_grid_db": gcv_grid_db,
             "linear_diag": linear_diag,
             "bark_diag": bark_diag,
             "new_diag": new_diag,
+            "gcv_diag": gcv_diag,
             "delta_new_bark_db": delta_new_bark,
             "delta_new_linear_db": delta_new_linear,
             "lowest_freq_hz": lowest_freq_hz,
@@ -229,14 +249,31 @@ def main() -> int:
                 "linear_diag": selected["linear_diag"],
                 "bark_diag": selected["bark_diag"],
                 "new_diag": selected["new_diag"],
+                "gcv_diag": selected["gcv_diag"],
                 "png": str(png_path),
             },
         })
+        ld = selected["linear_diag"]
+        bd = selected["bark_diag"]
+        nd = selected["new_diag"]
+        gd = selected["gcv_diag"]
+        gcv_lam = gd.get("gcv_lambda")
+        gcv_lam_str = f"{gcv_lam:.2e}" if gcv_lam else "N/A"
         print(
-            f"{fixture['fixture_id']}: frame {selected['frame_index']} at {selected['time_s']:.4f}s | "
-            f"mean |new-Bark|={selected['delta_new_bark_db']:.2f} dB | "
-            f"mean |new-linear|={selected['delta_new_linear_db']:.2f} dB | "
-            f"png={png_path}"
+            f"\n{fixture['fixture_id']}\n"
+            f"  frame {selected['frame_index']} @ {selected['time_s']:.4f}s  "
+            f"partials={len(selected['partial_freqs_hz'])}\n"
+            f"  Linear RDC  : err={ld['weighted_error_db']:.3f} dB  "
+            f"cond={ld['condition_estimate']:.2e}  fallback={ld.get('fallback') or 'none'}\n"
+            f"  Bark RDC    : err={bd['weighted_error_db']:.3f} dB  "
+            f"cond={bd['condition_estimate']:.2e}  fallback={bd.get('fallback') or 'none'}\n"
+            f"  New RDC     : err={nd['weighted_error_db']:.3f} dB  "
+            f"cond={nd['condition_estimate']:.2e}  order={nd['effective_order']}  "
+            f"virt={nd['virtual_points']}  fallback={nd.get('fallback') or 'none'}\n"
+            f"  New+GCV     : err={gd['weighted_error_db']:.3f} dB  "
+            f"cond={gd['condition_estimate']:.2e}  order={gd['effective_order']}  "
+            f"λ={gcv_lam_str}  fallback={gd.get('fallback') or 'none'}\n"
+            f"  png={png_path}"
         )
 
     summary_path = out_dir / "summary.json"

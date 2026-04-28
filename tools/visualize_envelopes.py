@@ -431,9 +431,10 @@ def _gcv_lambda_search(
     min_hz: float,
     max_hz: float,
     lambda_min: float = 1.0e-5,
-    lambda_max: float = 1.0e+1,
+    lambda_max: float = 1.0e+2,
     n_candidates: int = 10,
     ridge: float = 1.0e-10,
+    max_range_extensions: int = 0,
 ) -> float:
     """GCV lambda search mirroring C++ selectGcvLambda.
 
@@ -441,6 +442,12 @@ def _gcv_lambda_search(
         GCV(λ) = RSS(λ) / (n_eff · (1 − df(λ)/n_eff)²)
     where df(λ) = tr(A_λ⁻¹ · M), M = XᵀWX, A_λ = M + λP.
     Falls back to lambda_min if no candidate produces a finite score.
+
+    When the optimum falls at lambda_max, max_range_extensions controls how many
+    10× range doublings are attempted (default 0 = disabled).  Saturation at
+    lambda_max is the correct answer for featureless frames (maximum regularization
+    → constant envelope); extending the range can cause condition blow-up because
+    the curvature penalty does not penalise the DC (k=0) direction.
     """
     import numpy as np
     if not points or order < 0:
@@ -466,36 +473,49 @@ def _gcv_lambda_search(
     w_sum_sq = max(float((W * W).sum()), 1.0e-60)
     n_eff    = max(1.0, (w_sum * w_sum) / w_sum_sq)
 
-    candidates = np.logspace(math.log10(max(lambda_min, 1.0e-12)),
-                             math.log10(max(lambda_max, lambda_min * 10.0)),
-                             n_candidates)
-
-    best_lam = float(candidates[0])
-    best_gcv = float("inf")
-
     ridge_mat = max(0.0, ridge) * np.eye(n, dtype=np.float64)
 
-    for lam in candidates:
-        A = M + ridge_mat + float(lam) * penalty
-        try:
-            # Solve for beta and hat trace simultaneously.
-            beta       = np.linalg.solve(A, rhs)
-            # df = tr(A⁻¹ · M): solve A X = M, take trace.
-            A_inv_M    = np.linalg.solve(A, M)
-            df         = float(np.trace(A_inv_M))
-        except np.linalg.LinAlgError:
-            continue
+    def _search_range(lo: float, hi: float) -> tuple[float, float]:
+        """Search [lo, hi] with n_candidates log-spaced points.
+        Returns (best_lambda, best_gcv)."""
+        candidates = np.logspace(math.log10(max(lo, 1.0e-12)),
+                                 math.log10(max(hi, lo * 10.0)),
+                                 n_candidates)
+        blam = float(candidates[0])
+        bgcv = float("inf")
+        for lam in candidates:
+            A = M + ridge_mat + float(lam) * penalty
+            try:
+                beta    = np.linalg.solve(A, rhs)
+                A_inv_M = np.linalg.solve(A, M)
+                df      = float(np.trace(A_inv_M))
+            except np.linalg.LinAlgError:
+                continue
+            df    = max(0.0, min(df, n_eff * 0.99))
+            pred  = B @ beta
+            rss   = float(np.sum(W * (pred - Y) ** 2))
+            denom = 1.0 - df / n_eff
+            if denom < 1.0e-6:
+                continue
+            gcv = rss / (n_eff * denom * denom)
+            if math.isfinite(gcv) and gcv < bgcv:
+                bgcv = gcv
+                blam = float(lam)
+        return blam, bgcv
 
-        df    = max(0.0, min(df, n_eff * 0.99))
-        pred  = B @ beta
-        rss   = float(np.sum(W * (pred - Y) ** 2))
-        denom = 1.0 - df / n_eff
-        if denom < 1.0e-6:
-            continue
-        gcv = rss / (n_eff * denom * denom)
-        if math.isfinite(gcv) and gcv < best_gcv:
-            best_gcv = gcv
-            best_lam = float(lam)
+    best_lam, best_gcv = _search_range(lambda_min, lambda_max)
+    current_max = lambda_max
+
+    # Automatic range widening: if optimum is at the upper boundary, extend.
+    for _ in range(max_range_extensions):
+        if best_lam < current_max * 0.99:
+            break  # interior minimum found
+        new_max = current_max * 10.0
+        ext_lam, ext_gcv = _search_range(current_max, new_max)
+        if ext_gcv < best_gcv:
+            best_gcv = ext_gcv
+            best_lam = ext_lam
+        current_max = new_max
 
     return best_lam
 
@@ -543,9 +563,12 @@ def fit_new_model(
     augmented = _append_virtual_gap(usable, previous_model, 0.05, 0.1, 6)
 
     # BIC order selection — mirrors C++ useBicOrderSelection with 1e7 threshold.
+    # bicMinOrderPartialDensity=0.15 prevents collapse to order 1 on dense frames
+    # (C++ enforces minBicOrder = ceil(n_partials * 0.15)).
     if eff_order > 1:
+        min_bic_order = max(1, math.ceil(len(usable) * 0.15))
         best_order, best_bic = eff_order, float("inf")
-        for trial_order in range(1, eff_order + 1):
+        for trial_order in range(min_bic_order, eff_order + 1):
             t = _solve_new_attempt(augmented, trial_order, eff_reg, 1.0e-10, min_hz, max_hz)
             if t is None or t.condition_estimate > 1.0e7:
                 continue
@@ -560,7 +583,7 @@ def fit_new_model(
     gcv_lambda = None
     if use_gcv:
         gcv_lambda = _gcv_lambda_search(augmented, eff_order, min_hz, max_hz,
-                                        lambda_min=1.0e-5, lambda_max=1.0e+1,
+                                        lambda_min=1.0e-5, lambda_max=1.0e+2,
                                         n_candidates=10, ridge=1.0e-10)
         eff_reg = gcv_lambda
 
