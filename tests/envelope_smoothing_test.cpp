@@ -109,12 +109,16 @@ int main()
 
     incompatible = makeEnvelope(12, 2.0);
     incompatible.regularization = 0.1;
-    if (ats::canSmoothEnvelopes(makeEnvelope(11, 0.0), incompatible))
-        return fail("different regularization settings should not be smoothable");
+    incompatible.envelopeOrder = 5;
+    incompatible.values = { -18.0, 1.1, -0.4, 0.2, -0.1, 0.05 };
+    if (!ats::canSmoothEnvelopes(makeEnvelope(11, 0.0), incompatible))
+        return fail("different per-frame RDC settings should still be smoothable on a common grid");
 
-    const auto blocked = ats::smoothEnvelopeFrame(makeEnvelope(11, 0.0), incompatible, options);
-    if (!sameValues(blocked, incompatible) || blocked.smoothingAmount != 0.0)
-        return fail("incompatible envelopes should pass through unsmoothed");
+    const auto blended = ats::smoothEnvelopeFrame(makeEnvelope(11, 0.0), incompatible, options);
+    if (blended.storage != ats::EnvelopeValueStorage::Samples || blended.values.size() < 64)
+        return fail("adaptive smoothing should resample onto a common sampled grid");
+    if (blended.smoothingAmount <= 0.0)
+        return fail("adaptive smoothing should report a non-zero smoothing amount");
 
     std::cout << "ok: spectral envelope temporal smoothing\n";
     return 0;

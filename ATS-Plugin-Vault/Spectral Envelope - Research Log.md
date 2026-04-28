@@ -92,3 +92,57 @@ Added `_mel()`, `_hz_from_mel()`, `_normalized_position_mel()` (O'Shaughnessy fo
 ### Tests
 
 New file `tests/python_model_improvements_test.py` — 31 tests, 0 failures. Covers IRLS robustness, uncertainty properties (finite, positive, monotone in n), p75 gate (suppressed/allowed), and Mel axis (monotone, round-trip, uniformity).
+
+---
+
+## C++ integration pass — 2026-04-28
+
+This branch now carries the Stage 2 uncertainty work across the C++ RDC path and uses it in the first downstream decisions.
+
+### 1. RDC uncertainty is now emitted and persisted
+
+- `RdcFitResult` now carries `RdcUncertainty`.
+- `FrameEnvelope` now persists that uncertainty blob so it survives serialization and can be reused by later frame-to-frame logic.
+- `evaluatePredictionSigma(...)` is available in C++ for per-frequency posterior sigma queries.
+
+Implementation detail: the stored factor is the Cholesky factor of the final IRLS-weighted normal system, plus `noiseVariance = RSS / (n_eff - df)`.
+
+### 2. Virtual-point weighting is uncertainty-aware
+
+Cross-frame gap-fill points no longer all inherit the same fixed weight. When the previous frame has valid uncertainty, each virtual support point is downweighted by `1 / (1 + k * sigma(f))`, so stale or weakly constrained regions are trusted less than stable ones.
+
+### 3. True Envelope switching is quality-based
+
+The old `points.size() > threshold` switch was replaced with a gate that looks at:
+
+- observed Bark-bin density,
+- residual-energy dominance,
+- RDC prediction sigma.
+
+Dense but unreliable or residual-dominant frames now stay on RDC, while dense, well-constrained frames still promote to True Envelope.
+
+### 4. Temporal smoothing now survives adaptive per-frame fits
+
+`SpectralEnvelopeSmoothing.cpp` no longer requires exact equality of RDC metadata such as order or regularization. When compatible frames differ in fit settings, smoothing resamples both envelopes onto a common grid and blends there.
+
+This keeps temporal smoothing usable once BIC/GCV or estimator presets change frame-to-frame fit metadata.
+
+### 5. Residual bands now feed the estimator itself
+
+`EnvelopeFrameInput` now accepts residual-band support points, and the RDC fit builder can fuse them as low-weight auxiliary observations. The plugin preview path now forwards ATS critical-band energy into that frame input, so sparse/noisy/percussive material is no longer forced to rely on partials alone.
+
+### 6. Workspace estimator presets now affect runtime behavior
+
+The workspace preset combo is no longer display-only:
+
+- selection is stored in processor state,
+- the overlay / preview estimator is built from the selected preset at runtime,
+- preset-specific RDC / LPC / True Envelope configurations now drive the preview path instead of a hardcoded Bark order-12 RDC.
+
+### Verification
+
+- `cmake --build build --target regularized_cepstrum_test envelope_smoothing_test spectral_envelope_improvements_test spectral_envelope_estimator_test AtsResynth`
+- `./build/tests/regularized_cepstrum_test`
+- `./build/tests/envelope_smoothing_test`
+- `./build/tests/spectral_envelope_improvements_test`
+- `./build/tests/spectral_envelope_estimator_test`

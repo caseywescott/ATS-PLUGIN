@@ -3,6 +3,7 @@
 #include "FrequencyWarp.h"
 #include "TrueEnvelope.h"
 
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -240,6 +241,21 @@ void choleskyForwardBack(const std::vector<double>& lower,
         for (std::size_t k = ii + 1; k < n; ++k)
             sum -= lower[k * n + ii] * solution[k];
         solution[ii] = sum / lower[ii * n + ii];
+    }
+}
+
+void choleskyForwardSolve(const std::vector<double>& lower,
+                         const std::size_t n,
+                         const std::vector<double>& rhs,
+                         std::vector<double>& solution)
+{
+    solution.assign(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        double sum = rhs[i];
+        for (std::size_t k = 0; k < i; ++k)
+            sum -= lower[i * n + k] * solution[k];
+        solution[i] = sum / lower[i * n + i];
     }
 }
 
@@ -534,11 +550,14 @@ double computeAtsPartialWeight(const EnvelopePartialPoint& partial,
 bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
                                    const AtsPartialWeightOptions& options,
                                    std::vector<RdcFitPoint>& out,
-                                   EnvelopeDiagnostics* diagnostics)
+                                   EnvelopeDiagnostics* diagnostics,
+                                   RdcFitPointSummary* summary)
 {
     out.clear();
     if (diagnostics)
         *diagnostics = {};
+    if (summary)
+        *summary = {};
 
     // Disable SMR contribution when all SMR values are zero — applying the
     // 0.25× downweight equally across all partials provides no discrimination.
@@ -577,6 +596,95 @@ bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
         }
 
         out.push_back({ partial.frequencyHz, amplitudeToDb(amplitude, effectiveOptions.amplitudeFloor), weight });
+        if (summary)
+        {
+            ++summary->partialPointCount;
+            summary->partialWeightSum += weight;
+        }
+    }
+
+    if (effectiveOptions.useResidualSupport && !frame.residualBands.empty())
+    {
+        struct ResidualCandidate
+        {
+            RdcFitPoint point;
+            double score = 0.0;
+        };
+
+        std::vector<ResidualCandidate> candidates;
+        candidates.reserve(frame.residualBands.size());
+
+        const double amplitudeSpan = std::max(1.0e-9,
+                                              effectiveOptions.maxAmplitudeDb - effectiveOptions.minAmplitudeDb);
+        double partialReferenceWeight = 0.25;
+        if (!out.empty())
+        {
+            double totalWeight = 0.0;
+            for (const auto& point : out)
+                totalWeight += point.weight;
+            partialReferenceWeight = totalWeight / static_cast<double>(out.size());
+        }
+
+        for (const auto& band : frame.residualBands)
+        {
+            if (!std::isfinite(band.frequencyHz) || band.frequencyHz <= 0.0 ||
+                !std::isfinite(band.energy) || band.energy < 0.0)
+            {
+                continue;
+            }
+
+            double amplitude = std::sqrt(std::max(0.0, band.energy));
+            if (amplitude < effectiveOptions.residualEnergyFloor)
+            {
+                amplitude = effectiveOptions.residualEnergyFloor;
+                if (diagnostics)
+                {
+                    ++diagnostics->clippedOrFlooredCount;
+                    diagnostics->warningFlags |= EnvelopeWarningAmplitudeFloor;
+                }
+            }
+
+            const double amplitudeDb = amplitudeToDb(amplitude, effectiveOptions.amplitudeFloor);
+            const double amplitudeNorm = std::clamp(
+                (amplitudeDb - effectiveOptions.minAmplitudeDb) / amplitudeSpan,
+                0.0,
+                1.0);
+            const double confidence = std::clamp(band.confidence, 0.0, 1.0);
+            const double weightScale = band.orphanBand
+                ? effectiveOptions.orphanResidualWeightScale
+                : effectiveOptions.residualWeightScale;
+            const double weight = partialReferenceWeight
+                                  * weightScale
+                                  * std::max(0.1, amplitudeNorm)
+                                  * std::max(0.25, confidence);
+            if (!std::isfinite(weight) || weight <= 0.0)
+                continue;
+
+            ResidualCandidate candidate;
+            candidate.point.frequencyHz = band.frequencyHz;
+            candidate.point.logAmplitudeDb = amplitudeDb;
+            candidate.point.weight = std::max(1.0e-6, weight);
+            candidate.score = amplitude * confidence * weightScale;
+            candidates.push_back(std::move(candidate));
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+            return a.score > b.score;
+        });
+
+        const int maxResidualPoints = std::max(0, effectiveOptions.residualMaxPointCount);
+        const int limit = maxResidualPoints > 0
+            ? std::min<int>(maxResidualPoints, static_cast<int>(candidates.size()))
+            : static_cast<int>(candidates.size());
+        for (int i = 0; i < limit; ++i)
+        {
+            out.push_back(candidates[static_cast<std::size_t>(i)].point);
+            if (summary)
+            {
+                ++summary->residualPointCount;
+                summary->residualWeightSum += candidates[static_cast<std::size_t>(i)].point.weight;
+            }
+        }
     }
 
     if (diagnostics && diagnostics->clippedOrFlooredCount > 0)
@@ -672,7 +780,7 @@ bool shouldReusePreviousFrame(const FrameEnvelope& previousEnvelope,
                               const EnvelopeFrameInput& frame)
 {
     return hasPreviousEnvelope &&
-           previousEnvelope.storage != EnvelopeValueStorage::Samples &&
+           !previousEnvelope.values.empty() &&
            previousSourceModelId == frame.sourceModelId &&
            frame.frameIndex == previousFrameIndex + 1;
 }
@@ -689,6 +797,8 @@ void appendCrossFrameVirtualPoints(const FrameEnvelope& previousEnvelope,
                                    const double weightScale,
                                    const double minGap,
                                    const int maxCount,
+                                   const bool useUncertaintyWeighting,
+                                   const double uncertaintyGain,
                                    std::vector<RdcFitPoint>& points)
 {
     if (points.empty() || maxCount <= 0 || weightScale <= 0.0)
@@ -763,12 +873,52 @@ void appendCrossFrameVirtualPoints(const FrameEnvelope& previousEnvelope,
         RdcFitPoint virt;
         virt.frequencyHz = freqHz;
         virt.logAmplitudeDb = valueDb;
-        virt.weight = std::max(1.0e-6, baseWeight);
+        double adaptiveWeight = baseWeight;
+        if (useUncertaintyWeighting && previousEnvelope.uncertainty.valid)
+        {
+            bool sigmaOk = false;
+            const double sigma = evaluatePredictionSigma(previousEnvelope, freqHz, &sigmaOk);
+            if (sigmaOk && std::isfinite(sigma) && sigma >= 0.0)
+                adaptiveWeight /= (1.0 + std::max(0.0, uncertaintyGain) * sigma);
+        }
+        virt.weight = std::max(1.0e-6, adaptiveWeight);
         virt.isVirtual = true;
         points.push_back(virt);
         takenPositions.push_back(candidate.position);
         std::sort(takenPositions.begin(), takenPositions.end());
     }
+}
+
+struct RdcSolveDetails
+{
+    std::vector<double> normalMatrix;
+    std::vector<double> choleskyFactor;
+    double weightedResidualSumSquares = 0.0;
+    double effectiveSampleSize = 0.0;
+    double effectiveDegreesOfFreedom = 0.0;
+};
+
+double observedPointDensity(const std::vector<RdcFitPoint>& points,
+                            const EnvelopeAxisSpec& axis)
+{
+    const auto positions = normalizedPositionsForPoints(points, barkPenaltyAxisFor(axis));
+    if (positions.empty())
+        return 0.0;
+
+    constexpr int kBins = 24;
+    std::array<bool, kBins> occupied {};
+    for (const double position : positions)
+    {
+        const int bin = std::clamp(static_cast<int>(std::floor(position * static_cast<double>(kBins))),
+                                   0,
+                                   kBins - 1);
+        occupied[static_cast<std::size_t>(bin)] = true;
+    }
+
+    int count = 0;
+    for (const bool filled : occupied)
+        count += filled ? 1 : 0;
+    return static_cast<double>(count) / static_cast<double>(kBins);
 }
 
 bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
@@ -777,7 +927,8 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
                           const double regularization,
                           std::vector<double>& coefficients,
                           EnvelopeDiagnostics& diagnostics,
-                          std::string& errorMessage)
+                          std::string& errorMessage,
+                          RdcSolveDetails* solveDetails = nullptr)
 {
     const std::size_t n = static_cast<std::size_t>(order + 1);
 
@@ -825,6 +976,12 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
     // Pre-allocate normal-equation buffers reused each IRLS iteration.
     std::vector<double> matrix(n * n, 0.0);
     std::vector<double> rhs(n, 0.0);
+    std::vector<double> lower;
+    std::vector<double> finalNormalMatrix;
+    std::vector<double> finalLower;
+    double finalEffectiveResidualSumSquares = 0.0;
+    double finalEffectiveWeightSum = 0.0;
+    double finalEffectiveWeightSumSquares = 0.0;
 
     // At least one pass (iter 0 = standard L2); subsequent passes apply Huber.
     const int maxIter = std::max(1, options.irlsMaxIterations);
@@ -836,11 +993,13 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
         std::fill(matrix.begin(), matrix.end(), 0.0);
         std::fill(rhs.begin(), rhs.end(), 0.0);
         double weightSum = 0.0;
+        double weightSumSquares = 0.0;
 
         for (const auto& cp : cached)
         {
             const double w = cp.baseWeight * cp.irlsWeight;
             weightSum += w;
+            weightSumSquares += w * w;
             for (std::size_t row = 0; row < n; ++row)
             {
                 const double wb = w * cp.basis[row];
@@ -856,11 +1015,15 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
             return false;
         }
 
+        std::vector<double> normalMatrix = matrix;
         // Mirror lower triangle to upper and add regularization on diagonal.
         for (std::size_t row = 0; row < n; ++row)
         {
             for (std::size_t col = 0; col < row; ++col)
+            {
+                normalMatrix[col * n + row] = normalMatrix[row * n + col];
                 matrix[col * n + row] = matrix[row * n + col];
+            }
             matrix[row * n + row] += std::max(0.0, options.ridge);
         }
 
@@ -871,14 +1034,16 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
                 matrix[i] += lambda * penaltyMatrix[i];
         }
 
-        if (!solveSymmetricPositiveDefinite(matrix, rhs, coefficients, pivotRatio))
+        if (!choleskyDecompose(matrix, n, lower, pivotRatio))
         {
             errorMessage = "cepstrum normal equations were not positive definite";
             return false;
         }
+        choleskyForwardBack(lower, n, rhs, coefficients);
 
         // Compute residuals for diagnostics and (if not the last iter) IRLS reweighting.
         double wSqErrSum = 0.0, wSum = 0.0;
+        double effectiveSqErrSum = 0.0;
         std::vector<double> absResiduals;
         absResiduals.reserve(cached.size());
         for (const auto& cp : cached)
@@ -892,10 +1057,16 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
             absResiduals.push_back(std::abs(r));
             wSqErrSum += cp.baseWeight * r * r;
             wSum += cp.baseWeight;
+            effectiveSqErrSum += (cp.baseWeight * cp.irlsWeight) * r * r;
         }
 
         diagnostics.weightedError = wSum > 0.0 ? std::sqrt(wSqErrSum / wSum) : 0.0;
         diagnostics.conditionEstimate = pivotRatio * pivotRatio;
+        finalNormalMatrix = std::move(normalMatrix);
+        finalLower = lower;
+        finalEffectiveResidualSumSquares = effectiveSqErrSum;
+        finalEffectiveWeightSum = weightSum;
+        finalEffectiveWeightSumSquares = weightSumSquares;
 
         if (iter == maxIter - 1 || absResiduals.empty())
             break;
@@ -917,7 +1088,47 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
         }
     }
 
+    if (solveDetails != nullptr)
+    {
+        solveDetails->normalMatrix = std::move(finalNormalMatrix);
+        solveDetails->choleskyFactor = std::move(finalLower);
+        solveDetails->weightedResidualSumSquares = finalEffectiveResidualSumSquares;
+        solveDetails->effectiveSampleSize = finalEffectiveWeightSumSquares > 0.0
+            ? std::max(1.0, (finalEffectiveWeightSum * finalEffectiveWeightSum) / finalEffectiveWeightSumSquares)
+            : std::max(1.0, static_cast<double>(cached.size()));
+        if (!solveDetails->normalMatrix.empty() && !solveDetails->choleskyFactor.empty())
+        {
+            solveDetails->effectiveDegreesOfFreedom = std::clamp(
+                computeHatTrace(solveDetails->choleskyFactor, solveDetails->normalMatrix, n),
+                0.0,
+                solveDetails->effectiveSampleSize * 0.99);
+        }
+    }
+
     return true;
+}
+
+RdcUncertainty buildUncertaintyFromSolveDetails(const RdcSolveDetails& solveDetails)
+{
+    RdcUncertainty uncertainty;
+    if (solveDetails.choleskyFactor.empty() ||
+        solveDetails.effectiveSampleSize <= 0.0 ||
+        solveDetails.effectiveDegreesOfFreedom >= solveDetails.effectiveSampleSize)
+    {
+        return uncertainty;
+    }
+
+    const double denom = std::max(1.0e-12,
+                                  solveDetails.effectiveSampleSize - solveDetails.effectiveDegreesOfFreedom);
+    uncertainty.noiseVariance = std::max(0.0, solveDetails.weightedResidualSumSquares / denom);
+    uncertainty.effectiveDegreesOfFreedom = solveDetails.effectiveDegreesOfFreedom;
+    uncertainty.coefficientCount = static_cast<int>(std::sqrt(static_cast<double>(solveDetails.choleskyFactor.size())));
+    uncertainty.choleskyFactor = solveDetails.choleskyFactor;
+    uncertainty.valid = std::isfinite(uncertainty.noiseVariance) &&
+                        std::isfinite(uncertainty.effectiveDegreesOfFreedom) &&
+                        uncertainty.noiseVariance >= 0.0 &&
+                        !uncertainty.choleskyFactor.empty();
+    return uncertainty;
 }
 
 void finishFitResult(RdcFitResult& result,
@@ -934,6 +1145,7 @@ void finishFitResult(RdcFitResult& result,
     result.envelope.storage = EnvelopeValueStorage::Coefficients;
     result.envelope.values = std::move(coefficients);
     result.envelope.diagnostics = result.diagnostics;
+    result.envelope.uncertainty = result.uncertainty;
     result.ok = true;
 }
 
@@ -953,6 +1165,7 @@ void finishConstantFallback(RdcFitResult& result,
     result.envelope.storage = EnvelopeValueStorage::Samples;
     result.envelope.values = { valueDb };
     result.envelope.diagnostics = result.diagnostics;
+    result.envelope.uncertainty = {};
     result.ok = true;
 }
 
@@ -1081,6 +1294,7 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
 
     std::vector<double> coefficients;
     EnvelopeDiagnostics attemptDiagnostics;
+    RdcSolveDetails attemptSolveDetails;
     std::string attemptError;
     bool solved = solveCepstrumAttempt(usable,
                                        options,
@@ -1088,7 +1302,8 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                        effectiveRegularization,
                                        coefficients,
                                        attemptDiagnostics,
-                                       attemptError);
+                                       attemptError,
+                                       &attemptSolveDetails);
 
     const bool retryForCondition = solved &&
         attemptDiagnostics.conditionEstimate > options.illConditionedThreshold &&
@@ -1102,6 +1317,7 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
         });
 
         EnvelopeDiagnostics retryDiagnostics;
+        RdcSolveDetails retrySolveDetails;
         std::vector<double> retryCoefficients;
         std::string retryError;
         if (options.retryIllConditionedWithRegularization &&
@@ -1111,10 +1327,12 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                  retryRegularization,
                                  retryCoefficients,
                                  retryDiagnostics,
-                                 retryError))
+                                 retryError,
+                                 &retrySolveDetails))
         {
             coefficients = std::move(retryCoefficients);
             attemptDiagnostics = retryDiagnostics;
+            attemptSolveDetails = std::move(retrySolveDetails);
             effectiveRegularization = retryRegularization;
             result.diagnostics.fallbackReason = EnvelopeFallbackReason::IllConditioned;
             result.diagnostics.addWarning(EnvelopeWarningFallback,
@@ -1153,6 +1371,7 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                        existingWarnings.end());
     if (existingFallback != EnvelopeFallbackReason::None)
         result.diagnostics.fallbackReason = existingFallback;
+    result.uncertainty = buildUncertaintyFromSolveDetails(attemptSolveDetails);
 
     finishFitResult(result, options, effectiveOrder, effectiveRegularization, std::move(coefficients));
     return true;
@@ -1208,6 +1427,59 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
     const double value = evaluateCoefficients(envelope.values, envelope.frequencyAxis, frequencyHz, evalOk);
     setOk(ok, evalOk);
     return evalOk ? std::max(value, kPhysicalFloorDb) : value;
+}
+
+double evaluatePredictionSigma(const RdcUncertainty& uncertainty,
+                               const EnvelopeAxisSpec& axis,
+                               const int order,
+                               const double frequencyHz,
+                               bool* ok)
+{
+    if (!uncertainty.valid || uncertainty.noiseVariance < 0.0 ||
+        uncertainty.choleskyFactor.empty() || order < 0)
+    {
+        setOk(ok, false);
+        return 0.0;
+    }
+
+    const std::size_t n = uncertainty.coefficientCount > 0
+        ? static_cast<std::size_t>(uncertainty.coefficientCount)
+        : static_cast<std::size_t>(order + 1);
+    if (uncertainty.choleskyFactor.size() != n * n)
+    {
+        setOk(ok, false);
+        return 0.0;
+    }
+
+    std::vector<double> basis(n, 0.0);
+    if (!fillBasisForFrequency(frequencyHz, axis, order, basis))
+    {
+        setOk(ok, false);
+        return 0.0;
+    }
+
+    std::vector<double> solved;
+    choleskyForwardSolve(uncertainty.choleskyFactor, n, basis, solved);
+    double varianceScale = 0.0;
+    for (const double value : solved)
+        varianceScale += value * value;
+
+    const double variance = std::max(0.0, uncertainty.noiseVariance * varianceScale);
+    setOk(ok, std::isfinite(variance));
+    return variance > 0.0 ? std::sqrt(variance) : 0.0;
+}
+
+double evaluatePredictionSigma(const FrameEnvelope& envelope,
+                               const double frequencyHz,
+                               bool* ok)
+{
+    return evaluatePredictionSigma(envelope.uncertainty,
+                                   envelope.frequencyAxis,
+                                   envelope.uncertainty.coefficientCount > 0
+                                       ? envelope.uncertainty.coefficientCount - 1
+                                       : envelope.envelopeOrder,
+                                   frequencyHz,
+                                   ok);
 }
 
 RegularizedCepstrumEnvelopeEstimator::RegularizedCepstrumEnvelopeEstimator(RegularizedCepstrumEstimatorOptions nextOptions)
@@ -1274,8 +1546,9 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
     }
 
     EnvelopeDiagnostics pointDiagnostics;
+    RdcFitPointSummary pointSummary;
     std::vector<RdcFitPoint> realPoints;
-    if (!buildRdcFitPointsFromPartials(frame, options.weights, realPoints, &pointDiagnostics))
+    if (!buildRdcFitPointsFromPartials(frame, options.weights, realPoints, &pointDiagnostics, &pointSummary))
     {
         if (errorMessage)
             *errorMessage = "no usable weighted partial points";
@@ -1330,40 +1603,10 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                           virtualWeightScale,
                                           std::max(0.0, options.crossFrameVirtualPointMinGap),
                                           maxCount,
+                                          options.crossFrameUncertaintyWeighting,
+                                          options.crossFrameUncertaintyGain,
                                           points);
         }
-    }
-
-    // Auto-switch to True Envelope for dense frames — it is more accurate
-    // in the high-partial-count regime and is already implemented.
-    if (options.autoSwitchToTrueEnvelope &&
-        static_cast<int>(points.size()) > options.autoSwitchThreshold)
-    {
-        TrueEnvelopeEstimatorOptions teOpts;
-        teOpts.frequencyAxis = options.fit.frequencyAxis;
-        teOpts.weights = options.weights;
-        TrueEnvelopeFitResult teResult;
-        if (fitTrueEnvelopeFromPoints(points, teOpts, teResult) && teResult.ok)
-        {
-            out = std::move(teResult.envelope);
-            out.estimatorId = id();
-            out.estimatorVersion = version();
-            out.sourceModelId = frame.sourceModelId;
-            out.frameIndex = frame.frameIndex;
-            out.sampleRate = frame.sampleRate > 0.0 ? frame.sampleRate : context.sampleRate;
-            out.diagnostics.clippedOrFlooredCount += pointDiagnostics.clippedOrFlooredCount;
-            out.diagnostics.warningFlags |= pointDiagnostics.warningFlags;
-            out.diagnostics.warnings.insert(out.diagnostics.warnings.end(),
-                                            pointDiagnostics.warnings.begin(),
-                                            pointDiagnostics.warnings.end());
-            lastDiagnostics = out.diagnostics;
-            previousEnvelope = out;
-            previousSourceModelId = frame.sourceModelId;
-            previousFrameIndex = frame.frameIndex;
-            hasPreviousEnvelope = true;
-            return true;
-        }
-        // Fall through to RDC if True Envelope fails
     }
 
     // Density-based BIC minimum order: for frames with many fit points (voice,
@@ -1394,11 +1637,88 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
     out.frameIndex = frame.frameIndex;
     out.sampleRate = frame.sampleRate > 0.0 ? frame.sampleRate : context.sampleRate;
 
+    double partialEnergy = 0.0;
+    for (const auto& partial : frame.partials)
+    {
+        if (!partial.selected || !std::isfinite(partial.amplitude) || partial.amplitude <= 0.0)
+            continue;
+        partialEnergy += partial.amplitude * partial.amplitude;
+    }
+    double residualEnergy = 0.0;
+    for (const auto& residual : frame.residualBands)
+    {
+        if (!std::isfinite(residual.energy) || residual.energy <= 0.0)
+            continue;
+        residualEnergy += residual.energy;
+    }
+    const double residualDominance = (partialEnergy + residualEnergy) > 0.0
+        ? residualEnergy / (partialEnergy + residualEnergy)
+        : 0.0;
+    const double density = observedPointDensity(realPoints, fitOptions.frequencyAxis);
+    double meanPredictionSigma = 0.0;
+    int sigmaCount = 0;
+    if (fit.uncertainty.valid)
+    {
+        for (const auto& point : realPoints)
+        {
+            bool sigmaOk = false;
+            const double sigma = evaluatePredictionSigma(fit.uncertainty,
+                                                         fitOptions.frequencyAxis,
+                                                         fit.effectiveOrder,
+                                                         point.frequencyHz,
+                                                         &sigmaOk);
+            if (!sigmaOk || !std::isfinite(sigma))
+                continue;
+            meanPredictionSigma += sigma;
+            ++sigmaCount;
+        }
+    }
+    meanPredictionSigma = sigmaCount > 0
+        ? meanPredictionSigma / static_cast<double>(sigmaCount)
+        : 0.0;
+
     out.diagnostics.clippedOrFlooredCount += pointDiagnostics.clippedOrFlooredCount;
     out.diagnostics.warningFlags |= pointDiagnostics.warningFlags;
     out.diagnostics.warnings.insert(out.diagnostics.warnings.end(),
                                     pointDiagnostics.warnings.begin(),
                                     pointDiagnostics.warnings.end());
+
+    const bool switchEligible = options.autoSwitchToTrueEnvelope &&
+                                pointSummary.partialPointCount >= std::max(2, options.trueEnvelopeMinFitPoints) &&
+                                density >= std::max(0.0, options.trueEnvelopeMinObservedDensity) &&
+                                residualDominance <= std::max(0.0, options.trueEnvelopeMaxResidualDominance) &&
+                                (!fit.uncertainty.valid || meanPredictionSigma <= std::max(0.0, options.trueEnvelopeSigmaThreshold));
+    if (switchEligible)
+    {
+        TrueEnvelopeEstimatorOptions teOpts;
+        teOpts.frequencyAxis = options.fit.frequencyAxis;
+        teOpts.weights = options.weights;
+        TrueEnvelopeFitResult teResult;
+        if (fitTrueEnvelopeFromPoints(points, teOpts, teResult) && teResult.ok)
+        {
+            out = std::move(teResult.envelope);
+            out.estimatorId = id();
+            out.estimatorVersion = version();
+            out.sourceModelId = frame.sourceModelId;
+            out.frameIndex = frame.frameIndex;
+            out.sampleRate = frame.sampleRate > 0.0 ? frame.sampleRate : context.sampleRate;
+            out.uncertainty = fit.uncertainty;
+            out.diagnostics.clippedOrFlooredCount += pointDiagnostics.clippedOrFlooredCount;
+            out.diagnostics.warningFlags |= pointDiagnostics.warningFlags;
+            out.diagnostics.warnings.insert(out.diagnostics.warnings.end(),
+                                            pointDiagnostics.warnings.begin(),
+                                            pointDiagnostics.warnings.end());
+        }
+    }
+
+    if (options.adaptiveSmoothingFromUncertainty && fit.uncertainty.valid)
+    {
+        out.smoothingAmount = std::clamp(
+            std::sqrt(std::max(0.0, fit.uncertainty.noiseVariance)) * options.smoothingUncertaintyScale,
+            0.0,
+            1.0);
+    }
+
     lastDiagnostics = out.diagnostics;
     previousEnvelope = out;
     previousSourceModelId = frame.sourceModelId;

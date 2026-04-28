@@ -87,6 +87,9 @@ SpectralEnvelopeWorkspacePanel::SpectralEnvelopeWorkspacePanel(AtsAudioProcessor
     estimatorPresetBox.setSelectedId(1, juce::dontSendNotification);
     estimatorPresetBox.setHelpText(
         "Estimator preset determines the envelope fitting algorithm applied to source and target models.");
+    estimatorPresetBox.onChange = [this] {
+        processor.setEnvelopeOverlayEstimatorPreset(estimatorPresetBox.getSelectedId());
+    };
     addAndMakeVisible(estimatorPresetLabel);
     addAndMakeVisible(estimatorPresetBox);
 
@@ -166,6 +169,9 @@ void SpectralEnvelopeWorkspacePanel::refreshModelSlots()
 
     sourceIdLabel.setText(srcId.isEmpty() ? "(none)" : srcId, juce::dontSendNotification);
     targetIdLabel.setText(tgtId.isEmpty() ? "(none)" : tgtId, juce::dontSendNotification);
+    const int presetId = processor.getEnvelopeOverlayEstimatorPreset();
+    if (presetId > 0 && estimatorPresetBox.getSelectedId() != presetId)
+        estimatorPresetBox.setSelectedId(presetId, juce::dontSendNotification);
 
     const bool hasBoth = srcId.isNotEmpty() && tgtId.isNotEmpty();
     abStatusLabel.setText(

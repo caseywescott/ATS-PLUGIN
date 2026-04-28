@@ -118,8 +118,14 @@ add_test(NAME f0_adaptive_envelope_test COMMAND f0_adaptive_envelope_test)
 
 add_executable(envelope_smoothing_test
   envelope_smoothing_test.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/F0AdaptiveEnvelope.cpp
+  ../src/core/LpcEnvelope.cpp
+  ../src/core/RegularizedCepstrum.cpp
   ../src/core/SpectralEnvelope.cpp
-  ../src/core/SpectralEnvelopeSmoothing.cpp)
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/SpectralEnvelopeSmoothing.cpp
+  ../src/core/TrueEnvelope.cpp)
 target_include_directories(envelope_smoothing_test PRIVATE ../src/core)
 target_compile_features(envelope_smoothing_test PRIVATE cxx_std_17)
 add_test(NAME envelope_smoothing_test COMMAND envelope_smoothing_test)

@@ -91,6 +91,8 @@ public:
 
     /** Build a transfer recipe from the current APVTS envelope transfer params. */
     ats::SpectralEnvelopeTransferRecipe readEnvelopeTransferRecipeFromApvts() const;
+    void setEnvelopeOverlayEstimatorPreset(int presetId);
+    int getEnvelopeOverlayEstimatorPreset() const;
 
     /** Source and target model IDs for the envelope transfer workspace (UI-set, non-automatable). */
     void setEnvelopeTransferSourceId(const juce::String& id);
@@ -200,6 +202,7 @@ private:
     mutable juce::SpinLock envelopeTransferIdLock;
     juce::String envelopeTransferSourceId;
     juce::String envelopeTransferTargetId;
+    std::atomic<int> envelopeOverlayEstimatorPreset { 1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessor)
 };

@@ -58,6 +58,7 @@ struct RdcFitResult
     bool ok = false;
     FrameEnvelope envelope;
     EnvelopeDiagnostics diagnostics;
+    RdcUncertainty uncertainty;
     int effectiveOrder = 0;
     std::string errorMessage;
     // GCV fields — non-zero only when RdcFitOptions::useGcvLambda = true.
@@ -78,6 +79,11 @@ struct AtsPartialWeightOptions
     bool useAmplitude = true;
     bool useConfidence = true;
     bool useSelection = true;
+    bool useResidualSupport = true;
+    double residualWeightScale = 0.1;
+    double orphanResidualWeightScale = 0.05;
+    int residualMaxPointCount = 12;
+    double residualEnergyFloor = 1.0e-20;
 };
 
 struct RegularizedCepstrumEstimatorOptions
@@ -85,11 +91,17 @@ struct RegularizedCepstrumEstimatorOptions
     RdcFitOptions fit;
     AtsPartialWeightOptions weights;
     bool autoSwitchToTrueEnvelope = true;
-    int autoSwitchThreshold = 40;
+    int autoSwitchThreshold = 40; // legacy dense-frame hint; quality metrics drive the final switch
+    int trueEnvelopeMinFitPoints = 12;
+    double trueEnvelopeSigmaThreshold = 2.5;
+    double trueEnvelopeMinObservedDensity = 0.35;
+    double trueEnvelopeMaxResidualDominance = 0.45;
     bool enableCrossFrameVirtualPoints = true;
     double crossFrameVirtualPointWeightScale = 0.05;
     double crossFrameVirtualPointMinGap = 0.1;
     int crossFrameVirtualPointMaxCount = 6;
+    bool crossFrameUncertaintyWeighting = true;
+    double crossFrameUncertaintyGain = 2.0;
     // Gate virtual points when real partials have shifted by more than this many dB
     // on average relative to the previous frame's envelope.  On onset/decay frames
     // where spectral content changes rapidly the previous-frame support is stale and
@@ -99,6 +111,16 @@ struct RegularizedCepstrumEstimatorOptions
     // ceil(fitPointCount * bicMinOrderPartialDensity).  Prevents order collapse
     // to 1-3 on dense frames that carry meaningful formant or timbral structure.
     double bicMinOrderPartialDensity = 0.15;
+    bool adaptiveSmoothingFromUncertainty = false;
+    double smoothingUncertaintyScale = 0.1;
+};
+
+struct RdcFitPointSummary
+{
+    int partialPointCount = 0;
+    int residualPointCount = 0;
+    double partialWeightSum = 0.0;
+    double residualWeightSum = 0.0;
 };
 
 [[nodiscard]] const char* toString(CepstrumPenalty penalty);
@@ -111,7 +133,8 @@ struct RegularizedCepstrumEstimatorOptions
 bool buildRdcFitPointsFromPartials(const EnvelopeFrameInput& frame,
                                    const AtsPartialWeightOptions& options,
                                    std::vector<RdcFitPoint>& out,
-                                   EnvelopeDiagnostics* diagnostics = nullptr);
+                                   EnvelopeDiagnostics* diagnostics = nullptr,
+                                   RdcFitPointSummary* summary = nullptr);
 
 bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
                                     const RdcFitOptions& options,
@@ -120,6 +143,14 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
 [[nodiscard]] double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
                                                          double frequencyHz,
                                                          bool* ok = nullptr);
+[[nodiscard]] double evaluatePredictionSigma(const RdcUncertainty& uncertainty,
+                                             const EnvelopeAxisSpec& axis,
+                                             int order,
+                                             double frequencyHz,
+                                             bool* ok = nullptr);
+[[nodiscard]] double evaluatePredictionSigma(const FrameEnvelope& envelope,
+                                             double frequencyHz,
+                                             bool* ok = nullptr);
 
 class RegularizedCepstrumEnvelopeEstimator final : public SpectralEnvelopeEstimator
 {

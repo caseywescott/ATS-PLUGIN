@@ -67,6 +67,15 @@ struct EnvelopeDiagnostics
     void addWarning(EnvelopeWarningFlags flag, std::string message);
 };
 
+struct RdcUncertainty
+{
+    double noiseVariance = 0.0;
+    double effectiveDegreesOfFreedom = 0.0;
+    int coefficientCount = 0;
+    std::vector<double> choleskyFactor;
+    bool valid = false;
+};
+
 struct FrameEnvelope
 {
     std::string estimatorId;
@@ -81,6 +90,7 @@ struct FrameEnvelope
     EnvelopeValueStorage storage = EnvelopeValueStorage::Coefficients;
     std::vector<double> values;
     EnvelopeDiagnostics diagnostics;
+    RdcUncertainty uncertainty;
     std::uint64_t smoothingGroup = 0;
     double smoothingAmount = 0.0;
 

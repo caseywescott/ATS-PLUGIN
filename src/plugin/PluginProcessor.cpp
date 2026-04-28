@@ -11,8 +11,12 @@
 #include <thread>
 
 #include "AtsMathExpr.h"
+#include "FrequencyWarp.h"
+#include "LpcEnvelope.h"
 #include "RegularizedCepstrum.h"
 #include "PluginEditor.h"
+#include "SpectralEnvelopeEstimator.h"
+#include "TrueEnvelope.h"
 
 #include "ResampleLinear.h"
 
@@ -24,7 +28,7 @@ extern "C" {
 
 namespace
 {
-constexpr int kStateVersion = 5;
+constexpr int kStateVersion = 6;
 constexpr int kMinReadableStateVersion = 2;
 
 void freeResidual(double*** res)
@@ -37,6 +41,122 @@ void freeResidual(double*** res)
         std::free((*res)[1]);
     std::free(*res);
     *res = nullptr;
+}
+
+struct OverlayEstimatorPlan
+{
+    std::unique_ptr<ats::SpectralEnvelopeEstimator> estimator;
+    ats::EnvelopeAxisSpec axis;
+    int maxOrder = 16;
+};
+
+double residualBandCenterFrequency(const int bandIndex, const double sampleRate)
+{
+    ats::EnvelopeAxisSpec barkAxis;
+    barkAxis.type = ats::EnvelopeFrequencyAxis::Bark;
+    barkAxis.minFrequencyHz = 20.0;
+    barkAxis.maxFrequencyHz = sampleRate > 0.0 ? sampleRate * 0.5 : 22050.0;
+    barkAxis.sampleRate = sampleRate;
+
+    const double position = (static_cast<double>(bandIndex) + 0.5) / static_cast<double>(ATSA_CRITICAL_BANDS);
+    bool ok = false;
+    const double frequencyHz = ats::frequencyForNormalizedPosition(position, barkAxis, &ok);
+    return ok ? frequencyHz : 0.0;
+}
+
+OverlayEstimatorPlan makeOverlayEstimatorPlan(const int presetId,
+                                              const ats::EnvelopeAxisSpec& baseAxis)
+{
+    OverlayEstimatorPlan plan;
+    plan.axis = baseAxis;
+
+    switch (presetId)
+    {
+        case 2:
+        {
+            ats::RegularizedCepstrumEstimatorOptions opts;
+            opts.fit.frequencyAxis = baseAxis;
+            opts.fit.frequencyAxis.type = ats::EnvelopeFrequencyAxis::Erb;
+            opts.fit.order = 24;
+            opts.fit.regularization = 0.02;
+            opts.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
+            opts.weights.useSmr = true;
+            plan.axis = opts.fit.frequencyAxis;
+            plan.maxOrder = 24;
+            plan.estimator = std::make_unique<ats::RegularizedCepstrumEnvelopeEstimator>(opts);
+            break;
+        }
+        case 3:
+        {
+            ats::RegularizedCepstrumEstimatorOptions opts;
+            opts.fit.frequencyAxis = baseAxis;
+            opts.fit.frequencyAxis.type = ats::EnvelopeFrequencyAxis::Mel;
+            opts.fit.order = 12;
+            opts.fit.regularization = 0.08;
+            opts.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
+            opts.weights.useSmr = true;
+            plan.axis = opts.fit.frequencyAxis;
+            plan.maxOrder = 16;
+            plan.estimator = std::make_unique<ats::RegularizedCepstrumEnvelopeEstimator>(opts);
+            break;
+        }
+        case 4:
+        {
+            ats::RegularizedCepstrumEstimatorOptions opts;
+            opts.fit.frequencyAxis = baseAxis;
+            opts.fit.frequencyAxis.type = ats::EnvelopeFrequencyAxis::LinearHz;
+            opts.fit.order = 20;
+            opts.fit.regularization = 0.03;
+            opts.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
+            opts.weights.useSmr = true;
+            plan.axis = opts.fit.frequencyAxis;
+            plan.maxOrder = 24;
+            plan.estimator = std::make_unique<ats::RegularizedCepstrumEnvelopeEstimator>(opts);
+            break;
+        }
+        case 5:
+        {
+            ats::LpcEnvelopeEstimatorOptions opts;
+            opts.frequencyAxis = baseAxis;
+            opts.frequencyAxis.type = ats::EnvelopeFrequencyAxis::Mel;
+            opts.order = 16;
+            opts.sampleCount = 128;
+            plan.axis = opts.frequencyAxis;
+            plan.maxOrder = 16;
+            plan.estimator = std::make_unique<ats::LpcEnvelopeEstimator>(opts);
+            break;
+        }
+        case 6:
+        {
+            ats::TrueEnvelopeEstimatorOptions opts;
+            opts.frequencyAxis = baseAxis;
+            opts.frequencyAxis.type = ats::EnvelopeFrequencyAxis::Bark;
+            opts.sampleCount = 160;
+            opts.lifterOrder = 18;
+            opts.iterations = 10;
+            plan.axis = opts.frequencyAxis;
+            plan.maxOrder = 18;
+            plan.estimator = std::make_unique<ats::TrueEnvelopeEstimator>(opts);
+            break;
+        }
+        case 1:
+        default:
+        {
+            ats::RegularizedCepstrumEstimatorOptions opts;
+            opts.fit.frequencyAxis = baseAxis;
+            opts.fit.frequencyAxis.type = ats::EnvelopeFrequencyAxis::Bark;
+            opts.fit.order = 16;
+            opts.fit.regularization = 0.05;
+            opts.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
+            opts.weights.useSmr = true;
+            plan.axis = opts.fit.frequencyAxis;
+            plan.maxOrder = 16;
+            plan.estimator = std::make_unique<ats::RegularizedCepstrumEnvelopeEstimator>(opts);
+            break;
+        }
+    }
+
+    return plan;
 }
 
 juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::SynthParams& sp)
@@ -864,6 +984,8 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
         mos.writeFloat(apvts.getRawParameterValue("envResidualMix")->load());
         mos.writeByte((juce::uint8) juce::roundToInt(apvts.getRawParameterValue("envTransientPolicy")->load()));
     }
+    if (kStateVersion >= 6)
+        mos.writeInt(envelopeOverlayEstimatorPreset.load());
 
     destData = mos.getMemoryBlock();
 }
@@ -916,6 +1038,11 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         envResidualMix = mis.readFloat();
         envTransientPolicy = (int) mis.readByte();
     }
+    int overlayEstimatorPreset = 1;
+    if (ver >= 6 && mis.getNumBytesRemaining() >= (juce::int64) sizeof(int))
+        overlayEstimatorPreset = mis.readInt();
+
+    setEnvelopeOverlayEstimatorPreset(overlayEstimatorPreset);
 
     if (auto* p = apvts.getParameter("analysisType"))
         p->setValueNotifyingHost((float) (juce::jlimit(1, 4, ap.type) - 1) / 3.0f);
@@ -1304,6 +1431,8 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
             return false;
         }
 
+        const double sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+        const double nyquist = sampleRate > 0.0 ? sampleRate * 0.5 : 22050.0;
         sourceFrameIndex = s->frames > 1 ? juce::jlimit(0, s->frames - 1, s->frames / 3) : 0;
         targetFrameIndex = s->frames > 1 ? juce::jlimit(0, s->frames - 1, (2 * s->frames) / 3) : sourceFrameIndex;
         if (s->frames > 1 && targetFrameIndex == sourceFrameIndex)
@@ -1329,13 +1458,27 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
 
             frame.sourceModelId = "active-model";
             frame.frameIndex = static_cast<std::uint64_t>(frameIndex);
-            frame.sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+            frame.sampleRate = sampleRate;
+            if (s->band_energy != nullptr)
+            {
+                for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+                {
+                    const double energy = s->band_energy[band][frameIndex];
+                    const double frequencyHz = residualBandCenterFrequency(band, sampleRate);
+                    if (!std::isfinite(energy) || energy <= 0.0 || frequencyHz <= 0.0)
+                        continue;
+
+                    ats::EnvelopeResidualBandPoint residual;
+                    residual.frequencyHz = frequencyHz;
+                    residual.energy = energy;
+                    residual.confidence = 1.0;
+                    frame.residualBands.push_back(residual);
+                }
+            }
         };
         collectFrame(sourceFrameIndex, sourceFrame);
         collectFrame(targetFrameIndex, targetFrame);
 
-        const double sampleRate = sourceFrame.sampleRate > 0.0 ? sourceFrame.sampleRate : hostSampleRate;
-        const double nyquist = sampleRate > 0.0 ? sampleRate * 0.5 : 22050.0;
         axis.type = ats::EnvelopeFrequencyAxis::LinearHz;
         axis.minFrequencyHz = 20.0;
         axis.maxFrequencyHz = juce::jlimit(200.0, nyquist, std::max(1000.0, maxFreq * 1.05));
@@ -1348,28 +1491,23 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
         return false;
     }
 
-    ats::RegularizedCepstrumEstimatorOptions estimatorOptions;
-    estimatorOptions.fit.frequencyAxis = axis;
-    estimatorOptions.fit.order = 12;
-    estimatorOptions.fit.regularization = 0.05;
-    estimatorOptions.fit.penalty = ats::CepstrumPenalty::SecondDerivative;
-    estimatorOptions.weights.useSmr = false;
-
-    ats::RegularizedCepstrumEnvelopeEstimator estimator(estimatorOptions);
+    const int presetId = juce::jlimit(1, 6, getEnvelopeOverlayEstimatorPreset());
+    auto sourcePlan = makeOverlayEstimatorPlan(presetId, axis);
+    auto targetPlan = makeOverlayEstimatorPlan(presetId, axis);
     ats::EnvelopeEstimatorContext context;
     context.sampleRate = sourceFrame.sampleRate;
-    context.frequencyAxis = axis;
-    context.maxOrder = 12;
+    context.frequencyAxis = sourcePlan.axis;
+    context.maxOrder = sourcePlan.maxOrder;
 
     std::string error;
-    if (!estimator.prepare(context, &error))
+    if (!sourcePlan.estimator || !sourcePlan.estimator->prepare(context, &error))
     {
         status = juce::String(error.c_str());
         return false;
     }
 
     ats::FrameEnvelope sourceEnvelope;
-    if (!estimator.estimate(sourceFrame, sourceEnvelope, &error))
+    if (!sourcePlan.estimator->estimate(sourceFrame, sourceEnvelope, &error))
     {
         status = juce::String(error.c_str());
         return false;
@@ -1379,9 +1517,9 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
     ats::FrameEnvelope* targetEnvelopePtr = nullptr;
     if (targetFrame.partials.size() >= 2)
     {
-        ats::RegularizedCepstrumEnvelopeEstimator targetEstimator(estimatorOptions);
-        if (targetEstimator.prepare(context, &error) &&
-            targetEstimator.estimate(targetFrame, targetEnvelope, &error))
+        if (targetPlan.estimator &&
+            targetPlan.estimator->prepare(context, &error) &&
+            targetPlan.estimator->estimate(targetFrame, targetEnvelope, &error))
         {
             targetEnvelopePtr = &targetEnvelope;
         }
@@ -1394,6 +1532,10 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
     eval.targetAxis = axis;
 
     ats::SpectralEnvelopeTransferRecipe recipe;
+    recipe.estimatorId = sourceEnvelope.estimatorId;
+    recipe.estimatorVersion = sourceEnvelope.estimatorVersion;
+    recipe.envelopeOrder = sourceEnvelope.envelopeOrder;
+    recipe.regularization = sourceEnvelope.regularization;
     recipe.partialNormalization = ats::HybridNormalizationPolicy::None;
     recipe.mapping = ats::HybridFrequencyMapping::DirectHz;
     recipe.extrapolation = ats::EnvelopeExtrapolationPolicy::Clamp;
@@ -1552,6 +1694,16 @@ ats::SpectralEnvelopeTransferRecipe AtsAudioProcessor::readEnvelopeTransferRecip
         recipe.residualPolicy = ats::HybridResidualPolicy::DecolorThenColor;
 
     return recipe;
+}
+
+void AtsAudioProcessor::setEnvelopeOverlayEstimatorPreset(const int presetId)
+{
+    envelopeOverlayEstimatorPreset.store(juce::jlimit(1, 6, presetId), std::memory_order_relaxed);
+}
+
+int AtsAudioProcessor::getEnvelopeOverlayEstimatorPreset() const
+{
+    return envelopeOverlayEstimatorPreset.load(std::memory_order_relaxed);
 }
 
 void AtsAudioProcessor::setEnvelopeTransferSourceId(const juce::String& id)

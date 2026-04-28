@@ -318,6 +318,14 @@ std::string FrameEnvelope::serialize() const
     for (std::size_t i = 0; i < diagnostics.warnings.size(); ++i)
         appendField(os, ("diag_warning_" + std::to_string(i)).c_str(), escapeString(diagnostics.warnings[i]));
 
+    appendField(os, "uncertainty_valid", uncertainty.valid ? "true" : "false");
+    appendField(os, "uncertainty_noise_variance", doubleToString(uncertainty.noiseVariance));
+    appendField(os, "uncertainty_effective_df", doubleToString(uncertainty.effectiveDegreesOfFreedom));
+    appendField(os, "uncertainty_coefficient_count", std::to_string(uncertainty.coefficientCount));
+    appendField(os, "uncertainty_cholesky_count", std::to_string(uncertainty.choleskyFactor.size()));
+    for (std::size_t i = 0; i < uncertainty.choleskyFactor.size(); ++i)
+        appendField(os, ("uncertainty_cholesky_" + std::to_string(i)).c_str(), doubleToString(uncertainty.choleskyFactor[i]));
+
     appendField(os, "smoothing_group", std::to_string(smoothingGroup));
     appendField(os, "smoothing_amount", doubleToString(smoothingAmount));
     os << "END\n";
@@ -433,6 +441,30 @@ bool FrameEnvelope::deserialize(const std::string& text, FrameEnvelope& out, std
         if (!requireField(fields, key.c_str(), value, errorMessage) || !unescapeString(value, message))
             return false;
         parsed.diagnostics.warnings.push_back(std::move(message));
+    }
+
+    if (requireField(fields, "uncertainty_valid", value, nullptr))
+    {
+        parsed.uncertainty.valid = (value == "true");
+        if (!requireField(fields, "uncertainty_noise_variance", value, errorMessage) || !parseDouble(value, parsed.uncertainty.noiseVariance))
+            return false;
+        if (!requireField(fields, "uncertainty_effective_df", value, errorMessage) || !parseDouble(value, parsed.uncertainty.effectiveDegreesOfFreedom))
+            return false;
+        if (!requireField(fields, "uncertainty_coefficient_count", value, errorMessage) || !parseSignedInt(value, parsed.uncertainty.coefficientCount))
+            return false;
+
+        std::uint64_t choleskyCount = 0;
+        if (!requireField(fields, "uncertainty_cholesky_count", value, errorMessage) || !parseInt64(value, choleskyCount))
+            return false;
+        parsed.uncertainty.choleskyFactor.reserve(static_cast<std::size_t>(choleskyCount));
+        for (std::uint64_t i = 0; i < choleskyCount; ++i)
+        {
+            const std::string key = "uncertainty_cholesky_" + std::to_string(i);
+            double sample = 0.0;
+            if (!requireField(fields, key.c_str(), value, errorMessage) || !parseDouble(value, sample))
+                return false;
+            parsed.uncertainty.choleskyFactor.push_back(sample);
+        }
     }
 
     if (!requireField(fields, "smoothing_group", value, errorMessage) || !parseInt64(value, parsed.smoothingGroup))

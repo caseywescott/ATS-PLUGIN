@@ -25,6 +25,14 @@ struct EnvelopeSpectrumPoint
     double amplitude = 0.0;
 };
 
+struct EnvelopeResidualBandPoint
+{
+    double frequencyHz = 0.0;
+    double energy = 0.0;
+    double confidence = 1.0;
+    bool orphanBand = false;
+};
+
 struct EnvelopeEstimatorContext
 {
     double sampleRate = 0.0;
@@ -39,6 +47,7 @@ struct EnvelopeFrameInput
     std::uint64_t frameIndex = 0;
     double sampleRate = 0.0;
     std::vector<EnvelopePartialPoint> partials;
+    std::vector<EnvelopeResidualBandPoint> residualBands;
     bool waveformAvailable = false;
     double fundamentalFrequencyHz = 0.0;
     double f0Confidence = 0.0;

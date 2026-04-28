@@ -92,6 +92,14 @@ int main()
         return fail("result was not marked ok");
     if (result.envelope.values.size() != 4)
         return fail("unexpected coefficient count");
+    if (!result.uncertainty.valid || result.uncertainty.coefficientCount != 4)
+        return fail("uncertainty output was not populated for a successful fit");
+    {
+        bool sigmaOk = false;
+        const double sigma = ats::evaluatePredictionSigma(result.envelope, 1500.0, &sigmaOk);
+        if (!sigmaOk || !std::isfinite(sigma) || sigma <= 0.0)
+            return fail("prediction sigma should be finite and positive");
+    }
 
     for (const double freq : { 140.0, 440.0, 1500.0, 3200.0, 7000.0 })
     {
@@ -209,6 +217,28 @@ int main()
             return fail("high-order fit should use coefficient storage");
         if (!(barkCurvatureEnergy(highResult.envelope) < barkCurvatureEnergy(looseResult.envelope)))
             return fail("strong regularization should reduce Bark-space curvature for high-order fits");
+    }
+
+    // Dense clean frames should be more certain than sparse noisy ones.
+    {
+        std::vector<ats::RdcFitPoint> sparseNoisy;
+        for (const double freq : { 180.0, 550.0, 1200.0, 2600.0, 4100.0, 6900.0 })
+            sparseNoisy.push_back({ freq, knownEnvelopeDb(freq) + std::sin(freq * 0.001) * 3.0, 1.0 });
+
+        ats::RdcFitOptions sparseOpts = options;
+        sparseOpts.order = 5;
+        sparseOpts.regularization = 0.08;
+
+        ats::RdcFitResult sparseResult;
+        if (!ats::fitRegularizedDiscreteCepstrum(sparseNoisy, sparseOpts, sparseResult))
+            return fail("sparse noisy fit failed: " + sparseResult.errorMessage);
+
+        bool denseSigmaOk = false;
+        bool sparseSigmaOk = false;
+        const double denseSigma = ats::evaluatePredictionSigma(result.envelope, 1500.0, &denseSigmaOk);
+        const double sparseSigma = ats::evaluatePredictionSigma(sparseResult.envelope, 1500.0, &sparseSigmaOk);
+        if (!denseSigmaOk || !sparseSigmaOk || !(denseSigma < sparseSigma))
+            return fail("dense clean fit should have lower prediction sigma than sparse noisy fit");
     }
 
     std::cout << "ok: regularized discrete cepstrum solver\n";

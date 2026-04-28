@@ -233,11 +233,10 @@ int testBicOrderSelection()
 }
 
 // ── Tier 2.5 ─────────────────────────────────────────────────────────────────
-// When active partials exceed the auto-switch threshold, the estimator should
-// delegate to True Envelope and still return a valid envelope with our id.
+// Dense, well-constrained frames should switch to True Envelope based on
+// quality metrics rather than a raw point-count threshold.
 int testAutoSwitchTrueEnvelope()
 {
-    // Build a dense frame with 50 partials (above the default threshold of 40)
     const auto freqs = makeFrequencies(50, 80.0, 8000.0);
     const auto frame = makeFrame(freqs, 20.0);
 
@@ -265,6 +264,8 @@ int testAutoSwitchTrueEnvelope()
 
     if (envelope.estimatorId != ats::RegularizedCepstrumEnvelopeEstimator::kId)
         return fail("Tier 2.5: estimatorId mismatch after auto-switch");
+    if (envelope.storage != ats::EnvelopeValueStorage::Samples)
+        return fail("Tier 2.5: quality-based auto-switch should return sampled True Envelope data");
 
     // Verify evaluate works on the returned envelope
     bool evalOk = false;
@@ -283,24 +284,34 @@ int testAutoSwitchTrueEnvelope()
     ats::FrameEnvelope rdcEnvelope;
     if (!noSwitchEstimator.estimate(frame, rdcEnvelope, &err))
         return fail("Tier 2.5: no-switch estimate failed: " + err);
+    if (rdcEnvelope.storage != ats::EnvelopeValueStorage::Coefficients)
+        return fail("Tier 2.5: disabling auto-switch should keep RDC coefficient output");
 
-    std::cout << "pass: Tier 2.5 - auto-switch to True Envelope for dense frames\n";
+    std::cout << "pass: Tier 2.5 - quality-based switch prefers True Envelope for dense reliable frames\n";
     return 0;
 }
 
 // ── Tier 2.5 boundary ────────────────────────────────────────────────────────
-// Frames at or below the threshold must NOT trigger the auto-switch.
+// Residual-dominant dense frames should stay on RDC even when they are dense.
 int testAutoSwitchBoundary()
 {
-    // Exactly at threshold: should use RDC
     const auto freqs = makeFrequencies(40, 80.0, 8000.0);
-    const auto frame = makeFrame(freqs, 20.0);
+    auto frame = makeFrame(freqs, 20.0, 0.2);
+    for (int band = 0; band < 18; ++band)
+    {
+        ats::EnvelopeResidualBandPoint residual;
+        residual.frequencyHz = 120.0 + band * 380.0;
+        const double amplitude = dbToAmp(-12.0 + 0.1 * band);
+        residual.energy = amplitude * amplitude;
+        residual.confidence = 1.0;
+        frame.residualBands.push_back(residual);
+    }
 
     ats::RegularizedCepstrumEstimatorOptions opts;
     opts.fit.frequencyAxis = makeBarkAxis();
     opts.fit.order = 8;
     opts.autoSwitchToTrueEnvelope = true;
-    opts.autoSwitchThreshold = 40;
+    opts.trueEnvelopeMaxResidualDominance = 0.25;
 
     ats::RegularizedCepstrumEnvelopeEstimator estimator(opts);
 
@@ -314,12 +325,12 @@ int testAutoSwitchBoundary()
         return fail("Tier 2.5 boundary: prepare failed");
 
     ats::FrameEnvelope envelope;
-    // With exactly 40 points and threshold 40, auto-switch should NOT fire
-    // (condition is > threshold, not >=)
     if (!estimator.estimate(frame, envelope, &err))
-        return fail("Tier 2.5 boundary: estimate failed at threshold: " + err);
+        return fail("Tier 2.5 boundary: estimate failed on residual-dominant frame: " + err);
+    if (envelope.storage != ats::EnvelopeValueStorage::Coefficients)
+        return fail("Tier 2.5 boundary: residual-dominant frame should stay on RDC");
 
-    std::cout << "pass: Tier 2.5 - boundary: threshold frame uses RDC\n";
+    std::cout << "pass: Tier 2.5 - residual dominance suppresses True Envelope switch\n";
     return 0;
 }
 
