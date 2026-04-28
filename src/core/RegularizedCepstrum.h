@@ -50,7 +50,7 @@ struct RdcFitOptions
     bool   useGcvLambda      = false;
     int    gcvCandidateCount = 10;
     double gcvLambdaMin      = 1.0e-5;
-    double gcvLambdaMax      = 1.0e+1;
+    double gcvLambdaMax      = 1.0e+2;  // extended from 1e+1; matches Python port fix (commit 453194d)
 };
 
 struct RdcFitResult
