@@ -275,6 +275,96 @@ Extended `tests/spectral_envelope_improvements_test.cpp`:
 
 ---
 
+## Python Port Parity Fixes — 2026-04-28 (commit 453194d, branch `codex/spectral-envelope`)
+
+Two correctness fixes to bring the Python reference port to parity with the C++ estimator.
+
+### Fix 1 — BIC density floor (High)
+
+The BIC order search previously started at `trial_order=1` with no lower bound, allowing collapse to order 1 on dense frames with many partials (e.g. 90+ partials → effective_order=1, a flat line). C++ enforces `bicMinOrderPartialDensity=0.15` → `minBicOrder = ceil(N × 0.15)`.
+
+**Change:** Added `min_bic_order = max(1, math.ceil(len(usable) * 0.15))` as the BIC search lower bound.
+
+**Result:** Median BIC order now tracks partial density — Guitar (7 pts): 1→2, Crotale (21 pts): 1→4, Vocal (43 pts): 1→7, Soundiron (56 pts): 2→9.
+
+### Fix 2 — GCV range extension (Medium)
+
+GCV was saturating at `lambda_max=1e+1` on most fixtures. The vocal chop's true minimum is above that cap.
+
+**Change:** Extended `lambda_max` from `1e+1` to `1e+2`. Automatic range widening is implemented but disabled (`max_range_extensions=0`) because the curvature penalty's DC (k=0) direction is unconstrained — extending λ beyond 1e+2 blows condition to 1e+6 without meaningful envelope improvement. Saturation at `lambda_max` for featureless frames (crotale, guitar) is physically correct.
+
+**Result:** Vocal chop GCV now finds interior minimum at λ≈16.7 (previously saturating at 10).
+
+---
+
+## Python Port Improvements — 2026-04-28 (commit ca55c18, branch `codex/spectral-envelope`)
+
+Four improvements to `tools/visualize_envelopes.py`: two C++ parity features missing from the Python port, and two novel features from the GCV Stage 2 plan.
+
+### IRLS Huber loss (C++ parity — `irlsMaxIterations=4`)
+
+`_solve_new_attempt` now runs up to 4 IRLS iterations. The Huber scale is `1.5 × (MAR/0.6745)` floored at 0.5 dB, matching the C++ implementation exactly. Outlier partials (tracking glitches, amplitude spikes) are downweighted without any manual flagging.
+
+BIC and GCV search paths continue to use pure L2 (`irls_max_iterations=1`) for efficiency.
+
+**Representative improvement:** Guitar pluck New RDC: **12.6 → 5.6 dB** weighted error on the selected representative frame.
+
+### p75 amplitude-delta gate on virtual points (C++ parity)
+
+`fit_new_model` now computes the 75th-percentile of `|predicted − actual|` across all real fit points against the previous frame's envelope. When `p75 > 12 dB`, virtual injection is suppressed entirely (onset/transient frames where the previous envelope is stale).
+
+Using p75 rather than the mean matches C++ behavior: a single large-amplitude transient partial triggers the gate even when most of the spectrum is stable.
+
+Diagnostics now include `p75_delta_db` and `virtual_suppressed`.
+
+### Posterior uncertainty output (GCV plan Stage 2)
+
+After the final IRLS solve, `_EnvelopeModel` now carries:
+- `hessian_inv` — the `(order+1)²` posterior precision inverse `A⁻¹`
+- `noise_variance` — `σ²` = weighted residual variance (in dB²)
+
+New helper: `_evaluate_prediction_sigma(model, freq_hz)` → `sqrt(σ² · x(f)ᵀ A⁻¹ x(f))` — the posterior predictive standard deviation in dB at any frequency.
+
+`fit_new_model` diagnostics now include:
+- `predict_sigma_grid` — predictive σ at every grid frequency (same length as `grid_freqs`)
+- `has_uncertainty` — bool flag
+- `noise_variance_db2` — σ² scalar
+
+This enables downstream adaptive decisions (e.g. weight virtual points by σ, gate True Envelope switch by frame-level uncertainty) without re-fitting.
+
+### Mel frequency axis (PRD Tier 2)
+
+Added `_mel()`, `_hz_from_mel()`, `_normalized_position_mel()` using the O'Shaughnessy formula (`mel = 2595 · log₁₀(1 + f/700)`). `rdc_fit_and_eval` now accepts `use_mel=True`.
+
+Mel is slightly more uniform than Bark in the 1–5 kHz musical range and is listed in the PRD as the desired third axis. Integration into `fit_new_model` (which is currently Bark-only) is a follow-on task.
+
+### Test coverage — 31 tests, 0 failures
+
+New file: `tests/python_model_improvements_test.py`
+
+| Test | Assertion |
+|---|---|
+| `irls_outlier_robustness` | IRLS non-outlier RMS error ≤ L2 |
+| `irls_hessian_inv_not_none` | `hessian_inv` populated after IRLS |
+| `irls_noise_variance_positive` | `noise_variance > 0` |
+| `irls_hessian_inv_symmetric` | `‖H − Hᵀ‖ < 1e-10` |
+| `irls_hessian_inv_psd` | min eigval ≥ 0 |
+| `uncertainty_finite_*Hz` | `predict_sigma` finite & positive at 5 test freqs |
+| `uncertainty_decreases_with_partials` | More data at fixed order → lower σ |
+| `p75_gate_suppressed_flag` | `virtual_suppressed=True` on stale frame (20 dB offset) |
+| `p75_gate_zero_virtual_points` | 0 virtual points injected when gate fires |
+| `p75_gate_not_suppressed` | Injection allowed on stable (fresh) frame |
+| `mel_monotone_*Hz` | Position monotone increasing at 6 frequencies |
+| `mel_round_trip_*Hz` | mel→hz→mel identity within 1e-6 Hz |
+| `mel_more_uniform_than_linear` | Mel spacing std-dev < Linear in 1–5 kHz |
+| `bark_more_uniform_than_linear` | Bark spacing std-dev < Linear in 1–5 kHz |
+| `diag_has_uncertainty_key` | `has_uncertainty` key in diagnostics |
+| `diag_has_sigma_grid` | `predict_sigma_grid` key in diagnostics |
+| `sigma_grid_non_empty` | Grid is non-empty |
+| `sigma_grid_has_finite_values` | At least one finite value in grid |
+
+---
+
 ## Related
 
 - [[Modern ATSH Engine - PRD Summary]] (model + orphans + transients this feature consumes)
