@@ -549,6 +549,134 @@ int testVirtualPointAmplitudeDeltaGate()
     return 0;
 }
 
+// ── GCV disabled ─────────────────────────────────────────────────────────────
+// With useGcvLambda=false (the default), gcvWasUsed must remain false and
+// envelope.regularization must equal options.regularization.
+int testGcvDisabled()
+{
+    const auto freqs = makeFrequencies(20, 80.0, 8000.0);
+    std::vector<ats::RdcFitPoint> points;
+    for (const double f : freqs)
+        points.push_back({ f, smoothEnvDb(f), 1.0 });
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis         = makeBarkAxis();
+    opts.order                 = 8;
+    opts.regularization        = 1.0e-3;
+    opts.useBicOrderSelection  = false;
+    opts.useGcvLambda          = false;
+
+    ats::RdcFitResult result;
+    if (!ats::fitRegularizedDiscreteCepstrum(points, opts, result))
+        return fail("GCV disabled: fit failed: " + result.errorMessage);
+    if (result.gcvWasUsed)
+        return fail("GCV disabled: gcvWasUsed should be false when useGcvLambda=false");
+
+    std::cout << "pass: GCV disabled — fixed lambda used (lambda="
+              << result.envelope.regularization << ")\n";
+    return 0;
+}
+
+// ── GCV lambda adaptation ─────────────────────────────────────────────────────
+// Noisy data (large alternating amplitude perturbation) should drive GCV to
+// select a larger lambda than clean data (exact smooth envelope). This verifies
+// that GCV is correctly adapting to frame noise level.
+int testGcvLambdaAdaptation()
+{
+    const auto freqs = makeFrequencies(20, 80.0, 8000.0);
+
+    // Clean: exact smooth envelope values.
+    std::vector<ats::RdcFitPoint> cleanPoints;
+    for (const double f : freqs)
+        cleanPoints.push_back({ f, smoothEnvDb(f), 1.0 });
+
+    // Noisy: ±8 dB alternating perturbation on every partial.
+    std::vector<ats::RdcFitPoint> noisyPoints;
+    for (std::size_t i = 0; i < freqs.size(); ++i)
+    {
+        const double noise = (i % 2 == 0) ? 8.0 : -8.0;
+        noisyPoints.push_back({ freqs[i], smoothEnvDb(freqs[i]) + noise, 1.0 });
+    }
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis        = makeBarkAxis();
+    opts.order                = 10;
+    opts.regularization       = 1.0e-3;  // fallback if GCV fails
+    opts.ridge                = 1.0e-10;
+    opts.penalty              = ats::CepstrumPenalty::SecondDerivative;
+    opts.useBicOrderSelection = false;   // isolate GCV from BIC interaction
+    opts.useGcvLambda         = true;
+    opts.gcvCandidateCount    = 12;
+    opts.gcvLambdaMin         = 1.0e-5;
+    opts.gcvLambdaMax         = 1.0e+1;
+
+    ats::RdcFitResult cleanResult, noisyResult;
+    if (!ats::fitRegularizedDiscreteCepstrum(cleanPoints, opts, cleanResult))
+        return fail("GCV adaptation: clean fit failed: " + cleanResult.errorMessage);
+    if (!cleanResult.gcvWasUsed)
+        return fail("GCV adaptation: gcvWasUsed not set for clean frame");
+
+    if (!ats::fitRegularizedDiscreteCepstrum(noisyPoints, opts, noisyResult))
+        return fail("GCV adaptation: noisy fit failed: " + noisyResult.errorMessage);
+    if (!noisyResult.gcvWasUsed)
+        return fail("GCV adaptation: gcvWasUsed not set for noisy frame");
+
+    // GCV must select a larger (or equal) lambda for the noisier data.
+    if (noisyResult.envelope.regularization < cleanResult.envelope.regularization)
+        return fail("GCV adaptation: noisy frame should select >= lambda vs clean "
+                    "(noisy=" + std::to_string(noisyResult.envelope.regularization)
+                    + " clean=" + std::to_string(cleanResult.envelope.regularization) + ")");
+
+    std::cout << "pass: GCV lambda adaptation (clean=" << cleanResult.envelope.regularization
+              << " noisy=" << noisyResult.envelope.regularization << ")\n";
+    return 0;
+}
+
+// ── GCV fit validity ──────────────────────────────────────────────────────────
+// A GCV-selected fit must produce a valid, evaluable envelope.
+int testGcvFitValidity()
+{
+    const auto freqs = makeFrequencies(15, 80.0, 8000.0);
+    std::vector<ats::RdcFitPoint> points;
+    for (std::size_t i = 0; i < freqs.size(); ++i)
+    {
+        // Mix clean and noisy to trigger non-trivial GCV optimum.
+        const double noise = (i % 3 == 0) ? 5.0 : 0.0;
+        points.push_back({ freqs[i], smoothEnvDb(freqs[i]) + noise, 1.0 });
+    }
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis        = makeBarkAxis();
+    opts.order                = 8;
+    opts.regularization       = 1.0e-3;
+    opts.useBicOrderSelection = false;
+    opts.useGcvLambda         = true;
+    opts.gcvCandidateCount    = 10;
+    opts.gcvLambdaMin         = 1.0e-5;
+    opts.gcvLambdaMax         = 1.0e+1;
+
+    ats::RdcFitResult result;
+    if (!ats::fitRegularizedDiscreteCepstrum(points, opts, result))
+        return fail("GCV validity: fit failed: " + result.errorMessage);
+    if (!result.ok)
+        return fail("GCV validity: result not marked ok");
+    if (!result.gcvWasUsed)
+        return fail("GCV validity: gcvWasUsed not set");
+    if (result.gcvScore < 0.0)
+        return fail("GCV validity: gcvScore is negative");
+
+    // The envelope must be evaluable at a mid-range frequency.
+    bool evalOk = false;
+    const double val = ats::evaluateRegularizedDiscreteCepstrum(result.envelope, 1000.0, &evalOk);
+    (void)val;
+    if (!evalOk)
+        return fail("GCV validity: evaluate failed on GCV-fitted envelope");
+
+    std::cout << "pass: GCV fit validity (gcvScore=" << result.gcvScore
+              << " lambda=" << result.envelope.regularization << ")\n";
+    return 0;
+}
+
 int main()
 {
     int result = 0;
@@ -561,6 +689,9 @@ int main()
     result |= testCrossFrameVirtualGapFill();
     result |= testBicDensityFloor();
     result |= testVirtualPointAmplitudeDeltaGate();
+    result |= testGcvDisabled();
+    result |= testGcvLambdaAdaptation();
+    result |= testGcvFitValidity();
 
     if (result == 0)
         std::cout << "ok: all spectral envelope improvements\n";

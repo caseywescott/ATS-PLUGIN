@@ -183,20 +183,17 @@ bool buildSmoothnessPenaltyMatrix(const EnvelopeAxisSpec& fitAxis,
     return true;
 }
 
-// Cholesky (L L^T) solve for a symmetric positive-definite system.
-// matrix is stored as a flat row-major upper triangle (matrix[i*n+j] for i<=j),
-// which avoids n separate heap allocations for the inner rows.
-bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
-                                    const std::vector<double>& rhs,
-                                    std::vector<double>& solution,
-                                    double& pivotRatio)
+// Cholesky (L L^T) decomposition for a symmetric positive-definite matrix.
+// matrix: flat row-major (matrix[i*n+j]). lower: flat row-major lower triangle.
+// Returns false if the matrix is not positive definite.
+bool choleskyDecompose(const std::vector<double>& matrix,
+                       const std::size_t n,
+                       std::vector<double>& lower,
+                       double& pivotRatio)
 {
-    const std::size_t n = rhs.size();
-    // Flat lower-triangular Cholesky factor: lower[i*n+j], j <= i.
-    std::vector<double> lower(n * n, 0.0);
+    lower.assign(n * n, 0.0);
     double minPivot = std::numeric_limits<double>::infinity();
     double maxPivot = 0.0;
-
     for (std::size_t i = 0; i < n; ++i)
     {
         for (std::size_t j = 0; j <= i; ++j)
@@ -204,7 +201,6 @@ bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
             double sum = matrix[i * n + j];
             for (std::size_t k = 0; k < j; ++k)
                 sum -= lower[i * n + k] * lower[j * n + k];
-
             if (i == j)
             {
                 if (!std::isfinite(sum) || sum <= 1.0e-18)
@@ -219,7 +215,16 @@ bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
             }
         }
     }
+    pivotRatio = minPivot > 0.0 ? maxPivot / minPivot : std::numeric_limits<double>::infinity();
+    return true;
+}
 
+// Forward-backward solve given Cholesky lower factor L: solves L L^T x = rhs.
+void choleskyForwardBack(const std::vector<double>& lower,
+                         const std::size_t n,
+                         const std::vector<double>& rhs,
+                         std::vector<double>& solution)
+{
     std::vector<double> y(n, 0.0);
     for (std::size_t i = 0; i < n; ++i)
     {
@@ -228,7 +233,6 @@ bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
             sum -= lower[i * n + k] * y[k];
         y[i] = sum / lower[i * n + i];
     }
-
     solution.assign(n, 0.0);
     for (std::size_t ii = n; ii-- > 0;)
     {
@@ -237,9 +241,176 @@ bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
             sum -= lower[k * n + ii] * solution[k];
         solution[ii] = sum / lower[ii * n + ii];
     }
+}
 
-    pivotRatio = minPivot > 0.0 ? maxPivot / minPivot : std::numeric_limits<double>::infinity();
+// Cholesky (L L^T) solve for a symmetric positive-definite system.
+// matrix is stored as a flat row-major upper triangle (matrix[i*n+j] for i<=j),
+// which avoids n separate heap allocations for the inner rows.
+bool solveSymmetricPositiveDefinite(const std::vector<double>& matrix,
+                                    const std::vector<double>& rhs,
+                                    std::vector<double>& solution,
+                                    double& pivotRatio)
+{
+    const std::size_t n = rhs.size();
+    std::vector<double> lower;
+    if (!choleskyDecompose(matrix, n, lower, pivotRatio))
+        return false;
+    choleskyForwardBack(lower, n, rhs, solution);
     return true;
+}
+
+// Hat-matrix trace for GCV: df(λ) = tr(M_λ⁻¹ · M).
+// lower: Cholesky factor of M_λ (n×n, row-major).
+// M:     XᵀWX (n×n, symmetric, row-major).
+// Computes n forward-back solves, accumulates diagonal of M_λ⁻¹·M.
+double computeHatTrace(const std::vector<double>& lower,
+                       const std::vector<double>& M,
+                       const std::size_t n)
+{
+    double trace = 0.0;
+    std::vector<double> col(n), sol(n);
+    for (std::size_t j = 0; j < n; ++j)
+    {
+        for (std::size_t i = 0; i < n; ++i)
+            col[i] = M[i * n + j];
+        choleskyForwardBack(lower, n, col, sol);
+        trace += sol[j];
+    }
+    return trace;
+}
+
+// GCV-based lambda search (log-space grid, options.gcvCandidateCount points).
+// Evaluates GCV(λ) = RSS(λ) / (n_eff · (1 - df(λ)/n_eff)²) for each candidate,
+// returns the lambda with the minimum finite score.
+// gcvScoreOut receives the best GCV score (may be nullptr).
+double selectGcvLambda(const std::vector<RdcFitPoint>& points,
+                       const std::vector<double>& penaltyMatrix,
+                       const RdcFitOptions& options,
+                       const int order,
+                       const double fallbackLambda,
+                       double* gcvScoreOut)
+{
+    if (order < 0 || points.empty())
+    {
+        if (gcvScoreOut) *gcvScoreOut = 0.0;
+        return fallbackLambda;
+    }
+
+    const std::size_t n = static_cast<std::size_t>(order + 1);
+
+    // Build basis cache (L2 only; no IRLS needed for GCV).
+    struct GcvPoint { double y = 0.0; double w = 0.0; std::vector<double> b; };
+    std::vector<GcvPoint> cached;
+    cached.reserve(points.size());
+    for (const auto& p : points)
+    {
+        GcvPoint gp;
+        gp.b.resize(n);
+        if (!fillBasisForFrequency(p.frequencyHz, options.frequencyAxis, order, gp.b))
+            continue;
+        gp.y = p.logAmplitudeDb;
+        gp.w = p.weight;
+        cached.push_back(std::move(gp));
+    }
+    if (cached.empty())
+    {
+        if (gcvScoreOut) *gcvScoreOut = 0.0;
+        return fallbackLambda;
+    }
+
+    // Assemble M = XᵀWX and rhs = XᵀWy.
+    std::vector<double> M(n * n, 0.0), rhs(n, 0.0);
+    double wSum = 0.0, wSumSq = 0.0;
+    for (const auto& gp : cached)
+    {
+        wSum   += gp.w;
+        wSumSq += gp.w * gp.w;
+        for (std::size_t row = 0; row < n; ++row)
+        {
+            const double wb = gp.w * gp.b[row];
+            rhs[row] += wb * gp.y;
+            for (std::size_t col = 0; col <= row; ++col)
+                M[row * n + col] += wb * gp.b[col];
+        }
+    }
+    if (wSum <= 0.0)
+    {
+        if (gcvScoreOut) *gcvScoreOut = 0.0;
+        return fallbackLambda;
+    }
+    // Mirror lower triangle to upper.
+    for (std::size_t row = 0; row < n; ++row)
+        for (std::size_t col = 0; col < row; ++col)
+            M[col * n + row] = M[row * n + col];
+
+    // Kish effective sample size.
+    const double nEff = (wSumSq > 0.0)
+        ? std::max(1.0, (wSum * wSum) / wSumSq)
+        : std::max(1.0, static_cast<double>(cached.size()));
+
+    // Log-space grid search.
+    const int N      = std::max(2, options.gcvCandidateCount);
+    const double lMin = std::max(options.gcvLambdaMin, 1.0e-12);
+    const double lMax = std::max(options.gcvLambdaMax, lMin * 10.0);
+    const double logMin = std::log(lMin);
+    const double logMax = std::log(lMax);
+    const double ridge  = std::max(0.0, options.ridge);
+
+    double bestLambda = fallbackLambda;
+    double bestGcv    = std::numeric_limits<double>::infinity();
+
+    std::vector<double> Mlambda(n * n), lower, beta;
+
+    for (int i = 0; i < N; ++i)
+    {
+        const double lam = std::exp(logMin + (logMax - logMin)
+                                    * static_cast<double>(i) / static_cast<double>(N - 1));
+
+        // Form M_λ = M + lam·P + ridge·I.
+        Mlambda = M;
+        for (std::size_t row = 0; row < n; ++row)
+            Mlambda[row * n + row] += ridge;
+        if (!penaltyMatrix.empty() && lam > 0.0)
+            for (std::size_t k = 0; k < Mlambda.size(); ++k)
+                Mlambda[k] += lam * penaltyMatrix[k];
+
+        // Cholesky factor; skip ill-conditioned candidates.
+        double pivotRatio = 0.0;
+        if (!choleskyDecompose(Mlambda, n, lower, pivotRatio))
+            continue;
+        if (pivotRatio > options.illConditionedThreshold)
+            continue;
+
+        // Solve for β(λ) and compute weighted RSS.
+        choleskyForwardBack(lower, n, rhs, beta);
+        double rss = 0.0;
+        for (const auto& gp : cached)
+        {
+            double pred = 0.0;
+            for (std::size_t k = 0; k < n; ++k)
+                pred += beta[k] * gp.b[k];
+            const double r = pred - gp.y;
+            rss += gp.w * r * r;
+        }
+
+        // Hat trace: df(λ) = tr(M_λ⁻¹ · M).
+        const double df = std::clamp(computeHatTrace(lower, M, n), 0.0, nEff * 0.99);
+
+        // GCV score.
+        const double denom = 1.0 - df / nEff;
+        if (denom < 1.0e-6)
+            continue;
+        const double gcv = rss / (nEff * denom * denom);
+        if (std::isfinite(gcv) && gcv < bestGcv)
+        {
+            bestGcv    = gcv;
+            bestLambda = lam;
+        }
+    }
+
+    if (gcvScoreOut)
+        *gcvScoreOut = std::isfinite(bestGcv) ? bestGcv : 0.0;
+    return bestLambda;
 }
 
 double evaluateCoefficients(const std::vector<double>& coefficients,
@@ -320,22 +491,33 @@ double computeAtsPartialWeight(const EnvelopePartialPoint& partial,
         return 0.0;
     }
 
-    double weight = 1.0;
+    // Compute normalised amplitude and SMR components separately so they can be
+    // combined via geometric mean.  Multiplicative combination compresses the
+    // dynamic range quadratically — a partial with amp=0.9, smr=0.1 and one
+    // with amp=0.5, smr=0.9 both score ~0.09 even though they differ
+    // substantially.  Geometric mean (sqrt of product) gives each component
+    // equal influence and keeps the result in [0,1].
+    double ampNorm = 1.0;
+    double smrNorm = 1.0;
+
     if (options.useSmr)
     {
         const double span = std::max(1.0e-9, options.maxSmrDb - options.minSmrDb);
-        const double smrNorm = std::clamp((partial.smr - options.minSmrDb) / span, 0.0, 1.0);
-        weight *= smrNorm;
+        smrNorm = std::clamp((partial.smr - options.minSmrDb) / span, 0.0, 1.0);
     }
 
     if (options.useAmplitude)
     {
         const double db = amplitudeToDb(partial.amplitude, options.amplitudeFloor);
         const double span = std::max(1.0e-9, options.maxAmplitudeDb - options.minAmplitudeDb);
-        const double ampNorm = std::clamp((db - options.minAmplitudeDb) / span, 0.0, 1.0);
-        weight *= ampNorm;
+        ampNorm = std::clamp((db - options.minAmplitudeDb) / span, 0.0, 1.0);
     }
 
+    const double weight_base = (options.useAmplitude && options.useSmr)
+        ? std::sqrt(ampNorm * smrNorm)   // geometric mean: equal influence per component
+        : ampNorm * smrNorm;             // single component active: no geometric correction needed
+
+    double weight = weight_base;
     if (options.useConfidence)
         weight *= std::clamp(partial.confidence, 0.0, 1.0);
 
@@ -480,33 +662,8 @@ double nearestGapDistance(const std::vector<double>& positions, const double tar
     return best;
 }
 
-std::vector<RdcFitPoint> makeEnvelopeSupportPoints(const FrameEnvelope& envelope,
-                                                   const EnvelopeAxisSpec& fitAxis,
-                                                   const int count)
-{
-    std::vector<RdcFitPoint> support;
-    if (count <= 0 || !isValidFrequencyAxis(fitAxis))
-        return support;
-
-    const EnvelopeAxisSpec barkAxis = barkPenaltyAxisFor(fitAxis);
-    if (!isValidFrequencyAxis(barkAxis))
-        return support;
-
-    support.reserve(static_cast<std::size_t>(count));
-    for (int i = 0; i < count; ++i)
-    {
-        const double position = count == 1 ? 0.5 : static_cast<double>(i) / static_cast<double>(count - 1);
-        bool freqOk = false;
-        const double frequencyHz = frequencyForNormalizedPosition(position, barkAxis, &freqOk);
-        bool evalOk = false;
-        const double valueDb = evaluateRegularizedDiscreteCepstrum(envelope, frequencyHz, &evalOk);
-        if (!freqOk || !evalOk)
-            continue;
-        support.push_back({ frequencyHz, valueDb, 1.0 });
-    }
-
-    return support;
-}
+// Removed: makeEnvelopeSupportPoints (uniform grid).
+// appendCrossFrameVirtualPoints now computes gap-targeted positions internally.
 
 bool shouldReusePreviousFrame(const FrameEnvelope& previousEnvelope,
                               const bool hasPreviousEnvelope,
@@ -520,61 +677,67 @@ bool shouldReusePreviousFrame(const FrameEnvelope& previousEnvelope,
            frame.frameIndex == previousFrameIndex + 1;
 }
 
+// Appends up to maxCount virtual gap-fill points sampled from the previous
+// envelope at the midpoints of the largest gaps between current partials.
+//
+// Sampling at gap midpoints (rather than a uniform grid) guarantees that
+// virtual support is placed in the regions that actually lack coverage.
+// A uniform grid tends to cluster near existing partials when the partial
+// distribution is non-uniform, wasting slots on already-covered regions.
 void appendCrossFrameVirtualPoints(const FrameEnvelope& previousEnvelope,
-                                   const std::vector<RdcFitPoint>& previousSupportPoints,
                                    const EnvelopeAxisSpec& fitAxis,
                                    const double weightScale,
                                    const double minGap,
                                    const int maxCount,
                                    std::vector<RdcFitPoint>& points)
 {
-    if (previousSupportPoints.empty() || points.empty() || maxCount <= 0 || weightScale <= 0.0)
+    if (points.empty() || maxCount <= 0 || weightScale <= 0.0)
         return;
 
-    const auto currentPositions = normalizedPositionsForPoints(points, barkPenaltyAxisFor(fitAxis));
+    const EnvelopeAxisSpec gapAxis = barkPenaltyAxisFor(fitAxis);
+    if (!isValidFrequencyAxis(gapAxis))
+        return;
+
+    const auto currentPositions = normalizedPositionsForPoints(points, gapAxis);
     if (currentPositions.empty())
         return;
 
+    // Scale virtual point weight by previous-frame condition quality: a solve that
+    // was ill-conditioned (high condition number) produced a noisy envelope — trusting
+    // it for gap fill degrades rather than stabilises the current frame.
+    const double prevCond = previousEnvelope.diagnostics.conditionEstimate;
+    const double logCondRatio = std::log10(std::max(prevCond / 100.0, 1.0e-10));
+    const double qualityScale = std::min(1.0, 1.0 / std::max(logCondRatio, 0.1));
+    const double baseWeight = meanWeight(points) * weightScale * qualityScale;
+
+    // Build candidate positions at the midpoints of the largest gaps (including
+    // edge gaps below the lowest partial and above the highest).
     struct Candidate
     {
-        RdcFitPoint point;
         double position = 0.0;
-        double gap = 0.0;
+        double gapSize = 0.0;
     };
-
     std::vector<Candidate> candidates;
-    candidates.reserve(previousSupportPoints.size());
-    const double baseWeight = meanWeight(points) * weightScale;
-    const EnvelopeAxisSpec gapAxis = barkPenaltyAxisFor(fitAxis);
-    for (const auto& supportPoint : previousSupportPoints)
+    candidates.reserve(currentPositions.size() + 1);
+
+    // Inter-partial gaps
+    for (std::size_t i = 0; i + 1 < currentPositions.size(); ++i)
     {
-        bool posOk = false;
-        const double position = normalizedPositionForFrequency(supportPoint.frequencyHz, gapAxis, &posOk);
-        if (!posOk)
-            continue;
-
-        const double gap = nearestGapDistance(currentPositions, position);
-        if (gap < minGap)
-            continue;
-
-        bool evalOk = false;
-        const double valueDb = evaluateRegularizedDiscreteCepstrum(previousEnvelope,
-                                                                   supportPoint.frequencyHz,
-                                                                   &evalOk);
-        if (!evalOk)
-            continue;
-
-        Candidate candidate;
-        candidate.point.frequencyHz = supportPoint.frequencyHz;
-        candidate.point.logAmplitudeDb = valueDb;
-        candidate.point.weight = std::max(1.0e-6, baseWeight);
-        candidate.position = position;
-        candidate.gap = gap;
-        candidates.push_back(candidate);
+        const double lo = currentPositions[i];
+        const double hi = currentPositions[i + 1];
+        candidates.push_back({ (lo + hi) * 0.5, hi - lo });
     }
 
+    // Edge gaps: below the lowest and above the highest partial
+    if (!currentPositions.empty())
+    {
+        candidates.push_back({ currentPositions.front() * 0.5, currentPositions.front() });
+        candidates.push_back({ (1.0 + currentPositions.back()) * 0.5, 1.0 - currentPositions.back() });
+    }
+
+    // Sort largest gap first so we fill the most under-supported regions first.
     std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
-        return a.gap > b.gap;
+        return a.gapSize > b.gapSize;
     });
 
     std::vector<double> takenPositions = currentPositions;
@@ -582,10 +745,27 @@ void appendCrossFrameVirtualPoints(const FrameEnvelope& previousEnvelope,
     {
         if (static_cast<int>(points.size()) >= maxCount + static_cast<int>(currentPositions.size()))
             break;
+        if (candidate.gapSize < minGap)
+            continue;
         if (nearestGapDistance(takenPositions, candidate.position) < minGap * 0.5)
             continue;
 
-        points.push_back(candidate.point);
+        bool freqOk = false;
+        const double freqHz = frequencyForNormalizedPosition(candidate.position, gapAxis, &freqOk);
+        if (!freqOk)
+            continue;
+
+        bool evalOk = false;
+        const double valueDb = evaluateRegularizedDiscreteCepstrum(previousEnvelope, freqHz, &evalOk);
+        if (!evalOk)
+            continue;
+
+        RdcFitPoint virt;
+        virt.frequencyHz = freqHz;
+        virt.logAmplitudeDb = valueDb;
+        virt.weight = std::max(1.0e-6, baseWeight);
+        virt.isVirtual = true;
+        points.push_back(virt);
         takenPositions.push_back(candidate.position);
         std::sort(takenPositions.begin(), takenPositions.end());
     }
@@ -600,13 +780,9 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
                           std::string& errorMessage)
 {
     const std::size_t n = static_cast<std::size_t>(order + 1);
-    // Flat row-major symmetric matrix (upper triangle populated, then mirrored).
-    std::vector<double> matrix(n * n, 0.0);
-    std::vector<double> rhs(n, 0.0);
 
-    // Pre-allocate one basis buffer and reuse it for every partial point,
-    // avoiding O(N_partials) heap allocations in the inner loop.
-    std::vector<double> basis(n, 0.0);
+    // Build the smoothness penalty matrix once — it depends only on the axis
+    // and order, not on point weights, so it is reused across all IRLS iterations.
     std::vector<double> penaltyMatrix;
     if (!buildSmoothnessPenaltyMatrix(options.frequencyAxis, options.penalty, order, penaltyMatrix))
     {
@@ -614,66 +790,133 @@ bool solveCepstrumAttempt(const std::vector<RdcFitPoint>& points,
         return false;
     }
 
-    double weightSum = 0.0;
-    diagnostics.fitPointCount = 0;
+    // Pre-evaluate and cache basis vectors for all usable points.  Storing
+    // frequencyHz alongside the basis lets us evaluate residuals efficiently
+    // during IRLS without re-deriving the frequency from the basis.
+    struct CachedPoint
+    {
+        double frequencyHz = 0.0;
+        double logAmplitudeDb = 0.0;
+        double baseWeight = 0.0;    // original partial weight (fixed across IRLS)
+        double irlsWeight = 1.0;    // Huber multiplier, updated each IRLS iteration
+        std::vector<double> basis;
+    };
+    std::vector<CachedPoint> cached;
+    cached.reserve(points.size());
     for (const auto& point : points)
     {
-        if (!fillBasisForFrequency(point.frequencyHz, options.frequencyAxis, order, basis))
+        CachedPoint cp;
+        cp.basis.resize(n);
+        if (!fillBasisForFrequency(point.frequencyHz, options.frequencyAxis, order, cp.basis))
             continue;
-
-        ++diagnostics.fitPointCount;
-        weightSum += point.weight;
-        for (std::size_t row = 0; row < n; ++row)
-        {
-            const double weightedBasis = point.weight * basis[row];
-            rhs[row] += weightedBasis * point.logAmplitudeDb;
-            for (std::size_t col = 0; col <= row; ++col)
-                matrix[row * n + col] += weightedBasis * basis[col];
-        }
+        cp.frequencyHz = point.frequencyHz;
+        cp.logAmplitudeDb = point.logAmplitudeDb;
+        cp.baseWeight = point.weight;
+        cached.push_back(std::move(cp));
     }
 
-    if (diagnostics.fitPointCount == 0 || weightSum <= 0.0)
+    diagnostics.fitPointCount = static_cast<int>(cached.size());
+    if (cached.empty())
     {
         errorMessage = "no usable fit points";
         return false;
     }
 
-    // Mirror lower triangle to upper and add regularization on diagonal.
-    for (std::size_t row = 0; row < n; ++row)
-    {
-        for (std::size_t col = 0; col < row; ++col)
-            matrix[col * n + row] = matrix[row * n + col];
+    // Pre-allocate normal-equation buffers reused each IRLS iteration.
+    std::vector<double> matrix(n * n, 0.0);
+    std::vector<double> rhs(n, 0.0);
 
-        matrix[row * n + row] += std::max(0.0, options.ridge);
-    }
-
-    if (!penaltyMatrix.empty() && regularization > 0.0)
-    {
-        const double lambda = std::max(0.0, regularization);
-        for (std::size_t i = 0; i < matrix.size(); ++i)
-            matrix[i] += lambda * penaltyMatrix[i];
-    }
-
+    // At least one pass (iter 0 = standard L2); subsequent passes apply Huber.
+    const int maxIter = std::max(1, options.irlsMaxIterations);
     double pivotRatio = 0.0;
-    if (!solveSymmetricPositiveDefinite(matrix, rhs, coefficients, pivotRatio))
+
+    for (int iter = 0; iter < maxIter; ++iter)
     {
-        errorMessage = "cepstrum normal equations were not positive definite";
-        return false;
+        // --- Assemble normal equations with effective weights = baseWeight * irlsWeight ---
+        std::fill(matrix.begin(), matrix.end(), 0.0);
+        std::fill(rhs.begin(), rhs.end(), 0.0);
+        double weightSum = 0.0;
+
+        for (const auto& cp : cached)
+        {
+            const double w = cp.baseWeight * cp.irlsWeight;
+            weightSum += w;
+            for (std::size_t row = 0; row < n; ++row)
+            {
+                const double wb = w * cp.basis[row];
+                rhs[row] += wb * cp.logAmplitudeDb;
+                for (std::size_t col = 0; col <= row; ++col)
+                    matrix[row * n + col] += wb * cp.basis[col];
+            }
+        }
+
+        if (weightSum <= 0.0)
+        {
+            errorMessage = "no usable fit points";
+            return false;
+        }
+
+        // Mirror lower triangle to upper and add regularization on diagonal.
+        for (std::size_t row = 0; row < n; ++row)
+        {
+            for (std::size_t col = 0; col < row; ++col)
+                matrix[col * n + row] = matrix[row * n + col];
+            matrix[row * n + row] += std::max(0.0, options.ridge);
+        }
+
+        if (!penaltyMatrix.empty() && regularization > 0.0)
+        {
+            const double lambda = std::max(0.0, regularization);
+            for (std::size_t i = 0; i < matrix.size(); ++i)
+                matrix[i] += lambda * penaltyMatrix[i];
+        }
+
+        if (!solveSymmetricPositiveDefinite(matrix, rhs, coefficients, pivotRatio))
+        {
+            errorMessage = "cepstrum normal equations were not positive definite";
+            return false;
+        }
+
+        // Compute residuals for diagnostics and (if not the last iter) IRLS reweighting.
+        double wSqErrSum = 0.0, wSum = 0.0;
+        std::vector<double> absResiduals;
+        absResiduals.reserve(cached.size());
+        for (const auto& cp : cached)
+        {
+            bool evalOk = false;
+            const double pred = evaluateCoefficients(coefficients, options.frequencyAxis,
+                                                      cp.frequencyHz, evalOk);
+            if (!evalOk)
+                continue;
+            const double r = pred - cp.logAmplitudeDb;
+            absResiduals.push_back(std::abs(r));
+            wSqErrSum += cp.baseWeight * r * r;
+            wSum += cp.baseWeight;
+        }
+
+        diagnostics.weightedError = wSum > 0.0 ? std::sqrt(wSqErrSum / wSum) : 0.0;
+        diagnostics.conditionEstimate = pivotRatio * pivotRatio;
+
+        if (iter == maxIter - 1 || absResiduals.empty())
+            break;
+
+        // --- Huber IRLS weight update ---
+        // Robust scale: median absolute residual / 0.6745, floored at 0.5 dB
+        // to prevent collapse on near-zero-residual frames.
+        std::vector<double> sortedRes = absResiduals;
+        std::sort(sortedRes.begin(), sortedRes.end());
+        const double sigmaHat = std::max(sortedRes[sortedRes.size() / 2] / 0.6745, 0.5);
+        const double huberDelta = 1.5 * sigmaHat;
+
+        for (std::size_t i = 0; i < cached.size() && i < absResiduals.size(); ++i)
+        {
+            const double r = absResiduals[i];
+            cached[i].irlsWeight = (r <= huberDelta)
+                ? 1.0
+                : huberDelta / std::max(r, 1.0e-9);
+        }
     }
 
-    double weightedSquaredError = 0.0;
-    for (const auto& point : points)
-    {
-        bool evalOk = false;
-        const double predicted = evaluateCoefficients(coefficients, options.frequencyAxis, point.frequencyHz, evalOk);
-        if (!evalOk)
-            continue;
-        const double residual = predicted - point.logAmplitudeDb;
-        weightedSquaredError += point.weight * residual * residual;
-    }
-
-    diagnostics.weightedError = std::sqrt(weightedSquaredError / weightSum);
-    diagnostics.conditionEstimate = pivotRatio * pivotRatio;
     return true;
 }
 
@@ -755,6 +998,24 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
     // the one with the lowest Bayesian Information Criterion.
     if (options.useBicOrderSelection && effectiveOrder > 1)
     {
+        // Kish effective sample size from real (non-virtual) points only.
+        // Virtual gap-fill points must not inflate n or contaminate the error
+        // term — BIC assumes IID observations, and virtual points are by
+        // construction on the previous-frame envelope, making every trial
+        // order look artificially better on sparse augmented frames.
+        double realWSum = 0.0, realWSumSq = 0.0;
+        for (const auto& p : usable)
+        {
+            if (!p.isVirtual)
+            {
+                realWSum += p.weight;
+                realWSumSq += p.weight * p.weight;
+            }
+        }
+        const double nEff = (realWSumSq > 0.0)
+            ? std::max(1.0, (realWSum * realWSum) / realWSumSq)
+            : std::max(1.0, static_cast<double>(usable.size()));
+
         const int bicFloor = std::max(1, std::min(options.minBicOrder, effectiveOrder));
         int bestOrder = effectiveOrder;
         double bestBic = std::numeric_limits<double>::infinity();
@@ -771,11 +1032,30 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
             if (trialDiag.conditionEstimate > options.illConditionedThreshold)
                 continue;
 
-            const int n = trialDiag.fitPointCount;
+            // Compute weighted RMSE on real points only; virtual points lie on
+            // the previous envelope by construction and must not enter the BIC
+            // error term.
+            double realSqSum = 0.0, realWtSum = 0.0;
+            for (const auto& p : usable)
+            {
+                if (p.isVirtual)
+                    continue;
+                bool evalOk = false;
+                const double pred = evaluateCoefficients(trialCoeffs, options.frequencyAxis, p.frequencyHz, evalOk);
+                if (!evalOk)
+                    continue;
+                const double r = pred - p.logAmplitudeDb;
+                realSqSum += p.weight * r * r;
+                realWtSum += p.weight;
+            }
+            const double realError = realWtSum > 0.0
+                ? std::sqrt(realSqSum / realWtSum)
+                : trialDiag.weightedError;
+
             const int k = o + 1;
-            const double sigma2 = std::max(trialDiag.weightedError * trialDiag.weightedError, 1.0e-30);
-            const double bic = static_cast<double>(n) * std::log(sigma2)
-                             + static_cast<double>(k) * std::log(static_cast<double>(std::max(n, 1)));
+            const double sigma2 = std::max(realError * realError, 1.0e-30);
+            const double bic = nEff * std::log(sigma2)
+                             + static_cast<double>(k) * std::log(std::max(nEff, 1.0));
             if (bic < bestBic)
             {
                 bestBic = bic;
@@ -783,6 +1063,20 @@ bool fitRegularizedDiscreteCepstrum(const std::vector<RdcFitPoint>& points,
             }
         }
         effectiveOrder = bestOrder;
+    }
+
+    // GCV lambda selection: run after BIC has fixed effectiveOrder so we search
+    // lambda space for the chosen model complexity rather than both jointly.
+    if (options.useGcvLambda)
+    {
+        std::vector<double> gcvPenalty;
+        buildSmoothnessPenaltyMatrix(options.frequencyAxis, options.penalty, effectiveOrder, gcvPenalty);
+        double gcvScore = 0.0;
+        effectiveRegularization = selectGcvLambda(usable, gcvPenalty, options,
+                                                   effectiveOrder, effectiveRegularization,
+                                                   &gcvScore);
+        result.gcvScore   = gcvScore;
+        result.gcvWasUsed = true;
     }
 
     std::vector<double> coefficients;
@@ -868,6 +1162,12 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
                                            const double frequencyHz,
                                            bool* ok)
 {
+    // The cosine basis has no positivity constraint and can oscillate well below
+    // the physical noise floor in sparse regions.  Clamp to the minimum plausible
+    // spectral value to prevent visual artifacts and stale cross-frame gap-fill
+    // values from corrupting subsequent fits.
+    constexpr double kPhysicalFloorDb = -100.0;
+
     if (envelope.storage == EnvelopeValueStorage::Samples)
     {
         if (envelope.values.empty())
@@ -878,7 +1178,7 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
         if (envelope.values.size() == 1)
         {
             setOk(ok, true);
-            return envelope.values.front();
+            return std::max(envelope.values.front(), kPhysicalFloorDb);
         }
 
         bool positionOk = false;
@@ -894,7 +1194,8 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
         const auto hi = std::min(lo + 1u, envelope.values.size() - 1u);
         const double t = scaled - static_cast<double>(lo);
         setOk(ok, true);
-        return envelope.values[lo] + t * (envelope.values[hi] - envelope.values[lo]);
+        const double interpolated = envelope.values[lo] + t * (envelope.values[hi] - envelope.values[lo]);
+        return std::max(interpolated, kPhysicalFloorDb);
     }
 
     if (envelope.storage != EnvelopeValueStorage::Coefficients || envelope.values.empty())
@@ -906,7 +1207,7 @@ double evaluateRegularizedDiscreteCepstrum(const FrameEnvelope& envelope,
     bool evalOk = false;
     const double value = evaluateCoefficients(envelope.values, envelope.frequencyAxis, frequencyHz, evalOk);
     setOk(ok, evalOk);
-    return value;
+    return evalOk ? std::max(value, kPhysicalFloorDb) : value;
 }
 
 RegularizedCepstrumEnvelopeEstimator::RegularizedCepstrumEnvelopeEstimator(RegularizedCepstrumEstimatorOptions nextOptions)
@@ -992,16 +1293,16 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                  previousFrameIndex,
                                  frame))
     {
-        // Amplitude-delta gate: compute mean |predicted - actual| in dB across the
-        // real fit points.  If the current frame's partials have shifted substantially
-        // from the previous envelope (onset, decay, transient) the previous-frame
-        // support is stale and should not be injected — doing so anchors the fit to
-        // spectral content that no longer exists.
+        // Amplitude-delta gate: compute the 75th-percentile of |predicted - actual|
+        // in dB across the real fit points.  Using p75 rather than the mean means a
+        // single large-amplitude transient partial can trigger the gate even when the
+        // rest of the spectrum is stable — a mean-based gate would dilute such an
+        // outlier across all partials and miss the onset.
         double virtualWeightScale = options.crossFrameVirtualPointWeightScale;
         if (options.crossFrameVirtualPointMaxDeltaDb > 0.0 && !realPoints.empty())
         {
-            double deltaSum = 0.0;
-            int deltaCount = 0;
+            std::vector<double> deltas;
+            deltas.reserve(realPoints.size());
             for (const auto& rp : realPoints)
             {
                 bool evalOk = false;
@@ -1009,23 +1310,22 @@ bool RegularizedCepstrumEnvelopeEstimator::estimate(const EnvelopeFrameInput& fr
                                                                              rp.frequencyHz,
                                                                              &evalOk);
                 if (evalOk)
-                {
-                    deltaSum += std::abs(rp.logAmplitudeDb - predicted);
-                    ++deltaCount;
-                }
+                    deltas.push_back(std::abs(rp.logAmplitudeDb - predicted));
             }
-            const double meanDeltaDb = deltaCount > 0 ? deltaSum / static_cast<double>(deltaCount) : 0.0;
-            if (meanDeltaDb > options.crossFrameVirtualPointMaxDeltaDb)
-                virtualWeightScale = 0.0;
+            if (!deltas.empty())
+            {
+                std::sort(deltas.begin(), deltas.end());
+                const auto p75Idx = static_cast<std::size_t>(0.75 * static_cast<double>(deltas.size() - 1));
+                const double p75DeltaDb = deltas[p75Idx];
+                if (p75DeltaDb > options.crossFrameVirtualPointMaxDeltaDb)
+                    virtualWeightScale = 0.0;
+            }
         }
 
         if (virtualWeightScale > 0.0)
         {
             const int maxCount = std::max(0, options.crossFrameVirtualPointMaxCount);
             appendCrossFrameVirtualPoints(previousEnvelope,
-                                          makeEnvelopeSupportPoints(previousEnvelope,
-                                                                    options.fit.frequencyAxis,
-                                                                    maxCount),
                                           options.fit.frequencyAxis,
                                           virtualWeightScale,
                                           std::max(0.0, options.crossFrameVirtualPointMinGap),

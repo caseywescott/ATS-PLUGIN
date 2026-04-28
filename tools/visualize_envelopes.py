@@ -425,6 +425,81 @@ def _append_virtual_gap(
     return augmented
 
 
+def _gcv_lambda_search(
+    points: list,
+    order: int,
+    min_hz: float,
+    max_hz: float,
+    lambda_min: float = 1.0e-5,
+    lambda_max: float = 1.0e+1,
+    n_candidates: int = 10,
+    ridge: float = 1.0e-10,
+) -> float:
+    """GCV lambda search mirroring C++ selectGcvLambda.
+
+    Returns the lambda in [lambda_min, lambda_max] that minimises
+        GCV(λ) = RSS(λ) / (n_eff · (1 − df(λ)/n_eff)²)
+    where df(λ) = tr(A_λ⁻¹ · M), M = XᵀWX, A_λ = M + λP.
+    Falls back to lambda_min if no candidate produces a finite score.
+    """
+    import numpy as np
+    if not points or order < 0:
+        return lambda_min
+
+    n = order + 1
+    penalty = _build_curvature_penalty(order, min_hz, max_hz)
+
+    B = np.zeros((len(points), n), dtype=np.float64)
+    W = np.zeros(len(points),     dtype=np.float64)
+    Y = np.zeros(len(points),     dtype=np.float64)
+    for i, pt in enumerate(points):
+        B[i, :] = _basis_row_ndarray(
+            _normalized_position_bark(pt["frequency_hz"], min_hz, max_hz), order)
+        W[i] = pt["weight"]
+        Y[i] = pt["log_amplitude_db"]
+
+    BtW = (B * W[:, None]).T   # (n, N_pts)
+    M   = BtW @ B              # XᵀWX (n×n)
+    rhs = BtW @ Y              # XᵀWy (n,)
+
+    w_sum    = max(float(W.sum()), 1.0e-30)
+    w_sum_sq = max(float((W * W).sum()), 1.0e-60)
+    n_eff    = max(1.0, (w_sum * w_sum) / w_sum_sq)
+
+    candidates = np.logspace(math.log10(max(lambda_min, 1.0e-12)),
+                             math.log10(max(lambda_max, lambda_min * 10.0)),
+                             n_candidates)
+
+    best_lam = float(candidates[0])
+    best_gcv = float("inf")
+
+    ridge_mat = max(0.0, ridge) * np.eye(n, dtype=np.float64)
+
+    for lam in candidates:
+        A = M + ridge_mat + float(lam) * penalty
+        try:
+            # Solve for beta and hat trace simultaneously.
+            beta       = np.linalg.solve(A, rhs)
+            # df = tr(A⁻¹ · M): solve A X = M, take trace.
+            A_inv_M    = np.linalg.solve(A, M)
+            df         = float(np.trace(A_inv_M))
+        except np.linalg.LinAlgError:
+            continue
+
+        df    = max(0.0, min(df, n_eff * 0.99))
+        pred  = B @ beta
+        rss   = float(np.sum(W * (pred - Y) ** 2))
+        denom = 1.0 - df / n_eff
+        if denom < 1.0e-6:
+            continue
+        gcv = rss / (n_eff * denom * denom)
+        if math.isfinite(gcv) and gcv < best_gcv:
+            best_gcv = gcv
+            best_lam = float(lam)
+
+    return best_lam
+
+
 def fit_new_model(
     frame_partials: list,
     sample_rate: float,
@@ -434,6 +509,7 @@ def fit_new_model(
     regularization: float = 1.0e-3,
     previous_model=None,    # _EnvelopeModel | None
     grid_size: int = 512,
+    use_gcv: bool = False,
 ) -> tuple:
     """Fit the new estimator: Bark axis + Bark-space curvature prior + BIC order
     selection (1e7 ill-conditioned threshold) + cross-frame gap fill (Tier 1-3).
@@ -480,6 +556,14 @@ def fit_new_model(
                 best_order = trial_order
         eff_order = best_order
 
+    # GCV lambda selection: after BIC fixes eff_order, search lambda space.
+    gcv_lambda = None
+    if use_gcv:
+        gcv_lambda = _gcv_lambda_search(augmented, eff_order, min_hz, max_hz,
+                                        lambda_min=1.0e-5, lambda_max=1.0e+1,
+                                        n_candidates=10, ridge=1.0e-10)
+        eff_reg = gcv_lambda
+
     result = _solve_new_attempt(augmented, eff_order, eff_reg, 1.0e-10, min_hz, max_hz)
     if result is None or result.condition_estimate > 1.0e7:
         retry_reg = max(eff_reg * 10.0, 1.0, 1.0e-2)
@@ -503,13 +587,15 @@ def fit_new_model(
     grid_freqs = np.exp(np.linspace(math.log(min_hz), math.log(max_hz), grid_size)).tolist()
     grid_db    = [_evaluate_new_model(result, f) for f in grid_freqs]
     diag = {
-        "fit_points":       len(augmented),
-        "real_fit_points":  len(usable),
-        "effective_order":  result.order,
+        "fit_points":        len(augmented),
+        "real_fit_points":   len(usable),
+        "effective_order":   result.order,
         "weighted_error_db": result.weighted_error_db,
         "condition_estimate": result.condition_estimate,
-        "fallback":         result.fallback,
-        "virtual_points":   max(0, len(augmented) - len(usable)),
+        "fallback":          result.fallback,
+        "virtual_points":    max(0, len(augmented) - len(usable)),
+        "gcv_lambda":        gcv_lambda,
+        "gcv_was_used":      use_gcv,
     }
     return grid_freqs, grid_db, diag, result
 
@@ -570,6 +656,7 @@ def run_viewer(
     show_bark: bool,
     show_new_model: bool = True,
     show_density: bool = True,
+    use_gcv: bool = False,
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -618,6 +705,7 @@ def run_viewer(
             gf_n, gdb_n, diag_n, prev_model = fit_new_model(
                 fd["partials"], sample_rate, lowest_freq, highest_freq,
                 order=order, regularization=reg, previous_model=prev_model,
+                use_gcv=use_gcv,
             )
             envelopes_new.append((gf_n, gdb_n))
             new_diag_list.append(diag_n)
@@ -861,6 +949,10 @@ def main() -> int:
                         help="Show partial-density heatmap bar below main plot. Default: on.")
     parser.add_argument("--no-density", dest="density", action="store_false",
                         help="Hide the density heatmap bar.")
+    parser.add_argument("--gcv", dest="use_gcv", action="store_true", default=False,
+                        help="Use GCV lambda selection in the new model (default: off).")
+    parser.add_argument("--no-gcv", dest="use_gcv", action="store_false",
+                        help="Disable GCV lambda selection.")
     parser.add_argument("--cache", default=None, metavar="PATH",
                         help="Cache frame-dump JSON at PATH to skip re-analysis on re-runs.")
     args = parser.parse_args()
@@ -884,7 +976,8 @@ def main() -> int:
     )
 
     run_viewer(dump, wav_path.name, args.order, args.reg, args.bark,
-               show_new_model=args.new_model, show_density=args.density)
+               show_new_model=args.new_model, show_density=args.density,
+               use_gcv=args.use_gcv)
     return 0
 
 

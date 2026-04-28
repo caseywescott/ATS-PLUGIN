@@ -282,3 +282,57 @@
 | Transient-aware transfer | 20 |
 | Optional estimators | 21-23 |
 | Plugin workspace and presets | 24-26 |
+| GCV λ adaptation | A |
+| Covariance output | B |
+| Uncertainty-driven virtual weights | C |
+| Uncertainty-driven True Env switch | D |
+| Uncertainty-driven smoothing | E |
+
+---
+
+## Phase 8 — Adaptive Regularization and Uncertainty Output
+
+**Full plan:** [docs/GCV_LAMBDA_PLAN.md](./GCV_LAMBDA_PLAN.md)
+**Issue:** Problem #2 — Fixed λ; no adaptation to frame noise level
+**Location:** `fit_new_model` (Python) / `fitRegularizedDiscreteCepstrum` (C++)
+
+### Commit A — `feat(envelope): add GCV lambda search to fitRegularizedDiscreteCepstrum`
+
+**Stage 1 — adaptive λ**
+
+- [ ] Add `useGcvLambda`, `gcvCandidateCount`, `gcvLambdaMin`, `gcvLambdaMax` to `RdcFitOptions`.
+- [ ] Add `gcvScore`, `gcvWasUsed` to `RdcFitResult`.
+- [ ] Implement `computeHatTrace(M, P, lambda)` — diagonal of M_λ⁻¹·M via p Cholesky back-solves.
+- [ ] Implement `gcvScore(M, P, rhs, lambda, nEff)` — RSS / (nEff·(1 − df/nEff)²).
+- [ ] Wire GCV grid search (log-space, 10 candidates) into `fitRegularizedDiscreteCepstrum`
+  after BIC order selection, before the final `solveCepstrumAttempt`.
+- [ ] Mirror GCV in `fit_new_model` (Python); add `--gcv` flag to `visualize_envelopes.py`.
+- [ ] Tests: noisy 10-partial → GCV λ > 1e-3; dense 30-partial → GCV λ < 1e-3; regressions pass.
+
+### Commit B — `feat(envelope): add RdcUncertainty covariance output`
+
+**Stage 2 — posterior covariance**
+
+- [ ] Add `RdcUncertainty` struct: `noiseVariance`, `effectiveDf`, `choleskyFactor`, `valid`.
+- [ ] Add `uncertainty` field to `RdcFitResult`.
+- [ ] Populate from Cholesky factor and σ² = RSS/(n − df) after GCV-optimal solve.
+- [ ] Add `evaluatePredictionSigma(uncertainty, frequencyHz)` helper (O(p) forward-solve).
+- [ ] Tests: covariance PSD; σ²(f) increases monotonically with λ.
+
+### Commit C — `feat(envelope): drive virtual-point weighting from prediction sigma`
+
+- [ ] Add `crossFrameUncertaintyWeighting`, `crossFrameUncertaintyGain` to estimator options.
+- [ ] In `estimate()`: adapt virtual gap-fill weight = baseScale / (1 + k·σ(f)) per point.
+- [ ] Test: noisy previous frame → lower virtual weight than clean previous frame.
+
+### Commit D — `feat(envelope): gate True Envelope switch on prediction uncertainty`
+
+- [ ] Add `trueEnvelopeSigmaThreshold` (default 3.0 dB) to estimator options.
+- [ ] Update auto-switch logic: fire when `meanSigma > threshold || nUsable >= hardThreshold`.
+- [ ] Test: manufactured high-uncertainty RDC frame triggers switch below hard partial count.
+
+### Commit E — `feat(envelope): advisory temporal smoothing from uncertainty`
+
+- [ ] Add `adaptiveSmoothingFromUncertainty` (bool, default false), `smoothingUncertaintyScale`.
+- [ ] Set `out.smoothingAmount` from `noiseVariance` in `estimate()` when flag is on.
+- [ ] Test: noisy frame → smoothingAmount ≥ clean frame smoothingAmount.

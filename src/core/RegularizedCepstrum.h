@@ -21,6 +21,7 @@ struct RdcFitPoint
     double frequencyHz = 0.0;
     double logAmplitudeDb = 0.0;
     double weight = 1.0;
+    bool isVirtual = false; // true for cross-frame gap-fill points; excluded from BIC n_eff
 };
 
 struct RdcFitOptions
@@ -38,6 +39,18 @@ struct RdcFitOptions
     double sparseRegularizationFloor = 1.0e-2;
     double illConditionedRegularizationFloor = 1.0;
     double illConditionedThreshold = 1.0e7;
+    // IRLS iterations for Huber-loss robustness against outlier partials.
+    // 0 disables IRLS (pure L2). 4 gives convergence in most cases.
+    int irlsMaxIterations = 4;
+    // GCV-based lambda selection: search a log-space grid and choose the lambda
+    // that minimises the Generalized Cross-Validation score
+    //   GCV(λ) = RSS(λ) / (n_eff · (1 − df(λ)/n_eff)²)
+    // where df(λ) = tr(M_λ⁻¹ · M), M = XᵀWX, M_λ = M + λP.
+    // Disabled by default; enable via useGcvLambda = true.
+    bool   useGcvLambda      = false;
+    int    gcvCandidateCount = 10;
+    double gcvLambdaMin      = 1.0e-5;
+    double gcvLambdaMax      = 1.0e+1;
 };
 
 struct RdcFitResult
@@ -47,13 +60,16 @@ struct RdcFitResult
     EnvelopeDiagnostics diagnostics;
     int effectiveOrder = 0;
     std::string errorMessage;
+    // GCV fields — non-zero only when RdcFitOptions::useGcvLambda = true.
+    double gcvScore   = 0.0;
+    bool   gcvWasUsed = false;
 };
 
 struct AtsPartialWeightOptions
 {
     double amplitudeFloor = 1.0e-12;
     double minAmplitudeDb = -120.0;
-    double maxAmplitudeDb = 0.0;
+    double maxAmplitudeDb = 30.0; // extended above 0 dB so high-amplitude partials receive higher weight
     double minSmrDb = -10.0;
     double maxSmrDb = 30.0;
     double minWeight = 1.0e-4;
