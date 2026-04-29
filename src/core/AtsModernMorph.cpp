@@ -1,9 +1,8 @@
 #include "AtsModernMorph.h"
+#include "AtsJsonInternal.h"
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
-#include <locale>
 #include <set>
 #include <sstream>
 
@@ -13,63 +12,13 @@ namespace ats
 namespace
 {
 
+using ats::json_internal::number;
+using ats::json_internal::appendQuoted;
+
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 6.28318530717958647692;
 
 double clamp01(double value) { return std::max(0.0, std::min(1.0, value)); }
-
-std::string number(double value)
-{
-    std::ostringstream out;
-    out.imbue(std::locale::classic());
-    out << std::setprecision(17) << value;
-    return out.str();
-}
-
-void appendQuoted(std::ostringstream& out, const std::string& value)
-{
-    out << '"';
-    for (const char c : value)
-    {
-        switch (c)
-        {
-            case '\\':
-                out << "\\\\";
-                break;
-            case '"':
-                out << "\\\"";
-                break;
-            case '\b':
-                out << "\\b";
-                break;
-            case '\f':
-                out << "\\f";
-                break;
-            case '\n':
-                out << "\\n";
-                break;
-            case '\r':
-                out << "\\r";
-                break;
-            case '\t':
-                out << "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20)
-                {
-                    out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-                        << static_cast<int>(static_cast<unsigned char>(c)) << std::dec
-                        << std::setfill(' ');
-                }
-                else
-                {
-                    out << c;
-                }
-                break;
-        }
-    }
-    out << '"';
-}
 
 const ModernAtsPartial* findPartial(const ModernAtsModel& model, int id)
 {

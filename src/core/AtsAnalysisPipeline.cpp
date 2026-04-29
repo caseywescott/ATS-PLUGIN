@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <limits>
 #include <numeric>
+#include <unordered_set>
 
 extern "C" {
 #include "atsa.h"
@@ -61,9 +62,9 @@ ModernAtsPartialFrame frameFromPeak(const TrackingPeak& peak, ModernAtsFrameReas
     return frame;
 }
 
-bool containsFrame(const std::vector<int>& frames, int frameIndex)
+bool containsFrame(const std::unordered_set<int>& frameSet, int frameIndex)
 {
-    return std::find(frames.begin(), frames.end(), frameIndex) != frames.end();
+    return frameSet.count(frameIndex) != 0;
 }
 
 struct Candidate
@@ -219,6 +220,8 @@ std::vector<SpectralPeak> ClassicStftPeakEstimator::estimatePeaks(
         peak.frequencyHz = interpolatedFrequency;
         peak.amplitude = ampFromDb(interpolatedMagnitude);
         peak.phaseRadians = center.phaseRadians;
+        // smrDb is set to magnitude as a proxy; a real SMR requires a psychoacoustic
+        // masking threshold which is not computed here.
         peak.smrDb = interpolatedMagnitude;
         peak.magnitudeDb = interpolatedMagnitude;
         peaks.push_back(peak);
@@ -371,6 +374,7 @@ ClassicAtsAnalysisResult runClassicAtsAnalysis(const AnalysisParams& params,
 
     double** residual = nullptr;
     int residualLength = 0;
+    // tracker() takes a non-const pointer but does not modify the sample data.
     auto* samples = const_cast<double*>(monoSamples.data());
     ATS_SOUND* raw = tracker(&an, samples, sampleRate, static_cast<int>(monoSamples.size()), &residual, &residualLength);
     freeResidual(&residual);
@@ -417,6 +421,10 @@ std::vector<ModernAtsTrackLifecycleEvent> normalizeTrackLifecycleFromActivity(
     const std::vector<int>& protectedFrameIndices,
     bool allowGapFillAcrossProtectedFrames)
 {
+    // Build a set for O(1) protected-frame lookup (used in inner gap-scan loop).
+    const std::unordered_set<int> protectedSet(protectedFrameIndices.begin(),
+                                               protectedFrameIndices.end());
+
     std::vector<ModernAtsTrackLifecycleEvent> events;
     const int n = static_cast<int>(activity.size());
     int cursor = 0;
@@ -454,7 +462,7 @@ std::vector<ModernAtsTrackLifecycleEvent> normalizeTrackLifecycleFromActivity(
                 break;
             bool crossesProtectedFrame = false;
             for (int frame = gapStart; frame < gapEnd; ++frame)
-                crossesProtectedFrame = crossesProtectedFrame || containsFrame(protectedFrameIndices, frame);
+                crossesProtectedFrame = crossesProtectedFrame || containsFrame(protectedSet, frame);
             if (crossesProtectedFrame && !allowGapFillAcrossProtectedFrames)
                 break;
 
@@ -485,6 +493,10 @@ std::vector<ModernAtsTrackLifecycleEvent> normalizeTrackLifecycleFromActivity(
 AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<TrackingPeakFrame>& frames,
                                                       const AssignmentTrackerConfig& config)
 {
+    // Build a set for O(1) transient-break frame lookup (checked every frame).
+    const std::unordered_set<int> transientBreakSet(config.transientBreakFrameIndices.begin(),
+                                                    config.transientBreakFrameIndices.end());
+
     AssignmentTrackerResult result;
     std::vector<int> activePartialIds;
     int nextPartialId = 0;
@@ -499,7 +511,7 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
         }
 
         const bool transientBreak = !config.allowInterpolationAcrossTransients
-                                    && containsFrame(config.transientBreakFrameIndices,
+                                    && containsFrame(transientBreakSet,
                                                      static_cast<int>(frameIndex));
         if (transientBreak)
         {
@@ -557,8 +569,11 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
         std::vector<int> nextActivePartialIds;
         for (const auto& candidate : candidates)
         {
-            const double alternativeCost = std::max(0.0, candidate.cost.birthDeathCost)
-                                           + std::max(0.0, candidate.cost.spuriousPeakCost);
+            // Alternative to matching (track, peak): the track sleeps (deathPenalty) and
+            // the peak is treated as spurious (spuriousPeakPenalty).  birthPenalty is not
+            // added here — it applies when a peak spawns a new track, not when it is
+            // discarded.  Using birth+death+spurious would triple-count and inflate the gate.
+            const double alternativeCost = config.deathPenalty + config.spuriousPeakPenalty;
             const double maxAllowedCost = std::min(config.maxMatchCost, alternativeCost);
             if (candidate.cost.totalCost > maxAllowedCost)
                 continue;

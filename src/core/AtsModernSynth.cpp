@@ -144,52 +144,73 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
     const auto& model = *plan.model;
     std::memset(output, 0, static_cast<std::size_t>(numSamples) * sizeof(float));
 
-    for (int sample = 0; sample < plan.totalSamples; ++sample)
+    // Partial sinusoidal synthesis.
+    // Outer loop is per-partial so each track carries a continuous phase accumulator
+    // across hops, eliminating phase discontinuities at frame boundaries.
+    for (const auto& partial : model.partials)
     {
-        const int frameIndex = plan.hopSizeSamples > 0 ? sample / plan.hopSizeSamples : 0;
-        if (frameIndex < 0 || frameIndex >= static_cast<int>(model.frames.size()))
-            continue;
+        double phase = 0.0;
+        bool phaseSeeded = false;
 
-        const int nextFrameIndex = std::min(frameIndex + 1, static_cast<int>(model.frames.size()) - 1);
-        const double localT = plan.hopSizeSamples > 0
-                                  ? (double)(sample - frameStartSample(plan, frameIndex))
-                                        / (double)plan.hopSizeSamples
-                                  : 0.0;
-
-        double value = 0.0;
-        for (const auto& partial : model.partials)
+        for (int sample = 0; sample < plan.totalSamples; ++sample)
         {
+            const int frameIndex = plan.hopSizeSamples > 0 ? sample / plan.hopSizeSamples : 0;
             if (frameIndex >= static_cast<int>(partial.frames.size()))
-                continue;
+                break;
 
             const auto& a = partial.frames[static_cast<std::size_t>(frameIndex)];
-            const auto& b = partial.frames[static_cast<std::size_t>(std::min(nextFrameIndex,
-                                                                              static_cast<int>(partial.frames.size()) - 1))];
             if (a.reason == ModernAtsFrameReason::Slept || a.reason == ModernAtsFrameReason::Pruned
                 || a.reason == ModernAtsFrameReason::Rejected)
+            {
+                phaseSeeded = false; // next active segment re-seeds from stored phase
                 continue;
+            }
 
+            const int nextFrameIndex =
+                std::min(frameIndex + 1, static_cast<int>(partial.frames.size()) - 1);
+            const auto& b = partial.frames[static_cast<std::size_t>(nextFrameIndex)];
+            const double localT = plan.hopSizeSamples > 0
+                                      ? static_cast<double>(sample - frameIndex * plan.hopSizeSamples)
+                                            / static_cast<double>(plan.hopSizeSamples)
+                                      : 0.0;
             const double amp = lerp(a.amplitude, b.amplitude, localT) * plan.config.partialGain;
             const double freq = lerp(a.frequencyHz, b.frequencyHz, localT);
-            const double phase = (plan.config.useStoredPhase ? a.phaseRadians : 0.0)
-                                 + kTwoPi * freq * (double)(sample - frameStartSample(plan, frameIndex))
-                                       / (double)plan.outputSampleRate;
-            value += amp * std::sin(phase);
-        }
 
-        if (plan.config.orphanResidualGain > 0.0)
+            if (!phaseSeeded)
+            {
+                phase = plan.config.useStoredPhase ? a.phaseRadians : 0.0;
+                phaseSeeded = true;
+            }
+
+            output[sample] += static_cast<float>(amp * std::sin(phase));
+            phase += kTwoPi * freq / static_cast<double>(plan.outputSampleRate);
+            if (phase >= kTwoPi)
+                phase -= kTwoPi;
+            else if (phase < 0.0)
+                phase += kTwoPi;
+        }
+    }
+
+    // Orphan residual band noise.
+    if (plan.config.orphanResidualGain > 0.0)
+    {
+        for (int sample = 0; sample < plan.totalSamples; ++sample)
         {
+            const int frameIndex = plan.hopSizeSamples > 0 ? sample / plan.hopSizeSamples : 0;
+            if (frameIndex < 0 || frameIndex >= static_cast<int>(model.frames.size()))
+                continue;
             const double orphanEnergy = frameEnergy(model.frames[static_cast<std::size_t>(frameIndex)]);
             if (orphanEnergy > 0.0)
             {
-                const double noise = deterministicNoise(plan.config.deterministicNoiseSeed, sample, frameIndex);
-                value += std::sqrt(orphanEnergy) * plan.config.orphanResidualGain * noise;
+                const double noise =
+                    deterministicNoise(plan.config.deterministicNoiseSeed, sample, frameIndex);
+                output[sample] +=
+                    static_cast<float>(std::sqrt(orphanEnergy) * plan.config.orphanResidualGain * noise);
             }
         }
-
-        output[sample] = sanitize(value, plan.config.denormalClamp);
     }
 
+    // Transient buffer playback with linear resampling and click-free crossfades.
     if (plan.config.transientGain > 0.0)
     {
         for (std::size_t bufferIndex = 0; bufferIndex < model.transientBuffers.size(); ++bufferIndex)
@@ -200,27 +221,36 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                 continue;
 
             const int start = transientStartSample(plan, *marker, buffer);
-            const int length = static_cast<int>(std::ceil((double)buffer.samples.size()
-                                                         * (double)plan.outputSampleRate
-                                                         / (double)buffer.sampleRate));
+            const int length = static_cast<int>(std::ceil(static_cast<double>(buffer.samples.size())
+                                                          * static_cast<double>(plan.outputSampleRate)
+                                                          / static_cast<double>(buffer.sampleRate)));
             for (int i = 0; i < length; ++i)
             {
                 const int outIndex = start + i;
                 if (outIndex < 0 || outIndex >= numSamples)
                     continue;
 
-                const double srcPos = (double)i * (double)buffer.sampleRate / (double)plan.outputSampleRate;
-                const int srcIndex = std::min(static_cast<int>(buffer.samples.size()) - 1,
-                                              std::max(0, static_cast<int>(std::floor(srcPos))));
+                // Linear interpolation between adjacent source samples.
+                const double srcPos = static_cast<double>(i) * static_cast<double>(buffer.sampleRate)
+                                      / static_cast<double>(plan.outputSampleRate);
+                const int srcFloor = std::max(
+                    0, std::min(static_cast<int>(buffer.samples.size()) - 1,
+                                static_cast<int>(std::floor(srcPos))));
+                const int srcCeil =
+                    std::min(static_cast<int>(buffer.samples.size()) - 1, srcFloor + 1);
+                const double frac = srcPos - std::floor(srcPos);
+                const double srcSample =
+                    static_cast<double>(buffer.samples[static_cast<std::size_t>(srcFloor)]) * (1.0 - frac)
+                    + static_cast<double>(buffer.samples[static_cast<std::size_t>(srcCeil)]) * frac;
+
                 const double fade = transientFade(i, length, plan.config.transientCrossfadeSamples);
-                const double sample = output[outIndex]
-                                      + (double)buffer.samples[static_cast<std::size_t>(srcIndex)]
-                                            * plan.config.transientGain * marker->gain * buffer.gain * fade;
-                output[outIndex] = sanitize(sample, plan.config.denormalClamp);
+                output[outIndex] += static_cast<float>(
+                    srcSample * plan.config.transientGain * marker->gain * buffer.gain * fade);
             }
         }
     }
 
+    // Final denormal clamp pass over the mixed output.
     for (int i = 0; i < plan.totalSamples; ++i)
         output[i] = sanitize(output[i], plan.config.denormalClamp);
 

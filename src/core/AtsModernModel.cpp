@@ -1,8 +1,7 @@
 #include "AtsModernModel.h"
+#include "AtsJsonInternal.h"
 
 #include <cmath>
-#include <iomanip>
-#include <locale>
 #include <set>
 #include <sstream>
 
@@ -102,60 +101,10 @@ const char* toString(ModernAtsLifecycleKind kind)
 namespace
 {
 
+using ats::json_internal::number;
+using ats::json_internal::appendQuoted;
+
 bool finite(double value) { return std::isfinite(value); }
-
-std::string number(double value)
-{
-    std::ostringstream out;
-    out.imbue(std::locale::classic());
-    out << std::setprecision(17) << value;
-    return out.str();
-}
-
-void appendQuoted(std::ostringstream& out, const std::string& value)
-{
-    out << '"';
-    for (const char c : value)
-    {
-        switch (c)
-        {
-            case '\\':
-                out << "\\\\";
-                break;
-            case '"':
-                out << "\\\"";
-                break;
-            case '\b':
-                out << "\\b";
-                break;
-            case '\f':
-                out << "\\f";
-                break;
-            case '\n':
-                out << "\\n";
-                break;
-            case '\r':
-                out << "\\r";
-                break;
-            case '\t':
-                out << "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20)
-                {
-                    out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-                        << static_cast<int>(static_cast<unsigned char>(c)) << std::dec
-                        << std::setfill(' ');
-                }
-                else
-                {
-                    out << c;
-                }
-                break;
-        }
-    }
-    out << '"';
-}
 
 void appendIntArray(std::ostringstream& out, const std::vector<int>& values)
 {
@@ -254,9 +203,9 @@ bool validateModernAtsModel(const ModernAtsModel& model, std::string& errorMessa
             errorMessage = "Frame time must be finite and non-negative.";
             return false;
         }
-        if (previousFrameTime > frame.timeSeconds)
+        if (previousFrameTime >= frame.timeSeconds && previousFrameTime >= 0.0)
         {
-            errorMessage = "Frame times must be monotonic.";
+            errorMessage = "Frame times must be strictly increasing.";
             return false;
         }
         previousFrameTime = frame.timeSeconds;
@@ -565,7 +514,23 @@ std::string serializeModernAtsModelToJson(const ModernAtsModel& model)
 
 std::size_t estimateModernAtsModelStateBytes(const ModernAtsModel& model)
 {
-    return serializeModernAtsModelToJson(model).size();
+    // Approximate serialized JSON byte count without allocating the full string.
+    // Each double serializes to at most 22 chars (setprecision(17)), each int to ≤11,
+    // each frame payload tag to ~90 chars, each partial-frame record to ~130 chars.
+    std::size_t bytes = 256; // header fields
+    for (const auto& frame : model.frames)
+        bytes += 90 + frame.activePartialIds.size() * 12
+                    + frame.orphanResidualBandEnergy.size() * 23;
+    for (const auto& partial : model.partials)
+        bytes += 64 + partial.label.size() + partial.frames.size() * 130;
+    bytes += model.trackLifecycle.size() * 80;
+    bytes += model.assignmentCosts.size() * 170;
+    bytes += model.transients.size() * 145;
+    for (const auto& buf : model.transientBuffers)
+        bytes += 70 + buf.samples.size() * 17;
+    for (const auto& w : model.warnings)
+        bytes += w.size() + 4;
+    return bytes;
 }
 
 } // namespace ats

@@ -251,6 +251,16 @@ void testValidationRejectsDanglingReferences()
            "transient buffers should reference existing markers");
 }
 
+void testValidationRejectsNonIncreasingFrameTimes()
+{
+    std::string error;
+
+    auto duplicateTimes = makeSmallModel();
+    duplicateTimes.frames.push_back(duplicateTimes.frames.front());
+    expect(!ats::validateModernAtsModel(duplicateTimes, error),
+           "frame times must be strictly increasing");
+}
+
 void testRepresentativeStateSizes()
 {
     struct Shape
@@ -294,6 +304,7 @@ int main()
     testChannelPolicySerializationAndValidation();
     testOptionalFieldsStayEmpty();
     testValidationRejectsDanglingReferences();
+    testValidationRejectsNonIncreasingFrameTimes();
     testRepresentativeStateSizes();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

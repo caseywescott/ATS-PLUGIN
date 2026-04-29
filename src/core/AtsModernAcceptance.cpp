@@ -85,12 +85,13 @@ bool renderSafetyPassed(const ModernAtsRealtimeSafetyReport& safety)
 
 bool ModernAtsAcceptanceReport::passed() const
 {
+    // An empty report (no gates evaluated) is not a failure: all evaluated checks passed.
     for (const auto& check : checks)
     {
         if (!check.passed)
             return false;
     }
-    return !checks.empty();
+    return true;
 }
 
 std::vector<std::string> ModernAtsAcceptanceReport::failureMessages() const

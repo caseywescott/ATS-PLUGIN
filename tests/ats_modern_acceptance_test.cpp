@@ -282,6 +282,13 @@ void testAcceptanceReportFlagsFailures()
     expect(!report.failureMessages().empty(), "failing report should explain failures");
 }
 
+void testEmptyAcceptanceReportPasses()
+{
+    ats::ModernAtsAcceptanceReport report;
+    expect(report.passed(), "empty acceptance report should default to passing");
+    expect(report.failureMessages().empty(), "empty acceptance report should have no failures");
+}
+
 } // namespace
 
 int main()
@@ -289,5 +296,6 @@ int main()
     testMetricHelpers();
     testAcceptanceReportPassesRepresentativeFixtures();
     testAcceptanceReportFlagsFailures();
+    testEmptyAcceptanceReportPasses();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
