@@ -441,7 +441,7 @@ void SessionTabPanel::refreshFromProcessor()
     const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
     trackerModeLabel.setEnabled(trackerSelectable);
     trackerModeCombo.setEnabled(trackerSelectable);
-    if (!trackerSelectable)
+    if (!trackerSelectable && modeWarningLabel.getText().isEmpty())
     {
         modeWarningLabel.setText("Tracker selector is enabled only when Analysis mode is Modern ATS or Experimental reassigned/DDM.",
                                  juce::dontSendNotification);

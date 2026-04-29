@@ -1880,14 +1880,81 @@ bool AtsAudioProcessor::buildSpectrogramTexture(bool partialsMode, int width, in
     out.clear(juce::Rectangle<int>(width, height), juce::Colours::black);
 
     const juce::ScopedLock ml(modelLock);
+
+    const float dbMin = -90.0f;
+    const float dbMax = -10.0f;
+
+    // Use modern model when available (Modern ATS or Experimental analysis modes).
+    if (latestModernModelValid && !latestModernModel.partials.empty())
+    {
+        juce::Image::BitmapData bd(out, juce::Image::BitmapData::writeOnly);
+        const int numPartials = (int) latestModernModel.partials.size();
+        const int numFrames = (int) latestModernModel.frames.size();
+
+        if (partialsMode)
+        {
+            if (numPartials <= 0 || numFrames <= 0)
+                return true;
+
+            for (int y = 0; y < height; ++y)
+            {
+                const int par = juce::jmin(numPartials - 1,
+                    (int) ((int64_t) y * (int64_t) numPartials / (int64_t) height));
+                const auto& partial = latestModernModel.partials[(std::size_t) par];
+                const int partFrames = (int) partial.frames.size();
+                if (partFrames <= 0)
+                    continue;
+                for (int x = 0; x < width; ++x)
+                {
+                    const int fr = juce::jmin(partFrames - 1,
+                        (int) ((int64_t) x * (int64_t) partFrames / (int64_t) width));
+                    const double a = partial.frames[(std::size_t) fr].amplitude;
+                    const float db = (float) (20.0 * std::log10(juce::jmax(1e-15, a)));
+                    const float t = juce::jlimit(0.0f, 1.0f, (db - dbMin) / (dbMax - dbMin));
+                    const auto col = juce::Colour::fromHSV(0.62f - 0.35f * t, 0.55f + 0.35f * t, 0.15f + 0.75f * t, 1.0f);
+                    bd.setPixelColour(x, y, col);
+                }
+            }
+        }
+        else
+        {
+            // Orphan residual band energy stored per frame in the modern model.
+            int numBands = 0;
+            for (const auto& frame : latestModernModel.frames)
+                numBands = juce::jmax(numBands, (int) frame.orphanResidualBandEnergy.size());
+
+            if (numBands <= 0 || numFrames <= 0)
+                return true;
+
+            for (int y = 0; y < height; ++y)
+            {
+                const int band = juce::jmin(numBands - 1,
+                    (int) ((int64_t) y * (int64_t) numBands / (int64_t) height));
+                for (int x = 0; x < width; ++x)
+                {
+                    const int fr = juce::jmin(numFrames - 1,
+                        (int) ((int64_t) x * (int64_t) numFrames / (int64_t) width));
+                    double e = 0.0;
+                    const auto& frame = latestModernModel.frames[(std::size_t) fr];
+                    if (band < (int) frame.orphanResidualBandEnergy.size())
+                        e = frame.orphanResidualBandEnergy[(std::size_t) band];
+                    const float db = (float) (10.0 * std::log10(juce::jmax(1e-20, e)));
+                    const float t = juce::jlimit(0.0f, 1.0f, (db - (dbMin - 20.0f)) / (dbMax - (dbMin - 20.0f)));
+                    const auto col = juce::Colour::fromHSV(0.25f + 0.45f * t, 0.7f, 0.2f + 0.7f * t, 1.0f);
+                    bd.setPixelColour(x, y, col);
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // Fall back to classic ATS_SOUND (Classic ATS mode or when modern model is unavailable).
     auto* s = analyzedModel.get();
     if (s == nullptr || s->frames <= 0)
         return false;
 
     juce::Image::BitmapData bd(out, juce::Image::BitmapData::writeOnly);
-
-    const float dbMin = -90.0f;
-    const float dbMax = -10.0f;
 
     if (partialsMode)
     {
