@@ -81,6 +81,27 @@ These currently live in:
 - `tests/benchmark_phase4_task42.py`
 - `tests/python_temporal_smoothing_test.py`
 
+### Phase 4 Task 4.3 synthetic fixtures
+
+The current Task 4.3 research pass adds two mixed-density frame fixtures plus one boundary-sweep diagnostic for the Python-only sub-band prototype:
+
+- `B1_low_dense_high_sparse`
+  - low band: dense harmonic support with local ripple
+  - high band: sparse bright cluster with a much narrower local feature
+  - metric: dense-grid envelope RMS against the analytical truth curve
+- `B2_bright_high_cluster`
+  - broad low shelf plus isolated bright high-frequency cluster
+  - metric: dense-grid envelope RMS plus overlap seam RMS / max across the `mid -> high` stitching region
+- `B2_boundary_sweep`
+  - four-frame synthetic sweep that moves the bright high-band bump across the mid/high boundary
+  - metric: zipper residual RMS / max after subtracting the known truth motion, plus per-frame anchor diagnostics
+
+These currently live in:
+
+- `tests/phase4_task43_fixtures.py`
+- `tests/python_subband_adaptive_test.py`
+- `tests/benchmark_phase4_task43.py`
+
 ---
 
 ## Metric Definitions

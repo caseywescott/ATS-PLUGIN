@@ -95,6 +95,63 @@ This is a promotion candidate for a later C++ port, but it remains behind the ex
 
 ---
 
+## Python model: sub-band adaptive cepstrum — 2026-04-30
+
+Added an opt-in Task 4.3 prototype to the Python reference path:
+
+- `SubbandAdaptiveOptions`
+- band-local Bark-space layouts inside `fit_new_model()`
+- overlap-add recombination on a shared Bark grid
+
+The prototype keeps the current global estimator as the anchor rather than replacing it outright. Three behaviors mattered most in practice:
+
+- dense frames (`>= 24` usable points) no-op back to the current global fit
+- sparse or mixed-density frames get local order/lambda selection from per-band support count and global-model uncertainty
+- when overlap seams grow too large, a frame-level global anchor pulls the result back toward the baseline instead of letting the local bands diverge unchecked
+
+New diagnostics now report:
+
+- per-band point count, effective order, lambda, uncertainty, confidence, and solve status
+- overlap seam RMS / max per adjacent band pair
+- frame-level global-anchor weight used to tame seam-heavy cases
+- sub-band apply/no-op reason for dense or under-supported frames
+
+### Task 4.3 benchmark results
+
+| Metric | Global | Sub-band | Outcome |
+| --- | ---: | ---: | --- |
+| `S1 dense harmonic` RMS | `0.721911 dB` | `0.721911 dB` | no regression (`dense_global_noop`) |
+| `S2 sparse guitar` RMS | `1.889463 dB` | `1.889463 dB` | no improvement (`insufficient_band_support`) |
+| `S5 inharmonic` RMS | `0.233253 dB` | `0.215013 dB` | `7.82%` lower |
+| `B1 low-dense/high-sparse` RMS | `1.002393 dB` | `0.917329 dB` | `8.49%` lower |
+| `B2 bright high cluster` RMS | `1.023540 dB` | `0.893967 dB` | `12.66%` lower |
+| `B2` seam RMS / max | `n/a` | `0.588554 / 1.596426 dB` | inside `0.75 / 1.8 dB` threshold |
+| Boundary sweep zipper RMS / max | `n/a` | `2.035388 / 6.495903 dB` | still too large |
+
+### Stop/go decision
+
+The Python prototype does not clear the Task 4.3 promotion gates:
+
+- `B1` improved by more than the required `8%`
+- `B2` stayed inside the documented seam threshold
+- `S1` stayed flat because dense frames were explicitly guarded
+- `S5` improved, but only by `7.82%`, below the `10%` gate
+- the synthetic boundary sweep still shows strong zippering even with the global-anchor safeguard
+
+This remains a research-only path behind `SubbandAdaptiveOptions(enabled=True)`. It should not be ported to C++ or promoted into the default estimator path in its current form.
+
+### Verification
+
+- `python3 tests/python_subband_adaptive_test.py`
+- `python3 tests/benchmark_phase4_task43.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_three_models.py`
+
+---
+
 ## Python port parity fixes — 2026-04-28 (commit 453194d)
 
 Two correctness bugs in the Python port fixed to match C++ behavior.

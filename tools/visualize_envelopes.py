@@ -412,6 +412,18 @@ class TemporalEnvelopeSmoothingOptions:
 
 
 @dataclass
+class SubbandAdaptiveOptions:
+    enabled: bool = False
+    axis: str = "bark"
+    band_count: int = 3
+    overlap: float = 0.14
+    min_band_points: int = 1
+    sample_grid_size: int = 96
+    seam_rms_threshold_db: float = 0.75
+    seam_max_threshold_db: float = 1.80
+
+
+@dataclass
 class _TemporalEnvelopeState:
     grid_freqs_hz: list[float]
     values_db: object
@@ -1204,22 +1216,18 @@ def _select_or_blend_axis_models(
     return grid_hz, grid_db, diag, blend_model
 
 
-def fit_new_model(
+def _fit_global_model(
     frame_partials: list,
     sample_rate: float,
     lowest_freq_hz: float,
     highest_freq_hz: float,
-    order: int = 16,
-    regularization: float = 1.0e-3,
-    previous_model=None,    # _EnvelopeModel | None
-    grid_size: int = 512,
-    use_gcv: bool = False,
-    true_envelope_release_mode: str = "heuristic",
+    order: int,
+    regularization: float,
+    previous_model,
+    grid_size: int,
+    use_gcv: bool,
+    true_envelope_release_mode: str,
 ) -> tuple:
-    """Fit the new estimator with adaptive regularisation and axis selection.
-
-    Returns (grid_freqs_hz, grid_db, diagnostics_dict, _EnvelopeModel).
-    """
     import numpy as np
 
     min_hz = max(lowest_freq_hz, 1.0)
@@ -1244,6 +1252,402 @@ def fit_new_model(
         for axis in ("linear", "mel", "bark")
     }
     return _select_or_blend_axis_models(axis_results, usable, min_hz, max_hz)
+
+
+def _make_subband_layout(count: int, overlap: float) -> list[dict]:
+    count = max(2, count)
+    overlap = max(0.0, min(0.45, overlap))
+    half_overlap = overlap * 0.5
+    labels = ["low", "mid", "high"] if count == 3 else [f"band_{idx + 1}" for idx in range(count)]
+    layout = []
+    for idx in range(count):
+        core_lo = idx / float(count)
+        core_hi = (idx + 1) / float(count)
+        layout.append({
+            "label": labels[idx],
+            "lo": max(0.0, core_lo - half_overlap),
+            "core_lo": core_lo,
+            "core_hi": core_hi,
+            "hi": min(1.0, core_hi + half_overlap),
+        })
+    return layout
+
+
+def _subband_window(position: float, band: dict) -> float:
+    lo = band["lo"]
+    core_lo = band["core_lo"]
+    core_hi = band["core_hi"]
+    hi = band["hi"]
+    if position < lo or position > hi:
+        return 0.0
+    if position <= core_lo:
+        denom = max(core_lo - lo, 1.0e-9)
+        t = max(0.0, min(1.0, (position - lo) / denom))
+        return 0.5 - 0.5 * math.cos(math.pi * t)
+    if position >= core_hi:
+        denom = max(hi - core_hi, 1.0e-9)
+        t = max(0.0, min(1.0, (hi - position) / denom))
+        return 0.5 - 0.5 * math.cos(math.pi * t)
+    return 1.0
+
+
+def _build_subband_points(
+    usable: list,
+    band: dict,
+    min_hz: float,
+    max_hz: float,
+    axis: str,
+) -> tuple[list, int]:
+    band_points = []
+    support_count = 0
+    for point in usable:
+        position = _normalized_position_axis(point["frequency_hz"], min_hz, max_hz, axis)
+        window = _subband_window(position, band)
+        if window <= 0.0:
+            continue
+        if window >= 0.20:
+            support_count += 1
+        weighted_point = dict(point)
+        weighted_point["weight"] = max(1.0e-4, point["weight"] * window)
+        band_points.append(weighted_point)
+    return band_points, support_count
+
+
+def _subband_mean_sigma_db(global_model: _EnvelopeModel, band_points: list) -> float:
+    weighted = []
+    for point in band_points:
+        sigma_db = _evaluate_prediction_sigma(global_model, point["frequency_hz"])
+        if math.isfinite(sigma_db) and sigma_db > 0.0:
+            weighted.append((point["weight"], sigma_db))
+    if weighted:
+        w_sum = max(sum(weight for weight, _ in weighted), 1.0e-9)
+        return sum(weight * sigma for weight, sigma in weighted) / w_sum
+    return max(math.sqrt(max(global_model.noise_variance, 0.0)), 0.35)
+
+
+def _select_subband_order(
+    base_order: int,
+    support_count: int,
+    density_ratio: float,
+    mean_sigma_db: float,
+) -> int:
+    if support_count <= 1:
+        return 0
+    max_supported = max(1, support_count - 1)
+    density_ratio = max(0.0, min(1.0, density_ratio))
+    sigma_penalty = min(0.55, mean_sigma_db / 3.0)
+    target_order = 2 + round((max(base_order, 2) - 2) * max(0.15, density_ratio) * (1.0 - sigma_penalty))
+    return max(1, min(base_order, max_supported, target_order))
+
+
+def _subband_regularization(
+    base_reg: float,
+    density_ratio: float,
+    mean_sigma_db: float,
+    support_count: int,
+) -> float:
+    density_ratio = max(0.0, min(1.0, density_ratio))
+    sigma_ratio = min(1.5, mean_sigma_db / 0.8)
+    sparsity = 1.0 - density_ratio
+    reg = max(base_reg, 1.0e-5) * (0.55 + 1.35 * sparsity + 0.85 * sigma_ratio)
+    if support_count <= 3:
+        reg *= 1.15
+    return min(max(reg, 1.0e-5), 5.0e-2)
+
+
+def _blend_subband_value(frequency_hz: float, bands: list, axis: str, min_hz: float, max_hz: float) -> float:
+    position = _normalized_position_axis(frequency_hz, min_hz, max_hz, axis)
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for band_entry in bands:
+        window = _subband_window(position, band_entry["layout"])
+        if window <= 0.0:
+            continue
+        weighted_sum += window * _evaluate_new_model(band_entry["model"], frequency_hz)
+        weight_total += window
+    if weight_total <= 1.0e-9:
+        return _evaluate_new_model(bands[0]["model"], frequency_hz)
+    return weighted_sum / weight_total
+
+
+def _fit_subband_model(
+    usable: list,
+    min_hz: float,
+    max_hz: float,
+    order: int,
+    regularization: float,
+    grid_size: int,
+    use_gcv: bool,
+    true_envelope_release_mode: str,
+    global_diag: dict,
+    global_model: _EnvelopeModel,
+    options: SubbandAdaptiveOptions,
+) -> tuple[list[float], list[float], dict, _EnvelopeModel] | None:
+    import numpy as np
+
+    axis = options.axis if options.axis in ("linear", "mel", "bark") else "bark"
+    layout = _make_subband_layout(options.band_count, options.overlap)
+    sample_grid_size = max(grid_size, max(32, options.sample_grid_size))
+    sample_grid_hz = _make_bark_grid(min_hz, max_hz, sample_grid_size)
+
+    band_entries = []
+    band_diags = []
+    for band in layout:
+        band_points, support_count = _build_subband_points(usable, band, min_hz, max_hz, axis)
+        if support_count < max(1, options.min_band_points):
+            return None
+
+        band_width = max(band["core_hi"] - band["core_lo"], 1.0e-6)
+        band_min_hz = _frequency_for_position(band["lo"], min_hz, max_hz, axis)
+        band_max_hz = _frequency_for_position(band["hi"], min_hz, max_hz, axis)
+        density_ratio = min(1.0, support_count / max(5.0, 15.0 * band_width))
+        mean_sigma_db = _subband_mean_sigma_db(global_model, band_points)
+        local_order = _select_subband_order(order, support_count, density_ratio, mean_sigma_db)
+        local_reg = _subband_regularization(regularization, density_ratio, mean_sigma_db, support_count)
+
+        _, _, band_diag, band_model = _fit_axis_model(
+            band_points,
+            band_min_hz,
+            band_max_hz,
+            local_order,
+            local_reg,
+            None,
+            sample_grid_size,
+            use_gcv,
+            axis,
+            true_envelope_release_mode,
+        )
+
+        band_sigma_grid = []
+        for freq_hz in sample_grid_hz:
+            sigma_db = _evaluate_prediction_sigma(band_model, freq_hz)
+            if not math.isfinite(sigma_db) or sigma_db <= 0.0:
+                sigma_db = max(math.sqrt(max(band_model.noise_variance, 0.0)), 0.25)
+            band_sigma_grid.append(sigma_db)
+
+        confidence = 1.0 / (1.0 + mean_sigma_db + band_diag["weighted_error_db"])
+        band_entries.append({
+            "layout": band,
+            "model": band_model,
+            "sigma_grid": band_sigma_grid,
+        })
+        band_diags.append({
+            "label": band["label"],
+            "point_count": support_count,
+            "effective_order": band_model.order,
+            "regularization": local_reg,
+            "uncertainty_db": mean_sigma_db,
+            "confidence": max(0.0, min(1.0, confidence)),
+            "weighted_error_db": band_diag["weighted_error_db"],
+            "condition_estimate": band_diag["condition_estimate"],
+            "solve_status": band_diag["solve_status"],
+            "coverage": band_diag["coverage"],
+        })
+
+    blended_values = []
+    blended_sigma = []
+    for sample_index, freq_hz in enumerate(sample_grid_hz):
+        position = _normalized_position_axis(freq_hz, min_hz, max_hz, axis)
+        contributions = []
+        for band_entry in band_entries:
+            window = _subband_window(position, band_entry["layout"])
+            if window <= 0.0:
+                continue
+            contributions.append((window, band_entry))
+        if not contributions:
+            blended_values.append(_evaluate_new_model(global_model, freq_hz))
+            blended_sigma.append(max(math.sqrt(max(global_model.noise_variance, 0.0)), 0.35))
+            continue
+        weight_total = sum(weight for weight, _ in contributions)
+        normalized = [(weight / max(weight_total, 1.0e-9), band_entry) for weight, band_entry in contributions]
+        blended_values.append(sum(
+            weight * _evaluate_new_model(band_entry["model"], freq_hz)
+            for weight, band_entry in normalized
+        ))
+        blended_sigma.append(math.sqrt(sum(
+            (weight * band_entry["sigma_grid"][sample_index]) ** 2
+            for weight, band_entry in normalized
+        )))
+
+    seam_pairs = []
+    for band_index in range(len(band_entries) - 1):
+        left = band_entries[band_index]
+        right = band_entries[band_index + 1]
+        overlap_lo = max(left["layout"]["lo"], right["layout"]["lo"])
+        overlap_hi = min(left["layout"]["hi"], right["layout"]["hi"])
+        overlap_freqs = [
+            freq_hz
+            for freq_hz in sample_grid_hz
+            if overlap_lo <= _normalized_position_axis(freq_hz, min_hz, max_hz, axis) <= overlap_hi
+        ]
+        if not overlap_freqs:
+            seam_pairs.append({"pair": f"{left['layout']['label']}->{right['layout']['label']}", "rms_db": 0.0, "max_db": 0.0})
+            continue
+        diffs = [
+            _evaluate_new_model(left["model"], freq_hz) - _evaluate_new_model(right["model"], freq_hz)
+            for freq_hz in overlap_freqs
+        ]
+        seam_pairs.append({
+            "pair": f"{left['layout']['label']}->{right['layout']['label']}",
+            "rms_db": math.sqrt(sum(diff * diff for diff in diffs) / max(len(diffs), 1)),
+            "max_db": max(abs(diff) for diff in diffs),
+        })
+
+    seam_rms = max((pair["rms_db"] for pair in seam_pairs), default=0.0)
+    seam_max = max((pair["max_db"] for pair in seam_pairs), default=0.0)
+    mean_confidence = sum(band["confidence"] for band in band_diags) / max(len(band_diags), 1)
+    global_anchor_weight = min(
+        0.70,
+        max(
+            0.05,
+            0.08
+            + 0.28 * (1.0 - mean_confidence)
+            + 0.18 * max(0.0, seam_rms / max(options.seam_rms_threshold_db, 1.0e-6) - 1.0)
+            + 0.12 * max(0.0, seam_max / max(options.seam_max_threshold_db, 1.0e-6) - 1.0),
+        ),
+    )
+    for sample_index, freq_hz in enumerate(sample_grid_hz):
+        global_value = _evaluate_new_model(global_model, freq_hz)
+        global_sigma = max(math.sqrt(max(global_model.noise_variance, 0.0)), 0.35)
+        blended_values[sample_index] = (
+            (1.0 - global_anchor_weight) * blended_values[sample_index]
+            + global_anchor_weight * global_value
+        )
+        blended_sigma[sample_index] = math.sqrt(
+            ((1.0 - global_anchor_weight) * blended_sigma[sample_index]) ** 2
+            + (global_anchor_weight * global_sigma) ** 2
+        )
+
+    blended_variance = [sigma_db * sigma_db for sigma_db in blended_sigma]
+    blended_model = _build_sampled_model(
+        blended_values,
+        blended_variance,
+        min_hz,
+        max_hz,
+        global_model,
+        len(usable),
+        0.0,
+        "subband_adaptive",
+    )
+    blended_weighted_error = math.sqrt(sum(
+        point["weight"] * (point["log_amplitude_db"] - _evaluate_new_model(blended_model, point["frequency_hz"])) ** 2
+        for point in usable
+    ) / max(sum(point["weight"] for point in usable), 1.0e-9))
+    blended_model.weighted_error_db = blended_weighted_error
+
+    output_grid_hz = list(sample_grid_hz)
+    output_grid_db = [_evaluate_new_model(blended_model, freq_hz) for freq_hz in output_grid_hz]
+    diag = dict(global_diag)
+    diag.update({
+        "axis": axis,
+        "selected_axis": f"subband_{axis}",
+        "selection_mode": "subband_overlap_add",
+        "fit_points": len(usable),
+        "real_fit_points": len(usable),
+        "weighted_error_db": blended_weighted_error,
+        "condition_estimate": max(band["condition_estimate"] for band in band_diags),
+        "fallback": None,
+        "virtual_points": 0,
+        "gcv_lambda": None,
+        "gcv_was_used": use_gcv,
+        "noise_variance_db2": float(sum(blended_variance) / max(len(blended_variance), 1)),
+        "has_uncertainty": True,
+        "predict_sigma_grid": list(blended_sigma),
+        "subband_enabled": True,
+        "subband_applied": True,
+        "subband_band_count": len(layout),
+        "subband_axis": axis,
+        "subband_global_weighted_error_db": global_diag["weighted_error_db"],
+        "subband_global_anchor_weight": global_anchor_weight,
+        "band_seam_rms_db": seam_rms,
+        "band_seam_max_db": seam_max,
+        "band_seam_pairs": seam_pairs,
+        "band_seam_rms_threshold_db": options.seam_rms_threshold_db,
+        "band_seam_max_threshold_db": options.seam_max_threshold_db,
+        "subbands": band_diags,
+        "solve_status": "subband_adaptive",
+    })
+    return output_grid_hz, output_grid_db, diag, blended_model
+
+
+def fit_new_model(
+    frame_partials: list,
+    sample_rate: float,
+    lowest_freq_hz: float,
+    highest_freq_hz: float,
+    order: int = 16,
+    regularization: float = 1.0e-3,
+    previous_model=None,    # _EnvelopeModel | None
+    grid_size: int = 512,
+    use_gcv: bool = False,
+    true_envelope_release_mode: str = "heuristic",
+    subband_options: SubbandAdaptiveOptions | None = None,
+) -> tuple:
+    """Fit the new estimator with adaptive regularisation and optional sub-bands.
+
+    Returns (grid_freqs_hz, grid_db, diagnostics_dict, _EnvelopeModel).
+    """
+    if subband_options is None:
+        subband_options = SubbandAdaptiveOptions()
+
+    global_grid_hz, global_grid_db, global_diag, global_model = _fit_global_model(
+        frame_partials,
+        sample_rate,
+        lowest_freq_hz,
+        highest_freq_hz,
+        order,
+        regularization,
+        previous_model,
+        grid_size,
+        use_gcv,
+        true_envelope_release_mode,
+    )
+    if not subband_options.enabled or not global_grid_hz:
+        return global_grid_hz, global_grid_db, global_diag, global_model
+
+    min_hz = max(lowest_freq_hz, 1.0)
+    max_hz = min(highest_freq_hz, sample_rate * 0.5)
+    usable = sorted(
+        [
+            point for point in _build_fit_points_new(frame_partials, min_hz, max_hz)
+            if min_hz <= point["frequency_hz"] <= max_hz and point["weight"] > 0.0
+        ],
+        key=lambda point: point["frequency_hz"],
+    )
+    if not usable:
+        return global_grid_hz, global_grid_db, global_diag, global_model
+
+    if len(usable) >= 24:
+        fallback_diag = dict(global_diag)
+        fallback_diag.update({
+            "subband_enabled": True,
+            "subband_applied": False,
+            "subband_reason": "dense_global_noop",
+        })
+        return global_grid_hz, global_grid_db, fallback_diag, global_model
+
+    subband_result = _fit_subband_model(
+        usable,
+        min_hz,
+        max_hz,
+        order,
+        regularization,
+        grid_size,
+        use_gcv,
+        true_envelope_release_mode,
+        global_diag,
+        global_model,
+        subband_options,
+    )
+    if subband_result is None:
+        fallback_diag = dict(global_diag)
+        fallback_diag.update({
+            "subband_enabled": True,
+            "subband_applied": False,
+            "subband_reason": "insufficient_band_support",
+        })
+        return global_grid_hz, global_grid_db, fallback_diag, global_model
+    return subband_result
 
 
 def _make_bark_grid(min_hz: float, max_hz: float, grid_size: int) -> list[float]:

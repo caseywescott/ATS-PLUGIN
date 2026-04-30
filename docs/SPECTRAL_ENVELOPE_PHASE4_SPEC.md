@@ -294,17 +294,17 @@ Fitting a small number of overlapping Bark or ERB sub-bands with local order and
 
 ### Work Items
 
-- [ ] Define a small overlapping sub-band layout on Bark or ERB axes.
-- [ ] Select local order and lambda from per-band point density and uncertainty.
-- [ ] Blend bands with continuity penalties or overlap-add weighting.
-- [ ] Record diagnostics per band: point count, order, lambda, confidence, and seam energy.
-- [ ] Compare against the current global model on all five canonical scenarios plus `B1/B2`.
+- [x] Define a small overlapping sub-band layout on Bark axes.
+- [x] Select local order and lambda from per-band point density and uncertainty.
+- [x] Blend bands with overlap-add weighting plus a global-anchor fallback when seams get large.
+- [x] Record diagnostics per band: point count, order, lambda, confidence, seam energy, and anchor weight.
+- [x] Compare against the current global model on all five canonical scenarios plus `B1/B2`.
 
 ### Acceptance Criteria
 
 - [ ] `S5` improves by at least `10%`.
-- [ ] `B1_low_dense_high_sparse` improves by at least `8%`.
-- [ ] Band seam error stays below a documented threshold across overlap regions.
+- [x] `B1_low_dense_high_sparse` improves by at least `8%`.
+- [x] Band seam error stays below the documented `0.75 dB RMS` / `1.8 dB max` threshold across `B2` overlap regions.
 - [ ] No zippering when a peak crosses a band boundary in synthetic sweeps.
 
 ### Expected Win
@@ -320,6 +320,50 @@ Fitting a small number of overlapping Bark or ERB sub-bands with local order and
 ### Stop/Go Rule
 
 Ship only if mixed-band fixtures improve and seam checks stay clean.
+
+### Outcome - 2026-04-30
+
+Status: `research only`, behind explicit Python-only option `SubbandAdaptiveOptions(enabled=True)`. Do not port to C++ yet.
+
+Prototype details:
+
+- Added an opt-in sub-band path to `fit_new_model()` in `tools/visualize_envelopes.py`.
+- The prototype uses three overlapping Bark-space bands with local order/lambda selection from per-band support count and global-model uncertainty.
+- Each band is fit independently, then recombined with overlap-add weighting on a shared Bark grid.
+- When adjacent band seams grow too large, a frame-level global anchor blends the result back toward the existing global model rather than silently promoting a brittle local fit.
+- Dense frames (`>= 24` usable points) short-circuit to the existing global path so the sub-band option does not perturb the dense baseline.
+
+Verification:
+
+- `python3 tests/python_subband_adaptive_test.py`
+- `python3 tests/benchmark_phase4_task43.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_three_models.py`
+
+Task 4.3 benchmark results:
+
+| Metric | Global | Sub-band | Gate | Result |
+| --- | ---: | ---: | --- | --- |
+| `S1` RMS | `0.721911 dB` | `0.721911 dB` | regression `< 0.03 dB` | pass |
+| `S2` RMS | `1.889463 dB` | `1.889463 dB` | improve by `5-10%` | fail (`0.00%`, insufficient band support so the option fell back to the global model) |
+| `S5` RMS | `0.233253 dB` | `0.215013 dB` | improve by `10-20%` | fail (`7.82%`) |
+| `B1` RMS | `1.002393 dB` | `0.917329 dB` | improve by `>= 8%` | pass (`8.49%`) |
+| `B2` RMS | `1.023540 dB` | `0.893967 dB` | seam gate only | pass (`12.66%` better) |
+| `B2` seam RMS / max | `n/a` | `0.588554 / 1.596426 dB` | `<= 0.75 / 1.8 dB` | pass |
+| Boundary sweep zipper RMS / max | `n/a` | `2.035388 / 6.495903 dB` | `<= 0.75 / 1.8 dB` | fail |
+
+Stop/go decision:
+
+- The dense no-regression guard worked: `S1` stayed flat because dense frames now no-op back to the current global estimator.
+- The mixed-density target passed: `B1_low_dense_high_sparse` improved by `8.49%`, and `B2_bright_high_cluster` stayed inside the documented seam threshold.
+- The promotion gates still failed overall:
+  - `S2_sparse_guitar` did not improve because the prototype judged it under-supported and fell back to the global path.
+  - `S5` improved, but only by `7.82%`, below the required `10%`.
+  - The synthetic band-boundary sweep still shows large zippering (`2.035388 dB RMS`, `6.495903 dB max`) even with the global-anchor safeguard.
+- This makes Task 4.3 a documented research result, not a promotion candidate.
 
 ---
 

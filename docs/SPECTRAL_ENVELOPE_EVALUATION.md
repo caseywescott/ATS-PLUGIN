@@ -40,3 +40,12 @@ LPC is useful for broad resonant, formant-like contours when the frame has enoug
 The F0-adaptive waveform prototype is intentionally optional and non-default. It is exposed as `f0-adaptive/waveform-prototype`, but it only estimates when the frame includes waveform-derived spectrum samples plus reliable F0 metadata. Partial-only ATS frames, missing waveform data, out-of-range F0 values, low F0 confidence, and sparse spectra are rejected with diagnostics instead of silently falling back to a speech-oriented assumption.
 
 The prototype follows the CheapTrick/WORLD design idea at a high level: smooth a dense waveform spectrum using a frequency bandwidth tied to the current F0, then store the result as sampled log-amplitude envelope values. This can help singing, spoken voice, and monophonic pitched instruments where F0 is reliable and the waveform spectrum contains enough harmonic detail. It is not a general replacement for RDC: inharmonic sources, dense polyphony, noisy textures, percussive frames, missing waveform input, or uncertain F0 should continue to use the default sparse-partial estimator or another explicit comparison estimator.
+
+---
+
+## Task 4.3 Research Metrics
+
+The Phase 4 Task 4.3 sub-band prototype adds two evaluation metrics on top of the standard envelope RMS checks:
+
+- **Band Seam Error:** evaluate each adjacent band pair over their overlap region before the final overlap-add mix, then report seam RMS and seam max in dB. The current research threshold is `<= 0.75 dB RMS` and `<= 1.8 dB max`.
+- **Boundary-Sweep Zipper Error:** for a synthetic sequence that moves a bright bump across a band boundary, subtract the known truth motion from the estimated frame-to-frame motion and report RMS / max residual in dB. This is the guard against visually or audibly obvious stitching jumps when a feature crosses from one local band fit to another.
