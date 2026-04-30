@@ -42,6 +42,59 @@ Important details:
 
 ---
 
+## Python model: temporal state-space smoothing — 2026-04-30
+
+Added an opt-in sequential smoothing path to the Python reference model:
+
+- `TemporalEnvelopeFrame`
+- `TemporalEnvelopeSmoothingOptions`
+- `fit_new_model_sequence()`
+
+The smoother operates on a shared sampled Bark grid, uses the current frame's predictive sigma as observation covariance, and blends each frame with the previous temporal state using a Kalman-style update. Two safety hooks mattered most in practice:
+
+- transient-boundary frames bypass the prior completely to avoid onset smear
+- optional `motion_scale` / `residual_scale` metadata can raise process noise when real motion is expected
+
+New diagnostics now report:
+
+- temporal gain mean/min/max
+- prior vs observation variance ratio
+- process-noise scale
+- frame-to-frame delta RMS
+- gate reason
+
+### Task 4.2 benchmark results
+
+| Metric | Raw | Smoothed | Outcome |
+| --- | ---: | ---: | --- |
+| `T1_held_missing_partials` jitter | `0.995672 dB` | `0.765997 dB` | `23.07%` lower |
+| `T2_onset_sustain_decay` onset RMS | `0.907323 dB` | `0.907323 dB` | no smear regression |
+| `T3_vibrato_drift` drift tracking error | `1.175007 dB` | `0.975729 dB` | `16.96%` lower |
+| `S1` regression check | `0.632968 dB` | `0.545600 dB` | improved |
+| `S3` regression check | `1.137595 dB` | `1.154675 dB` | `+0.017080 dB`, inside gate |
+| `S5` regression check | `0.366228 dB` | `0.349044 dB` | improved |
+
+### Stop/go decision
+
+The Python prototype cleared the Task 4.2 stop/go rule:
+
+- jitter dropped by more than the required `20%`
+- onset smearing stayed clean after transient-boundary bypass
+- drift motion was preserved and tracked more accurately
+- `S1/S3/S5` stayed inside the documented no-regression envelope
+
+This is a promotion candidate for a later C++ port, but it remains behind the explicit `TemporalEnvelopeSmoothingOptions(enabled=True)` flag for now.
+
+### Verification
+
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_three_models.py`
+
+---
+
 ## Python port parity fixes — 2026-04-28 (commit 453194d)
 
 Two correctness bugs in the Python port fixed to match C++ behavior.

@@ -201,18 +201,18 @@ A state-space smoother over cepstral coefficients or sampled Bark envelopes will
 
 ### Work Items
 
-- [ ] Define a temporal state for either cepstral coefficients or sampled Bark-grid envelopes.
-- [ ] Use current per-frame uncertainty as observation covariance.
-- [ ] Add transient and onset gates so smoothing weakens across fast spectral changes.
-- [ ] Add optional process-noise scaling from residual energy, harmonicity, or F0 drift confidence.
-- [ ] Emit diagnostics: applied smoothing gain, prior/observation balance, and gate reason.
+- [x] Define a temporal state for either cepstral coefficients or sampled Bark-grid envelopes.
+- [x] Use current per-frame uncertainty as observation covariance.
+- [x] Add transient and onset gates so smoothing weakens across fast spectral changes.
+- [x] Add optional process-noise scaling from residual energy, harmonicity, or F0 drift confidence.
+- [x] Emit diagnostics: applied smoothing gain, prior/observation balance, and gate reason.
 
 ### Acceptance Criteria
 
-- [ ] `T1_held_missing_partials` jitter drops by at least `20%`.
-- [ ] `T2_onset_sustain_decay` does not smear the onset beyond the `5%` gate.
-- [ ] `T3_vibrato_drift` follows genuine motion instead of flattening it away.
-- [ ] Existing non-sequential fixtures remain inside the no-regression envelope.
+- [x] `T1_held_missing_partials` jitter drops by at least `20%`.
+- [x] `T2_onset_sustain_decay` does not smear the onset beyond the `5%` gate.
+- [x] `T3_vibrato_drift` follows genuine motion instead of flattening it away.
+- [x] Existing non-sequential fixtures remain inside the no-regression envelope.
 
 ### Expected Win
 
@@ -227,6 +227,47 @@ A state-space smoother over cepstral coefficients or sampled Bark envelopes will
 ### Stop/Go Rule
 
 Ship only if jitter drops and onset-smearing tests remain clean.
+
+### Outcome - 2026-04-30
+
+Status: `promotion candidate`, still behind explicit Python-only option `TemporalEnvelopeSmoothingOptions(enabled=True)`. No C++ port yet.
+
+Prototype details:
+
+- Added `TemporalEnvelopeFrame`, `TemporalEnvelopeSmoothingOptions`, and `fit_new_model_sequence()` in `tools/visualize_envelopes.py`.
+- The temporal state lives on a shared sampled Bark grid rather than on raw cepstral coefficients.
+- Observation covariance comes from the current frame's predictive sigma grid, with a small floor for stability.
+- The smoother uses a Kalman-style prior/observation blend, with explicit transient-boundary bypass and optional `motion_scale` / `residual_scale` process-noise scaling hooks.
+- Diagnostics now report temporal gain, prior/observation ratio, process-noise scaling, delta RMS, and the gate reason.
+
+Verification:
+
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_three_models.py`
+
+Task 4.2 benchmark results:
+
+| Metric | Raw | Smoothed | Gate | Result |
+| --- | ---: | ---: | --- | --- |
+| `T1` temporal jitter | `0.995672 dB` | `0.765997 dB` | reduce by `20-35%` | pass (`23.07%`) |
+| `T2` onset-frame RMS | `0.907323 dB` | `0.907323 dB` | worsen by `<= 5%` | pass (`0.00%`) |
+| `T3` drift-band motion | `1.389890 dB` | `1.174311 dB` | must not flatten real motion | pass |
+| `T3` truth motion reference | `0.562035 dB` | `1.174311 dB` | retain genuine motion | pass (`2.089x` truth floor) |
+| `T3` drift tracking error | `1.175007 dB` | `0.975729 dB` | follow real motion | pass (`16.96%` lower) |
+| `S1` RMS | `0.632968 dB` | `0.545600 dB` | regression `< 0.02 dB` | pass |
+| `S3` RMS | `1.137595 dB` | `1.154675 dB` | regression `< 0.02 dB` | pass (`+0.017080 dB`) |
+| `S5` RMS | `0.366228 dB` | `0.349044 dB` | regression `< 0.02 dB` | pass |
+
+Stop/go decision:
+
+- The primary gate passed: `T1` jitter improved by more than the required `20%`.
+- The onset-smear gate passed after switching transient-boundary frames to an explicit observation-only bypass.
+- The drift fixture passed the non-flattening requirement and reduced drift-tracking error materially.
+- All documented no-regression gates stayed inside the envelope.
+- This makes the Python prototype eligible for a later C++ port, but it should remain behind the explicit temporal-smoothing option until that port exists and the runtime path is benchmarked separately.
 
 ---
 

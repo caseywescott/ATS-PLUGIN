@@ -59,8 +59,27 @@ The current Task 4.1 research pass implements two deterministic clustered sparse
 
 These currently live in:
 
-- `Tests/benchmark_phase4_task41.py`
+- `tests/benchmark_phase4_task41.py`
 - `tests/python_model_improvements_test.py`
+
+### Phase 4 Task 4.2 synthetic fixtures
+
+The current Task 4.2 research pass adds three sequential fixtures for opt-in temporal smoothing on the Python reference path:
+
+- `T1_held_missing_partials`
+  - steady sparse note with intermittent missing harmonic observations across frames
+  - metric: shared-grid temporal jitter after subtracting zero-motion truth
+- `T2_onset_sustain_decay`
+  - onset-adjacent frame sequence with one transient-boundary frame followed by sustain
+  - metric: onset-band local RMS plus transient gate diagnostics
+- `T3_vibrato_drift`
+  - small frequency drift with a moving Bark-space bump so the envelope really changes across frames
+  - metric: drift-band motion retention and drift-tracking error against truth motion
+
+These currently live in:
+
+- `tests/benchmark_phase4_task42.py`
+- `tests/python_temporal_smoothing_test.py`
 
 ---
 
