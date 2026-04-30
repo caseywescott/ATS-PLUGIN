@@ -424,6 +424,22 @@ class SubbandAdaptiveOptions:
 
 
 @dataclass
+class RefinementOptions:
+    enabled: bool = False
+    bark_grid_size: int = 72
+    max_iterations: int = 3
+    initial_step_size: float = 0.55
+    min_step_size: float = 0.05
+    max_delta_db: float = 1.25
+    blur_weight: float = 0.35
+    anchor_strength: float = 0.20
+    uncertainty_gain: float = 0.65
+    dense_target_hz: list[float] | None = None
+    dense_target_db: list[float] | None = None
+    target_label: str = ""
+
+
+@dataclass
 class _TemporalEnvelopeState:
     grid_freqs_hz: list[float]
     values_db: object
@@ -1582,6 +1598,7 @@ def fit_new_model(
     use_gcv: bool = False,
     true_envelope_release_mode: str = "heuristic",
     subband_options: SubbandAdaptiveOptions | None = None,
+    refinement_options: RefinementOptions | None = None,
 ) -> tuple:
     """Fit the new estimator with adaptive regularisation and optional sub-bands.
 
@@ -1589,6 +1606,8 @@ def fit_new_model(
     """
     if subband_options is None:
         subband_options = SubbandAdaptiveOptions()
+    if refinement_options is None:
+        refinement_options = RefinementOptions()
 
     global_grid_hz, global_grid_db, global_diag, global_model = _fit_global_model(
         frame_partials,
@@ -1602,11 +1621,25 @@ def fit_new_model(
         use_gcv,
         true_envelope_release_mode,
     )
-    if not subband_options.enabled or not global_grid_hz:
-        return global_grid_hz, global_grid_db, global_diag, global_model
+    selected_grid_hz = global_grid_hz
+    selected_grid_db = global_grid_db
+    selected_diag = global_diag
+    selected_model = global_model
 
     min_hz = max(lowest_freq_hz, 1.0)
     max_hz = min(highest_freq_hz, sample_rate * 0.5)
+    if not subband_options.enabled or not global_grid_hz:
+        if refinement_options.enabled and selected_grid_hz:
+            return _apply_optional_refinement(
+                selected_grid_hz,
+                selected_diag,
+                selected_model,
+                min_hz,
+                max_hz,
+                refinement_options,
+            )
+        return selected_grid_hz, selected_grid_db, selected_diag, selected_model
+
     usable = sorted(
         [
             point for point in _build_fit_points_new(frame_partials, min_hz, max_hz)
@@ -1615,7 +1648,16 @@ def fit_new_model(
         key=lambda point: point["frequency_hz"],
     )
     if not usable:
-        return global_grid_hz, global_grid_db, global_diag, global_model
+        if refinement_options.enabled and selected_grid_hz:
+            return _apply_optional_refinement(
+                selected_grid_hz,
+                selected_diag,
+                selected_model,
+                min_hz,
+                max_hz,
+                refinement_options,
+            )
+        return selected_grid_hz, selected_grid_db, selected_diag, selected_model
 
     if len(usable) >= 24:
         fallback_diag = dict(global_diag)
@@ -1624,30 +1666,42 @@ def fit_new_model(
             "subband_applied": False,
             "subband_reason": "dense_global_noop",
         })
-        return global_grid_hz, global_grid_db, fallback_diag, global_model
+        selected_diag = fallback_diag
+    else:
+        subband_result = _fit_subband_model(
+            usable,
+            min_hz,
+            max_hz,
+            order,
+            regularization,
+            grid_size,
+            use_gcv,
+            true_envelope_release_mode,
+            global_diag,
+            global_model,
+            subband_options,
+        )
+        if subband_result is None:
+            fallback_diag = dict(global_diag)
+            fallback_diag.update({
+                "subband_enabled": True,
+                "subband_applied": False,
+                "subband_reason": "insufficient_band_support",
+            })
+            selected_diag = fallback_diag
+        else:
+            selected_grid_hz, selected_grid_db, selected_diag, selected_model = subband_result
 
-    subband_result = _fit_subband_model(
-        usable,
-        min_hz,
-        max_hz,
-        order,
-        regularization,
-        grid_size,
-        use_gcv,
-        true_envelope_release_mode,
-        global_diag,
-        global_model,
-        subband_options,
-    )
-    if subband_result is None:
-        fallback_diag = dict(global_diag)
-        fallback_diag.update({
-            "subband_enabled": True,
-            "subband_applied": False,
-            "subband_reason": "insufficient_band_support",
-        })
-        return global_grid_hz, global_grid_db, fallback_diag, global_model
-    return subband_result
+    if refinement_options.enabled and selected_grid_hz:
+        return _apply_optional_refinement(
+            selected_grid_hz,
+            selected_diag,
+            selected_model,
+            min_hz,
+            max_hz,
+            refinement_options,
+        )
+    return selected_grid_hz, selected_grid_db, selected_diag, selected_model
 
 
 def _make_bark_grid(min_hz: float, max_hz: float, grid_size: int) -> list[float]:
@@ -1657,6 +1711,29 @@ def _make_bark_grid(min_hz: float, max_hz: float, grid_size: int) -> list[float]
         _frequency_for_bark_position(i / float(grid_size - 1), min_hz, max_hz)
         for i in range(grid_size)
     ]
+
+
+def _interpolate_curve(source_hz: list[float], source_db: list[float], query_hz: list[float]) -> list[float]:
+    if not source_hz or not source_db or len(source_hz) != len(source_db):
+        return []
+    if len(source_hz) == 1:
+        return [float(source_db[0]) for _ in query_hz]
+
+    result = []
+    for freq_hz in query_hz:
+        if freq_hz <= source_hz[0]:
+            result.append(float(source_db[0]))
+            continue
+        if freq_hz >= source_hz[-1]:
+            result.append(float(source_db[-1]))
+            continue
+        hi = bisect.bisect_right(source_hz, freq_hz)
+        lo = max(0, hi - 1)
+        hi = min(hi, len(source_hz) - 1)
+        span = max(source_hz[hi] - source_hz[lo], 1.0e-12)
+        blend = (freq_hz - source_hz[lo]) / span
+        result.append(float(source_db[lo] + blend * (source_db[hi] - source_db[lo])))
+    return result
 
 
 def _sample_model_on_grid(model: _EnvelopeModel, grid_freqs_hz: list[float]) -> tuple[list[float], list[float]]:
@@ -1698,6 +1775,132 @@ def _build_sampled_model(
         release_details=base_model.release_details,
     )
     return sampled_model
+
+
+def _apply_optional_refinement(
+    base_grid_hz: list[float],
+    base_diag: dict,
+    base_model: _EnvelopeModel,
+    min_hz: float,
+    max_hz: float,
+    options: RefinementOptions,
+) -> tuple[list[float], list[float], dict, _EnvelopeModel]:
+    import time
+    import numpy as np
+
+    base_grid_db = [_evaluate_new_model(base_model, freq_hz) for freq_hz in base_grid_hz]
+    diag = dict(base_diag)
+    diag.update({
+        "refinement_enabled": bool(options.enabled),
+        "refinement_applied": False,
+    })
+    if not options.enabled:
+        diag["refinement_reason"] = "disabled"
+        return base_grid_hz, base_grid_db, diag, base_model
+    if not options.dense_target_hz or not options.dense_target_db:
+        diag["refinement_reason"] = "missing_dense_target"
+        return base_grid_hz, base_grid_db, diag, base_model
+    if len(options.dense_target_hz) != len(options.dense_target_db):
+        diag["refinement_reason"] = "invalid_dense_target"
+        return base_grid_hz, base_grid_db, diag, base_model
+
+    bark_grid_hz = _make_bark_grid(min_hz, max_hz, max(8, options.bark_grid_size))
+    base_values_db, base_sigma_db = _sample_model_on_grid(base_model, bark_grid_hz)
+    target_values_db = _interpolate_curve(options.dense_target_hz, options.dense_target_db, bark_grid_hz)
+    if not target_values_db:
+        diag["refinement_reason"] = "target_interpolation_failed"
+        return base_grid_hz, base_grid_db, diag, base_model
+
+    base_values = np.array(base_values_db, dtype=np.float64)
+    target_values = np.array(target_values_db, dtype=np.float64)
+    sigma_values = np.array([max(0.18, sigma_db) for sigma_db in base_sigma_db], dtype=np.float64)
+    sigma_ref = max(float(np.median(sigma_values)), 0.18)
+    target_weights = 1.0 + options.uncertainty_gain * np.clip((sigma_values / sigma_ref) - 1.0, 0.0, 3.0)
+    anchor_weights = options.anchor_strength / np.maximum(target_weights, 1.0e-6)
+
+    def blur(values: np.ndarray) -> np.ndarray:
+        if values.size <= 2:
+            return values.copy()
+        padded = np.pad(values, (1, 1), mode="edge")
+        return 0.25 * padded[:-2] + 0.50 * padded[1:-1] + 0.25 * padded[2:]
+
+    blurred_target = blur(target_values)
+
+    def loss_and_gradient(values: np.ndarray) -> tuple[float, np.ndarray]:
+        diff = values - target_values
+        blurred_diff = blur(values) - blurred_target
+        anchor_diff = values - base_values
+
+        direct_loss = float(np.mean(target_weights * diff * diff))
+        blurred_loss = float(np.mean(blurred_diff * blurred_diff))
+        anchor_loss = float(np.mean(anchor_weights * anchor_diff * anchor_diff))
+        total_loss = direct_loss + options.blur_weight * blurred_loss + anchor_loss
+
+        norm = max(values.size, 1)
+        grad_direct = (2.0 / norm) * target_weights * diff
+        grad_blur = (2.0 * options.blur_weight / norm) * blur(blurred_diff)
+        grad_anchor = (2.0 / norm) * anchor_weights * anchor_diff
+        return total_loss, grad_direct + grad_blur + grad_anchor
+
+    start_time = time.perf_counter()
+    current_values = base_values.copy()
+    current_loss, gradient = loss_and_gradient(current_values)
+    loss_history = [current_loss]
+    step_history: list[float] = []
+
+    for _ in range(max(0, options.max_iterations)):
+        step_size = max(options.initial_step_size, options.min_step_size)
+        accepted = False
+        while step_size >= options.min_step_size:
+            delta = np.clip(step_size * gradient, -options.max_delta_db, options.max_delta_db)
+            candidate_values = current_values - delta
+            candidate_loss, candidate_grad = loss_and_gradient(candidate_values)
+            if candidate_loss <= current_loss - 1.0e-9:
+                current_values = candidate_values
+                current_loss = candidate_loss
+                gradient = candidate_grad
+                loss_history.append(candidate_loss)
+                step_history.append(step_size)
+                accepted = True
+                break
+            step_size *= 0.5
+        if not accepted:
+            break
+
+    runtime_ms = (time.perf_counter() - start_time) * 1000.0
+    refined_values_db = [float(value) for value in current_values.tolist()]
+    variance_db2 = [float(sigma_db * sigma_db) for sigma_db in sigma_values.tolist()]
+    refined_model = _build_sampled_model(
+        refined_values_db,
+        variance_db2,
+        min_hz,
+        max_hz,
+        base_model,
+        base_model.fit_points,
+        math.sqrt(max(current_loss, 0.0)),
+        "analysis_refined" if len(loss_history) > 1 else base_model.solve_status,
+    )
+    output_grid_db = [_evaluate_new_model(refined_model, freq_hz) for freq_hz in base_grid_hz]
+    diag.update({
+        "refinement_enabled": True,
+        "refinement_applied": len(loss_history) > 1,
+        "refinement_reason": "dense_target_refinement" if len(loss_history) > 1 else "no_descent_step",
+        "refinement_target_label": options.target_label,
+        "refinement_target_points": len(options.dense_target_hz),
+        "refinement_grid_size": len(bark_grid_hz),
+        "refinement_iteration_count": max(0, len(loss_history) - 1),
+        "refinement_loss_initial": loss_history[0],
+        "refinement_loss_final": loss_history[-1],
+        "refinement_loss_history": loss_history,
+        "refinement_step_history": step_history,
+        "refinement_monotonic": all(
+            loss_history[i + 1] <= loss_history[i] + 1.0e-9
+            for i in range(len(loss_history) - 1)
+        ),
+        "refinement_runtime_ms": runtime_ms,
+        "refinement_uncertainty_median_db": sigma_ref,
+    })
+    return base_grid_hz, output_grid_db, diag, refined_model
 
 
 def _smooth_temporal_envelope_frame(
