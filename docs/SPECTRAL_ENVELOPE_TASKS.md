@@ -308,14 +308,20 @@
 
 **Stage 1 — adaptive λ**
 
-- [ ] Add `useGcvLambda`, `gcvCandidateCount`, `gcvLambdaMin`, `gcvLambdaMax` to `RdcFitOptions`.
-- [ ] Add `gcvScore`, `gcvWasUsed` to `RdcFitResult`.
-- [ ] Implement `computeHatTrace(M, P, lambda)` — diagonal of M_λ⁻¹·M via p Cholesky back-solves.
-- [ ] Implement `gcvScore(M, P, rhs, lambda, nEff)` — RSS / (nEff·(1 − df/nEff)²).
-- [ ] Wire GCV grid search (log-space, 10 candidates) into `fitRegularizedDiscreteCepstrum`
+- [x] Add `useGcvLambda`, `gcvCandidateCount`, `gcvLambdaMin`, `gcvLambdaMax` to `RdcFitOptions`.
+- [x] Add `gcvScore`, `gcvWasUsed` to `RdcFitResult`.
+- [x] Implement `computeHatTrace(M, P, lambda)` — diagonal of M_λ⁻¹·M via p Cholesky back-solves.
+- [x] Implement `gcvScore(M, P, rhs, lambda, nEff)` — RSS / (nEff·(1 − df/nEff)²).
+- [x] Wire GCV grid search (log-space, 10 candidates) into `fitRegularizedDiscreteCepstrum`
   after BIC order selection, before the final `solveCepstrumAttempt`.
-- [ ] Mirror GCV in `fit_new_model` (Python); add `--gcv` flag to `visualize_envelopes.py`.
-- [ ] Tests: noisy 10-partial → GCV λ > 1e-3; dense 30-partial → GCV λ < 1e-3; regressions pass.
+- [x] Mirror GCV in `fit_new_model` (Python); add `--gcv` flag to `visualize_envelopes.py`.
+- [ ] Tests: noisy 10-partial → GCV λ > 1e-3; dense 30-partial → GCV λ < 1e-3; regressions pass. Python mirror passes both gates, but the current C++ runtime path still records `0.00151991` on the dense-clean diagnostic and is not promotable.
+
+Outcome:
+
+- Commit A is now implemented, benchmarked, and documented as an opt-in path.
+- The missing ATSA baseline artifact now lives in [SPECTRAL_ENVELOPE_BASELINES_GCV.md](./SPECTRAL_ENVELOPE_BASELINES_GCV.md).
+- Promotion remains blocked because opt-in GCV beats fixed-`λ` New RDC on only `54 / 279` committed ATSA reference frames (`19.4%`) and loses the overall Bark comparison (`43.7%` vs `55.2%` for fixed-`λ` New RDC).
 
 ### Commit B — `feat(envelope): add RdcUncertainty covariance output`
 

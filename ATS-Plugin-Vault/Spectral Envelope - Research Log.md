@@ -42,6 +42,44 @@ Important details:
 
 ---
 
+## GCV lambda adaptation baseline — 2026-04-30
+
+This slice finished the missing acceptance coverage and baseline artifacts for Phase 8 / Commit A in `docs/GCV_LAMBDA_PLAN.md`.
+
+What changed:
+
+- tightened the GCV acceptance tests in both runtime-path C++ coverage and the Python mirror
+- added a small local refinement pass around the best coarse GCV candidate in both implementations
+- added `tests/benchmark_gcv_reference_profiles.py`
+- checked in `docs/SPECTRAL_ENVELOPE_BASELINES_GCV.md` with the ATSA reference-fixture lambda profiles
+
+### Verification
+
+- `./build/tests/spectral_envelope_improvements_test`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/benchmark_gcv_reference_profiles.py`
+
+### Commit A benchmark results
+
+| Metric | Value | Outcome |
+| --- | ---: | --- |
+| Python noisy 10-partial synthetic λ | `166.81005372` | passes `>= 1e-3` gate |
+| Python dense 30-partial synthetic λ | `7.31471704297e-05` | passes `<= 1e-3` gate |
+| C++ dense 30-partial diagnostic λ | `0.00151991` | misses stricter promotion gate |
+| Fixed-`λ` New RDC beats Bark | `154 / 279` frames | `55.2%` |
+| Opt-in GCV beats Bark | `122 / 279` frames | `43.7%` |
+| Opt-in GCV beats fixed-`λ` New RDC | `54 / 279` frames | `19.4%` |
+
+### Stop/go decision
+
+Commit A is now implemented and benchmarked, but it is not a promotion candidate for the default runtime path:
+
+- the current C++ runtime-path diagnostic still misses the dense-clean `<= 1e-3` gate
+- the committed ATSA reference fixtures still favor the fixed-`λ` New RDC path overall
+- `useGcvLambda` should therefore stay as an explicit opt-in research/control path
+
+---
+
 ## Python model: temporal state-space smoothing — 2026-04-30
 
 Added an opt-in sequential smoothing path to the Python reference model:

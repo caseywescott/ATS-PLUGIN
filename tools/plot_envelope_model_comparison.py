@@ -7,9 +7,9 @@ Generates a per-fixture PNG that overlays three models (default):
   3. New RDC (Bark + curvature prior + BIC + IRLS + gap fill) — purple bold
 
 Pass --gcv to also overlay the GCV-regularized variant (cyan bold dotted).
-GCV is opt-in because evaluation data shows it over-regularizes on most
-fixtures (beats Bark on 56% vs 74% for fixed-λ New RDC), making the plain
-New RDC the correct production default.
+GCV is opt-in because the current ATSA reference baseline still favors the
+fixed-λ New RDC path overall: GCV beats Bark on 43.7% of frames versus 55.2%
+for fixed-λ New RDC. See docs/SPECTRAL_ENVELOPE_BASELINES_GCV.md.
 
 The input WAVs are analyzed with ats_offline --dump-frames. A representative
 frame is selected per fixture by the largest mean absolute deviation between
@@ -163,8 +163,8 @@ def analyze_fixture(wav_path: Path,
             regularization=regularization,
             previous_model=previous_model,
         )
-        # GCV is opt-in (--gcv flag). Evaluation shows it over-regularizes on most
-        # fixtures (56% vs 74% frame-win rate against Bark), so New RDC is the default.
+        # GCV is opt-in (--gcv flag). The current ATSA reference baseline still
+        # favors fixed-λ New RDC overall: 43.7% vs 55.2% frame-win rate against Bark.
         gcv_grid_hz, gcv_grid_db, gcv_diag = [], [], {}
         if show_gcv:
             gcv_grid_hz, gcv_grid_db, gcv_diag, _ = fit_new_model(
@@ -229,8 +229,8 @@ def main() -> int:
     parser.add_argument("--reg", type=float, default=1.0e-3, help="Base regularization.")
     parser.add_argument("--gcv", action="store_true", default=False,
                         help="Also overlay GCV-regularized New RDC (opt-in; default off). "
-                             "Evaluation shows GCV over-regularizes on most fixtures — "
-                             "New RDC without GCV is the production default.")
+                             "The current ATSA baseline still favors fixed-lambda New RDC, "
+                             "so New RDC without GCV remains the production default.")
     args = parser.parse_args()
 
     ats_offline = Path(args.ats_offline)

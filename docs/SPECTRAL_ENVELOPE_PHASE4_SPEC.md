@@ -4,6 +4,20 @@
 **Branch context:** `codex/spectral-envelope`  
 **Related docs:** [SPECTRAL_ENVELOPE_TASKS.md](./SPECTRAL_ENVELOPE_TASKS.md), [SPECTRAL_ENVELOPE_EVALUATION.md](./SPECTRAL_ENVELOPE_EVALUATION.md), [SPECTRAL_ENVELOPE_FIXTURES.md](./SPECTRAL_ENVELOPE_FIXTURES.md), [GCV_LAMBDA_PLAN.md](./GCV_LAMBDA_PLAN.md)
 
+## Follow-On Status
+
+The next follow-on after the four Phase 4 research tasks is Phase 8 / Commit A in
+[GCV_LAMBDA_PLAN.md](./GCV_LAMBDA_PLAN.md). That work is now implemented and benchmarked as an
+explicit opt-in path, with the current baseline recorded in
+[SPECTRAL_ENVELOPE_BASELINES_GCV.md](./SPECTRAL_ENVELOPE_BASELINES_GCV.md).
+
+Current stance:
+
+- keep `useGcvLambda` opt-in only
+- do not treat it as a promotion candidate for the default runtime path yet
+- the current C++ dense-clean diagnostic still records `λ = 0.00151991` against the stricter `<= 1e-3` promotion target
+- the committed ATSA reference fixtures still favor fixed-`λ` New RDC overall (`55.2%` of frames beat Bark vs `43.7%` for opt-in GCV)
+
 ---
 
 ## Overview

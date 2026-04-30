@@ -277,6 +277,39 @@ Files changed:
 
 Acceptance: all existing 18+ tests pass; GCV opt-in; noisy synthetic fixture selects λ > 1e-3.
 
+### Outcome - 2026-04-30
+
+Status: `implemented, benchmarked, still opt-in`. Do not promote to the default runtime path yet.
+
+What landed in this slice:
+
+- Commit A code paths were verified and finished with tighter acceptance coverage in both C++ and Python.
+- Added a local log-space refinement pass around the best coarse GCV candidate in both `selectGcvLambda()` and `_gcv_lambda_search()` so the search is less sensitive to decade-sized gaps.
+- Added `tests/benchmark_gcv_reference_profiles.py` and checked in [SPECTRAL_ENVELOPE_BASELINES_GCV.md](./SPECTRAL_ENVELOPE_BASELINES_GCV.md) for deterministic ATSA reference-fixture drift tracking.
+
+Verification:
+
+- `./build/tests/spectral_envelope_improvements_test`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/benchmark_gcv_reference_profiles.py`
+
+Measured results:
+
+| Metric | Value | Gate | Result |
+| --- | ---: | --- | --- |
+| Python noisy 10-partial synthetic | `166.81005372` | `>= 1e-3` | pass |
+| Python dense 30-partial synthetic | `7.31471704297e-05` | `<= 1e-3` | pass |
+| C++ dense 30-partial diagnostic | `0.00151991` | `<= 1e-3` | fail |
+| ATSA frames where fixed-`λ` New RDC beats Bark | `154 / 279` (`55.2%`) | informational | baseline |
+| ATSA frames where opt-in GCV beats Bark | `122 / 279` (`43.7%`) | informational | worse |
+| ATSA frames where opt-in GCV beats fixed-`λ` New RDC | `54 / 279` (`19.4%`) | informational | worse |
+
+Stop/go decision:
+
+- Implementation acceptance is complete enough to keep the option alive behind `useGcvLambda`.
+- Promotion acceptance is not met. The C++ runtime path still misses the dense-clean synthetic gate, and the committed ATSA reference fixtures still favor the fixed-`λ` New RDC path overall.
+- GCV therefore remains an explicit opt-in research/control path rather than a promotion candidate.
+
 ### Commit B — `feat(envelope): add RdcUncertainty covariance output`
 
 Files changed:
@@ -329,11 +362,11 @@ Files changed:
 
 ## Definition of Done (Stage 1)
 
-- [ ] `useGcvLambda=true` compiles, all existing tests pass.
-- [ ] Noisy 10-partial synthetic: GCV selects λ ≥ 1e-3 (smoother than default).
-- [ ] Dense 30-partial clean: GCV selects λ ≤ 1e-3 (less smooth than default).
-- [ ] GCV λ per frame logged in diagnostics; visualize_envelopes.py shows it with `--gcv`.
-- [ ] Baseline GCV λ profiles for the 4 ATSA reference fixtures checked in.
+- [x] `useGcvLambda=true` compiles, all existing tests pass.
+- [x] Noisy 10-partial synthetic: GCV selects λ ≥ 1e-3 (smoother than default).
+- [ ] Dense 30-partial clean: GCV selects λ ≤ 1e-3 (less smooth than default). Current C++ runtime-path diagnostic is `0.00151991`; Python mirror passes at `7.31471704297e-05`.
+- [x] GCV λ per frame logged in diagnostics; visualize_envelopes.py shows it with `--gcv`.
+- [x] Baseline GCV λ profiles for the 4 ATSA reference fixtures checked in.
 
 ## Definition of Done (Stage 2)
 
