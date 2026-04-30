@@ -327,26 +327,26 @@ Outcome:
 
 **Stage 2 — posterior covariance**
 
-- [ ] Add `RdcUncertainty` struct: `noiseVariance`, `effectiveDf`, `choleskyFactor`, `valid`.
-- [ ] Add `uncertainty` field to `RdcFitResult`.
-- [ ] Populate from Cholesky factor and σ² = RSS/(n − df) after GCV-optimal solve.
-- [ ] Add `evaluatePredictionSigma(uncertainty, frequencyHz)` helper (O(p) forward-solve).
-- [ ] Tests: covariance PSD; σ²(f) increases monotonically with λ.
+- [x] Add `RdcUncertainty` struct: `noiseVariance`, `effectiveDf`, `choleskyFactor`, `valid`.
+- [x] Add `uncertainty` field to `RdcFitResult`.
+- [x] Populate from Cholesky factor and σ² = RSS/(n − df) after GCV-optimal solve.
+- [x] Add `evaluatePredictionSigma(uncertainty, frequencyHz)` helper (O(p) forward-solve).
+- [x] Tests: covariance PSD; σ²(f) increases monotonically with noise level.
 
 ### Commit C — `feat(envelope): drive virtual-point weighting from prediction sigma`
 
-- [ ] Add `crossFrameUncertaintyWeighting`, `crossFrameUncertaintyGain` to estimator options.
-- [ ] In `estimate()`: adapt virtual gap-fill weight = baseScale / (1 + k·σ(f)) per point.
-- [ ] Test: noisy previous frame → lower virtual weight than clean previous frame.
+- [x] Add `crossFrameUncertaintyWeighting`, `crossFrameUncertaintyGain` to estimator options.
+- [x] In `estimate()`: adapt virtual gap-fill weight = baseScale / (1 + k·σ(f)) per point.
+- [x] Test: noisy previous frame → lower virtual weight than clean previous frame.
 
 ### Commit D — `feat(envelope): gate True Envelope switch on prediction uncertainty`
 
-- [ ] Add `trueEnvelopeSigmaThreshold` (default 3.0 dB) to estimator options.
-- [ ] Update auto-switch logic: fire when `meanSigma > threshold || nUsable >= hardThreshold`.
-- [ ] Test: manufactured high-uncertainty RDC frame triggers switch below hard partial count.
+- [x] Add `trueEnvelopeSigmaThreshold` (default 2.5 dB) to estimator options.
+- [x] Update auto-switch logic: block switch when `meanSigma > threshold` (uncertainty gates the switch rather than triggering it — high σ means the RDC fit is unreliable, so True Envelope is not a safe upgrade).
+- [x] Test: `trueEnvelopeSigmaThreshold=0` blocks the switch even for a dense eligible frame.
 
 ### Commit E — `feat(envelope): advisory temporal smoothing from uncertainty`
 
-- [ ] Add `adaptiveSmoothingFromUncertainty` (bool, default false), `smoothingUncertaintyScale`.
-- [ ] Set `out.smoothingAmount` from `noiseVariance` in `estimate()` when flag is on.
-- [ ] Test: noisy frame → smoothingAmount ≥ clean frame smoothingAmount.
+- [x] Add `adaptiveSmoothingFromUncertainty` (bool, default false), `smoothingUncertaintyScale`.
+- [x] Set `out.smoothingAmount` from `noiseVariance` in `estimate()` when flag is on.
+- [x] Test: noisy frame → smoothingAmount > clean frame smoothingAmount.

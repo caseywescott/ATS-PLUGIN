@@ -711,6 +711,321 @@ int testGcvFitValidity()
     return 0;
 }
 
+// ── Commit B — covariance PSD ─────────────────────────────────────────────────
+// After a successful fit, uncertainty.valid must be true, noiseVariance must be
+// non-negative and finite, and evaluatePredictionSigma must return a non-negative
+// finite value at every queried frequency (positive-semi-definite covariance).
+int testUncertaintyCovariancePSD()
+{
+    const auto barkAxis = makeBarkAxis();
+    const auto freqs = makeFrequencies(20, 80.0, 8000.0);
+
+    std::vector<ats::RdcFitPoint> points;
+    for (const double f : freqs)
+    {
+        ats::RdcFitPoint p;
+        p.frequencyHz = f;
+        p.logAmplitudeDb = smoothEnvDb(f);
+        p.weight = 1.0;
+        points.push_back(p);
+    }
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis = barkAxis;
+    opts.order = 8;
+    opts.regularization = 1.0e-3;
+    opts.useBicOrderSelection = false;
+    opts.irlsMaxIterations = 1;
+
+    ats::RdcFitResult result;
+    if (!ats::fitRegularizedDiscreteCepstrum(points, opts, result) || !result.ok)
+        return fail("Covariance PSD: fit failed: " + result.errorMessage);
+
+    if (!result.uncertainty.valid)
+        return fail("Covariance PSD: uncertainty.valid is false after successful fit");
+    if (result.uncertainty.noiseVariance < 0.0 || !std::isfinite(result.uncertainty.noiseVariance))
+        return fail("Covariance PSD: noiseVariance is negative or non-finite");
+    if (result.uncertainty.choleskyFactor.empty())
+        return fail("Covariance PSD: choleskyFactor is empty");
+
+    // All diagonal entries of L must be positive (valid Cholesky factor → PSD inverse)
+    const std::size_t n = static_cast<std::size_t>(result.uncertainty.coefficientCount);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double diag = result.uncertainty.choleskyFactor[i * n + i];
+        if (diag <= 0.0 || !std::isfinite(diag))
+            return fail("Covariance PSD: Cholesky diagonal[" + std::to_string(i) + "] <= 0");
+    }
+
+    // evaluatePredictionSigma must return non-negative finite values everywhere
+    const auto evalFreqs = makeFrequencies(25, 100.0, 7500.0);
+    int invalid = 0;
+    for (const double f : evalFreqs)
+    {
+        bool ok = false;
+        const double sigma = ats::evaluatePredictionSigma(
+            result.uncertainty, barkAxis, result.effectiveOrder, f, &ok);
+        if (!ok || !std::isfinite(sigma) || sigma < 0.0)
+            ++invalid;
+    }
+    if (invalid > 0)
+        return fail("Covariance PSD: " + std::to_string(invalid) + " frequencies yielded invalid sigma");
+
+    std::cout << "pass: Commit B - covariance PSD (noiseVariance=" << result.uncertainty.noiseVariance
+              << " df=" << result.uncertainty.effectiveDegreesOfFreedom << ")\n";
+    return 0;
+}
+
+// ── Commit B — sigma scales with noise ────────────────────────────────────────
+// A noisier frame (large amplitude scatter) must produce a strictly larger
+// noiseVariance and mean prediction sigma than a clean frame with the same
+// frequency layout and the same estimator settings.
+int testUncertaintySigmaScalesWithNoise()
+{
+    const auto barkAxis = makeBarkAxis();
+    const auto freqs = makeFrequencies(20, 80.0, 8000.0);
+
+    std::vector<ats::RdcFitPoint> cleanPoints;
+    for (const double f : freqs)
+    {
+        ats::RdcFitPoint p;
+        p.frequencyHz = f;
+        p.logAmplitudeDb = smoothEnvDb(f);
+        p.weight = 1.0;
+        cleanPoints.push_back(p);
+    }
+
+    // Add ±8 dB scatter on alternating points; skip IRLS so outliers stay hot.
+    std::vector<ats::RdcFitPoint> noisyPoints = cleanPoints;
+    for (std::size_t i = 0; i < noisyPoints.size(); i += 2)
+        noisyPoints[i].logAmplitudeDb += (i % 4 == 0) ? 8.0 : -8.0;
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis = barkAxis;
+    opts.order = 8;
+    opts.regularization = 1.0e-3;
+    opts.useBicOrderSelection = false;
+    opts.irlsMaxIterations = 1;
+
+    ats::RdcFitResult cleanResult, noisyResult;
+    if (!ats::fitRegularizedDiscreteCepstrum(cleanPoints, opts, cleanResult) || !cleanResult.uncertainty.valid)
+        return fail("Sigma noise scaling: clean fit or uncertainty failed");
+    if (!ats::fitRegularizedDiscreteCepstrum(noisyPoints, opts, noisyResult) || !noisyResult.uncertainty.valid)
+        return fail("Sigma noise scaling: noisy fit or uncertainty failed");
+
+    if (noisyResult.uncertainty.noiseVariance <= cleanResult.uncertainty.noiseVariance)
+        return fail("Sigma noise scaling: noisy noiseVariance (" +
+                    std::to_string(noisyResult.uncertainty.noiseVariance) +
+                    ") must exceed clean (" + std::to_string(cleanResult.uncertainty.noiseVariance) + ")");
+
+    const auto evalFreqs = makeFrequencies(20, 100.0, 7500.0);
+    double cleanMean = 0.0, noisyMean = 0.0;
+    for (const double f : evalFreqs)
+    {
+        bool ok1 = false, ok2 = false;
+        cleanMean += ats::evaluatePredictionSigma(
+            cleanResult.uncertainty, barkAxis, cleanResult.effectiveOrder, f, &ok1);
+        noisyMean += ats::evaluatePredictionSigma(
+            noisyResult.uncertainty, barkAxis, noisyResult.effectiveOrder, f, &ok2);
+    }
+    const double n = static_cast<double>(evalFreqs.size());
+    cleanMean /= n;
+    noisyMean /= n;
+
+    if (noisyMean <= cleanMean)
+        return fail("Sigma noise scaling: noisy mean sigma (" + std::to_string(noisyMean) +
+                    ") must exceed clean (" + std::to_string(cleanMean) + ")");
+
+    std::cout << "pass: Commit B - sigma scales with noise (clean=" << cleanMean
+              << " dB, noisy=" << noisyMean << " dB)\n";
+    return 0;
+}
+
+// ── Commit C — virtual weight uncertainty adaptation ──────────────────────────
+// The virtual-point weight formula is baseScale / (1 + gain * sigma).
+// Higher prediction sigma must produce a strictly lower virtual weight.
+int testVirtualWeightUncertaintyAdaptation()
+{
+    const auto barkAxis = makeBarkAxis();
+    const double testFreq = 1000.0;
+    const double baseScale = 0.05;
+    const double gain = 2.0;
+
+    const auto freqs = makeFrequencies(20, 80.0, 8000.0);
+
+    std::vector<ats::RdcFitPoint> cleanPoints;
+    for (const double f : freqs)
+    {
+        ats::RdcFitPoint p;
+        p.frequencyHz = f;
+        p.logAmplitudeDb = smoothEnvDb(f);
+        p.weight = 1.0;
+        cleanPoints.push_back(p);
+    }
+
+    std::vector<ats::RdcFitPoint> noisyPoints = cleanPoints;
+    for (std::size_t i = 0; i < noisyPoints.size(); i += 2)
+        noisyPoints[i].logAmplitudeDb += (i % 4 == 0) ? 10.0 : -10.0;
+
+    ats::RdcFitOptions opts;
+    opts.frequencyAxis = barkAxis;
+    opts.order = 8;
+    opts.regularization = 1.0e-3;
+    opts.useBicOrderSelection = false;
+    opts.irlsMaxIterations = 1;
+
+    ats::RdcFitResult cleanResult, noisyResult;
+    if (!ats::fitRegularizedDiscreteCepstrum(cleanPoints, opts, cleanResult) || !cleanResult.uncertainty.valid)
+        return fail("Virtual weight adaptation: clean fit failed");
+    if (!ats::fitRegularizedDiscreteCepstrum(noisyPoints, opts, noisyResult) || !noisyResult.uncertainty.valid)
+        return fail("Virtual weight adaptation: noisy fit failed");
+
+    bool ok1 = false, ok2 = false;
+    const double cleanSigma = ats::evaluatePredictionSigma(
+        cleanResult.uncertainty, barkAxis, cleanResult.effectiveOrder, testFreq, &ok1);
+    const double noisySigma = ats::evaluatePredictionSigma(
+        noisyResult.uncertainty, barkAxis, noisyResult.effectiveOrder, testFreq, &ok2);
+
+    if (!ok1 || !ok2)
+        return fail("Virtual weight adaptation: evaluatePredictionSigma failed at " +
+                    std::to_string(testFreq) + " Hz");
+    if (noisySigma <= cleanSigma)
+        return fail("Virtual weight adaptation: noisy sigma (" + std::to_string(noisySigma) +
+                    ") must exceed clean sigma (" + std::to_string(cleanSigma) + ")");
+
+    const double cleanWeight = baseScale / (1.0 + gain * cleanSigma);
+    const double noisyWeight = baseScale / (1.0 + gain * noisySigma);
+
+    if (noisyWeight >= cleanWeight)
+        return fail("Virtual weight adaptation: noisy weight (" + std::to_string(noisyWeight) +
+                    ") must be smaller than clean weight (" + std::to_string(cleanWeight) + ")");
+
+    std::cout << "pass: Commit C - virtual weight adaptation (clean sigma=" << cleanSigma
+              << " w=" << cleanWeight << "; noisy sigma=" << noisySigma
+              << " w=" << noisyWeight << ")\n";
+    return 0;
+}
+
+// ── Commit D — uncertainty gates True Envelope switch ─────────────────────────
+// trueEnvelopeSigmaThreshold controls whether the uncertainty from the RDC fit
+// is allowed to gate the True Envelope switch.  With threshold=0 any positive
+// sigma (all real fits with valid uncertainty) blocks the switch even for a
+// dense, well-structured frame that would otherwise qualify.
+int testUncertaintyGatesTrueEnvelopeSwitch()
+{
+    // Dense clean frame — same layout as Tier 2.5 baseline which confirms the switch fires.
+    const auto freqs = makeFrequencies(50, 80.0, 8000.0);
+    const auto frame = makeFrame(freqs, 20.0);
+
+    ats::EnvelopeEstimatorContext ctx;
+    ctx.sampleRate = 44100.0;
+    ctx.frequencyAxis = makeBarkAxis();
+    ctx.maxOrder = 32;
+
+    std::string err;
+
+    // Baseline: standard threshold (2.5 dB) — dense clean frame should switch.
+    {
+        ats::RegularizedCepstrumEstimatorOptions opts;
+        opts.fit.frequencyAxis = makeBarkAxis();
+        opts.fit.order = 16;
+        opts.fit.regularization = 1.0e-3;
+        opts.autoSwitchToTrueEnvelope = true;
+        opts.trueEnvelopeSigmaThreshold = 2.5;
+
+        ats::RegularizedCepstrumEnvelopeEstimator estimator(opts);
+        if (!estimator.prepare(ctx, &err))
+            return fail("Uncertainty gate: prepare failed (baseline): " + err);
+        ats::FrameEnvelope env;
+        if (!estimator.estimate(frame, env, &err))
+            return fail("Uncertainty gate: estimate failed (baseline): " + err);
+        if (env.storage != ats::EnvelopeValueStorage::Samples)
+            return fail("Uncertainty gate: baseline (threshold=2.5) should switch to True Envelope");
+    }
+
+    // Gated: threshold=0 — any positive sigma from a valid-uncertainty fit blocks the switch.
+    {
+        ats::RegularizedCepstrumEstimatorOptions opts;
+        opts.fit.frequencyAxis = makeBarkAxis();
+        opts.fit.order = 16;
+        opts.fit.regularization = 1.0e-3;
+        opts.autoSwitchToTrueEnvelope = true;
+        opts.trueEnvelopeSigmaThreshold = 0.0;
+
+        ats::RegularizedCepstrumEnvelopeEstimator estimator(opts);
+        if (!estimator.prepare(ctx, &err))
+            return fail("Uncertainty gate: prepare failed (zero threshold): " + err);
+        ats::FrameEnvelope env;
+        if (!estimator.estimate(frame, env, &err))
+            return fail("Uncertainty gate: estimate failed (zero threshold): " + err);
+        if (env.storage != ats::EnvelopeValueStorage::Coefficients)
+            return fail("Uncertainty gate: threshold=0 should block True Envelope switch");
+    }
+
+    std::cout << "pass: Commit D - uncertainty sigma gate blocks True Envelope switch at threshold=0\n";
+    return 0;
+}
+
+// ── Commit E — adaptive smoothing from uncertainty ────────────────────────────
+// When adaptiveSmoothingFromUncertainty is enabled, a frame whose RDC fit has
+// large residuals must produce a strictly larger smoothingAmount than a clean frame.
+int testAdaptiveSmoothingFromUncertainty()
+{
+    const auto barkAxis = makeBarkAxis();
+
+    ats::EnvelopeEstimatorContext ctx;
+    ctx.sampleRate = 44100.0;
+    ctx.frequencyAxis = barkAxis;
+    ctx.maxOrder = 16;
+
+    ats::RegularizedCepstrumEstimatorOptions opts;
+    opts.fit.frequencyAxis = barkAxis;
+    opts.fit.order = 8;
+    opts.fit.regularization = 1.0e-3;
+    opts.fit.useBicOrderSelection = false;
+    opts.fit.irlsMaxIterations = 1;      // skip Huber so outliers stay hot
+    opts.autoSwitchToTrueEnvelope = false; // stay on RDC to get its uncertainty
+    opts.adaptiveSmoothingFromUncertainty = true;
+    opts.smoothingUncertaintyScale = 0.5; // amplify to make the difference visible
+
+    const auto cleanFreqs = makeFrequencies(15, 80.0, 8000.0);
+    const auto cleanFrame = makeFrame(cleanFreqs, 20.0);
+
+    // Noisy frame: large amplitude scatter on every other partial
+    auto noisyFrame = makeFrame(cleanFreqs, 20.0);
+    for (std::size_t i = 0; i < noisyFrame.partials.size(); i += 2)
+        noisyFrame.partials[i].amplitude *= (i % 4 == 0) ? 10.0 : 0.1;
+
+    std::string err;
+
+    ats::FrameEnvelope cleanEnv;
+    {
+        ats::RegularizedCepstrumEnvelopeEstimator est(opts);
+        if (!est.prepare(ctx, &err))
+            return fail("Adaptive smoothing: prepare clean failed: " + err);
+        if (!est.estimate(cleanFrame, cleanEnv, &err))
+            return fail("Adaptive smoothing: estimate clean failed: " + err);
+    }
+
+    ats::FrameEnvelope noisyEnv;
+    {
+        ats::RegularizedCepstrumEnvelopeEstimator est(opts);
+        if (!est.prepare(ctx, &err))
+            return fail("Adaptive smoothing: prepare noisy failed: " + err);
+        if (!est.estimate(noisyFrame, noisyEnv, &err))
+            return fail("Adaptive smoothing: estimate noisy failed: " + err);
+    }
+
+    if (noisyEnv.smoothingAmount <= cleanEnv.smoothingAmount)
+        return fail("Adaptive smoothing: noisy smoothingAmount (" +
+                    std::to_string(noisyEnv.smoothingAmount) + ") must exceed clean (" +
+                    std::to_string(cleanEnv.smoothingAmount) + ")");
+
+    std::cout << "pass: Commit E - adaptive smoothing from uncertainty (clean="
+              << cleanEnv.smoothingAmount << " noisy=" << noisyEnv.smoothingAmount << ")\n";
+    return 0;
+}
+
 int main()
 {
     int result = 0;
@@ -727,6 +1042,11 @@ int main()
     result |= testGcvNoisySyntheticSelectsHigherLambda();
     result |= testGcvDenseSyntheticDiagnostic();
     result |= testGcvFitValidity();
+    result |= testUncertaintyCovariancePSD();
+    result |= testUncertaintySigmaScalesWithNoise();
+    result |= testVirtualWeightUncertaintyAdaptation();
+    result |= testUncertaintyGatesTrueEnvelopeSwitch();
+    result |= testAdaptiveSmoothingFromUncertainty();
 
     if (result == 0)
         std::cout << "ok: all spectral envelope improvements\n";

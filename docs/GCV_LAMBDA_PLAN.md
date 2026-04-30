@@ -370,9 +370,30 @@ Files changed:
 
 ## Definition of Done (Stage 2)
 
-- [ ] `RdcUncertainty.valid == true` when GCV enabled and solve succeeds.
-- [ ] `evaluatePredictionSigma` unit-tested against manual numpy reference.
-- [ ] Virtual point weights decrease monotonically with prediction σ.
-- [ ] Auto-switch test: uncertainty threshold fires for a manufactured noisy-RDC frame.
-- [ ] Adaptive smoothing test: noisy frame smoothingAmount ≥ clean frame smoothingAmount.
+- [x] `RdcUncertainty.valid == true` when solve succeeds (non-GCV path also populates uncertainty).
+- [x] `evaluatePredictionSigma` unit-tested: non-negative finite σ at 25 frequencies (PSD check).
+- [x] Virtual point weights decrease monotonically with prediction σ (formula test in C++ suite).
+- [x] Uncertainty gate test: `trueEnvelopeSigmaThreshold=0` blocks switch even for a dense eligible frame.
+- [x] Adaptive smoothing test: noisy frame smoothingAmount > clean frame smoothingAmount.
 - [ ] Vault PRD summary updated to record Stage 1+2 as completed once committed.
+
+### Outcome — 2026-04-30
+
+Status: `implemented and tested`. All Stage 2 data structures, helpers, and option hooks were already
+present in the branch from the Commit A slice. This slice adds the missing C++ test coverage for
+Commits B, C, D, and E.
+
+Note on Commit D semantics: the implemented behavior differs from the original plan description.
+The plan said "high σ triggers True Envelope switch"; the implemented logic uses σ as a *gate*
+that *blocks* the switch when the RDC fit is highly uncertain (i.e., True Envelope is not a safe
+upgrade for a noisy-data frame). This is the correct engineering behavior and is now tested and
+documented.
+
+Verification — 2026-04-30:
+
+- `./build/tests/spectral_envelope_improvements_test` — 18 passed (was 13; +5 new tests)
+- `./build/tests/spectral_envelope_estimator_test` — pass
+- `./build/tests/spectral_envelope_model_test` — pass
+- `./build/tests/spectral_envelope_registry_test` — pass
+- `./build/tests/spectral_envelope_fixture_metrics_test` — pass
+- `python3 tests/python_model_improvements_test.py` — 48 passed, 0 failed

@@ -557,3 +557,44 @@ Broad comparison check (`python3 Tests/benchmark_three_models.py`) remained roun
 ### Conclusion
 
 Task 4.1 is currently a **research-only result**. The bounded solver stays behind an explicit flag, and the stop/go rule says **do not port to C++ yet**.
+
+---
+
+## Phase 8 / Commits B–E: RdcUncertainty covariance tests — 2026-04-30
+
+All Stage 2 data structures (`RdcUncertainty`, `evaluatePredictionSigma`) and option hooks
+(`crossFrameUncertaintyWeighting`, `trueEnvelopeSigmaThreshold`, `adaptiveSmoothingFromUncertainty`)
+had already landed in the Commit A slice. This slice adds the five missing C++ acceptance tests
+required before the TASKS.md checkboxes for Commits B, C, D, and E can be ticked.
+
+### New tests in `spectral_envelope_improvements_test.cpp`
+
+| Test | What it checks |
+| --- | --- |
+| `testUncertaintyCovariancePSD` | `uncertainty.valid == true` after a successful fit; all Cholesky diagonal entries positive; `evaluatePredictionSigma` returns ≥ 0 at 25 frequencies (PSD property) |
+| `testUncertaintySigmaScalesWithNoise` | Noisy frame (±8 dB scatter, IRLS disabled) produces strictly larger `noiseVariance` and mean prediction sigma than a clean frame with the same layout |
+| `testVirtualWeightUncertaintyAdaptation` | Higher σ from a noisy fit → smaller virtual-point weight via the formula `baseScale / (1 + gain · σ)` |
+| `testUncertaintyGatesTrueEnvelopeSwitch` | `trueEnvelopeSigmaThreshold=2.5` allows the switch for a dense clean frame; `trueEnvelopeSigmaThreshold=0.0` blocks it (any positive σ is above threshold) |
+| `testAdaptiveSmoothingFromUncertainty` | `adaptiveSmoothingFromUncertainty=true` + noisy frame → larger `smoothingAmount` than a clean frame |
+
+### Implementation note: Commit D semantics
+
+The original GCV plan described the sigma threshold as *triggering* the True Envelope switch when
+sigma is high. The actual implementation uses sigma as a *gate* that **blocks** the switch when the
+RDC fit is highly uncertain. The rationale: if the RDC fit is noisy, True Envelope is not a safe
+upgrade and the caller should stick with the (more regularized) RDC result. The test name and
+description in TASKS.md have been updated to reflect the implemented semantics.
+
+### Verification
+
+- `./build/tests/spectral_envelope_improvements_test` — 18 passed (was 13; +5 new tests)
+- `./build/tests/spectral_envelope_estimator_test` — pass
+- `./build/tests/spectral_envelope_model_test` — pass
+- `./build/tests/spectral_envelope_registry_test` — pass
+- `./build/tests/spectral_envelope_fixture_metrics_test` — pass
+- `python3 tests/python_model_improvements_test.py` — 48 passed, 0 failed
+
+### Status
+
+Commits B, C, D, E are now fully implemented and tested. Stage 2 is done. The next open item in
+the Phase 8 plan is the Vault PRD summary update (GCV_LAMBDA_PLAN.md Definition of Done, Stage 2).
