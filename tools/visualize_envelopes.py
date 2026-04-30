@@ -383,6 +383,8 @@ class _EnvelopeModel:
     noise_variance: float = 0.0  # σ² = weighted residual variance (in dB²)
     axis: str = "bark"
     blend_components: object = None   # list[tuple[float, _EnvelopeModel]] | None
+    solve_status: str = "ok"
+    release_details: object = None
 
 
 def _evaluate_new_model(model: _EnvelopeModel, frequency_hz: float) -> float:
@@ -440,6 +442,7 @@ def _solve_new_attempt(
     irls_max_iterations: int = 4,
     n_real_points: int = 0,
     axis: str = "bark",
+    true_envelope_release_mode: str = "heuristic",
 ):
     """Assemble and solve the weighted regularized normal equations.
 
@@ -482,19 +485,34 @@ def _solve_new_attempt(
 
     # IRLS: start with Huber weights = 1 (pure L2 first iter), then update.
     irls_w = np.ones(len(points), dtype=np.float64)
-    peak_w = np.ones(len(points), dtype=np.float64)
-    max_iter = max(1, irls_max_iterations)
+    release_w = np.zeros(len(points), dtype=np.float64)
+    release_targets = np.zeros(len(points), dtype=np.float64)
+    release_bounds = np.zeros(len(points), dtype=np.float64)
+    constrained_peaks = 0
+    unclamped_outliers = 0
+    solve_status = "ok"
+    max_iter = max(1, irls_max_iterations + (4 if true_envelope_release_mode == "bounded" and n_virtual > 0 else 0))
     A = ridge_mat  # will be set inside the loop
     coefficients = np.zeros(n, dtype=np.float64)
+    final_sigma_hat = sigma_floor
+    outlier_cutoff_db = 0.0
 
     for iter_idx in range(max_iter):
-        W_eff = W_base * irls_w * peak_w
+        W_eff = W_base * irls_w
         BtW   = (B * W_eff[:, None]).T
         A     = BtW @ B + ridge_mat + penalty_P
         rhs   = BtW @ Y
+        if true_envelope_release_mode == "bounded" and n_virtual > 0:
+            for i in range(n_real):
+                if release_w[i] <= 0.0:
+                    continue
+                basis = B[i]
+                A += release_w[i] * np.outer(basis, basis)
+                rhs += release_w[i] * release_targets[i] * basis
         try:
             coefficients = np.linalg.solve(A, rhs)
         except np.linalg.LinAlgError:
+            solve_status = "solve_failed"
             return None
 
         predicted  = B @ coefficients
@@ -517,25 +535,83 @@ def _solve_new_attempt(
         real_res_sorted = np.sort(residuals[:n_real])
         sigma_hat   = max(float(real_res_sorted[len(real_res_sorted) // 2]) / 0.6745,
                           sigma_floor)
+        final_sigma_hat = sigma_hat
         p90_residual = float(real_res_sorted[int(0.90 * (len(real_res_sorted) - 1))])
         max_residual = float(real_res_sorted[-1])
 
-        # True-envelope-style release: gently boost real peaks only when the
-        # smooth curve sags just below them. Large residuals are left to Huber as
-        # likely tracking glitches rather than treated as envelope constraints.
-        new_peak_w = np.ones(len(points), dtype=np.float64)
+        signed_real = (Y - predicted)[:n_real]
+        new_release_w = np.zeros(len(points), dtype=np.float64)
+        new_release_targets = np.zeros(len(points), dtype=np.float64)
+        new_release_bounds = np.zeros(len(points), dtype=np.float64)
+        new_constrained_peaks = 0
+        new_unclamped_outliers = 0
+
         if n_virtual > 0:
-            signed_real = (Y - predicted)[:n_real]
-            release_db = 0.35
-            peak_room = np.clip((signed_real - release_db) / max(sigma_hat, 1.0e-9),
-                                0.0, 2.5)
-            peak_room = np.where(signed_real <= 4.0, peak_room, 0.0)
-            new_peak_w[:n_real] = 1.0 + 0.45 * peak_room
-        peak_delta = float(np.max(np.abs(new_peak_w - peak_w)))
-        peak_w = new_peak_w
+            if true_envelope_release_mode == "bounded":
+                try:
+                    A_inv = np.linalg.inv(A)
+                except np.linalg.LinAlgError:
+                    A_inv = None
+                release_floor_db = 0.18
+                release_ceiling_db = 0.55
+                outlier_cutoff_db = 4.0
+                for i in range(n_real):
+                    if A_inv is not None:
+                        local_variance = max(0.0, float(B[i] @ A_inv @ B[i]))
+                        local_sigma = sigma_hat * math.sqrt(local_variance)
+                    else:
+                        local_sigma = sigma_hat
+                    bound_db = min(
+                        release_ceiling_db,
+                        max(release_floor_db, 0.12 + 0.06 * sigma_hat + 0.14 * local_sigma),
+                    )
+                    new_release_bounds[i] = bound_db
+                    if signed_real[i] > outlier_cutoff_db:
+                        new_unclamped_outliers += 1
+                        continue
+                    violation_db = signed_real[i] - bound_db
+                    if violation_db <= 0.0:
+                        continue
+                    violation_scale = np.clip(
+                        violation_db / max(bound_db, 1.0e-3), 1.0, 4.0)
+                    new_release_w[i] = W_base[i] * irls_w[i] * (3.0 + 2.5 * violation_scale)
+                    new_release_targets[i] = Y[i] - bound_db
+                    new_constrained_peaks += 1
+            else:
+                # Legacy heuristic mode: gently boost real peaks only when the
+                # smooth curve sags just below them. Large residuals are left to
+                # Huber as likely tracking glitches rather than treated as
+                # envelope constraints.
+                release_db = 0.35
+                peak_room = np.clip((signed_real - release_db) / max(sigma_hat, 1.0e-9),
+                                    0.0, 2.5)
+                peak_room = np.where(signed_real <= 4.0, peak_room, 0.0)
+                new_release_w[:n_real] = W_base[:n_real] * irls_w[:n_real] * 0.45 * peak_room
+                new_release_targets[:n_real] = Y[:n_real]
+                new_release_bounds[:n_real] = release_db
+                new_constrained_peaks = int(np.count_nonzero(new_release_w[:n_real] > 0.0))
+                new_unclamped_outliers = int(np.count_nonzero(signed_real > 4.0))
+                outlier_cutoff_db = 4.0
+
+        release_delta = float(np.max(np.abs(new_release_w - release_w)))
+        release_w = new_release_w
+        release_targets = new_release_targets
+        release_bounds = new_release_bounds
+        constrained_peaks = new_constrained_peaks
+        unclamped_outliers = new_unclamped_outliers
+
+        release_violation = 0.0
+        if n_virtual > 0 and np.any(release_bounds[:n_real] > 0.0):
+            eligible_mask = signed_real <= outlier_cutoff_db
+            release_violation = float(np.max(np.where(
+                eligible_mask,
+                np.maximum(signed_real - release_bounds[:n_real], 0.0),
+                0.0,
+            )))
 
         if (p90_residual <= 1.25 * sigma_hat and max_residual <= 2.75 * sigma_hat
-                and peak_delta < 0.005):
+                and release_delta < 0.005
+                and (true_envelope_release_mode != "bounded" or release_violation < 0.02)):
             break
         huber_delta = 1.345 * sigma_hat
         new_irls_w = np.where(residuals <= huber_delta, 1.0,
@@ -567,6 +643,25 @@ def _solve_new_attempt(
         hessian_inv    = None
         noise_variance = 0.0
 
+    final_signed_real = (Y - (B @ coefficients))[:n_real]
+    final_protected_undershoot = [
+        max(0.0, final_signed_real[i] - release_bounds[i])
+        for i in range(n_real)
+        if release_bounds[i] > 0.0 and final_signed_real[i] <= max(4.0, 2.75 * final_sigma_hat + 0.5)
+    ]
+    release_details = {
+        "mode": true_envelope_release_mode,
+        "release_bound_db": float(np.max(release_bounds[:n_real])) if n_real > 0 else 0.0,
+        "release_bound_mean_db": float(np.mean(release_bounds[:n_real])) if n_real > 0 else 0.0,
+        "constrained_peak_count": constrained_peaks,
+        "unclamped_outlier_count": unclamped_outliers,
+        "max_release_violation_db": max(final_protected_undershoot) if final_protected_undershoot else 0.0,
+        "p95_release_violation_db": float(np.percentile(final_protected_undershoot, 95))
+        if final_protected_undershoot else 0.0,
+        "sigma_hat_db": final_sigma_hat,
+        "outlier_cutoff_db": outlier_cutoff_db,
+    }
+
     return _EnvelopeModel(
         storage="coefficients", values=coefficients, order=order,
         min_hz=min_hz, max_hz=max_hz, regularization=regularization,
@@ -574,6 +669,8 @@ def _solve_new_attempt(
         fit_points=len(points), fallback=None,
         hessian_inv=hessian_inv, noise_variance=noise_variance,
         axis=axis,
+        solve_status=solve_status,
+        release_details=release_details,
     )
 
 
@@ -850,6 +947,7 @@ def _fit_axis_model(
     grid_size: int,
     use_gcv: bool,
     axis: str,
+    true_envelope_release_mode: str,
 ) -> tuple[list[float], list[float], dict, _EnvelopeModel]:
     import numpy as np
 
@@ -886,7 +984,8 @@ def _fit_axis_model(
         for trial_order in range(min_bic_order, eff_order + 1):
             t = _solve_new_attempt(
                 augmented, trial_order, eff_reg, 1.0e-10, min_hz, max_hz,
-                irls_max_iterations=1, n_real_points=n_real, axis=axis)
+                irls_max_iterations=1, n_real_points=n_real, axis=axis,
+                true_envelope_release_mode=true_envelope_release_mode)
             if t is None or t.condition_estimate > 1.0e7:
                 continue
             n_bic = max(n_real, 1)
@@ -907,12 +1006,14 @@ def _fit_axis_model(
 
     result = _solve_new_attempt(
         augmented, eff_order, eff_reg, 1.0e-10, min_hz, max_hz,
-        irls_max_iterations=4, n_real_points=n_real, axis=axis)
+        irls_max_iterations=4, n_real_points=n_real, axis=axis,
+        true_envelope_release_mode=true_envelope_release_mode)
     if result is None or result.condition_estimate > 1.0e7:
         retry_reg = min(max(eff_reg * 10.0, 1.0e-4), 1.0)
         retry = _solve_new_attempt(
             augmented, eff_order, retry_reg, 1.0e-10, min_hz, max_hz,
-            irls_max_iterations=4, n_real_points=n_real, axis=axis)
+            irls_max_iterations=4, n_real_points=n_real, axis=axis,
+            true_envelope_release_mode=true_envelope_release_mode)
         if retry is not None:
             retry.fallback = "ill_conditioned_retry"
             result = retry
@@ -925,6 +1026,18 @@ def _fit_axis_model(
                 weighted_error_db=0.0, condition_estimate=float("inf"),
                 fit_points=len(augmented), fallback="constant_fallback",
                 axis=axis,
+                solve_status="constant_fallback",
+                release_details={
+                    "mode": true_envelope_release_mode,
+                    "release_bound_db": 0.0,
+                    "release_bound_mean_db": 0.0,
+                    "constrained_peak_count": 0,
+                    "unclamped_outlier_count": 0,
+                    "max_release_violation_db": 0.0,
+                    "p95_release_violation_db": 0.0,
+                    "sigma_hat_db": 0.0,
+                    "outlier_cutoff_db": 0.0,
+                },
             )
 
     if fallback and result.fallback is None:
@@ -951,7 +1064,11 @@ def _fit_axis_model(
         "predict_sigma_grid": sigma_grid,
         "coverage": coverage,
         "adaptive_regularization": eff_reg,
+        "solve_status": result.solve_status,
+        "true_envelope_release_mode": true_envelope_release_mode,
     }
+    if result.release_details:
+        diag.update(result.release_details)
     return grid_freqs, grid_db, diag, result
 
 
@@ -1064,6 +1181,7 @@ def fit_new_model(
     previous_model=None,    # _EnvelopeModel | None
     grid_size: int = 512,
     use_gcv: bool = False,
+    true_envelope_release_mode: str = "heuristic",
 ) -> tuple:
     """Fit the new estimator with adaptive regularisation and axis selection.
 
@@ -1089,7 +1207,7 @@ def fit_new_model(
     axis_results = {
         axis: _fit_axis_model(
             usable, min_hz, max_hz, order, regularization,
-            previous_model, grid_size, use_gcv, axis)
+            previous_model, grid_size, use_gcv, axis, true_envelope_release_mode)
         for axis in ("linear", "mel", "bark")
     }
     return _select_or_blend_axis_models(axis_results, usable, min_hz, max_hz)

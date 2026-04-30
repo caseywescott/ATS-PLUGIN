@@ -1,6 +1,6 @@
 # Spectral Envelope - Research Log
 
-Updated: 2026-04-27  
+Updated: 2026-04-30  
 Worktree: `codex/spectral-envelope`
 
 ## Tier 3 research shipped in this branch
@@ -268,3 +268,85 @@ Verification:
 
 - `python3 tests/python_model_improvements_test.py` -> 39 passed, 0 failed
 - `python3 tests/benchmark_three_models.py`
+
+---
+
+## Python model: bounded true-envelope release prototype — 2026-04-30
+
+### What I tried
+
+Added a new opt-in research mode to the Python reference path:
+
+- `true_envelope_release_mode="bounded"` on `fit_new_model()`
+- matching support in `_solve_new_attempt()`
+
+The prototype replaces the heuristic peak-weight boost with a one-sided bounded-undershoot constraint that is only active when virtual support points are present.
+
+### Why
+
+Task 4.1 in the Phase 4 spec asks for a more principled replacement for the current heuristic peak guard:
+
+- explicit bounded release instead of a hand-tuned weight bump,
+- release bounds that depend on uncertainty / residual scale,
+- false transient peaks that still stay on the robust path,
+- diagnostics that make the stop/go decision measurable.
+
+### Prototype details
+
+- bounded mode adds extra constraint energy only for real peaks whose current fit undershoots the peak by more than the configured release bound,
+- release bound is uncertainty-scaled and capped in the current prototype,
+- large positive residuals above `4.0 dB` are treated as unclamped outliers and are not converted into hard release constraints,
+- diagnostics now include:
+  - `release_bound_db`
+  - `release_bound_mean_db`
+  - `constrained_peak_count`
+  - `unclamped_outlier_count`
+  - `max_release_violation_db`
+  - `solve_status`
+
+### New focused coverage
+
+- `tests/python_model_improvements_test.py`
+  - keeps the existing heuristic release regression
+  - adds `bounded_release_clustered_*` checks for the new `S4b`-style protected clustered path
+  - adds `bounded_release_false_transient_*` checks for the `S4c` false-transient path
+- `Tests/benchmark_phase4_task41.py`
+  - compares heuristic vs bounded mode on `S1`, `S3`, `S4`, `S5`
+  - records exact `S4b` peak-undershoot and `S4c` false-transient metrics
+
+### Benchmark numbers
+
+Task 4.1 focused benchmark (`python3 Tests/benchmark_phase4_task41.py`):
+
+| Metric | Heuristic | Bounded | Delta / gate |
+|---|---:|---:|---|
+| `S1` RMS | 0.721925 | 0.721925 | `+0.000000` (passes no-regression gate) |
+| `S3` RMS | 0.451164 | 0.451164 | `+0.000000` (passes no-regression gate) |
+| `S4` RMS | 0.609219 | 0.605893 | `-0.003326` (`0.55%` better, fails `>= 8%` gate) |
+| `S5` RMS | 0.232041 | 0.232041 | `+0.000000` (passes no-regression gate) |
+| `S4b` max undershoot | 0.512083 dB | 0.329600 dB | `35.64%` better (passes reduction gate) |
+| `S4b` release bound | n/a | 0.317266 dB | still violated by `0.173924 dB` |
+| `S4c` false-peak gap | 7.105362 dB | 7.019321 dB | still clearly downweighted |
+
+Broad comparison check (`python3 Tests/benchmark_three_models.py`) remained rounded-identical to the existing stack on `S1/S2/S3/S5`, with `S4` still printing as `0.61`.
+
+### Regressions / risks
+
+- good news:
+  - no observed regression on `S1`, `S3`, or `S5`
+  - `S4b` improves materially
+  - `S4c` keeps the false transient on the robust path
+- remaining blockers:
+  - the main `S4` promotion gate still fails badly: `0.55%` improvement instead of the required `8%`
+  - `S4b` still does not keep all protected peaks fully inside the configured release bound
+  - the prototype is helpful but not decisive enough to justify a C++ port
+
+### Verification commands and results
+
+- `python3 tests/python_model_improvements_test.py` -> `44 passed, 0 failed`
+- `python3 Tests/benchmark_phase4_task41.py` -> stop/go failure on `S4`, pass on `S4b` reduction and `S4c` false-transient handling
+- `python3 Tests/benchmark_three_models.py` -> rounded baseline unchanged outside the targeted clustered case
+
+### Conclusion
+
+Task 4.1 is currently a **research-only result**. The bounded solver stays behind an explicit flag, and the stop/go rule says **do not port to C++ yet**.

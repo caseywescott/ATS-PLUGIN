@@ -296,6 +296,11 @@
 **Issue:** Problem #2 — Fixed λ; no adaptation to frame noise level
 **Location:** `fit_new_model` (Python) / `fitRegularizedDiscreteCepstrum` (C++)
 
+### Follow-up research plan
+
+- [ ] Phase 4 research spec: [SPECTRAL_ENVELOPE_PHASE4_SPEC.md](./SPECTRAL_ENVELOPE_PHASE4_SPEC.md)
+- [x] Task 4.1 Python prototype completed as research-only bounded true-envelope release mode; promotion failed the primary `S4` gate and remains behind an explicit flag.
+
 ### Commit A — `feat(envelope): add GCV lambda search to fitRegularizedDiscreteCepstrum`
 
 **Stage 1 — adaptive λ**

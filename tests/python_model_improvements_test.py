@@ -513,6 +513,77 @@ def test_true_envelope_release_with_virtual_points() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 15 — Bounded release keeps protected clustered peaks within its bound
+# ---------------------------------------------------------------------------
+
+def test_bounded_release_constrains_clustered_peaks() -> None:
+    prev_freqs = [100.0, 280.0, 620.0, 1400.0, 3200.0, 5600.0, 7800.0]
+    prev_dbs = _smooth_env(prev_freqs)
+    _, _, _, prev_model = fit_new_model(_make_partials(prev_freqs, prev_dbs), SR, LO, HI,
+                                        order=8, regularization=1.0e-3,
+                                        true_envelope_release_mode="heuristic")
+
+    curr_freqs = [920.0, 1000.0, 1100.0, 1180.0]
+    curr_dbs = [-1.0, 0.0, 0.0, -1.0]
+    heuristic_grid, _, heuristic_diag, heuristic_model = fit_new_model(
+        _make_partials(curr_freqs, curr_dbs), SR, LO, HI,
+        order=8, regularization=1.0e-3, previous_model=prev_model,
+        true_envelope_release_mode="heuristic")
+    bounded_grid, _, bounded_diag, bounded_model = fit_new_model(
+        _make_partials(curr_freqs, curr_dbs), SR, LO, HI,
+        order=8, regularization=1.0e-3, previous_model=prev_model,
+        true_envelope_release_mode="bounded")
+
+    if not heuristic_grid or not bounded_grid:
+        _fail("bounded_release_clustered_models_not_none", "fit_new_model returned empty grid")
+        return
+
+    def max_protected_undershoot(model):
+        return max(-_evaluate_new_model(model, f) for f in [1000.0, 1100.0])
+
+    heuristic_undershoot = max_protected_undershoot(heuristic_model)
+    bounded_undershoot = max_protected_undershoot(bounded_model)
+
+    _assert("bounded_release_clustered_constrained_peaks",
+            float(bounded_diag.get("release_bound_db", 0.0)) > 0.0,
+            f"expected positive release bound, got {bounded_diag}")
+    _assert("bounded_release_clustered_improves_undershoot",
+            bounded_undershoot <= heuristic_undershoot + 1.0e-3,
+            f"bounded undershoot={bounded_undershoot:.3f} should not be worse than "
+            f"heuristic undershoot={heuristic_undershoot:.3f}")
+    _assert("bounded_release_clustered_stays_within_bound",
+            math.isfinite(float(bounded_diag.get("max_release_violation_db", float("nan")))),
+            f"expected finite release violation metrics, got {bounded_diag}")
+
+
+# ---------------------------------------------------------------------------
+# Test 16 — Bounded release leaves false transients on the robust path
+# ---------------------------------------------------------------------------
+
+def test_bounded_release_ignores_false_transient() -> None:
+    prev_freqs = [100.0, 280.0, 620.0, 1400.0, 3200.0, 5600.0, 7800.0]
+    prev_dbs = _smooth_env(prev_freqs)
+    _, _, _, prev_model = fit_new_model(_make_partials(prev_freqs, prev_dbs), SR, LO, HI,
+                                        order=8, regularization=1.0e-3,
+                                        true_envelope_release_mode="heuristic")
+
+    curr_freqs = [920.0, 1000.0, 1040.0, 1120.0, 1180.0]
+    curr_dbs = [-1.0, 0.0, 7.0, 0.0, -1.0]
+    _, _, bounded_diag, bounded_model = fit_new_model(
+        _make_partials(curr_freqs, curr_dbs), SR, LO, HI,
+        order=8, regularization=1.0e-3, previous_model=prev_model,
+        true_envelope_release_mode="bounded")
+
+    false_gap = 7.0 - _evaluate_new_model(bounded_model, 1040.0)
+    _assert("bounded_release_false_transient_outlier_count",
+            int(bounded_diag.get("unclamped_outlier_count", 0)) >= 1,
+            f"expected unclamped outlier count >= 1, got {bounded_diag}")
+    _assert("bounded_release_false_transient_stays_robust",
+            false_gap >= 4.0,
+            f"false peak should stay on robust path; residual gap={false_gap:.3f} dB")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -532,6 +603,8 @@ def main() -> int:
     test_adaptive_huber_floor_sparse_vs_dense()
     test_bic_uses_n_real_not_augmented()
     test_true_envelope_release_with_virtual_points()
+    test_bounded_release_constrains_clustered_peaks()
+    test_bounded_release_ignores_false_transient()
 
     print(f"\n{_PASSED} passed, {len(_FAILURES)} failed.")
     if _FAILURES:
