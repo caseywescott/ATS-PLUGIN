@@ -387,6 +387,39 @@ class _EnvelopeModel:
     release_details: object = None
 
 
+@dataclass
+class TemporalEnvelopeFrame:
+    partials: list
+    transient_boundary: bool = False
+    motion_scale: float = 1.0
+    residual_scale: float = 1.0
+    label: str = ""
+
+
+@dataclass
+class TemporalEnvelopeSmoothingOptions:
+    enabled: bool = False
+    bark_grid_size: int = 48
+    process_noise_db: float = 0.24
+    observation_floor_db: float = 0.18
+    transient_process_scale: float = 24.0
+    delta_process_scale: float = 4.0
+    motion_process_scale: float = 1.2
+    residual_process_scale: float = 0.8
+    high_delta_db: float = 1.1
+    min_gain: float = 0.08
+    max_gain: float = 0.96
+
+
+@dataclass
+class _TemporalEnvelopeState:
+    grid_freqs_hz: list[float]
+    values_db: object
+    variance_db2: object
+    frame_index: int
+    label: str = ""
+
+
 def _evaluate_new_model(model: _EnvelopeModel, frequency_hz: float) -> float:
     import numpy as np
     if model.storage == "blend" and model.blend_components:
@@ -1211,6 +1244,261 @@ def fit_new_model(
         for axis in ("linear", "mel", "bark")
     }
     return _select_or_blend_axis_models(axis_results, usable, min_hz, max_hz)
+
+
+def _make_bark_grid(min_hz: float, max_hz: float, grid_size: int) -> list[float]:
+    if grid_size <= 1:
+        return [min_hz]
+    return [
+        _frequency_for_bark_position(i / float(grid_size - 1), min_hz, max_hz)
+        for i in range(grid_size)
+    ]
+
+
+def _sample_model_on_grid(model: _EnvelopeModel, grid_freqs_hz: list[float]) -> tuple[list[float], list[float]]:
+    values = [_evaluate_new_model(model, freq_hz) for freq_hz in grid_freqs_hz]
+    sigma = []
+    fallback_sigma = max(math.sqrt(max(model.noise_variance, 0.0)), 0.18)
+    for freq_hz in grid_freqs_hz:
+        pred_sigma = _evaluate_prediction_sigma(model, freq_hz)
+        sigma.append(pred_sigma if math.isfinite(pred_sigma) and pred_sigma > 0.0 else fallback_sigma)
+    return values, sigma
+
+
+def _build_sampled_model(
+    values_db: list[float],
+    variance_db2: list[float],
+    min_hz: float,
+    max_hz: float,
+    base_model: _EnvelopeModel,
+    fit_points: int,
+    weighted_error_db: float,
+    solve_status: str,
+) -> _EnvelopeModel:
+    import numpy as np
+    sampled_model = _EnvelopeModel(
+        storage="samples",
+        values=np.array(values_db, dtype=np.float64),
+        order=0,
+        min_hz=min_hz,
+        max_hz=max_hz,
+        regularization=base_model.regularization,
+        weighted_error_db=weighted_error_db,
+        condition_estimate=base_model.condition_estimate,
+        fit_points=fit_points,
+        fallback=base_model.fallback,
+        hessian_inv=None,
+        noise_variance=float(sum(variance_db2) / max(len(variance_db2), 1)),
+        axis="bark",
+        solve_status=solve_status,
+        release_details=base_model.release_details,
+    )
+    return sampled_model
+
+
+def _smooth_temporal_envelope_frame(
+    previous_state: _TemporalEnvelopeState | None,
+    observation_values_db: list[float],
+    observation_sigma_db: list[float],
+    options: TemporalEnvelopeSmoothingOptions,
+    transient_boundary: bool,
+    motion_scale: float,
+    residual_scale: float,
+    frame_index: int,
+    label: str,
+) -> tuple[_TemporalEnvelopeState, dict]:
+    import numpy as np
+
+    obs_values = np.array(observation_values_db, dtype=np.float64)
+    obs_sigma = np.array([
+        max(options.observation_floor_db, sigma_db)
+        for sigma_db in observation_sigma_db
+    ], dtype=np.float64)
+    obs_var = obs_sigma * obs_sigma
+
+    if previous_state is None or not options.enabled:
+        state = _TemporalEnvelopeState(
+            grid_freqs_hz=list(previous_state.grid_freqs_hz) if previous_state else [],
+            values_db=obs_values,
+            variance_db2=obs_var,
+            frame_index=frame_index,
+            label=label,
+        )
+        diag = {
+            "temporal_enabled": bool(options.enabled),
+            "temporal_applied": False,
+            "temporal_gain_mean": 1.0,
+            "temporal_gain_min": 1.0,
+            "temporal_gain_max": 1.0,
+            "temporal_prior_observation_ratio": 0.0,
+            "temporal_process_noise_db": options.process_noise_db,
+            "temporal_process_scale": 1.0,
+            "temporal_delta_rms_db": 0.0,
+            "temporal_gate_reason": "initial_frame",
+        }
+        return state, diag
+
+    if transient_boundary:
+        state = _TemporalEnvelopeState(
+            grid_freqs_hz=previous_state.grid_freqs_hz,
+            values_db=obs_values,
+            variance_db2=obs_var,
+            frame_index=frame_index,
+            label=label,
+        )
+        diag = {
+            "temporal_enabled": True,
+            "temporal_applied": True,
+            "temporal_gain_mean": 1.0,
+            "temporal_gain_min": 1.0,
+            "temporal_gain_max": 1.0,
+            "temporal_prior_observation_ratio": 0.0,
+            "temporal_process_noise_db": options.process_noise_db * options.transient_process_scale,
+            "temporal_process_scale": options.transient_process_scale,
+            "temporal_delta_rms_db": float(np.sqrt(np.mean((obs_values - previous_state.values_db) ** 2))),
+            "temporal_gate_reason": "transient_boundary_bypass",
+        }
+        return state, diag
+
+    delta_rms = float(np.sqrt(np.mean((obs_values - previous_state.values_db) ** 2)))
+    process_scale = 1.0
+    gate_reasons: list[str] = []
+
+    if transient_boundary:
+        process_scale *= options.transient_process_scale
+        gate_reasons.append("transient_boundary")
+
+    if delta_rms > options.high_delta_db:
+        excess = min((delta_rms - options.high_delta_db) / max(options.high_delta_db, 1.0e-6), 2.0)
+        process_scale *= 1.0 + options.delta_process_scale * excess
+        gate_reasons.append("high_delta")
+
+    if motion_scale > 1.0:
+        process_scale *= 1.0 + options.motion_process_scale * (motion_scale - 1.0)
+        gate_reasons.append("motion_scale")
+
+    if residual_scale > 1.0:
+        process_scale *= 1.0 + options.residual_process_scale * (residual_scale - 1.0)
+        gate_reasons.append("residual_scale")
+
+    process_noise_db = options.process_noise_db * process_scale
+    process_var = process_noise_db * process_noise_db
+    prior_var = np.maximum(previous_state.variance_db2 + process_var, 1.0e-9)
+    gain = np.clip(prior_var / (prior_var + obs_var), options.min_gain, options.max_gain)
+    posterior_values = previous_state.values_db + gain * (obs_values - previous_state.values_db)
+    posterior_var = np.maximum((1.0 - gain) * prior_var, 1.0e-9)
+
+    state = _TemporalEnvelopeState(
+        grid_freqs_hz=previous_state.grid_freqs_hz,
+        values_db=posterior_values,
+        variance_db2=posterior_var,
+        frame_index=frame_index,
+        label=label,
+    )
+    diag = {
+        "temporal_enabled": True,
+        "temporal_applied": True,
+        "temporal_gain_mean": float(np.mean(gain)),
+        "temporal_gain_min": float(np.min(gain)),
+        "temporal_gain_max": float(np.max(gain)),
+        "temporal_prior_observation_ratio": float(np.mean(prior_var / np.maximum(obs_var, 1.0e-9))),
+        "temporal_process_noise_db": process_noise_db,
+        "temporal_process_scale": process_scale,
+        "temporal_delta_rms_db": delta_rms,
+        "temporal_gate_reason": "+".join(gate_reasons) if gate_reasons else "steady",
+    }
+    return state, diag
+
+
+def fit_new_model_sequence(
+    frames: list[TemporalEnvelopeFrame],
+    sample_rate: float,
+    lowest_freq_hz: float,
+    highest_freq_hz: float,
+    order: int = 16,
+    regularization: float = 1.0e-3,
+    temporal_options: TemporalEnvelopeSmoothingOptions | None = None,
+    use_gcv: bool = False,
+    true_envelope_release_mode: str = "heuristic",
+) -> list[tuple[list[float], list[float], dict, _EnvelopeModel]]:
+    if temporal_options is None:
+        temporal_options = TemporalEnvelopeSmoothingOptions()
+
+    min_hz = max(lowest_freq_hz, 1.0)
+    max_hz = min(highest_freq_hz, sample_rate * 0.5)
+    bark_grid_hz = _make_bark_grid(min_hz, max_hz, max(2, temporal_options.bark_grid_size))
+
+    results = []
+    previous_fit_model = None
+    previous_state = None
+
+    for frame_index, frame in enumerate(frames):
+        raw_grid_hz, raw_grid_db, raw_diag, raw_model = fit_new_model(
+            frame.partials,
+            sample_rate,
+            lowest_freq_hz,
+            highest_freq_hz,
+            order=order,
+            regularization=regularization,
+            previous_model=previous_fit_model,
+            grid_size=max(512, temporal_options.bark_grid_size),
+            use_gcv=use_gcv,
+            true_envelope_release_mode=true_envelope_release_mode,
+        )
+        previous_fit_model = raw_model
+
+        if not raw_grid_hz:
+            diag = dict(raw_diag)
+            diag.update({
+                "temporal_enabled": bool(temporal_options.enabled),
+                "temporal_applied": False,
+                "temporal_gate_reason": "no_observation",
+            })
+            results.append((raw_grid_hz, raw_grid_db, diag, raw_model))
+            previous_state = None
+            continue
+
+        observation_values_db, observation_sigma_db = _sample_model_on_grid(raw_model, bark_grid_hz)
+        state, temporal_diag = _smooth_temporal_envelope_frame(
+            previous_state,
+            observation_values_db,
+            observation_sigma_db,
+            temporal_options,
+            transient_boundary=frame.transient_boundary,
+            motion_scale=max(0.25, frame.motion_scale),
+            residual_scale=max(0.25, frame.residual_scale),
+            frame_index=frame_index,
+            label=frame.label,
+        )
+        if not state.grid_freqs_hz:
+            state.grid_freqs_hz = bark_grid_hz
+        previous_state = state
+
+        smoothed_grid_db = [float(value) for value in state.values_db.tolist()]
+        smoothed_variance_db2 = [float(value) for value in state.variance_db2.tolist()]
+        smoothed_weighted_error = math.sqrt(sum(
+            (observation_values_db[i] - smoothed_grid_db[i]) ** 2 for i in range(len(smoothed_grid_db))
+        ) / max(len(smoothed_grid_db), 1))
+        smoothed_model = _build_sampled_model(
+            smoothed_grid_db,
+            smoothed_variance_db2,
+            min_hz,
+            max_hz,
+            raw_model,
+            raw_model.fit_points,
+            smoothed_weighted_error,
+            "temporal_smoothed" if temporal_diag["temporal_applied"] else raw_model.solve_status,
+        )
+
+        diag = dict(raw_diag)
+        diag.update(temporal_diag)
+        diag["temporal_raw_weighted_error_db"] = raw_model.weighted_error_db
+        diag["temporal_smoothed_weighted_error_db"] = smoothed_model.weighted_error_db
+        diag["temporal_variance_mean_db2"] = float(sum(smoothed_variance_db2) / max(len(smoothed_variance_db2), 1))
+        diag["temporal_grid_size"] = len(smoothed_grid_db)
+        results.append((bark_grid_hz, smoothed_grid_db, diag, smoothed_model))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
