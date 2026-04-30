@@ -433,7 +433,21 @@ void SessionTabPanel::refreshFromProcessor()
     }
     else
     {
-        diagnosticsLabel.setText({}, juce::dontSendNotification);
+        // Classic ATS mode: show basic model info when a model is available.
+        int classicPartials = 0, classicFrames = 0;
+        bool classicHasRes = false;
+        if (audioProcessor.getModelFootprint(classicPartials, classicFrames, classicHasRes))
+        {
+            diagnosticsLabel.setText(
+                "Classic ATS - partials: " + juce::String(classicPartials)
+                + ", frames: " + juce::String(classicFrames)
+                + ", residual bands: " + (classicHasRes ? juce::String("yes") : juce::String("no")),
+                juce::dontSendNotification);
+        }
+        else
+        {
+            diagnosticsLabel.setText({}, juce::dontSendNotification);
+        }
         modeWarningLabel.setText({}, juce::dontSendNotification);
     }
 

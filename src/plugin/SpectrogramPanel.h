@@ -31,6 +31,8 @@ private:
     juce::Image spectroImage;
     /** Normalized time [0,1] and ARGB color for lifecycle event overlay lines. */
     std::vector<std::pair<float, juce::Colour>> lifecycleLines;
+    /** Label text for the analysis mode of the currently displayed image. */
+    juce::String currentAnalysisModeText;
     int lastModelRevision = -1;
     bool rebuildPending = false;
 

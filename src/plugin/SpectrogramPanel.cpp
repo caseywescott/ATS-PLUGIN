@@ -64,6 +64,27 @@ void SpectrogramPanel::rebuildImageAsync()
     processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
     spectroImage = img;
 
+    // Update the mode label: Modern/Experimental when a modern model is valid, Classic otherwise.
+    {
+        juce::String summary, warnings;
+        if (processor.getModernDiagnosticsSummary(summary, warnings))
+        {
+            // Extract just the mode name from the diagnostics summary.
+            const int modeStart = summary.indexOf("mode: ");
+            const int modeEnd = summary.indexOf(", tracker:");
+            if (modeStart >= 0 && modeEnd > modeStart)
+                currentAnalysisModeText = summary.substring(modeStart + 6, modeEnd);
+            else
+                currentAnalysisModeText = "Modern ATS";
+        }
+        else
+        {
+            int p = 0, f = 0;
+            bool hasRes = false;
+            currentAnalysisModeText = processor.getModelFootprint(p, f, hasRes) ? "Classic ATS" : juce::String();
+        }
+    }
+
     lifecycleLines.clear();
     std::vector<AtsAudioProcessor::ModernLifecycleMarker> markers;
     if (processor.getModernLifecycleMarkers(markers))
@@ -120,7 +141,10 @@ void SpectrogramPanel::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0xffb0b0c0));
     g.setFont(juce::Font(12.0f));
-    g.drawText("Read-only spectrogram (downsampled)", plot.removeFromBottom(16), juce::Justification::centredLeft);
+    auto footer = plot.removeFromBottom(16);
+    g.drawText("Read-only spectrogram (downsampled)", footer, juce::Justification::centredLeft);
+    if (currentAnalysisModeText.isNotEmpty())
+        g.drawText(currentAnalysisModeText, footer, juce::Justification::centredRight);
 }
 
 void SpectrogramPanel::resized()
