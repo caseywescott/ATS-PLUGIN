@@ -108,12 +108,14 @@ bool prepareModernAtsRenderPlan(const ModernAtsModel& model,
         return false;
     }
 
-    const int hop = config.hopSizeSamples > 0 ? config.hopSizeSamples : model.header.hopSizeSamples;
-    if (hop <= 0)
+    const int baseHop = config.hopSizeSamples > 0 ? config.hopSizeSamples : model.header.hopSizeSamples;
+    if (baseHop <= 0)
     {
         errorMessage = "Render hop size must be positive.";
         return false;
     }
+    const double clampedTimeFactor = std::max(0.01, config.timeFactor);
+    const int hop = std::max(1, static_cast<int>(std::round(static_cast<double>(baseHop) * clampedTimeFactor)));
 
     int totalSamples = static_cast<int>(model.frames.size()) * hop;
     for (const auto& buffer : model.transientBuffers)
@@ -174,7 +176,7 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                                             / static_cast<double>(plan.hopSizeSamples)
                                       : 0.0;
             const double amp = lerp(a.amplitude, b.amplitude, localT) * plan.config.partialGain;
-            const double freq = lerp(a.frequencyHz, b.frequencyHz, localT);
+            const double freq = lerp(a.frequencyHz, b.frequencyHz, localT) * plan.config.frequencyFactor;
 
             if (!phaseSeeded)
             {

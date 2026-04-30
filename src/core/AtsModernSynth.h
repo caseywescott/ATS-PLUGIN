@@ -21,6 +21,10 @@ struct ModernAtsSynthConfig
     std::uint32_t deterministicNoiseSeed = 1;
     int transientCrossfadeSamples = 64;
     double denormalClamp = 1.0e-20;
+    /** Scales output duration: >1 stretches time, <1 compresses. Default 1.0 (no change). */
+    double timeFactor = 1.0;
+    /** Scales all partial frequencies: >1 raises pitch, <1 lowers. Default 1.0 (no change). */
+    double frequencyFactor = 1.0;
 };
 
 struct ModernAtsRenderPlan

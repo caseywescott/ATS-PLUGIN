@@ -1082,6 +1082,8 @@ void AtsAudioProcessor::startResynthWorker()
             cfgP.orphanResidualGain = 0.0;
             cfgP.transientGain = 0.0;
             cfgP.useStoredPhase = core.usePartialsPhase;
+            cfgP.timeFactor = core.timeFactor;
+            cfgP.frequencyFactor = core.frequencyFactor;
 
             auto partialsVec = ats::renderModernAtsModel(modernModelSnapshot, cfgP);
             if (!partialsVec.empty())
@@ -1096,6 +1098,8 @@ void AtsAudioProcessor::startResynthWorker()
             cfgR.partialGain = 0.0;
             cfgR.orphanResidualGain = 1.0;
             cfgR.transientGain = 1.0;
+            cfgR.timeFactor = core.timeFactor;
+            // frequencyFactor is not applied to noise/residual (no pitched content)
 
             auto residualVec = ats::renderModernAtsModel(modernModelSnapshot, cfgR);
             if (!residualVec.empty())
