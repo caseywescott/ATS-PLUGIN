@@ -928,6 +928,19 @@ def _gcv_lambda_search(
         return blam, bgcv
 
     best_lam, best_gcv = _search_range(lambda_min, lambda_max)
+    coarse = np.logspace(math.log10(max(lambda_min, 1.0e-12)),
+                         math.log10(max(lambda_max, lambda_min * 10.0)),
+                         max(2, n_candidates))
+    best_index = min(range(len(coarse)), key=lambda i: abs(float(coarse[i]) - best_lam))
+    left_index = max(0, best_index - 1)
+    right_index = min(len(coarse) - 1, best_index + 1)
+    refine_lo = float(coarse[left_index])
+    refine_hi = float(coarse[right_index])
+    if refine_hi > refine_lo:
+        refine_lam, refine_gcv = _search_range(refine_lo, refine_hi)
+        if refine_gcv < best_gcv:
+            best_lam = refine_lam
+            best_gcv = refine_gcv
     current_max = lambda_max
 
     # Automatic range widening: if optimum is at the upper boundary, extend.

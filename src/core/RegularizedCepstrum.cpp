@@ -374,14 +374,17 @@ double selectGcvLambda(const std::vector<RdcFitPoint>& points,
 
     double bestLambda = fallbackLambda;
     double bestGcv    = std::numeric_limits<double>::infinity();
+    int bestIndex = -1;
+
+    std::vector<double> candidates;
+    candidates.reserve(static_cast<std::size_t>(N));
+    for (int i = 0; i < N; ++i)
+        candidates.push_back(std::exp(logMin + (logMax - logMin)
+                                      * static_cast<double>(i) / static_cast<double>(N - 1)));
 
     std::vector<double> Mlambda(n * n), lower, beta;
-
-    for (int i = 0; i < N; ++i)
+    const auto evaluateCandidate = [&](const double lam) -> double
     {
-        const double lam = std::exp(logMin + (logMax - logMin)
-                                    * static_cast<double>(i) / static_cast<double>(N - 1));
-
         // Form M_λ = M + lam·P + ridge·I.
         Mlambda = M;
         for (std::size_t row = 0; row < n; ++row)
@@ -393,9 +396,9 @@ double selectGcvLambda(const std::vector<RdcFitPoint>& points,
         // Cholesky factor; skip ill-conditioned candidates.
         double pivotRatio = 0.0;
         if (!choleskyDecompose(Mlambda, n, lower, pivotRatio))
-            continue;
+            return std::numeric_limits<double>::infinity();
         if (pivotRatio > options.illConditionedThreshold)
-            continue;
+            return std::numeric_limits<double>::infinity();
 
         // Solve for β(λ) and compute weighted RSS.
         choleskyForwardBack(lower, n, rhs, beta);
@@ -415,12 +418,47 @@ double selectGcvLambda(const std::vector<RdcFitPoint>& points,
         // GCV score.
         const double denom = 1.0 - df / nEff;
         if (denom < 1.0e-6)
-            continue;
-        const double gcv = rss / (nEff * denom * denom);
+            return std::numeric_limits<double>::infinity();
+        return rss / (nEff * denom * denom);
+    };
+
+    for (int i = 0; i < N; ++i)
+    {
+        const double lam = candidates[static_cast<std::size_t>(i)];
+        const double gcv = evaluateCandidate(lam);
         if (std::isfinite(gcv) && gcv < bestGcv)
         {
-            bestGcv    = gcv;
+            bestGcv = gcv;
             bestLambda = lam;
+            bestIndex = i;
+        }
+    }
+
+    // Refine around the best coarse log-grid candidate so dense clean frames
+    // are not forced to jump between wide decades such as 4.33e-4 and 1.52e-3.
+    if (bestIndex >= 0 && N >= 2)
+    {
+        const int leftIndex = std::max(0, bestIndex - 1);
+        const int rightIndex = std::min(N - 1, bestIndex + 1);
+        const double refineLo = candidates[static_cast<std::size_t>(leftIndex)];
+        const double refineHi = candidates[static_cast<std::size_t>(rightIndex)];
+        if (refineHi > refineLo)
+        {
+            constexpr int kRefineCandidates = 9;
+            const double refineLogMin = std::log(refineLo);
+            const double refineLogMax = std::log(refineHi);
+            for (int i = 0; i < kRefineCandidates; ++i)
+            {
+                const double lam = std::exp(refineLogMin + (refineLogMax - refineLogMin)
+                                            * static_cast<double>(i)
+                                            / static_cast<double>(kRefineCandidates - 1));
+                const double gcv = evaluateCandidate(lam);
+                if (std::isfinite(gcv) && gcv < bestGcv)
+                {
+                    bestGcv = gcv;
+                    bestLambda = lam;
+                }
+            }
         }
     }
 

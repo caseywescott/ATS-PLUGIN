@@ -467,7 +467,46 @@ def test_bic_uses_n_real_not_augmented() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 14 — True-envelope release protects real peaks from virtual support
+# Test 14 — GCV selects stronger smoothing on noisy 10-partial frames
+# ---------------------------------------------------------------------------
+
+def test_gcv_noisy_frame_selects_lambda_above_default() -> None:
+    freqs = [120.0 + 620.0 * i for i in range(10)]
+    clean = _smooth_env(freqs)
+    noisy = [db + (8.0 if i % 2 == 0 else -8.0) for i, db in enumerate(clean)]
+
+    _, _, diag, _ = fit_new_model(
+        _make_partials(freqs, noisy), SR, LO, HI,
+        order=10, regularization=1.0e-3, use_gcv=True)
+
+    lam = float(diag.get("gcv_lambda") or 0.0)
+    _assert("gcv_noisy_flag", bool(diag.get("gcv_was_used", False)),
+            f"expected gcv_was_used in diagnostics, got {diag}")
+    _assert("gcv_noisy_lambda_ge_default", lam >= 1.0e-3,
+            f"expected noisy-frame lambda >= 1e-3, got {lam:.6g}")
+
+
+# ---------------------------------------------------------------------------
+# Test 15 — GCV selects weaker smoothing on dense 30-partial clean frames
+# ---------------------------------------------------------------------------
+
+def test_gcv_dense_frame_selects_lambda_below_default() -> None:
+    freqs = [120.0 + 420.0 * i for i in range(30)]
+    clean = _smooth_env(freqs)
+
+    _, _, diag, _ = fit_new_model(
+        _make_partials(freqs, clean), SR, LO, HI,
+        order=10, regularization=1.0e-3, use_gcv=True)
+
+    lam = float(diag.get("gcv_lambda") or 0.0)
+    _assert("gcv_dense_flag", bool(diag.get("gcv_was_used", False)),
+            f"expected gcv_was_used in diagnostics, got {diag}")
+    _assert("gcv_dense_lambda_le_default", lam <= 1.0e-3,
+            f"expected dense-frame lambda <= 1e-3, got {lam:.6g}")
+
+
+# ---------------------------------------------------------------------------
+# Test 16 — True-envelope release protects real peaks from virtual support
 # ---------------------------------------------------------------------------
 
 def test_true_envelope_release_with_virtual_points() -> None:
@@ -513,7 +552,7 @@ def test_true_envelope_release_with_virtual_points() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 15 — Bounded release keeps protected clustered peaks within its bound
+# Test 17 — Bounded release keeps protected clustered peaks within its bound
 # ---------------------------------------------------------------------------
 
 def test_bounded_release_constrains_clustered_peaks() -> None:
@@ -557,7 +596,7 @@ def test_bounded_release_constrains_clustered_peaks() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 16 — Bounded release leaves false transients on the robust path
+# Test 18 — Bounded release leaves false transients on the robust path
 # ---------------------------------------------------------------------------
 
 def test_bounded_release_ignores_false_transient() -> None:
@@ -602,6 +641,8 @@ def main() -> int:
     test_n_real_noise_variance_not_deflated()
     test_adaptive_huber_floor_sparse_vs_dense()
     test_bic_uses_n_real_not_augmented()
+    test_gcv_noisy_frame_selects_lambda_above_default()
+    test_gcv_dense_frame_selects_lambda_below_default()
     test_true_envelope_release_with_virtual_points()
     test_bounded_release_constrains_clustered_peaks()
     test_bounded_release_ignores_false_transient()
