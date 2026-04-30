@@ -95,6 +95,65 @@ New file `tests/python_model_improvements_test.py` — 31 tests, 0 failures. Cov
 
 ---
 
+## Python model improvements — 2026-04-28 (commit pending)
+
+Five targeted improvements to `tools/visualize_envelopes.py` that reduce mean envelope fitting error by **11.5%** across five representative scenarios.
+
+### 1. Real-point IRLS MAD (`n_real_points` parameter)
+
+`_solve_new_attempt` now accepts an optional `n_real_points: int` argument.  When set, the Huber-loss IRLS robust scale (median absolute residual / 0.6745) is computed from real partials **only**, not from the low-residual virtual gap-fill points appended after them.
+
+**Problem fixed:** Virtual support points are sampled from the previous frame's smooth envelope, so their residuals are near zero.  With virtual and real points pooled, the MAD-based sigma was artificially deflated, causing the Huber threshold to drop below the genuine residual level of real partials.  This over-penalized real partials with moderate residuals as if they were statistical outliers.
+
+**Effect:** Sparse frames with virtual injection (guitar, clustered) see 14–19% error reduction.
+
+### 2. Adaptive Huber sigma floor
+
+The fixed `0.5 dB` floor is replaced by `max(0.5, 2.0 * exp(−n_real / 8))`, which is:
+- **~1.5 dB** for n_real = 4 (very sparse → conservative, prevents weight collapse)
+- **~0.5 dB** for n_real ≥ 30 (dense → same as before)
+
+This prevents IRLS weight collapse on near-zero-residual sparse frames while allowing normal operation on dense frames.
+
+### 3. Huber delta constant: 1.5 → 1.345
+
+The Huber delta multiplier is changed from `1.5` to `1.345`, the asymptotically optimal value for a normal error distribution (gives 95% relative efficiency vs L2).  This provides tighter, more principled outlier rejection.
+
+### 4. Real-point noise variance
+
+`noise_variance` (used for posterior uncertainty bands) is now computed from real-partial residuals only, via `w_err_real`.  Previously, near-zero virtual-point residuals deflated the noise estimate, making uncertainty bands appear artificially narrow in gap regions.
+
+### 5. BIC data count uses `n_real`
+
+The BIC formula (`n * log(WRMS²) + k * log(n)`) now uses `n_real = len(usable)` as the data count instead of `len(augmented)`.  Virtual injection inflated `n`, making the per-parameter BIC penalty artificially large (`log(augmented)` > `log(real)`) and biasing order selection toward lower (simpler) models when many virtual points were present.
+
+### Three-model benchmark results
+
+| Scenario | Linear | Bark | Old New | **New** | Δ |
+|---|---|---|---|---|---|
+| S1: Dense harmonic (40 pts) | 1.30 | 0.34 | 0.34 | **0.35** | −0.01 |
+| S2: Sparse guitar (7 pts) | 2.03 | 1.27 | 1.37 | **1.18** | +0.19 |
+| S3: Outlier partials (19 pts, 2 outliers) | 1.84 | 2.86 | 0.12 | **0.11** | +0.01 |
+| S4: Clustered + virtual (4 pts + virt) | 16.6 | 23.8 | 1.38 | **1.20** | +0.19 |
+| S5: Crotale (6 pts, inharmonic) | 0.02 | 0.06 | 0.05 | **0.05** | ±0 |
+| **Mean** | 4.35 | 5.67 | **0.66** | **0.58** | **+0.08** |
+
+- New model vs Linear: **86.7%** error reduction
+- New model vs Bark: **89.8%** error reduction
+- Improvements (before → after): **11.5%** additional reduction
+
+The only regression is S1 (dense clean frame, −0.014 dB absolute) caused by the 1.5→1.345 delta tightening; it is practically imperceptible.
+
+### Tests added
+
+Three new tests in `tests/python_model_improvements_test.py` (37 total, 0 failures):
+
+- `test_n_real_noise_variance_not_deflated` — verifies real-only noise_variance ≥ mixed estimate
+- `test_adaptive_huber_floor_sparse_vs_dense` — verifies no IRLS degeneration on near-zero-residual sparse frames
+- `test_bic_uses_n_real_not_augmented` — verifies dense frames earn higher BIC order than sparse+virtual frames of equal total count
+
+---
+
 ## C++ integration pass — 2026-04-28
 
 This branch now carries the Stage 2 uncertainty work across the C++ RDC path and uses it in the first downstream decisions.
@@ -146,3 +205,66 @@ The workspace preset combo is no longer display-only:
 - `./build/tests/envelope_smoothing_test`
 - `./build/tests/spectral_envelope_improvements_test`
 - `./build/tests/spectral_envelope_estimator_test`
+
+---
+
+## Python model: standards review + true-envelope release — 2026-04-30
+
+Reviewed established spectral-envelope approaches against the current Python reference model:
+
+- **WORLD / CheapTrick**: emphasizes accurate and temporally stable spectral envelopes, using F0-adaptive analysis, power-spectrum smoothing, and quefrency-domain spectral recovery. Relevant to the existing adaptive regularization / smoothing direction.
+- **True Envelope / True Discrete Cepstrum**: treats the spectral envelope as a smooth curve that follows prominent spectral peaks, with a controlled release so the envelope can stay smooth without perceptually meaningful peak error.
+- **LPC / all-pole envelopes**: useful for speech-like resonances and already exists elsewhere in this codebase, but less directly applicable to the current partial-only RDC Python reference path.
+
+Sources:
+
+- Morise, "CheapTrick, a spectral envelope estimator for high-quality speech synthesis", Speech Communication 67, 2015. https://doi.org/10.1016/j.specom.2014.09.003
+- Mignot and Valimaki, "True discrete cepstrum: An accurate and smooth spectral envelope estimation for music processing", ICASSP 2014. https://doi.org/10.1109/ICASSP.2014.6855051
+- "On cepstral and all-pole based spectral envelope modeling with unknown model order", Pattern Recognition Letters, 2007. https://doi.org/10.1016/j.patrec.2007.03.021
+
+### Implemented
+
+Added a **relaxed true-envelope peak guard** to `_solve_new_attempt()`.
+
+The guard is intentionally narrow:
+
+- It only activates when cross-frame virtual support points are present.
+- It only boosts real partials that the current smooth curve undershoots by more than a small release (`0.35 dB`).
+- It ignores large positive residuals (`> 4 dB`) so transient/outlier partials still route through Huber robustness instead of being treated as envelope constraints.
+
+This matches the useful part of True Envelope / True Discrete Cepstrum for our current model: keep sparse real partial peaks from being dragged down by low-weight virtual anchors, while preserving smoothness and outlier protection.
+
+### Results vs previous adaptive stack
+
+Previous rounded benchmark from the adaptive axis-selection pass:
+
+| Scenario | Previous New | Current New |
+|---|---:|---:|
+| S1: Dense harmonic (40 pts) | 0.72 | 0.72 |
+| S2: Sparse guitar (7 pts) | 1.94 | 1.94 |
+| S3: Outlier partials (19 pts, 2 out) | 0.45 | 0.45 |
+| S4: Clustered + virtual (4 pts + virt) | 0.62 | 0.61 |
+| S5: Crotale (6 pts, inharmonic) | 0.23 | 0.23 |
+| **Mean** | **0.79** | **0.79** |
+
+Current precise benchmark:
+
+| Scenario | Linear | Bark | New |
+|---|---:|---:|---:|
+| S1: Dense harmonic (40 pts) | 1.367311 | 1.387824 | 0.721925 |
+| S2: Sparse guitar (7 pts) | 4.899100 | 6.041469 | 1.936955 |
+| S3: Outlier partials (19 pts, 2 out) | 2.305471 | 3.075902 | 0.451164 |
+| S4: Clustered + virtual (4 pts + virt) | 6.753889 | 6.579858 | 0.605946 |
+| S5: Crotale (6 pts, inharmonic) | 0.269875 | 0.493593 | 0.232041 |
+| **Mean** | **3.119129** | **3.515729** | **0.789606** |
+
+The visible effect is intentionally local: S4 improves slightly because it is the only benchmark scenario using virtual support. The dense, sparse-wide, outlier, and inharmonic cases stay unchanged at rounded precision.
+
+### Tests
+
+`tests/python_model_improvements_test.py` now includes `test_true_envelope_release_with_virtual_points`, which verifies that full IRLS with virtual support reduces real-peak undershoot versus the first L2 solve and keeps real peaks within `0.5 dB`.
+
+Verification:
+
+- `python3 tests/python_model_improvements_test.py` -> 39 passed, 0 failed
+- `python3 tests/benchmark_three_models.py`

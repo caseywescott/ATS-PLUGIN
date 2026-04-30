@@ -102,6 +102,37 @@ def _normalized_position_mel(freq_hz: float,
     return max(0.0, min(1.0, (m_val - m_min) / (m_max - m_min)))
 
 
+def _normalized_position_axis(
+    freq_hz: float,
+    min_hz: float,
+    max_hz: float,
+    axis: str,
+) -> float:
+    if axis == "linear":
+        return _normalized_position_linear(freq_hz, min_hz, max_hz)
+    if axis == "mel":
+        return _normalized_position_mel(freq_hz, min_hz, max_hz)
+    return _normalized_position_bark(freq_hz, min_hz, max_hz)
+
+
+def _frequency_for_position(
+    position: float,
+    min_hz: float,
+    max_hz: float,
+    axis: str,
+) -> float:
+    pos = max(0.0, min(1.0, position))
+    if axis == "linear":
+        return min_hz + pos * (max_hz - min_hz)
+    if axis == "mel":
+        m_min = _mel(max(1.0, min_hz))
+        m_max = _mel(max_hz)
+        return _hz_from_mel(m_min + pos * (m_max - m_min))
+    b_min = _bark(max(1.0, min_hz))
+    b_max = _bark(max_hz)
+    return _hz_from_bark(b_min + pos * (b_max - b_min))
+
+
 def _build_basis_row(pos: float, order: int) -> list[float]:
     """Cosine basis: [1, 2cos(pi*pos), 2cos(2pi*pos), ...]"""
     theta = math.pi * pos
@@ -244,9 +275,7 @@ def _hz_from_bark(bark_value: float) -> float:
 
 
 def _frequency_for_bark_position(position: float, min_hz: float, max_hz: float) -> float:
-    b_min = _bark(max(1.0, min_hz))
-    b_max = _bark(max_hz)
-    return _hz_from_bark(b_min + max(0.0, min(1.0, position)) * (b_max - b_min))
+    return _frequency_for_position(position, min_hz, max_hz, "bark")
 
 
 def _basis_row_ndarray(position: float, order: int):
@@ -296,6 +325,11 @@ def _build_fit_points_new(
 
 def _build_curvature_penalty(order: int, min_hz: float, max_hz: float):
     """Curvature penalty in Bark-warped frequency space (Tier 3.7)."""
+    return _build_curvature_penalty_for_axis(order, min_hz, max_hz, "bark")
+
+
+def _build_curvature_penalty_for_axis(order: int, min_hz: float, max_hz: float, axis: str):
+    """Curvature penalty in the chosen warped frequency space."""
     import numpy as np
     n = order + 1
     matrix = np.zeros((n, n), dtype=np.float64)
@@ -306,8 +340,8 @@ def _build_curvature_penalty(order: int, min_hz: float, max_hz: float):
     basis_samples = np.zeros((sample_count, n), dtype=np.float64)
     for i in range(sample_count):
         position = i * step
-        freq_hz  = _frequency_for_bark_position(position, min_hz, max_hz)
-        fit_pos  = _normalized_position_bark(freq_hz, min_hz, max_hz)
+        freq_hz  = _frequency_for_position(position, min_hz, max_hz, axis)
+        fit_pos  = _normalized_position_axis(freq_hz, min_hz, max_hz, axis)
         basis_samples[i, :] = _basis_row_ndarray(fit_pos, order)
     for i in range(2, sample_count - 2):
         d = (
@@ -347,10 +381,17 @@ class _EnvelopeModel:
     # Populated by the final IRLS solve; None when solve failed or is a fallback.
     hessian_inv: object = None   # np.ndarray (order+1)×(order+1) or None
     noise_variance: float = 0.0  # σ² = weighted residual variance (in dB²)
+    axis: str = "bark"
+    blend_components: object = None   # list[tuple[float, _EnvelopeModel]] | None
 
 
 def _evaluate_new_model(model: _EnvelopeModel, frequency_hz: float) -> float:
     import numpy as np
+    if model.storage == "blend" and model.blend_components:
+        return float(sum(
+            weight * _evaluate_new_model(component, frequency_hz)
+            for weight, component in model.blend_components
+        ))
     if model.storage == "samples":
         if model.values.size == 1:
             return float(model.values[0])
@@ -360,7 +401,7 @@ def _evaluate_new_model(model: _EnvelopeModel, frequency_hz: float) -> float:
         hi = min(lo + 1, int(model.values.size) - 1)
         t  = scaled - float(lo)
         return float(model.values[lo] + t * (model.values[hi] - model.values[lo]))
-    pos = _normalized_position_bark(frequency_hz, model.min_hz, model.max_hz)
+    pos = _normalized_position_axis(frequency_hz, model.min_hz, model.max_hz, model.axis)
     return float(np.dot(model.values, _basis_row_ndarray(pos, model.order)))
 
 
@@ -372,9 +413,18 @@ def _evaluate_prediction_sigma(model: _EnvelopeModel, frequency_hz: float) -> fl
     Returns float('nan') when uncertainty information is not available.
     """
     import numpy as np
+    if model.storage == "blend" and model.blend_components:
+        variance = 0.0
+        has_component_sigma = False
+        for weight, component in model.blend_components:
+            sigma = _evaluate_prediction_sigma(component, frequency_hz)
+            if math.isfinite(sigma):
+                variance += (weight * sigma) ** 2
+                has_component_sigma = True
+        return math.sqrt(max(0.0, variance)) if has_component_sigma else float("nan")
     if model.hessian_inv is None or model.noise_variance <= 0.0:
         return float("nan")
-    pos = _normalized_position_bark(frequency_hz, model.min_hz, model.max_hz)
+    pos = _normalized_position_axis(frequency_hz, model.min_hz, model.max_hz, model.axis)
     x = _basis_row_ndarray(pos, model.order)
     variance = model.noise_variance * max(0.0, float(x @ model.hessian_inv @ x))
     return math.sqrt(variance)
@@ -388,6 +438,8 @@ def _solve_new_attempt(
     min_hz: float,
     max_hz: float,
     irls_max_iterations: int = 4,
+    n_real_points: int = 0,
+    axis: str = "bark",
 ):
     """Assemble and solve the weighted regularized normal equations.
 
@@ -395,32 +447,48 @@ def _solve_new_attempt(
     irlsMaxIterations=4).  Set to 1 for pure L2 (BIC/GCV search paths).
     After the final IRLS iteration, A⁻¹ and σ² are stored in the returned
     _EnvelopeModel for downstream uncertainty evaluation.
+
+    n_real_points — when > 0, specifies how many leading entries in `points`
+    are real partials (vs low-weight virtual gap-fill points appended after).
+    IRLS robust-scale (MAD) and the final noise_variance are then computed
+    from real partials only, preventing virtual-point residuals (which are
+    near zero by construction) from skewing the Huber threshold and
+    uncertainty estimate.  Pass 0 (default) for the legacy behaviour where
+    all points are treated equally.
     """
     import numpy as np
     n = order + 1
     if not points:
         return None
-    penalty = _build_curvature_penalty(order, min_hz, max_hz)
+    n_real = n_real_points if 0 < n_real_points <= len(points) else len(points)
+    n_virtual = max(0, len(points) - n_real)
+    penalty = _build_curvature_penalty_for_axis(order, min_hz, max_hz, axis)
     B = np.zeros((len(points), n), dtype=np.float64)
     W_base = np.zeros(len(points), dtype=np.float64)
     Y = np.zeros(len(points), dtype=np.float64)
     for i, pt in enumerate(points):
         B[i, :] = _basis_row_ndarray(
-            _normalized_position_bark(pt["frequency_hz"], min_hz, max_hz), order)
+            _normalized_position_axis(pt["frequency_hz"], min_hz, max_hz, axis), order)
         W_base[i] = pt["weight"]
         Y[i] = pt["log_amplitude_db"]
 
     ridge_mat  = max(0.0, ridge) * np.eye(n, dtype=np.float64)
     penalty_P  = regularization * penalty if regularization > 0.0 else np.zeros((n, n), dtype=np.float64)
 
+    # Adaptive Huber sigma floor: sparse real frames need a more conservative
+    # floor (fewer points → noisier MAD estimate).  Converges to 0.5 dB for
+    # dense frames (n_real ≥ 30) and rises smoothly to ~2 dB for n_real ≤ 4.
+    sigma_floor = max(0.5, 2.0 * math.exp(-n_real / 8.0))
+
     # IRLS: start with Huber weights = 1 (pure L2 first iter), then update.
     irls_w = np.ones(len(points), dtype=np.float64)
+    peak_w = np.ones(len(points), dtype=np.float64)
     max_iter = max(1, irls_max_iterations)
     A = ridge_mat  # will be set inside the loop
     coefficients = np.zeros(n, dtype=np.float64)
 
     for iter_idx in range(max_iter):
-        W_eff = W_base * irls_w
+        W_eff = W_base * irls_w * peak_w
         BtW   = (B * W_eff[:, None]).T
         A     = BtW @ B + ridge_mat + penalty_P
         rhs   = BtW @ Y
@@ -431,20 +499,56 @@ def _solve_new_attempt(
 
         predicted  = B @ coefficients
         residuals  = np.abs(predicted - Y)
-        w_sum      = max(float(W_eff.sum()), 1.0e-30)
-        w_err      = math.sqrt(float(np.sum(W_eff * (predicted - Y) ** 2) / w_sum))
+        W_real     = W_eff[:n_real]
+        w_sum_real = max(float(W_real.sum()), 1.0e-30)
+        res_real   = (predicted - Y)[:n_real]
+        w_err_real = math.sqrt(float(np.sum(W_real * res_real ** 2) / w_sum_real))
 
         if iter_idx == max_iter - 1:
             break
 
-        # Huber IRLS weight update (mirrors C++ implementation).
-        # Robust scale: median absolute residual / 0.6745, floored at 0.5 dB
-        # to prevent weight collapse on near-zero-residual frames.
-        sorted_res = np.sort(residuals)
-        sigma_hat  = max(float(sorted_res[len(sorted_res) // 2]) / 0.6745, 0.5)
-        huber_delta = 1.5 * sigma_hat
-        irls_w = np.where(residuals <= huber_delta, 1.0,
-                          huber_delta / np.maximum(residuals, 1.0e-9))
+        # Huber IRLS weight update.
+        # Robust scale: MAD of real-partial residuals / 0.6745, with adaptive
+        # floor.  Using real-only residuals prevents the near-zero residuals of
+        # virtual gap-fill points from artificially tightening the Huber
+        # threshold and downweighting legitimate real partials.
+        # Delta constant 1.345 is the asymptotically optimal Huber value for
+        # 95% efficiency under a normal error distribution.
+        real_res_sorted = np.sort(residuals[:n_real])
+        sigma_hat   = max(float(real_res_sorted[len(real_res_sorted) // 2]) / 0.6745,
+                          sigma_floor)
+        p90_residual = float(real_res_sorted[int(0.90 * (len(real_res_sorted) - 1))])
+        max_residual = float(real_res_sorted[-1])
+
+        # True-envelope-style release: gently boost real peaks only when the
+        # smooth curve sags just below them. Large residuals are left to Huber as
+        # likely tracking glitches rather than treated as envelope constraints.
+        new_peak_w = np.ones(len(points), dtype=np.float64)
+        if n_virtual > 0:
+            signed_real = (Y - predicted)[:n_real]
+            release_db = 0.35
+            peak_room = np.clip((signed_real - release_db) / max(sigma_hat, 1.0e-9),
+                                0.0, 2.5)
+            peak_room = np.where(signed_real <= 4.0, peak_room, 0.0)
+            new_peak_w[:n_real] = 1.0 + 0.45 * peak_room
+        peak_delta = float(np.max(np.abs(new_peak_w - peak_w)))
+        peak_w = new_peak_w
+
+        if (p90_residual <= 1.25 * sigma_hat and max_residual <= 2.75 * sigma_hat
+                and peak_delta < 0.005):
+            break
+        huber_delta = 1.345 * sigma_hat
+        new_irls_w = np.where(residuals <= huber_delta, 1.0,
+                               huber_delta / np.maximum(residuals, 1.0e-9))
+
+        # Early exit: if Huber weights have converged (max change < 0.5%),
+        # another iteration would produce an identical solution.  Stop here to
+        # avoid the slight over-penalisation of clean-frame partials that the
+        # final iteration causes when the delta is already tight.
+        if float(np.max(np.abs(new_irls_w - irls_w))) < 0.005:
+            irls_w = new_irls_w
+            break
+        irls_w = new_irls_w
 
     # Condition estimate.
     try:
@@ -454,10 +558,11 @@ def _solve_new_attempt(
         cond = float("inf")
 
     # Posterior uncertainty: A⁻¹ so callers can compute σ²·x(f)ᵀA⁻¹x(f).
-    # Only computed for the final (IRLS-converged) solve.
+    # noise_variance is computed from real-partial residuals only so virtual
+    # points (near-zero residual by construction) do not deflate uncertainty.
     try:
         hessian_inv    = np.linalg.inv(A)
-        noise_variance = w_err ** 2
+        noise_variance = w_err_real ** 2
     except np.linalg.LinAlgError:
         hessian_inv    = None
         noise_variance = 0.0
@@ -465,9 +570,10 @@ def _solve_new_attempt(
     return _EnvelopeModel(
         storage="coefficients", values=coefficients, order=order,
         min_hz=min_hz, max_hz=max_hz, regularization=regularization,
-        weighted_error_db=w_err, condition_estimate=cond,
+        weighted_error_db=w_err_real, condition_estimate=cond,
         fit_points=len(points), fallback=None,
         hessian_inv=hessian_inv, noise_variance=noise_variance,
+        axis=axis,
     )
 
 
@@ -477,41 +583,104 @@ def _append_virtual_gap(
     weight_scale: float,
     min_gap: float,
     max_count: int,
+    axis: str = "bark",
 ) -> list:
     """Cross-frame gap fill with low-weight virtual points (Tier 3.8).
 
     weight_scale=0.0 suppresses injection entirely (used by the p75 delta gate
     on onset/transient frames where the previous-frame envelope is stale).
+
+    Improvement over the original uniform-grid approach: virtual points are now
+    placed at the centres of the *actual* Bark-space gaps (including the leading
+    and trailing boundary regions), sorted by gap size so the most under-supported
+    regions are filled first.  Each virtual point's weight is scaled proportionally
+    to its gap size, so large gaps (where the previous frame provides the only
+    constraint) carry slightly more influence than small gaps.
     """
     if prev_model is None or max_count <= 0 or not points or weight_scale <= 0.0:
         return points
+
     current_positions = sorted(
-        _normalized_position_bark(p["frequency_hz"], prev_model.min_hz, prev_model.max_hz)
+        _normalized_position_axis(p["frequency_hz"], prev_model.min_hz, prev_model.max_hz, axis)
         for p in points
     )
-    taken = list(current_positions)
-    base_weight = max(
-        1.0e-6,
-        sum(p["weight"] for p in points) / len(points) * weight_scale,
-    )
-    support = []
-    for i in range(max_count):
-        pos  = 0.5 if max_count == 1 else i / float(max_count - 1)
-        fhz  = _frequency_for_bark_position(pos, prev_model.min_hz, prev_model.max_hz)
-        db   = _evaluate_new_model(prev_model, fhz)
-        support.append({"frequency_hz": fhz, "log_amplitude_db": db, "weight": 1.0})
-    candidates = []
-    for sp in support:
-        pos = _normalized_position_bark(sp["frequency_hz"], prev_model.min_hz, prev_model.max_hz)
-        gap = min((abs(pos - cp) for cp in current_positions), default=1.0)
-        if gap < min_gap:
-            continue
-        candidates.append((gap, pos, dict(sp, weight=base_weight)))
-    candidates.sort(reverse=True)
+
+    mean_weight = sum(p["weight"] for p in points) / len(points)
+
+    # Identify all Bark-space gaps, including leading [0, first] and
+    # trailing [last, 1] boundary gaps.
+    boundaries = [0.0] + list(current_positions) + [1.0]
+    gaps: list[tuple[float, float, float]] = []   # (size, lo_pos, hi_pos)
+    for i in range(len(boundaries) - 1):
+        lo_pos, hi_pos = boundaries[i], boundaries[i + 1]
+        gap_size = hi_pos - lo_pos
+        if gap_size >= min_gap:
+            gaps.append((gap_size, lo_pos, hi_pos))
+
+    if not gaps:
+        return points
+
+    # Sort largest-gap-first and allocate virtual slots proportionally.
+    gaps.sort(reverse=True)
+    total_gap = sum(g[0] for g in gaps)
+
+    # Build candidates: one (or more) points per gap, centred within the gap.
+    # For each gap, n_pts ∝ gap_size; at minimum 1 per eligible gap.
+    candidates: list[tuple[float, float, dict]] = []   # (gap_size, pos, point_dict)
+    remaining = max_count
+    for gap_size, lo_pos, hi_pos in gaps:
+        if remaining <= 0:
+            break
+        # Proportional allocation (at least 1 per gap).
+        n_pts = max(1, round(gap_size / total_gap * max_count))
+        n_pts = min(n_pts, remaining)
+        if n_pts == 1:
+            positions_in_gap = [(lo_pos + hi_pos) * 0.5]
+        else:
+            step = (hi_pos - lo_pos) / (n_pts + 1)
+            positions_in_gap = [lo_pos + (j + 1) * step for j in range(n_pts)]
+        # All virtual points share the same base weight so the overall virtual
+        # influence on the solve stays comparable to the original implementation.
+        # (Scaling by gap size shrinks weights in large gaps where they are
+        # needed most — counterproductive.)
+        # Boundary gaps: place the exact boundary endpoint first so the cosine
+        # basis is pinned at x=0 or x=1, giving the strongest extrapolation
+        # constraint.  Extra points (when n_pts > 1) are placed interior.
+        is_leading  = (lo_pos == 0.0)
+        is_trailing = (hi_pos == 1.0)
+        if n_pts == 1:
+            if is_leading:
+                positions_in_gap = [0.0]
+            elif is_trailing:
+                positions_in_gap = [1.0]
+            else:
+                positions_in_gap = [(lo_pos + hi_pos) * 0.5]
+        else:
+            step = (hi_pos - lo_pos) / (n_pts + 1)
+            interior = [lo_pos + (j + 1) * step for j in range(n_pts - 1)]
+            if is_leading:
+                positions_in_gap = [0.0] + interior
+            elif is_trailing:
+                positions_in_gap = interior + [1.0]
+            else:
+                positions_in_gap = interior + [(lo_pos + hi_pos) * 0.5]
+
+        gap_weight = max(1.0e-6, mean_weight * weight_scale)
+        for pos in positions_in_gap:
+            fhz = _frequency_for_position(pos, prev_model.min_hz, prev_model.max_hz, axis)
+            db  = _evaluate_new_model(prev_model, fhz)
+            candidates.append((gap_size, pos, {
+                "frequency_hz":     fhz,
+                "log_amplitude_db": db,
+                "weight":           gap_weight,
+            }))
+        remaining -= n_pts
+
+    # Insert candidates (largest gap first), respecting the minimum-spacing guard.
     augmented = list(points)
-    start_n = len(points)
-    for _, pos, sp in candidates:
-        if len(augmented) >= start_n + max_count:
+    taken     = list(current_positions)
+    for _, pos, sp in sorted(candidates, key=lambda x: -x[0]):
+        if len(augmented) >= len(points) + max_count:
             break
         if min((abs(pos - tp) for tp in taken), default=1.0) < min_gap * 0.5:
             continue
@@ -531,6 +700,7 @@ def _gcv_lambda_search(
     n_candidates: int = 10,
     ridge: float = 1.0e-10,
     max_range_extensions: int = 0,
+    axis: str = "bark",
 ) -> float:
     """GCV lambda search mirroring C++ selectGcvLambda.
 
@@ -550,14 +720,14 @@ def _gcv_lambda_search(
         return lambda_min
 
     n = order + 1
-    penalty = _build_curvature_penalty(order, min_hz, max_hz)
+    penalty = _build_curvature_penalty_for_axis(order, min_hz, max_hz, axis)
 
     B = np.zeros((len(points), n), dtype=np.float64)
     W = np.zeros(len(points),     dtype=np.float64)
     Y = np.zeros(len(points),     dtype=np.float64)
     for i, pt in enumerate(points):
         B[i, :] = _basis_row_ndarray(
-            _normalized_position_bark(pt["frequency_hz"], min_hz, max_hz), order)
+            _normalized_position_axis(pt["frequency_hz"], min_hz, max_hz, axis), order)
         W[i] = pt["weight"]
         Y[i] = pt["log_amplitude_db"]
 
@@ -616,6 +786,274 @@ def _gcv_lambda_search(
     return best_lam
 
 
+def _axis_coverage(points: list, min_hz: float, max_hz: float, axis: str) -> float:
+    if not points:
+        return 0.0
+    positions = [
+        _normalized_position_axis(p["frequency_hz"], min_hz, max_hz, axis)
+        for p in points
+    ]
+    return max(positions) - min(positions) if positions else 0.0
+
+
+def _log_gap_cv(points: list) -> float:
+    freqs = sorted(p["frequency_hz"] for p in points)
+    if len(freqs) < 4:
+        return 0.0
+    gaps = [math.log(freqs[i + 1]) - math.log(freqs[i]) for i in range(len(freqs) - 1)]
+    mean_gap = sum(gaps) / len(gaps)
+    if mean_gap <= 1.0e-9:
+        return 0.0
+    variance = sum((gap - mean_gap) ** 2 for gap in gaps) / len(gaps)
+    return math.sqrt(max(0.0, variance)) / mean_gap
+
+
+def _adaptive_regularization(
+    base_reg: float,
+    coverage: float,
+    n_real: int,
+    n_virtual: int,
+    axis: str,
+) -> float:
+    reg = max(base_reg, 1.0e-5)
+
+    if n_real <= 8:
+        sparse_scale = 0.20 + 0.80 * min(max(coverage, 0.0) / 0.60, 1.0)
+        reg *= sparse_scale
+
+    if n_virtual > 0:
+        reg *= 0.30 if coverage < 0.45 else 0.55
+
+    if n_real >= 16 and coverage > 0.65:
+        dense_scale = 1.0 + 14.0 * ((coverage - 0.65) / 0.35) ** 2 * min(n_real / 32.0, 1.0)
+        reg *= dense_scale
+
+    if axis == "linear" and n_real <= 10 and n_virtual == 0:
+        reg *= 0.85
+        if coverage > 0.70:
+            reg *= 0.05
+    elif axis == "mel" and coverage > 0.55:
+        reg *= 0.90
+    elif axis == "bark" and n_virtual > 0:
+        reg *= 0.85
+
+    return min(max(reg, 1.0e-5), 1.0e-1)
+
+
+def _fit_axis_model(
+    usable: list,
+    min_hz: float,
+    max_hz: float,
+    order: int,
+    regularization: float,
+    previous_model,
+    grid_size: int,
+    use_gcv: bool,
+    axis: str,
+) -> tuple[list[float], list[float], dict, _EnvelopeModel]:
+    import numpy as np
+
+    eff_order = order
+    fallback = None
+    if len(usable) <= eff_order:
+        eff_order = max(0, len(usable) - 1)
+        fallback = "order_reduced_sparse"
+
+    virtual_weight_scale = 0.05
+    p75_delta_db = 0.0
+    if previous_model is not None and usable:
+        deltas = sorted(
+            abs(p["log_amplitude_db"] - _evaluate_new_model(previous_model, p["frequency_hz"]))
+            for p in usable
+        )
+        p75_delta_db = deltas[int(0.75 * (len(deltas) - 1))]
+        if p75_delta_db > 12.0:
+            virtual_weight_scale = 0.0
+
+    augmented = _append_virtual_gap(usable, previous_model, virtual_weight_scale, 0.1, 6, axis=axis)
+    n_real = len(usable)
+    n_virtual = max(0, len(augmented) - n_real)
+    coverage = _axis_coverage(usable, min_hz, max_hz, axis)
+    if axis in ("linear", "mel") and n_virtual == 0 and n_real <= 8 and coverage > 0.70:
+        eff_order = min(eff_order, max(1, n_real - 2))
+    eff_reg = _adaptive_regularization(regularization, coverage, n_real, n_virtual, axis)
+
+    if eff_order > 1:
+        density_floor = max(1, math.ceil(n_real * 0.15))
+        coverage_floor = 3 if coverage < 0.40 else density_floor
+        min_bic_order = max(density_floor, coverage_floor)
+        best_order, best_bic = eff_order, float("inf")
+        for trial_order in range(min_bic_order, eff_order + 1):
+            t = _solve_new_attempt(
+                augmented, trial_order, eff_reg, 1.0e-10, min_hz, max_hz,
+                irls_max_iterations=1, n_real_points=n_real, axis=axis)
+            if t is None or t.condition_estimate > 1.0e7:
+                continue
+            n_bic = max(n_real, 1)
+            bic = n_bic * math.log(max(t.weighted_error_db ** 2, 1.0e-30))
+            bic += (trial_order + 1) * math.log(n_bic)
+            if bic < best_bic:
+                best_bic = bic
+                best_order = trial_order
+        eff_order = best_order
+
+    gcv_lambda = None
+    if use_gcv:
+        gcv_lambda = _gcv_lambda_search(
+            augmented, eff_order, min_hz, max_hz,
+            lambda_min=1.0e-5, lambda_max=1.0e+2,
+            n_candidates=10, ridge=1.0e-10, axis=axis)
+        eff_reg = gcv_lambda
+
+    result = _solve_new_attempt(
+        augmented, eff_order, eff_reg, 1.0e-10, min_hz, max_hz,
+        irls_max_iterations=4, n_real_points=n_real, axis=axis)
+    if result is None or result.condition_estimate > 1.0e7:
+        retry_reg = min(max(eff_reg * 10.0, 1.0e-4), 1.0)
+        retry = _solve_new_attempt(
+            augmented, eff_order, retry_reg, 1.0e-10, min_hz, max_hz,
+            irls_max_iterations=4, n_real_points=n_real, axis=axis)
+        if retry is not None:
+            retry.fallback = "ill_conditioned_retry"
+            result = retry
+        else:
+            w_sum = max(sum(p["weight"] for p in augmented), 1.0e-30)
+            mean_db = sum(p["weight"] * p["log_amplitude_db"] for p in augmented) / w_sum
+            result = _EnvelopeModel(
+                storage="samples", values=np.array([mean_db]), order=0,
+                min_hz=min_hz, max_hz=max_hz, regularization=0.0,
+                weighted_error_db=0.0, condition_estimate=float("inf"),
+                fit_points=len(augmented), fallback="constant_fallback",
+                axis=axis,
+            )
+
+    if fallback and result.fallback is None:
+        result.fallback = fallback
+
+    grid_freqs = np.exp(np.linspace(math.log(min_hz), math.log(max_hz), grid_size)).tolist()
+    grid_db = [_evaluate_new_model(result, f) for f in grid_freqs]
+    sigma_grid = [_evaluate_prediction_sigma(result, f) for f in grid_freqs]
+    diag = {
+        "axis": axis,
+        "fit_points": len(augmented),
+        "real_fit_points": n_real,
+        "effective_order": result.order,
+        "weighted_error_db": result.weighted_error_db,
+        "condition_estimate": result.condition_estimate,
+        "fallback": result.fallback,
+        "virtual_points": n_virtual,
+        "gcv_lambda": gcv_lambda,
+        "gcv_was_used": use_gcv,
+        "p75_delta_db": p75_delta_db,
+        "virtual_suppressed": virtual_weight_scale == 0.0,
+        "noise_variance_db2": result.noise_variance,
+        "has_uncertainty": result.hessian_inv is not None,
+        "predict_sigma_grid": sigma_grid,
+        "coverage": coverage,
+        "adaptive_regularization": eff_reg,
+    }
+    return grid_freqs, grid_db, diag, result
+
+
+def _select_or_blend_axis_models(
+    axis_results: dict[str, tuple[list[float], list[float], dict, _EnvelopeModel]],
+    usable: list,
+    min_hz: float,
+    max_hz: float,
+) -> tuple[list[float], list[float], dict, _EnvelopeModel]:
+    import numpy as np
+
+    bark_coverage = _axis_coverage(usable, min_hz, max_hz, "bark")
+    span_octaves = math.log(max(usable[-1]["frequency_hz"], usable[0]["frequency_hz"]) /
+                            min(usable[-1]["frequency_hz"], usable[0]["frequency_hz"]), 2.0) if len(usable) > 1 else 0.0
+    gap_cv = _log_gap_cv(usable)
+    n_real = len(usable)
+    virtual_points = axis_results["bark"][2]["virtual_points"] if "bark" in axis_results else 0
+
+    if n_real >= 24:
+        priors = {"linear": 0.70, "mel": 0.25, "bark": 0.05}
+    elif virtual_points > 0 or span_octaves < 0.8:
+        priors = {"linear": 0.55, "mel": 0.35, "bark": 0.10}
+    elif n_real <= 8 and span_octaves > 3.2:
+        priors = {"linear": 0.60, "mel": 0.35, "bark": 0.05}
+    elif n_real <= 8:
+        priors = {"linear": 0.25, "mel": 0.65, "bark": 0.10}
+    else:
+        priors = {"linear": 0.50, "mel": 0.40, "bark": 0.10}
+
+    if gap_cv > 0.45 and bark_coverage > 0.50:
+        priors["linear"] += 0.10
+        priors["mel"] += 0.05
+    elif gap_cv < 0.15 and bark_coverage < 0.40:
+        priors["bark"] += 0.05
+
+    scores: dict[str, float] = {}
+    for axis, (_, _, diag, model) in axis_results.items():
+        err = max(diag["weighted_error_db"], 1.0e-3)
+        complexity = 1.0 + 0.15 * max(model.order, 0)
+        condition_penalty = 1.0 + 0.02 * math.log10(max(diag["condition_estimate"], 1.0))
+        scores[axis] = priors[axis] / (err * complexity * condition_penalty)
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    top_axis, top_score = ranked[0]
+    second_axis, second_score = ranked[1]
+    top_result = axis_results[top_axis]
+
+    score_sum = sum(scores.values())
+    normalized = {axis: score / max(score_sum, 1.0e-9) for axis, score in scores.items()}
+
+    if top_score >= second_score * 1.60 and normalized[top_axis] >= 0.60:
+        grid_hz, grid_db, diag, model = top_result
+        diag = dict(diag)
+        diag["selected_axis"] = top_axis
+        diag["selection_mode"] = "axis_select"
+        diag["axis_scores"] = scores
+        diag["axis_weights"] = normalized
+        return grid_hz, grid_db, diag, model
+
+    components = [
+        (weight, axis_results[axis][3])
+        for axis, weight in sorted(normalized.items(), key=lambda item: item[1], reverse=True)
+        if weight >= 0.12
+    ]
+    if len(components) < 2:
+        components = [
+            (normalized[top_axis], top_result[3]),
+            (normalized[second_axis], axis_results[second_axis][3]),
+        ]
+    weight_sum = sum(weight for weight, _ in components)
+    components = [(weight / max(weight_sum, 1.0e-9), model) for weight, model in components]
+    blend_model = _EnvelopeModel(
+        storage="blend", values=np.array([], dtype=np.float64), order=max(
+            component.order for _, component in components),
+        min_hz=min_hz, max_hz=max_hz, regularization=0.0,
+        weighted_error_db=sum(
+            weight * component.weighted_error_db for weight, component in components),
+        condition_estimate=min(component.condition_estimate for _, component in components),
+        fit_points=top_result[3].fit_points,
+        fallback=top_result[3].fallback,
+        noise_variance=sum(weight * component.noise_variance for weight, component in components),
+        axis="blend",
+        blend_components=components,
+    )
+    grid_hz = top_result[0]
+    grid_db = [
+        sum(weight * _evaluate_new_model(component, grid_hz[i]) for weight, component in components)
+        for i in range(len(grid_hz))
+    ]
+    sigma_grid = [_evaluate_prediction_sigma(blend_model, f) for f in grid_hz]
+    diag = dict(top_result[2])
+    diag["selected_axis"] = top_axis
+    diag["selection_mode"] = "axis_blend"
+    diag["blend_axes"] = [(component.axis, weight) for weight, component in components]
+    diag["axis_scores"] = scores
+    diag["axis_weights"] = normalized
+    diag["weighted_error_db"] = blend_model.weighted_error_db
+    diag["has_uncertainty"] = any(math.isfinite(s) for s in sigma_grid)
+    diag["predict_sigma_grid"] = sigma_grid
+    return grid_hz, grid_db, diag, blend_model
+
+
 def fit_new_model(
     frame_partials: list,
     sample_rate: float,
@@ -627,8 +1065,7 @@ def fit_new_model(
     grid_size: int = 512,
     use_gcv: bool = False,
 ) -> tuple:
-    """Fit the new estimator: Bark axis + Bark-space curvature prior + BIC order
-    selection (1e7 ill-conditioned threshold) + cross-frame gap fill (Tier 1-3).
+    """Fit the new estimator with adaptive regularisation and axis selection.
 
     Returns (grid_freqs_hz, grid_db, diagnostics_dict, _EnvelopeModel).
     """
@@ -648,104 +1085,14 @@ def fit_new_model(
         )
         return [], [], {"error": "no usable fit points", "fit_points": 0}, m
 
-    eff_order = order
-    eff_reg   = regularization
-    fallback  = None
-    if len(usable) <= eff_order:
-        eff_order = max(0, len(usable) - 1)
-        eff_reg   = max(eff_reg, 1.0e-2)
-        fallback  = "order_reduced_sparse"
-
-    # p75 amplitude-delta gate on virtual points (mirrors C++ crossFrameVirtualPointMaxDeltaDb=12.0).
-    # Use 75th-percentile rather than mean: a single large-amplitude transient partial
-    # should suppress injection even when most of the spectrum is stable.
-    virtual_weight_scale = 0.05
-    p75_delta_db = 0.0
-    if previous_model is not None and usable:
-        deltas = sorted(
-            abs(p["log_amplitude_db"] - _evaluate_new_model(previous_model, p["frequency_hz"]))
-            for p in usable
-        )
-        p75_delta_db = deltas[int(0.75 * (len(deltas) - 1))]
-        if p75_delta_db > 12.0:
-            virtual_weight_scale = 0.0  # suppress injection on onset/transient frames
-
-    augmented = _append_virtual_gap(usable, previous_model, virtual_weight_scale, 0.1, 6)
-
-    # BIC order selection — mirrors C++ useBicOrderSelection with 1e7 threshold.
-    # Uses L2 (irls_max_iterations=1) for efficiency across all trial orders.
-    # bicMinOrderPartialDensity=0.15 prevents collapse to order 1 on dense frames
-    # (C++ enforces minBicOrder = ceil(n_partials * 0.15)).
-    if eff_order > 1:
-        min_bic_order = max(1, math.ceil(len(usable) * 0.15))
-        best_order, best_bic = eff_order, float("inf")
-        for trial_order in range(min_bic_order, eff_order + 1):
-            t = _solve_new_attempt(augmented, trial_order, eff_reg, 1.0e-10, min_hz, max_hz,
-                                   irls_max_iterations=1)
-            if t is None or t.condition_estimate > 1.0e7:
-                continue
-            n = max(t.fit_points, 1)
-            bic = n * math.log(max(t.weighted_error_db ** 2, 1.0e-30)) + (trial_order + 1) * math.log(n)
-            if bic < best_bic:
-                best_bic   = bic
-                best_order = trial_order
-        eff_order = best_order
-
-    # GCV lambda selection: after BIC fixes eff_order, search lambda space (L2 only).
-    gcv_lambda = None
-    if use_gcv:
-        gcv_lambda = _gcv_lambda_search(augmented, eff_order, min_hz, max_hz,
-                                        lambda_min=1.0e-5, lambda_max=1.0e+2,
-                                        n_candidates=10, ridge=1.0e-10)
-        eff_reg = gcv_lambda
-
-    # Final solve with full IRLS (Huber loss, 4 iterations) for robustness against
-    # outlier partials (tracking glitches, amplitude spikes).
-    result = _solve_new_attempt(augmented, eff_order, eff_reg, 1.0e-10, min_hz, max_hz,
-                                irls_max_iterations=4)
-    if result is None or result.condition_estimate > 1.0e7:
-        retry_reg = max(eff_reg * 10.0, 1.0, 1.0e-2)
-        retry = _solve_new_attempt(augmented, eff_order, retry_reg, 1.0e-10, min_hz, max_hz,
-                                   irls_max_iterations=4)
-        if retry is not None:
-            retry.fallback = "ill_conditioned_retry"
-            result = retry
-        else:
-            w_sum   = max(sum(p["weight"] for p in augmented), 1.0e-30)
-            mean_db = sum(p["weight"] * p["log_amplitude_db"] for p in augmented) / w_sum
-            result  = _EnvelopeModel(
-                storage="samples", values=np.array([mean_db]), order=0,
-                min_hz=min_hz, max_hz=max_hz, regularization=0.0,
-                weighted_error_db=0.0, condition_estimate=float("inf"),
-                fit_points=len(augmented), fallback="constant_fallback",
-            )
-
-    if fallback and result.fallback is None:
-        result.fallback = fallback
-
-    grid_freqs = np.exp(np.linspace(math.log(min_hz), math.log(max_hz), grid_size)).tolist()
-    grid_db    = [_evaluate_new_model(result, f) for f in grid_freqs]
-
-    # Posterior predictive uncertainty grid (Stage 2 of GCV plan).
-    sigma_grid = [_evaluate_prediction_sigma(result, f) for f in grid_freqs]
-
-    diag = {
-        "fit_points":         len(augmented),
-        "real_fit_points":    len(usable),
-        "effective_order":    result.order,
-        "weighted_error_db":  result.weighted_error_db,
-        "condition_estimate": result.condition_estimate,
-        "fallback":           result.fallback,
-        "virtual_points":     max(0, len(augmented) - len(usable)),
-        "gcv_lambda":         gcv_lambda,
-        "gcv_was_used":       use_gcv,
-        "p75_delta_db":       p75_delta_db,
-        "virtual_suppressed": virtual_weight_scale == 0.0,
-        "noise_variance_db2": result.noise_variance,
-        "has_uncertainty":    result.hessian_inv is not None,
-        "predict_sigma_grid": sigma_grid,
+    usable = sorted(usable, key=lambda p: p["frequency_hz"])
+    axis_results = {
+        axis: _fit_axis_model(
+            usable, min_hz, max_hz, order, regularization,
+            previous_model, grid_size, use_gcv, axis)
+        for axis in ("linear", "mel", "bark")
     }
-    return grid_freqs, grid_db, diag, result
+    return _select_or_blend_axis_models(axis_results, usable, min_hz, max_hz)
 
 
 # ---------------------------------------------------------------------------

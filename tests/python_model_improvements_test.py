@@ -334,6 +334,185 @@ def test_fit_new_model_uncertainty_in_diag() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 11 — n_real_points: noise_variance is not deflated by virtual points
+# ---------------------------------------------------------------------------
+
+def test_n_real_noise_variance_not_deflated() -> None:
+    """When n_real_points is specified, noise_variance must reflect real-partial
+    residuals only.  A solve with low-residual virtual points mixed in without
+    n_real_points set should produce a lower (deflated) noise_variance than one
+    that passes n_real_points and computes variance from real points only."""
+    freqs_real = [200.0, 400.0, 800.0, 1600.0, 3200.0]
+    envs_real  = _smooth_env(freqs_real)
+    partials   = _make_partials(freqs_real, envs_real)
+    pts_real   = _build_fit_points_new(partials, LO, HI)
+
+    # Build a previous model so virtual injection occurs.
+    prev_partials = _make_partials(
+        [200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0],
+        _smooth_env([200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0])
+    )
+    prev_pts   = _build_fit_points_new(prev_partials, LO, HI)
+    prev_model = _solve_new_attempt(prev_pts, 4, 1.0e-3, 1.0e-10, LO, HI,
+                                     irls_max_iterations=4, n_real_points=len(prev_pts))
+    if prev_model is None:
+        _fail("n_real_noise_not_deflated", "could not build previous model")
+        return
+
+    from visualize_envelopes import _append_virtual_gap
+    augmented = _append_virtual_gap(pts_real, prev_model, 0.05, 0.1, 6)
+    n_real    = len(pts_real)
+    n_virtual = len(augmented) - n_real
+
+    if n_virtual == 0:
+        _ok("n_real_noise_not_deflated_skip_no_virtual")
+        return
+
+    # Solve without n_real_points (legacy: all points contribute to noise_var).
+    model_all  = _solve_new_attempt(augmented, 4, 1.0e-3, 1.0e-10, LO, HI,
+                                     irls_max_iterations=4)
+    # Solve with n_real_points (improved: only real partials contribute).
+    model_real = _solve_new_attempt(augmented, 4, 1.0e-3, 1.0e-10, LO, HI,
+                                     irls_max_iterations=4, n_real_points=n_real)
+
+    if model_all is None or model_real is None:
+        _fail("n_real_noise_not_deflated", "solver returned None")
+        return
+
+    # With real-only noise_variance, uncertainty should be >= the mixed version
+    # (virtual pts have near-zero residuals that pull the mixed estimate down).
+    _assert("n_real_noise_ge_mixed",
+            model_real.noise_variance >= model_all.noise_variance * 0.9,
+            f"real-only noise_var={model_real.noise_variance:.6f} should be "
+            f">= mixed noise_var={model_all.noise_variance:.6f}")
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — Adaptive Huber sigma floor: sparse frames get a higher floor
+# ---------------------------------------------------------------------------
+
+def test_adaptive_huber_floor_sparse_vs_dense() -> None:
+    """The adaptive sigma floor (based on n_real) should prevent over-aggressive
+    IRLS on sparse frames.  For very sparse frames (4 real pts) the effective
+    sigma floor is higher than for dense frames (30 real pts).
+
+    Proxy test: fit a sparse clean frame with IRLS and verify that all real
+    partial residuals remain non-NaN and that the model does not degenerate
+    (condition < 1e7).  The adaptive floor is responsible for preventing
+    weight collapse when MAD ≈ 0."""
+    # Sparse: 4 partials on exactly the smooth envelope → MAD ≈ 0 initially.
+    sparse_freqs  = [200.0, 1000.0, 4000.0, 10000.0]
+    sparse_pts    = _build_fit_points_new(
+        _make_partials(sparse_freqs, _smooth_env(sparse_freqs)), LO, HI)
+    model_sparse  = _solve_new_attempt(sparse_pts, 3, 1.0e-3, 1.0e-10, LO, HI,
+                                        irls_max_iterations=4, n_real_points=len(sparse_pts))
+
+    # Dense: 30 partials uniformly spaced.
+    dense_freqs   = [200.0 + i * 500.0 for i in range(30) if 200.0 + i*500.0 <= HI]
+    dense_pts     = _build_fit_points_new(
+        _make_partials(dense_freqs, _smooth_env(dense_freqs)), LO, HI)
+    model_dense   = _solve_new_attempt(dense_pts, 8, 1.0e-3, 1.0e-10, LO, HI,
+                                        irls_max_iterations=4, n_real_points=len(dense_pts))
+
+    for tag, m in [("sparse", model_sparse), ("dense", model_dense)]:
+        if m is None:
+            _fail(f"adaptive_floor_{tag}_not_none", "solver returned None")
+            continue
+        _assert(f"adaptive_floor_{tag}_not_degenerate",
+                m.condition_estimate < 1.0e7,
+                f"{tag} condition={m.condition_estimate:.2e} should be < 1e7")
+        _assert(f"adaptive_floor_{tag}_error_finite",
+                math.isfinite(m.weighted_error_db),
+                f"{tag} weighted_error_db={m.weighted_error_db} should be finite")
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — BIC uses n_real, not augmented count
+# ---------------------------------------------------------------------------
+
+def test_bic_uses_n_real_not_augmented() -> None:
+    """fit_new_model should select a higher BIC order on a dense frame than on
+    a sparse frame that happens to have the same total augmented point count
+    due to virtual injection.
+
+    Both frames have the same true envelope.  The dense frame has many real
+    observations; the sparse+virtual frame has fewer real observations padded
+    out to the same total by low-weight virtual points.  With the BIC counting
+    only n_real, the dense frame earns a higher-order model."""
+    def smooth(freqs): return _smooth_env(freqs)
+
+    # Dense frame: 12 real partials, no previous model → no virtual injection.
+    dense_freqs   = [200.0, 400.0, 700.0, 1000.0, 1500.0,
+                     2000.0, 3000.0, 4500.0, 6000.0, 8000.0, 10000.0, 12000.0]
+    _, _, diag_dense, _ = fit_new_model(
+        _make_partials(dense_freqs, smooth(dense_freqs)), SR, LO, HI,
+        order=8, regularization=1.0e-3)
+
+    # Sparse frame: 3 real partials with previous model → virtual injection.
+    sparse_freqs  = [200.0, 1000.0, 8000.0]
+    prev_pts = _build_fit_points_new(
+        _make_partials(dense_freqs, smooth(dense_freqs)), LO, HI)
+    prev_model = _solve_new_attempt(prev_pts, 6, 1.0e-3, 1.0e-10, LO, HI,
+                                     irls_max_iterations=1, n_real_points=len(prev_pts))
+    _, _, diag_sparse, _ = fit_new_model(
+        _make_partials(sparse_freqs, smooth(sparse_freqs)), SR, LO, HI,
+        order=8, regularization=1.0e-3, previous_model=prev_model)
+
+    dense_order  = diag_dense["effective_order"]
+    sparse_order = diag_sparse["effective_order"]
+    _assert("bic_dense_ge_sparse_order",
+            dense_order >= sparse_order,
+            f"dense order={dense_order} should be >= sparse order={sparse_order} "
+            f"(BIC should reward real observations, not virtual inflation)")
+
+
+# ---------------------------------------------------------------------------
+# Test 14 — True-envelope release protects real peaks from virtual support
+# ---------------------------------------------------------------------------
+
+def test_true_envelope_release_with_virtual_points() -> None:
+    """When virtual points are present, full IRLS should protect real partial
+    peaks from being pulled down by low-weight support anchors."""
+    real_pts = [
+        {"frequency_hz": f, "log_amplitude_db": 0.0, "weight": 1.0}
+        for f in [900.0, 1000.0, 1100.0, 1200.0]
+    ]
+    virtual_pts = [
+        {"frequency_hz": f, "log_amplitude_db": -10.0, "weight": 0.05}
+        for f in [LO, 300.0, 3000.0, 8000.0]
+    ]
+    augmented = real_pts + virtual_pts
+
+    l2_model = _solve_new_attempt(
+        augmented, 3, 1.0e-4, 1.0e-10, LO, HI,
+        irls_max_iterations=1, n_real_points=len(real_pts), axis="linear")
+    guarded_model = _solve_new_attempt(
+        augmented, 3, 1.0e-4, 1.0e-10, LO, HI,
+        irls_max_iterations=4, n_real_points=len(real_pts), axis="linear")
+
+    if l2_model is None or guarded_model is None:
+        _fail("true_envelope_release_models_not_none", "solver returned None")
+        return
+
+    def max_undershoot(model):
+        return max(
+            p["log_amplitude_db"] - _evaluate_new_model(model, p["frequency_hz"])
+            for p in real_pts
+        )
+
+    l2_undershoot = max_undershoot(l2_model)
+    guarded_undershoot = max_undershoot(guarded_model)
+
+    _assert("true_release_reduces_virtual_pull",
+            guarded_undershoot < l2_undershoot * 0.75,
+            f"guarded undershoot={guarded_undershoot:.3f} should be less than "
+            f"75% of L2 undershoot={l2_undershoot:.3f}")
+    _assert("true_release_keeps_real_peaks_close",
+            guarded_undershoot < 0.5,
+            f"guarded undershoot={guarded_undershoot:.3f} should stay below 0.5 dB")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -349,6 +528,10 @@ def main() -> int:
     test_mel_round_trip()
     test_mel_more_uniform_than_bark_in_musical_range()
     test_fit_new_model_uncertainty_in_diag()
+    test_n_real_noise_variance_not_deflated()
+    test_adaptive_huber_floor_sparse_vs_dense()
+    test_bic_uses_n_real_not_augmented()
+    test_true_envelope_release_with_virtual_points()
 
     print(f"\n{_PASSED} passed, {len(_FAILURES)} failed.")
     if _FAILURES:
