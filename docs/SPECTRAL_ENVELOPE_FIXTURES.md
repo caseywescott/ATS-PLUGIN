@@ -102,6 +102,29 @@ These currently live in:
 - `tests/python_subband_adaptive_test.py`
 - `tests/benchmark_phase4_task43.py`
 
+### Phase 4 Task 4.4 synthetic fixtures
+
+The current Task 4.4 research pass adds two dense-target refinement fixtures plus two regression checks for the Python-only optional refinement prototype:
+
+- `R1_mild_tracking_error`
+  - mildly detuned harmonic frame with a displaced bright region that the sparse point fit alone tends to misplace
+  - metric: dense-grid envelope RMS against truth plus monotonic dense-target loss history
+- `R2_sparse_plus_residual_bump`
+  - sparse partial frame whose dense target includes a broad residual-style bump between observed support regions
+  - metric: dense-grid envelope RMS against truth plus refinement loss descent
+- `S1_dense_clean`
+  - dense clean harmonic frame used to confirm the refinement anchor keeps already-good fits effectively unchanged
+  - metric: absolute RMS delta between initializer and refined result
+- `S3_outlier_partials`
+  - outlier-partial regression check to ensure the dense-target pass does not undo the existing robust fit behavior
+  - metric: no-regression RMS delta against truth
+
+These currently live in:
+
+- `tests/phase4_task44_fixtures.py`
+- `tests/python_refinement_test.py`
+- `tests/benchmark_phase4_task44.py`
+
 ---
 
 ## Metric Definitions

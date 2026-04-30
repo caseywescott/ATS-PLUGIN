@@ -49,3 +49,11 @@ The Phase 4 Task 4.3 sub-band prototype adds two evaluation metrics on top of th
 
 - **Band Seam Error:** evaluate each adjacent band pair over their overlap region before the final overlap-add mix, then report seam RMS and seam max in dB. The current research threshold is `<= 0.75 dB RMS` and `<= 1.8 dB max`.
 - **Boundary-Sweep Zipper Error:** for a synthetic sequence that moves a bright bump across a band boundary, subtract the known truth motion from the estimated frame-to-frame motion and report RMS / max residual in dB. This is the guard against visually or audibly obvious stitching jumps when a feature crosses from one local band fit to another.
+
+## Task 4.4 Research Metrics
+
+The Phase 4 Task 4.4 refinement prototype adds three metrics on top of the standard envelope RMS checks:
+
+- **Dense-Target Loss:** the refinement pass minimizes a dense-grid loss made of direct target mismatch, a blurred displaced-energy term, and an uncertainty-scaled anchor back to the initializer. The recorded diagnostics expose initial loss, final loss, and full loss history so monotonic descent can be checked explicitly.
+- **Initializer Delta:** for clean-frame regression gates, compare refined RMS against the unrefined initializer RMS and keep the absolute change inside the documented `0.01-0.02 dB` envelope.
+- **Runtime Ratio:** compare end-to-end `fit_new_model()` runtime with and without refinement on the same fixture. For the current Python-only optional-mode prototype, `<= 2.5x` baseline is treated as bounded enough for offline/high-quality mode.

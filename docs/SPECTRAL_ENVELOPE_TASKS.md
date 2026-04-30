@@ -300,6 +300,9 @@
 
 - [ ] Phase 4 research spec: [SPECTRAL_ENVELOPE_PHASE4_SPEC.md](./SPECTRAL_ENVELOPE_PHASE4_SPEC.md)
 - [x] Task 4.1 Python prototype completed as research-only bounded true-envelope release mode; promotion failed the primary `S4` gate and remains behind an explicit flag.
+- [x] Task 4.2 Python prototype completed as a promotion candidate for a later C++ port; remains behind the explicit temporal smoothing option.
+- [x] Task 4.3 Python prototype completed as research-only sub-band adaptive mode; promotion failed the `S5` and boundary-zipper gates and remains behind an explicit flag.
+- [x] Task 4.4 Python prototype completed as a promotion candidate for a later C++ port; remains behind the explicit refinement option until runtime-path benchmarks exist.
 
 ### Commit A — `feat(envelope): add GCV lambda search to fitRegularizedDiscreteCepstrum`
 

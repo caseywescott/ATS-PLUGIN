@@ -390,18 +390,18 @@ A short refinement pass, seeded by the current RDC fit and scored against a dens
 
 ### Work Items
 
-- [ ] Use current RDC output as the initializer.
-- [ ] Define one refinement loss against a denser target spectrum. Start with a simple transport-aware spectral loss or another displaced-energy-sensitive loss.
-- [ ] Cap refinement to a very small iteration budget.
-- [ ] Keep the feature optional and non-default unless runtime and regressions are excellent.
-- [ ] Record diagnostics: initial loss, final loss, iteration count, and runtime.
+- [x] Use current RDC output as the initializer.
+- [x] Define one refinement loss against a denser target spectrum. Start with a simple transport-aware spectral loss or another displaced-energy-sensitive loss.
+- [x] Cap refinement to a very small iteration budget.
+- [x] Keep the feature optional and non-default unless runtime and regressions are excellent.
+- [x] Record diagnostics: initial loss, final loss, iteration count, and runtime.
 
 ### Acceptance Criteria
 
-- [ ] `R1_mild_tracking_error` or `R2_sparse_plus_residual_bump` improves by at least `5%`.
-- [ ] Loss decreases monotonically through the refinement steps.
-- [ ] Clean dense frames remain effectively unchanged.
-- [ ] Runtime stays within the documented offline or high-quality budget.
+- [x] `R1_mild_tracking_error` or `R2_sparse_plus_residual_bump` improves by at least `5%`.
+- [x] Loss decreases monotonically through the refinement steps.
+- [x] Clean dense frames remain effectively unchanged.
+- [x] Runtime stays within the documented offline or high-quality budget.
 
 ### Expected Win
 
@@ -416,6 +416,48 @@ A short refinement pass, seeded by the current RDC fit and scored against a dens
 ### Stop/Go Rule
 
 Keep behind offline or high-quality mode unless runtime is negligible and clean-frame regressions are flat.
+
+### Outcome - 2026-04-30
+
+Status: `promotion candidate for later C++ port`, still behind explicit Python-only option `RefinementOptions(enabled=True)`. No runtime-path promotion or C++ port in this slice.
+
+Prototype details:
+
+- Added an opt-in dense-target refinement pass to `fit_new_model()` in `tools/visualize_envelopes.py`.
+- The pass seeds from the current RDC/sub-band result, resamples it on a shared Bark grid, and runs a capped three-step gradient descent against a denser target spectrum.
+- The loss combines direct dense-target mismatch, a blurred displaced-energy term, and an uncertainty-scaled anchor back to the initializer so clean frames stay effectively flat.
+- Diagnostics now report initial/final loss, monotonic loss history, accepted step sizes, iteration count, target label, and per-frame runtime.
+
+Verification:
+
+- `python3 tests/python_refinement_test.py`
+- `python3 tests/benchmark_phase4_task44.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/python_subband_adaptive_test.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task43.py`
+- `python3 tests/benchmark_three_models.py`
+
+Task 4.4 benchmark results:
+
+| Metric | Raw | Refined | Gate | Result |
+| --- | ---: | ---: | --- | --- |
+| `R1` RMS | `2.312333 dB` | `1.986433 dB` | improve by `5-12%` | pass (`14.09%`, stronger than target band) |
+| `R2` RMS | `1.552737 dB` | `1.454801 dB` | improve by `5-12%` | pass (`6.31%`) |
+| `S1` RMS | `0.226644 dB` | `0.213582 dB` | change `<= 0.02 dB` | pass (`-0.013062 dB`) |
+| `S3` RMS | `0.714662 dB` | `0.628216 dB` | regression `<= 0.02 dB` | pass (improved) |
+| Monotonic loss | `24.944401 -> 18.341126` on `R1` | `5.005466 -> 4.330656` on `R2` | monotonic descent | pass |
+| Runtime ratio | `71.859 ms` | `66.503 ms` | stay inside optional-mode budget | pass (`0.925x` on the measured `R1` loop) |
+
+Stop/go decision:
+
+- The primary promotion gate passed: both targeted fixtures improved, and `R2` cleared the required `5%` floor while `R1` improved substantially more.
+- Loss decreased monotonically through all accepted refinement steps on both targeted fixtures.
+- Clean dense and outlier-regression checks stayed inside the documented no-regression envelope.
+- Measured runtime stayed bounded for an optional offline/high-quality mode.
+- This makes Task 4.4 a viable later C++ port candidate, but the behavior should remain behind the explicit refinement option until that runtime port is benchmarked separately.
 
 ---
 

@@ -152,6 +152,65 @@ This remains a research-only path behind `SubbandAdaptiveOptions(enabled=True)`.
 
 ---
 
+## Python model: optional dense-target refinement — 2026-04-30
+
+Added an opt-in Task 4.4 prototype to the Python reference path:
+
+- `RefinementOptions`
+- `_apply_optional_refinement()`
+- dense-target refinement hook inside `fit_new_model()`
+
+The prototype keeps the existing RDC or sub-band fit as the initializer, then runs a capped three-step gradient descent on a shared Bark grid against a denser target spectrum. Three behaviors mattered most in practice:
+
+- a blurred displaced-energy term helps the pass correct mild peak displacement without needing a full transport solver
+- an uncertainty-scaled anchor keeps already-clean fits close to the initializer
+- the option only runs when an explicit dense target spectrum is provided, so the default path remains unchanged
+
+New diagnostics now report:
+
+- initial and final refinement loss
+- full monotonic loss history and accepted step sizes
+- iteration count
+- target label / target point count
+- per-frame refinement runtime
+
+### Task 4.4 benchmark results
+
+| Metric | Raw | Refined | Outcome |
+| --- | ---: | ---: | --- |
+| `R1_mild_tracking_error` RMS | `2.312333 dB` | `1.986433 dB` | `14.09%` lower |
+| `R2_sparse_plus_residual_bump` RMS | `1.552737 dB` | `1.454801 dB` | `6.31%` lower |
+| `S1_dense_clean` RMS | `0.226644 dB` | `0.213582 dB` | `-0.013062 dB`, inside gate |
+| `S3_outlier_partials` RMS | `0.714662 dB` | `0.628216 dB` | improved |
+| `R1` loss | `24.944401` | `18.341126` | monotonic descent |
+| `R2` loss | `5.005466` | `4.330656` | monotonic descent |
+| Runtime ratio (`R1` loop) | `71.859 ms` raw | `66.503 ms` refined | `0.925x` |
+
+### Stop/go decision
+
+The Python prototype cleared the Task 4.4 stop/go rule:
+
+- at least one targeted fixture improved by more than `5%` and in practice both targeted fixtures improved
+- loss decreased monotonically through all accepted refinement steps
+- the clean dense and outlier-regression fixtures stayed inside the documented no-regression envelope
+- measured runtime stayed bounded for an optional offline/high-quality path
+
+This is a promotion candidate for a later C++ port, but it remains behind the explicit `RefinementOptions(enabled=True)` flag for now.
+
+### Verification
+
+- `python3 tests/python_refinement_test.py`
+- `python3 tests/benchmark_phase4_task44.py`
+- `python3 tests/python_model_improvements_test.py`
+- `python3 tests/python_temporal_smoothing_test.py`
+- `python3 tests/python_subband_adaptive_test.py`
+- `python3 tests/benchmark_phase4_task41.py`
+- `python3 tests/benchmark_phase4_task42.py`
+- `python3 tests/benchmark_phase4_task43.py`
+- `python3 tests/benchmark_three_models.py`
+
+---
+
 ## Python port parity fixes — 2026-04-28 (commit 453194d)
 
 Two correctness bugs in the Python port fixed to match C++ behavior.
