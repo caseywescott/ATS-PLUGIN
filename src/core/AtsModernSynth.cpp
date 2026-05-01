@@ -175,8 +175,15 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                                       ? static_cast<double>(sample - frameIndex * plan.hopSizeSamples)
                                             / static_cast<double>(plan.hopSizeSamples)
                                       : 0.0;
-            const double amp = lerp(a.amplitude, b.amplitude, localT) * plan.config.partialGain;
-            const double freq = lerp(a.frequencyHz, b.frequencyHz, localT) * plan.config.frequencyFactor;
+            // When the next frame is inactive the partial is ending: fade amplitude to
+            // zero but hold frequency constant.  Interpolating frequency toward 0 Hz
+            // would produce an audible downward chirp artifact at every partial death.
+            const bool bActive = b.reason != ModernAtsFrameReason::Slept
+                                 && b.reason != ModernAtsFrameReason::Pruned
+                                 && b.reason != ModernAtsFrameReason::Rejected;
+            const double amp = lerp(a.amplitude, bActive ? b.amplitude : 0.0, localT) * plan.config.partialGain;
+            const double freq = lerp(a.frequencyHz, bActive ? b.frequencyHz : a.frequencyHz, localT)
+                                * plan.config.frequencyFactor;
 
             if (!phaseSeeded)
             {
