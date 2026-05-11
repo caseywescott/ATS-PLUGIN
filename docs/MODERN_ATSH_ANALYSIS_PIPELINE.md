@@ -1,8 +1,8 @@
 # Modern ATSH Phase 2 Analysis Pipeline
 
 Phase 2 adds a deterministic analysis layer around the classic ATSA/Qatsh path
-and introduces prototype modern components. It does not change the compatibility
-default.
+and introduces direct modern analysis components. It does not change the
+compatibility default.
 
 ## Mode Registry
 
@@ -11,20 +11,24 @@ default.
 | ID | Default tracker | Status |
 | --- | --- | --- |
 | `classic_ats` | `classic_recursive_frequency_smr` | Enabled and compatibility default |
-| `modern_ats` | `modern_assignment` | Enabled for explicit prototype tests |
-| `experimental` | `experimental` | Registered but disabled |
+| `modern_ats` | `modern_assignment` | Enabled for explicit direct-analysis runs |
+| `experimental` | `experimental` | Registered for gated experimental analysis |
 
 The plugin analysis call now routes through `ats::runClassicAtsAnalysis`, which
-wraps the existing ATSA `tracker` call. `tools/ats_offline` accepts
-`--analysis-mode classic_ats` and rejects modern/experimental modes until later
-phases wire those engines to real audio analysis.
+wraps the existing ATSA `tracker` call for compatibility, ATS export, and the
+classic residual render layer. `tools/ats_offline` accepts
+`--analysis-mode classic_ats` and remains classic-only for external parity
+tests.
 
 Phase 5 plugin integration snapshots the selected mode/tracker/peak-estimator
-parameters at Analyze time. Classic ATS remains the compatibility audio model.
-When Modern ATS or the experimental estimator is selected, the plugin also
-derives a versioned `ModernAtsModel` snapshot from the analyzed ATS data; Modern
-assignment tracking is applied to derived peak frames, and diagnostics are read
-from that modern snapshot rather than inferred from classic display fields.
+parameters at Analyze time. Classic ATS remains the compatibility audio model,
+but Modern ATS and Experimental mode now call `ats::runModernAtsAnalysis` on
+the downmixed source samples. That direct path estimates STFT peaks before
+tracking, applies the selected tracker to those source-derived peak frames, and
+stores a versioned `ModernAtsModel` whose `sourceHash` is based on the audio
+input rather than an intermediate `ATS_SOUND`. The plugin then overlays classic
+ATSA residual-band energy when available so residual display/rendering remains
+compatible while modern partial tracking can improve independently.
 
 ## Peak Estimation
 
@@ -39,7 +43,10 @@ provides diagnostics for:
 - magnitude threshold,
 - rejection reasons.
 
-Classic plugin analysis still uses the original ATSA tracker path unchanged.
+`ats::runModernAtsAnalysis` computes deterministic windowed DFT frames from the
+source audio, feeds those bins into the selected estimator, caps accepted peaks
+per frame for predictable CPU, and records per-frame diagnostics. Classic
+plugin analysis still uses the original ATSA tracker path unchanged.
 
 ## Tracking
 
@@ -54,7 +61,7 @@ events:
 Short gaps are marked as `gap_fill`, and short active segments are marked as
 `pruned`.
 
-The modern assignment prototype tracks synthetic peak frames with a bounded
+The modern assignment prototype tracks direct peak frames with a bounded
 candidate set per active track. Its cost matrix includes frequency, amplitude,
 SMR, optional frequency-slope continuity, birth/death penalties, and spurious
 peak penalty configuration. Cost breakdowns are recorded as
@@ -87,4 +94,7 @@ The `ats_analysis_pipeline` CTest covers:
 - orphan residual energy preservation and deterministic noise render,
 - transient marker detection and diagnostics,
 - attack protection that blocks gap fill and resets assignment at marked
-  transient frames.
+  transient frames,
+- direct audio-to-modern-model analysis, including source-audio hashing,
+  channel-policy metadata, assignment-cost diagnostics, validation, and
+  source sine peak tracking.

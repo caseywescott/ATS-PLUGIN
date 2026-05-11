@@ -121,6 +121,28 @@ ClassicAtsAnalysisResult runClassicAtsAnalysis(const AnalysisParams& params,
                                                const std::vector<double>& monoSamples,
                                                int sampleRate);
 
+struct ModernAtsAnalysisConfig
+{
+    ModernAtsAnalysisMode analysisMode = ModernAtsAnalysisMode::ModernAts;
+    ModernAtsTrackerMode trackerMode = ModernAtsTrackerMode::ModernAssignment;
+    bool useExperimentalPeakEstimator = false;
+    int inputChannelCount = 1;
+    std::size_t maxPeaksPerFrame = 96;
+    std::size_t maxCandidatesPerTrack = 8;
+};
+
+struct ModernAtsAnalysisResult
+{
+    ModernAtsModel model;
+    std::vector<PeakEstimationDiagnostics> peakDiagnostics;
+    std::string errorMessage;
+};
+
+ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
+                                             const std::vector<double>& monoSamples,
+                                             int sampleRate,
+                                             const ModernAtsAnalysisConfig& config);
+
 std::vector<ModernAtsTrackLifecycleEvent> normalizeTrackLifecycleFromActivity(int partialId,
                                                                               const std::vector<bool>& activity,
                                                                               int shortGapFrames,

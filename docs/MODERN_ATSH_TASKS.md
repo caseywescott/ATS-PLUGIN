@@ -329,7 +329,7 @@ Notes and gate documentation are in [MODERN_ATSH_ACCEPTANCE.md](./MODERN_ATSH_AC
 
 ## Phase 8 - Risk Closure and Release Policy
 
-### Commit 32 - `feat(model): record modern ATS channel policy`
+### Commit 33 - `feat(model): record modern ATS channel policy`
 
 **PRD:** section 5.1, section 6.2, section 8
 
@@ -338,6 +338,15 @@ Notes and gate documentation are in [MODERN_ATSH_ACCEPTANCE.md](./MODERN_ATSH_AC
 - [x] Validate channel-policy consistency and document reserved future per-channel/mid-side modes.
 
 Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported WAV channel count before launching analysis. Notes are in [MODERN_ATSH_RISK_CLOSURE.md](./MODERN_ATSH_RISK_CLOSURE.md).
+
+### Commit 34 - `fix(analysis): make Modern ATS analyze source peaks directly`
+
+**PRD:** section 5.1-section 5.3, section 6.1, section 7.3
+
+- [x] Close the unfinished architecture gap: Modern ATS plugin analysis no longer derives partial tracks from already-tracked classic `ATS_SOUND` cells.
+- [x] Add `ats::runModernAtsAnalysis` as a core audio-to-modern-model path with deterministic STFT peak estimation, peak diagnostics, source-audio hashing, transient markers, and assignment tracking.
+- [x] Keep Classic ATS available for compatibility, ATS export, and residual-layer rendering while Modern ATS partials improve independently.
+- [x] Add a deterministic CTest proving direct modern analysis tracks a source sine peak, preserves original channel-count metadata, records assignment costs, and validates the modern model.
 
 ---
 
@@ -356,3 +365,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Quality and release acceptance | 31 |
 | External real-audio ATSA comparison | 32 |
 | Stereo/multichannel policy | 33 |
+| Direct modern source analysis | 34 |

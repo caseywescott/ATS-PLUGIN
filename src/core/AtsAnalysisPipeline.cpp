@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <unordered_set>
+#include <utility>
 
 extern "C" {
 #include "atsa.h"
@@ -17,6 +20,8 @@ namespace ats
 
 namespace
 {
+
+constexpr double kTwoPi = 6.28318530717958647692;
 
 double clamp(double value, double lo, double hi)
 {
@@ -65,6 +70,286 @@ ModernAtsPartialFrame frameFromPeak(const TrackingPeak& peak, ModernAtsFrameReas
 bool containsFrame(const std::unordered_set<int>& frameSet, int frameIndex)
 {
     return frameSet.count(frameIndex) != 0;
+}
+
+bool modernFrameActive(const ModernAtsPartialFrame& frame)
+{
+    return frame.amplitude > 0.0 && frame.frequencyHz > 0.0
+           && frame.reason != ModernAtsFrameReason::Slept
+           && frame.reason != ModernAtsFrameReason::Pruned
+           && frame.reason != ModernAtsFrameReason::Rejected;
+}
+
+double ampToDb(double amp)
+{
+    return amp > 1.0e-15 ? 20.0 * std::log10(amp) : -300.0;
+}
+
+std::uint64_t fnv1aUpdate(std::uint64_t hash, std::uint64_t value)
+{
+    for (int i = 0; i < 8; ++i)
+    {
+        hash ^= (value >> (i * 8)) & 0xffu;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::string hex64(std::uint64_t value)
+{
+    const char* digits = "0123456789abcdef";
+    std::string out(16, '0');
+    for (int i = 15; i >= 0; --i)
+    {
+        out[static_cast<std::size_t>(i)] = digits[value & 0x0fu];
+        value >>= 4;
+    }
+    return out;
+}
+
+std::string sourceHashForAudio(const std::vector<double>& monoSamples, int sampleRate)
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    hash = fnv1aUpdate(hash, static_cast<std::uint64_t>(std::max(0, sampleRate)));
+    hash = fnv1aUpdate(hash, static_cast<std::uint64_t>(monoSamples.size()));
+    for (const double sample : monoSamples)
+    {
+        const auto quantized = static_cast<std::int64_t>(
+            std::llround(clamp(std::isfinite(sample) ? sample : 0.0, -4.0, 4.0) * 2147483647.0));
+        hash = fnv1aUpdate(hash, static_cast<std::uint64_t>(quantized));
+    }
+    return "direct_audio:" + std::to_string(sampleRate) + ":" + std::to_string(monoSamples.size())
+           + ":" + hex64(hash);
+}
+
+std::string parameterHashForModernAnalysis(const AnalysisParams& params,
+                                           const ModernAtsAnalysisConfig& config,
+                                           int windowSize,
+                                           int hopSize)
+{
+    std::ostringstream out;
+    out << "modern:type=" << params.type
+        << ";mode=" << toString(config.analysisMode)
+        << ";tracker=" << toString(config.trackerMode)
+        << ";peak=" << (config.useExperimentalPeakEstimator
+                            ? "experimental_reassigned_peak_estimator"
+                            : "classic_stft_peak_estimator")
+        << ";lf=" << params.lowest_freq
+        << ";hf=" << params.highest_freq
+        << ";lm=" << params.lowest_mag
+        << ";win=" << windowSize
+        << ";hop=" << hopSize
+        << ";maxPeaks=" << config.maxPeaksPerFrame
+        << ";maxCand=" << config.maxCandidatesPerTrack;
+    return out.str();
+}
+
+int analysisWindowSize(const AnalysisParams& params)
+{
+    return std::max(16, params.win_size > 0 ? params.win_size : ATSA_WSIZE);
+}
+
+int analysisHopSize(const AnalysisParams& params, int windowSize)
+{
+    if (params.hop_size > 1.0)
+        return std::max(1, static_cast<int>(std::llround(params.hop_size)));
+    return std::max(1, static_cast<int>(std::llround(static_cast<double>(windowSize)
+                                                     * std::max(0.001, params.hop_size))));
+}
+
+double analysisWindowWeight(int index, int size, int windowType)
+{
+    if (size <= 1)
+        return 1.0;
+
+    const double phase = kTwoPi * static_cast<double>(index) / static_cast<double>(size - 1);
+    switch (windowType)
+    {
+        case BLACKMAN:
+            return 0.42 - 0.50 * std::cos(phase) + 0.08 * std::cos(2.0 * phase);
+        case BLACKMAN_H:
+            return 0.35875 - 0.48829 * std::cos(phase) + 0.14128 * std::cos(2.0 * phase)
+                   - 0.01168 * std::cos(3.0 * phase);
+        case HANNING:
+        case VONHANN:
+            return 0.5 - 0.5 * std::cos(phase);
+        default:
+            return 1.0;
+    }
+}
+
+std::vector<SpectrumBin> estimateSpectrumBinsForFrame(const std::vector<double>& monoSamples,
+                                                      int frameStartSample,
+                                                      int windowSize,
+                                                      int sampleRate,
+                                                      const AnalysisParams& params,
+                                                      double& frameMeanSquare)
+{
+    frameMeanSquare = 0.0;
+    if (windowSize <= 0 || sampleRate <= 0)
+        return {};
+
+    const double nyquist = 0.5 * static_cast<double>(sampleRate);
+    const double lowest = std::max(0.0, params.lowest_freq);
+    const double highest = std::max(lowest, std::min(params.highest_freq, nyquist));
+    const int lowestBin = std::max(1, static_cast<int>(std::floor(lowest * windowSize / sampleRate)) - 1);
+    const int highestBin = std::min(windowSize / 2,
+                                    static_cast<int>(std::ceil(highest * windowSize / sampleRate)) + 1);
+
+    if (highestBin <= lowestBin)
+        return {};
+
+    std::vector<double> windowed(static_cast<std::size_t>(windowSize), 0.0);
+    double windowSum = 0.0;
+    double windowPower = 0.0;
+    double weightedEnergy = 0.0;
+
+    for (int i = 0; i < windowSize; ++i)
+    {
+        const int sampleIndex = frameStartSample + i;
+        const double sample = sampleIndex >= 0 && sampleIndex < static_cast<int>(monoSamples.size())
+                                  ? monoSamples[static_cast<std::size_t>(sampleIndex)]
+                                  : 0.0;
+        const double w = analysisWindowWeight(i, windowSize, params.win_type);
+        const double x = (std::isfinite(sample) ? sample : 0.0) * w;
+        windowed[static_cast<std::size_t>(i)] = x;
+        windowSum += w;
+        windowPower += w * w;
+        weightedEnergy += x * x;
+    }
+
+    frameMeanSquare = windowPower > 1.0e-12 ? weightedEnergy / windowPower : 0.0;
+
+    std::vector<SpectrumBin> bins;
+    bins.reserve(static_cast<std::size_t>(highestBin - lowestBin + 1));
+    const double ampNorm = 2.0 / std::max(1.0e-12, windowSum);
+
+    for (int bin = lowestBin; bin <= highestBin; ++bin)
+    {
+        double real = 0.0;
+        double imag = 0.0;
+        for (int i = 0; i < windowSize; ++i)
+        {
+            const double angle = -kTwoPi * static_cast<double>(bin * i) / static_cast<double>(windowSize);
+            const double x = windowed[static_cast<std::size_t>(i)];
+            real += x * std::cos(angle);
+            imag += x * std::sin(angle);
+        }
+
+        const double amp = ampNorm * std::hypot(real, imag);
+        SpectrumBin spectrumBin;
+        spectrumBin.frequencyHz = static_cast<double>(bin) * static_cast<double>(sampleRate)
+                                  / static_cast<double>(windowSize);
+        spectrumBin.magnitudeDb = ampToDb(amp);
+        spectrumBin.phaseRadians = std::atan2(imag, real);
+        bins.push_back(spectrumBin);
+    }
+
+    return bins;
+}
+
+std::vector<SpectralPeak> capAndSortPeaks(std::vector<SpectralPeak> peaks, std::size_t maxPeaks)
+{
+    std::sort(peaks.begin(), peaks.end(), [](const SpectralPeak& a, const SpectralPeak& b) {
+        if (a.amplitude == b.amplitude)
+            return a.frequencyHz < b.frequencyHz;
+        return a.amplitude > b.amplitude;
+    });
+
+    if (maxPeaks > 0 && peaks.size() > maxPeaks)
+        peaks.resize(maxPeaks);
+
+    std::sort(peaks.begin(), peaks.end(), [](const SpectralPeak& a, const SpectralPeak& b) {
+        return a.frequencyHz < b.frequencyHz;
+    });
+
+    return peaks;
+}
+
+TrackingPeakFrame trackingFrameFromPeaks(const std::vector<SpectralPeak>& peaks)
+{
+    TrackingPeakFrame frame;
+    frame.reserve(peaks.size());
+    for (const auto& peak : peaks)
+    {
+        TrackingPeak trackingPeak;
+        trackingPeak.sourceIndex = peak.binIndex;
+        trackingPeak.frequencyHz = peak.frequencyHz;
+        trackingPeak.amplitude = peak.amplitude;
+        trackingPeak.smrDb = peak.smrDb;
+        trackingPeak.phaseRadians = peak.phaseRadians;
+        frame.push_back(trackingPeak);
+    }
+    return frame;
+}
+
+void pruneShortModernTracks(AssignmentTrackerResult& result, int minSegmentFrames)
+{
+    const int minFrames = std::max(1, minSegmentFrames);
+    for (auto& partial : result.partials)
+    {
+        int activeCount = 0;
+        int firstActiveFrame = -1;
+        for (std::size_t frameIndex = 0; frameIndex < partial.frames.size(); ++frameIndex)
+        {
+            if (modernFrameActive(partial.frames[frameIndex]))
+            {
+                if (firstActiveFrame < 0)
+                    firstActiveFrame = static_cast<int>(frameIndex);
+                ++activeCount;
+            }
+        }
+
+        if (activeCount == 0 || activeCount >= minFrames)
+            continue;
+
+        for (auto& frame : partial.frames)
+        {
+            if (!modernFrameActive(frame))
+                continue;
+            frame.reason = ModernAtsFrameReason::Pruned;
+            frame.confidence = 0.0;
+        }
+        result.trackLifecycle.push_back(
+            { partial.id, firstActiveFrame, ModernAtsLifecycleKind::Pruned, "short_direct_track" });
+    }
+}
+
+void populateModernFramesFromTrackedPartials(ModernAtsModel& model,
+                                             const std::vector<double>& frameTimes,
+                                             const std::vector<double>& frameMeanSquareEnergy,
+                                             const std::vector<TrackingPeakFrame>& peakFrames)
+{
+    model.frames.clear();
+    model.frames.reserve(frameTimes.size());
+
+    for (std::size_t frameIndex = 0; frameIndex < frameTimes.size(); ++frameIndex)
+    {
+        ModernAtsFrame frame;
+        frame.timeSeconds = frameTimes[frameIndex];
+
+        for (const auto& partial : model.partials)
+        {
+            if (frameIndex < partial.frames.size() && modernFrameActive(partial.frames[frameIndex]))
+                frame.activePartialIds.push_back(partial.id);
+        }
+
+        double assignedEnergy = 0.0;
+        if (frameIndex < peakFrames.size())
+        {
+            for (const auto& peak : peakFrames[frameIndex])
+                assignedEnergy += 0.5 * peak.amplitude * peak.amplitude;
+        }
+
+        const double frameEnergy = frameIndex < frameMeanSquareEnergy.size()
+                                       ? std::max(0.0, frameMeanSquareEnergy[frameIndex])
+                                       : 0.0;
+        const double orphanEnergy = std::max(0.0, frameEnergy - assignedEnergy);
+        frame.orphanResidualBandEnergy.assign(kModernAtsDefaultResidualBands,
+                                              orphanEnergy / static_cast<double>(kModernAtsDefaultResidualBands));
+
+        model.frames.push_back(std::move(frame));
+    }
 }
 
 struct Candidate
@@ -402,6 +687,159 @@ ClassicAtsAnalysisResult runClassicAtsAnalysis(const AnalysisParams& params,
     }
 
     result.sound.reset(raw);
+    return result;
+}
+
+ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
+                                             const std::vector<double>& monoSamples,
+                                             int sampleRate,
+                                             const ModernAtsAnalysisConfig& config)
+{
+    ModernAtsAnalysisResult result;
+    if (monoSamples.empty())
+    {
+        result.errorMessage = "No samples to analyze.";
+        return result;
+    }
+    if (sampleRate <= 0)
+    {
+        result.errorMessage = "Invalid sample rate.";
+        return result;
+    }
+
+    const int windowSize = analysisWindowSize(params);
+    const int hopSize = analysisHopSize(params, windowSize);
+    const int startSample = std::max(0, static_cast<int>(std::floor(params.start * sampleRate)));
+    const int requestedEnd = params.duration > 0.0
+                                 ? startSample + std::max(1, static_cast<int>(std::ceil(params.duration * sampleRate)))
+                                 : static_cast<int>(monoSamples.size());
+    const int endSample = std::min(static_cast<int>(monoSamples.size()), requestedEnd);
+    if (startSample >= endSample)
+    {
+        result.errorMessage = "Analysis range is empty.";
+        return result;
+    }
+
+    PeakEstimationConfig peakConfig;
+    peakConfig.lowestFrequencyHz = params.lowest_freq;
+    peakConfig.highestFrequencyHz = std::min(params.highest_freq, 0.5 * static_cast<double>(sampleRate));
+    peakConfig.magnitudeThresholdDb = params.lowest_mag;
+    peakConfig.interpolateParabolically = true;
+
+    ClassicStftPeakEstimator classicEstimator;
+    ExperimentalReassignedPeakEstimator experimentalEstimator;
+    const IPeakEstimator& estimator = config.useExperimentalPeakEstimator
+                                          ? static_cast<const IPeakEstimator&>(experimentalEstimator)
+                                          : static_cast<const IPeakEstimator&>(classicEstimator);
+
+    std::vector<TrackingPeakFrame> trackingFrames;
+    std::vector<double> frameTimes;
+    std::vector<double> frameMeanSquareEnergy;
+    std::vector<TransientFeatureFrame> transientFeatures;
+
+    double previousPeakEnergy = 0.0;
+    int previousPeakCount = 0;
+    for (int frameStart = startSample; frameStart < endSample; frameStart += hopSize)
+    {
+        double frameEnergy = 0.0;
+        const auto bins = estimateSpectrumBinsForFrame(monoSamples,
+                                                       frameStart,
+                                                       windowSize,
+                                                       sampleRate,
+                                                       params,
+                                                       frameEnergy);
+        PeakEstimationDiagnostics diagnostics;
+        auto peaks = estimator.estimatePeaks(bins, peakConfig, diagnostics);
+        peaks = capAndSortPeaks(std::move(peaks), config.maxPeaksPerFrame);
+        diagnostics.acceptedPeaks = static_cast<int>(peaks.size());
+        diagnostics.rejectedPeaks = std::max(0, diagnostics.rawPeaks - diagnostics.acceptedPeaks);
+        result.peakDiagnostics.push_back(std::move(diagnostics));
+
+        auto trackingFrame = trackingFrameFromPeaks(peaks);
+        double peakEnergy = 0.0;
+        for (const auto& peak : trackingFrame)
+            peakEnergy += peak.amplitude * peak.amplitude;
+
+        TransientFeatureFrame feature;
+        feature.timeSeconds = static_cast<double>(frameStart) / static_cast<double>(sampleRate);
+        feature.energy = frameEnergy;
+        feature.spectralFlux = std::max(0.0, peakEnergy - previousPeakEnergy);
+        const double peakCountDelta =
+            std::abs(static_cast<double>(trackingFrame.size()) - static_cast<double>(previousPeakCount));
+        feature.modelDiscontinuity = peakCountDelta
+                                     / static_cast<double>(std::max<std::size_t>(
+                                         1, std::max(trackingFrame.size(),
+                                                     static_cast<std::size_t>(std::max(0, previousPeakCount)))));
+        transientFeatures.push_back(feature);
+
+        frameTimes.push_back(feature.timeSeconds);
+        frameMeanSquareEnergy.push_back(frameEnergy);
+        trackingFrames.push_back(std::move(trackingFrame));
+        previousPeakEnergy = peakEnergy;
+        previousPeakCount = static_cast<int>(trackingFrames.back().size());
+    }
+
+    if (trackingFrames.empty())
+    {
+        result.errorMessage = "Modern analysis produced no frames.";
+        return result;
+    }
+
+    TransientDetectionDiagnostics transientDiagnostics;
+    auto transients = detectTransientMarkers(transientFeatures, TransientDetectionConfig {}, transientDiagnostics);
+
+    AssignmentTrackerConfig trackerConfig;
+    trackerConfig.analysisMode = config.trackerMode == ModernAtsTrackerMode::ModernAssignment
+                                     ? config.analysisMode
+                                     : ModernAtsAnalysisMode::ClassicAts;
+    trackerConfig.maxCandidatesPerTrack = config.maxCandidatesPerTrack;
+    trackerConfig.useFrequencySlopeContinuity = config.trackerMode == ModernAtsTrackerMode::ModernAssignment;
+    for (const auto& marker : transients)
+        trackerConfig.transientBreakFrameIndices.push_back(marker.frameIndex);
+
+    auto assignment = runAssignmentTrackerPrototype(trackingFrames, trackerConfig);
+    pruneShortModernTracks(assignment, params.min_seg_len);
+
+    auto& model = result.model;
+    model.header.schemaVersion = kModernAtsSchemaVersion;
+    model.header.analysisMode = config.analysisMode;
+    model.header.trackerMode = config.trackerMode;
+    model.header.sampleRate = sampleRate;
+    model.header.hopSizeSamples = hopSize;
+    model.header.windowSizeSamples = windowSize;
+    model.header.inputChannelCount = std::max(1, config.inputChannelCount);
+    model.header.channelPolicy = defaultModernAtsChannelPolicyForInput(model.header.inputChannelCount);
+    model.header.parameterHash = parameterHashForModernAnalysis(params, config, windowSize, hopSize);
+    model.header.sourceHash = sourceHashForAudio(monoSamples, sampleRate);
+    model.partials = std::move(assignment.partials);
+    model.trackLifecycle = std::move(assignment.trackLifecycle);
+    model.assignmentCosts = std::move(assignment.assignmentCosts);
+    model.transients = std::move(transients);
+    populateModernFramesFromTrackedPartials(model, frameTimes, frameMeanSquareEnergy, trackingFrames);
+
+    if (config.useExperimentalPeakEstimator || config.analysisMode == ModernAtsAnalysisMode::Experimental)
+    {
+        model.warnings.push_back(
+            "Experimental direct peak estimator used before modern assignment tracking.");
+    }
+    else
+    {
+        model.warnings.push_back(
+            "Modern ATS direct source peak analysis: peaks are estimated from audio before tracking.");
+    }
+    if (config.trackerMode != ModernAtsTrackerMode::ModernAssignment)
+    {
+        model.warnings.push_back(
+            "Modern model used classic-compatible nearest tracking over direct peak frames.");
+    }
+
+    std::string validationError;
+    if (!validateModernAtsModel(model, validationError))
+    {
+        result.errorMessage = validationError;
+        result.model = {};
+    }
+
     return result;
 }
 

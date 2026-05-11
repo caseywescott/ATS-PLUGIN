@@ -336,6 +336,72 @@ void testExperimentalTransientLanePrototype()
     expect(comparison.laneTransientCount == 2, "transient lane comparison lane count mismatch");
 }
 
+void testDirectModernAnalysisUsesSourcePeaks()
+{
+    const int sampleRate = 4096;
+    const double frequency = 512.0;
+    std::vector<double> samples(2048, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        samples[i] = 0.45 * std::sin(2.0 * 3.14159265358979323846
+                                     * frequency * static_cast<double>(i)
+                                     / static_cast<double>(sampleRate));
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 0.5;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1000.0;
+    params.lowest_mag = -80.0;
+    params.min_seg_len = 2;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.inputChannelCount = 2; // Source was downmixed before analysis; preserve original channel count.
+
+    auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+    expect(result.model.header.analysisMode == ats::ModernAtsAnalysisMode::ModernAts,
+           "direct modern analysis mode mismatch");
+    expect(result.model.header.trackerMode == ats::ModernAtsTrackerMode::ModernAssignment,
+           "direct modern tracker mode mismatch");
+    expect(result.model.header.sourceHash.find("direct_audio:") == 0,
+           "modern analysis should hash source audio, not a classic ATS_SOUND");
+    expect(result.model.header.inputChannelCount == 2,
+           "modern analysis should preserve original input channel count");
+    expect(!result.model.frames.empty(), "direct modern analysis should produce frames");
+    expect(!result.model.partials.empty(), "direct modern analysis should produce partial tracks");
+    expect(!result.model.assignmentCosts.empty(), "direct modern assignment should record costs");
+    expect(!result.peakDiagnostics.empty(), "direct modern analysis should expose peak diagnostics");
+
+    std::string validationError;
+    expect(ats::validateModernAtsModel(result.model, validationError), validationError.c_str());
+
+    bool sawExpectedFrequency = false;
+    for (const auto& partial : result.model.partials)
+    {
+        for (const auto& frame : partial.frames)
+        {
+            if (std::abs(frame.frequencyHz - frequency) < 12.0
+                && frame.reason != ats::ModernAtsFrameReason::Pruned
+                && frame.reason != ats::ModernAtsFrameReason::Rejected
+                && frame.reason != ats::ModernAtsFrameReason::Slept)
+            {
+                sawExpectedFrequency = true;
+            }
+        }
+    }
+    expect(sawExpectedFrequency, "direct modern analysis did not track the source sine peak");
+
+    for (const auto& frame : result.model.frames)
+    {
+        expect(frame.orphanResidualBandEnergy.size() == ats::kModernAtsDefaultResidualBands,
+               "direct modern analysis should emit residual-band placeholders");
+    }
+}
+
 void testClassicAtsAnalysisEmptyInput()
 {
     ats::AnalysisParams params;
@@ -348,6 +414,13 @@ void testClassicAtsAnalysisEmptyInput()
     const auto invalidRate = ats::runClassicAtsAnalysis(params, oneFrame, -1);
     expect(!invalidRate.errorMessage.empty(), "invalid sample rate should produce an error message");
     expect(!invalidRate.sound, "invalid sample rate should not produce a model");
+
+    ats::ModernAtsAnalysisConfig modernConfig;
+    const auto modernEmpty = ats::runModernAtsAnalysis(params, empty, 48000, modernConfig);
+    expect(!modernEmpty.errorMessage.empty(), "modern empty input should produce an error message");
+    const auto modernInvalidRate = ats::runModernAtsAnalysis(params, oneFrame, -1, modernConfig);
+    expect(!modernInvalidRate.errorMessage.empty(),
+           "modern invalid sample rate should produce an error message");
 }
 
 void testLifecycleGapFillAllowedAcrossProtectedFrame()
@@ -397,6 +470,7 @@ int main()
     testOrphanResidualNoise();
     testTransientDetection();
     testExperimentalTransientLanePrototype();
+    testDirectModernAnalysisUsesSourcePeaks();
     testClassicAtsAnalysisEmptyInput();
     testDdspHelperPolicy();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

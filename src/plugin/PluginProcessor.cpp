@@ -379,6 +379,29 @@ void populateModernFramesFromPartials(ats::ModernAtsModel& model, const ATS_SOUN
     }
 }
 
+void overlayClassicResidualBands(ats::ModernAtsModel& model, const ATS_SOUND& sound)
+{
+    if (model.frames.empty() || sound.frames <= 0 || sound.band_energy == nullptr)
+        return;
+
+    int classicFrame = 0;
+    for (auto& frame : model.frames)
+    {
+        while (classicFrame + 1 < sound.frames)
+        {
+            const double currentDelta = std::abs(atsFrameTime(sound, classicFrame) - frame.timeSeconds);
+            const double nextDelta = std::abs(atsFrameTime(sound, classicFrame + 1) - frame.timeSeconds);
+            if (nextDelta > currentDelta)
+                break;
+            ++classicFrame;
+        }
+
+        auto bands = residualBandsForFrame(sound, classicFrame);
+        if (!bands.empty())
+            frame.orphanResidualBandEnergy = std::move(bands);
+    }
+}
+
 ats::ModernAtsModel buildModernModelFromClassicAtsSound(
     const ATS_SOUND& sound,
     const ats::AnalysisParams& analysisParams,
@@ -921,14 +944,31 @@ void AtsAudioProcessor::startAnalysis()
         std::string modernValidationError;
         if (selectedAnalysisMode != kAnalysisModeClassic)
         {
-            modernModel = buildModernModelFromClassicAtsSound(*result.sound.get(),
-                                                              ap,
-                                                              selectedAnalysisMode,
-                                                              selectedTrackerMode,
-                                                              selectedPeakEstimator,
-                                                              fileChannelCount,
-                                                              result.trackLifecycle);
-            modernModelValid = ats::validateModernAtsModel(modernModel, modernValidationError);
+            analysisProgress.store(0.55f);
+
+            ats::ModernAtsAnalysisConfig modernConfig;
+            modernConfig.analysisMode = selectedAnalysisMode == kAnalysisModeExperimental
+                                            ? ats::ModernAtsAnalysisMode::Experimental
+                                            : ats::ModernAtsAnalysisMode::ModernAts;
+            modernConfig.trackerMode = selectedTrackerMode == kTrackerModeAssignment
+                                           ? ats::ModernAtsTrackerMode::ModernAssignment
+                                           : ats::ModernAtsTrackerMode::ClassicRecursiveFrequencySmr;
+            modernConfig.useExperimentalPeakEstimator = selectedPeakEstimator == kPeakEstimatorExperimental;
+            modernConfig.inputChannelCount = fileChannelCount;
+
+            auto modernResult = ats::runModernAtsAnalysis(ap, localMono, fileSr, modernConfig);
+            if (modernResult.errorMessage.empty())
+            {
+                modernModel = std::move(modernResult.model);
+                overlayClassicResidualBands(modernModel, *result.sound.get());
+                modernModel.warnings.push_back(
+                    "Classic ATS model retained for ATS export and residual-layer rendering.");
+                modernModelValid = ats::validateModernAtsModel(modernModel, modernValidationError);
+            }
+            else
+            {
+                modernValidationError = modernResult.errorMessage;
+            }
         }
 
         {
@@ -958,14 +998,14 @@ void AtsAudioProcessor::startAnalysis()
             if (selectedAnalysisMode == kAnalysisModeModern)
             {
                 analysisWarnings.push_back(selectedTrackerMode == kTrackerModeAssignment
-                                               ? "Modern assignment tracker routed into the modern diagnostics model."
-                                               : "Modern mode using classic tracker for compatibility.");
+                                               ? "Modern ATS analyzed source peaks directly, then applied assignment tracking."
+                                               : "Modern ATS analyzed source peaks directly with classic-compatible tracking.");
             }
             else if (selectedAnalysisMode == kAnalysisModeExperimental)
             {
                 analysisWarnings.push_back(selectedTrackerMode == kTrackerModeAssignment
-                                               ? "Experimental reassigned/DDM mode using the modern assignment tracker."
-                                               : "Experimental reassigned/DDM mode using the classic tracker.");
+                                               ? "Experimental reassigned/DDM peak estimator feeding assignment tracking."
+                                               : "Experimental reassigned/DDM peak estimator with classic-compatible tracking.");
             }
             if (!modernModelValid && selectedAnalysisMode != kAnalysisModeClassic)
                 analysisWarnings.push_back("Analysis diagnostics unavailable: "
