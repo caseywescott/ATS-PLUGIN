@@ -348,6 +348,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep Classic ATS available for compatibility, ATS export, and residual-layer rendering while Modern ATS partials improve independently.
 - [x] Add a deterministic CTest proving direct modern analysis tracks a source sine peak, preserves original channel-count metadata, records assignment costs, and validates the modern model.
 
+### Commit 35 - `test(analysis): prevent classic-derived modern regression`
+
+**PRD:** section 5.1-section 5.3, section 6.1
+
+- [x] Remove the stale plugin fallback that converted classic `ATS_SOUND` partial cells into a Modern ATS model.
+- [x] Keep the classic ATSA output scoped to compatibility/export and residual-band overlay only.
+- [x] Add a deterministic source-path CTest that fails if the plugin reintroduces classic-derived Modern ATS helper paths or warnings.
+
 ---
 
 ## Dependency Index
@@ -366,3 +374,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | External real-audio ATSA comparison | 32 |
 | Stereo/multichannel policy | 33 |
 | Direct modern source analysis | 34 |
+| Modern source-path regression guard | 35 |

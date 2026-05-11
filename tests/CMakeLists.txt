@@ -66,6 +66,11 @@ add_test(
           "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ats_compat_manifest.json")
 
 add_test(
+  NAME modern_analysis_source_path
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/modern_analysis_source_path_check.py"
+          "${CMAKE_SOURCE_DIR}")
+
+add_test(
   NAME classic_compat_baseline
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/classic_compat_baseline.py"
           "$<TARGET_FILE:ats_offline>" "${CMAKE_BINARY_DIR}"
