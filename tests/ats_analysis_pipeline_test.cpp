@@ -402,6 +402,60 @@ void testDirectModernAnalysisUsesSourcePeaks()
     }
 }
 
+void testDirectModernAnalysisCapturesTransientBuffers()
+{
+    const int sampleRate = 4096;
+    std::vector<double> samples(2048, 0.0);
+    samples[512] = 1.0;
+    samples[513] = -0.5;
+
+    ats::AnalysisParams params;
+    params.win_size = 128;
+    params.hop_size = 64.0;
+    params.lowest_freq = 20.0;
+    params.highest_freq = 1800.0;
+    params.lowest_mag = -100.0;
+    params.min_seg_len = 1;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 24;
+    config.maxTransientBufferSeconds = 0.05;
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+    expect(!result.model.transients.empty(), "direct modern analysis should mark source attack transients");
+    expect(!result.model.transientBuffers.empty(),
+           "direct modern analysis should preserve transient source buffers");
+
+    std::string validationError;
+    expect(ats::validateModernAtsModel(result.model, validationError), validationError.c_str());
+
+    bool sawBufferedMarker = false;
+    bool sawImpulseSample = false;
+    for (std::size_t markerIndex = 0; markerIndex < result.model.transients.size(); ++markerIndex)
+    {
+        const auto& marker = result.model.transients[markerIndex];
+        if (marker.bufferIndex < 0)
+            continue;
+        sawBufferedMarker = true;
+        const auto& buffer = result.model.transientBuffers[static_cast<std::size_t>(marker.bufferIndex)];
+        expect(buffer.markerIndex == static_cast<int>(markerIndex),
+               "transient marker should reference matching source buffer");
+        expect(buffer.sampleRate == sampleRate, "transient source buffer sample rate mismatch");
+        expect(!buffer.samples.empty(), "transient source buffer should contain samples");
+        for (const float sample : buffer.samples)
+        {
+            if (std::abs(sample) > 0.9f)
+                sawImpulseSample = true;
+        }
+    }
+
+    expect(sawBufferedMarker, "at least one transient marker should reference a preserved source buffer");
+    expect(sawImpulseSample, "preserved transient buffer should contain the source impulse");
+}
+
 void testClassicAtsAnalysisEmptyInput()
 {
     ats::AnalysisParams params;
@@ -471,6 +525,7 @@ int main()
     testTransientDetection();
     testExperimentalTransientLanePrototype();
     testDirectModernAnalysisUsesSourcePeaks();
+    testDirectModernAnalysisCapturesTransientBuffers();
     testClassicAtsAnalysisEmptyInput();
     testDdspHelperPolicy();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

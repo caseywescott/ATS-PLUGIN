@@ -140,7 +140,9 @@ std::string parameterHashForModernAnalysis(const AnalysisParams& params,
         << ";win=" << windowSize
         << ";hop=" << hopSize
         << ";maxPeaks=" << config.maxPeaksPerFrame
-        << ";maxCand=" << config.maxCandidatesPerTrack;
+        << ";maxCand=" << config.maxCandidatesPerTrack
+        << ";transientBuffers=" << (config.captureTransientBuffers ? 1 : 0)
+        << ";maxTransientBufferSeconds=" << config.maxTransientBufferSeconds;
     return out.str();
 }
 
@@ -349,6 +351,58 @@ void populateModernFramesFromTrackedPartials(ModernAtsModel& model,
                                               orphanEnergy / static_cast<double>(kModernAtsDefaultResidualBands));
 
         model.frames.push_back(std::move(frame));
+    }
+}
+
+void attachTransientBuffersFromSource(ModernAtsModel& model,
+                                      const std::vector<double>& monoSamples,
+                                      int sampleRate,
+                                      double maxBufferSeconds)
+{
+    if (monoSamples.empty() || sampleRate <= 0 || model.transients.empty() || maxBufferSeconds <= 0.0)
+        return;
+
+    const int maxSamples = std::max(1, static_cast<int>(std::ceil(maxBufferSeconds
+                                                                  * static_cast<double>(sampleRate))));
+
+    for (std::size_t markerIndex = 0; markerIndex < model.transients.size(); ++markerIndex)
+    {
+        auto& marker = model.transients[markerIndex];
+        int startSample = std::max(0, static_cast<int>(std::floor(marker.windowStartSeconds
+                                                                  * static_cast<double>(sampleRate))));
+        int endSample = std::min(static_cast<int>(monoSamples.size()),
+                                 static_cast<int>(std::ceil(marker.windowEndSeconds
+                                                            * static_cast<double>(sampleRate))));
+        if (endSample <= startSample)
+            continue;
+
+        const int length = endSample - startSample;
+        if (length > maxSamples)
+        {
+            const int onsetSample = std::max(0, std::min(static_cast<int>(monoSamples.size()) - 1,
+                                                         static_cast<int>(std::llround(marker.onsetSeconds
+                                                                                      * sampleRate))));
+            startSample = std::max(0, onsetSample - maxSamples / 2);
+            endSample = std::min(static_cast<int>(monoSamples.size()), startSample + maxSamples);
+            startSample = std::max(0, endSample - maxSamples);
+        }
+
+        ModernAtsTransientBuffer buffer;
+        buffer.markerIndex = static_cast<int>(markerIndex);
+        buffer.sampleRate = sampleRate;
+        buffer.gain = 1.0;
+        buffer.samples.reserve(static_cast<std::size_t>(std::max(0, endSample - startSample)));
+        for (int i = startSample; i < endSample; ++i)
+        {
+            const double sample = monoSamples[static_cast<std::size_t>(i)];
+            buffer.samples.push_back(static_cast<float>(std::isfinite(sample) ? sample : 0.0));
+        }
+
+        if (buffer.samples.empty())
+            continue;
+
+        marker.bufferIndex = static_cast<int>(model.transientBuffers.size());
+        model.transientBuffers.push_back(std::move(buffer));
     }
 }
 
@@ -816,6 +870,8 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     model.assignmentCosts = std::move(assignment.assignmentCosts);
     model.transients = std::move(transients);
     populateModernFramesFromTrackedPartials(model, frameTimes, frameMeanSquareEnergy, trackingFrames);
+    if (config.captureTransientBuffers)
+        attachTransientBuffersFromSource(model, monoSamples, sampleRate, config.maxTransientBufferSeconds);
 
     if (config.useExperimentalPeakEstimator || config.analysisMode == ModernAtsAnalysisMode::Experimental)
     {
@@ -831,6 +887,11 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     {
         model.warnings.push_back(
             "Modern model used classic-compatible nearest tracking over direct peak frames.");
+    }
+    if (!model.transientBuffers.empty())
+    {
+        model.warnings.push_back("Captured " + std::to_string(model.transientBuffers.size())
+                                 + " transient source buffers for attack preservation.");
     }
 
     std::string validationError;

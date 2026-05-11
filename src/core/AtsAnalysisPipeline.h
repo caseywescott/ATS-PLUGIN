@@ -126,9 +126,11 @@ struct ModernAtsAnalysisConfig
     ModernAtsAnalysisMode analysisMode = ModernAtsAnalysisMode::ModernAts;
     ModernAtsTrackerMode trackerMode = ModernAtsTrackerMode::ModernAssignment;
     bool useExperimentalPeakEstimator = false;
+    bool captureTransientBuffers = true;
     int inputChannelCount = 1;
     std::size_t maxPeaksPerFrame = 96;
     std::size_t maxCandidatesPerTrack = 8;
+    double maxTransientBufferSeconds = 0.10;
 };
 
 struct ModernAtsAnalysisResult

@@ -356,6 +356,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep the classic ATSA output scoped to compatibility/export and residual-band overlay only.
 - [x] Add a deterministic source-path CTest that fails if the plugin reintroduces classic-derived Modern ATS helper paths or warnings.
 
+### Commit 36 - `feat(transient): capture direct-analysis transient buffers`
+
+**PRD:** section 5.5, section 5.7, section 7.3
+
+- [x] Populate `ModernAtsTransientBuffer` payloads from bounded source-audio windows when direct Modern ATS analysis marks transients.
+- [x] Wire transient marker `bufferIndex` values to matching source buffers so modern synthesis can preserve attacks.
+- [x] Add a deterministic CTest proving an impulse-style source transient produces a valid marker/buffer pair containing the source attack.
+
 ---
 
 ## Dependency Index
@@ -375,3 +383,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Stereo/multichannel policy | 33 |
 | Direct modern source analysis | 34 |
 | Modern source-path regression guard | 35 |
+| Direct transient-buffer capture | 36 |

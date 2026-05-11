@@ -81,7 +81,9 @@ Attack protection is represented in the analysis layer before full transient
 modeling exists. Protected transient frames can block short-gap fill in classic
 lifecycle normalization, and the assignment prototype can reset active tracks
 at marked attack frames so interpolation does not smear plucked/percussive
-onsets.
+onsets. Direct Modern ATS analysis also captures bounded source-audio snippets
+for each transient marker; markers store the matching buffer index so modern
+synthesis can play preserved attacks through the transient lane.
 
 ## Tests
 
@@ -97,4 +99,6 @@ The `ats_analysis_pipeline` CTest covers:
   transient frames,
 - direct audio-to-modern-model analysis, including source-audio hashing,
   channel-policy metadata, assignment-cost diagnostics, validation, and
-  source sine peak tracking.
+  source sine peak tracking,
+- direct transient-buffer capture from source audio, including marker/buffer
+  reference validation and source-impulse preservation.
