@@ -364,6 +364,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Wire transient marker `bufferIndex` values to matching source buffers so modern synthesis can preserve attacks.
 - [x] Add a deterministic CTest proving an impulse-style source transient produces a valid marker/buffer pair containing the source attack.
 
+### Commit 37 - `fix(synth): render captured transients in Modern preview`
+
+**PRD:** section 5.5, section 5.7, section 6.1
+
+- [x] Enable the modern transient-buffer lane in plugin Modern/Experimental preview rendering.
+- [x] Keep classic ATSA residual rendering as the residual layer while routing captured attacks through the modern partial layer.
+- [x] Extend the source-path CTest guard so plugin preview cannot silently mute captured transient buffers again.
+
 ---
 
 ## Dependency Index
@@ -384,3 +392,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Direct modern source analysis | 34 |
 | Modern source-path regression guard | 35 |
 | Direct transient-buffer capture | 36 |
+| Modern preview transient playback | 37 |

@@ -1,9 +1,11 @@
 # Modern ATSH Phase 3 Synthesis
 
 Phase 3 adds an offline-prepared modern snapshot renderer while keeping the
-classic ATSA/Qatsh render path intact. Plugin preview still uses the classic
-path for analyzed `ATS_SOUND` data; modern snapshots can now be rendered through
-`src/core/AtsModernSynth.h` / `.cpp`.
+classic ATSA/Qatsh render path intact. Classic-mode plugin preview still uses
+the classic path for analyzed `ATS_SOUND` data; Modern/Experimental preview
+renders modern partial and transient-buffer snapshots through
+`src/core/AtsModernSynth.h` / `.cpp` while retaining the classic residual layer
+for compatibility.
 
 ## Render Plan
 
@@ -37,6 +39,12 @@ host diagnostics.
 The classic renderer remains `do_synthesis` through the existing ATSA path and
 is still covered by `golden_offline`, `ats_roundtrip`, and plugin build
 verification.
+
+The plugin Modern preview renders partials and captured transient buffers into
+the partial layer (`transientGain = 1.0`) and keeps the ATSA residual render in
+the residual layer. This lets preserved attacks participate in the normal
+partials/residual mix without routing raw ATSA Bark-band residual energy through
+the modern orphan-noise renderer.
 
 ## Representative Budgets
 

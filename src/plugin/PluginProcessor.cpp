@@ -906,7 +906,7 @@ void AtsAudioProcessor::startResynthWorker()
             cfgP.outputSampleRate = modelSr;
             cfgP.partialGain = 1.0;
             cfgP.orphanResidualGain = 0.0;
-            cfgP.transientGain = 0.0;
+            cfgP.transientGain = 1.0;
             cfgP.useStoredPhase = core.usePartialsPhase;
             cfgP.timeFactor = core.timeFactor;
             cfgP.frequencyFactor = core.frequencyFactor;

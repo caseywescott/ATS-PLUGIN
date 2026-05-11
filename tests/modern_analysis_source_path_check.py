@@ -29,6 +29,8 @@ def main() -> int:
             "plugin Modern/Experimental analysis must call runModernAtsAnalysis on source audio")
     require("overlayClassicResidualBands(modernModel" in plugin_text,
             "plugin should only use classic ATS data to overlay residual bands")
+    require("cfgP.transientGain = 1.0;" in plugin_text,
+            "plugin Modern preview must render captured transient buffers")
     require("ModernAtsAnalysisResult" in pipeline_text,
             "core direct modern analysis result type is missing")
 
