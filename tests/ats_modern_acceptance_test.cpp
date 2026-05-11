@@ -146,6 +146,34 @@ std::vector<float> sineFixture()
     return samples;
 }
 
+std::vector<double> directSourceFixture(int sampleRate)
+{
+    std::vector<double> samples(static_cast<std::size_t>(sampleRate), 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.34 * std::sin(2.0 * 3.14159265358979323846 * 512.0 * t)
+                     + 0.21 * std::sin(2.0 * 3.14159265358979323846 * 768.0 * t + 0.4);
+    }
+    return samples;
+}
+
+int bestSustainedMatchCount(const ats::ModernAtsModel& model, double frequencyHz, double toleranceHz)
+{
+    int best = 0;
+    for (const auto& partial : model.partials)
+    {
+        int matches = 0;
+        for (const auto& frame : partial.frames)
+        {
+            if (frameIsActive(frame) && std::abs(frame.frequencyHz - frequencyHz) <= toleranceHz)
+                ++matches;
+        }
+        best = std::max(best, matches);
+    }
+    return best;
+}
+
 ats::MorphRecipe makeRecipe()
 {
     ats::MorphRecipe recipe;
@@ -266,6 +294,55 @@ void testAcceptanceReportPassesRepresentativeFixtures()
            "modern crossing fixture should improve identity errors");
 }
 
+void testAcceptanceRunsDirectModernSourceAnalysis()
+{
+    const int sampleRate = 4096;
+    const auto samples = directSourceFixture(sampleRate);
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1400.0;
+    params.lowest_mag = -85.0;
+    params.min_seg_len = 2;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 12;
+    config.maxCandidatesPerTrack = 6;
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    std::string validationError;
+    expect(ats::validateModernAtsModel(result.model, validationError), validationError.c_str());
+    expect(!result.model.partials.empty(), "direct source acceptance should produce partials");
+    expect(!result.model.assignmentCosts.empty(), "direct source acceptance should record assignment costs");
+
+    const int minSustainedFrames = 20;
+    expect(bestSustainedMatchCount(result.model, 512.0, 10.0) >= minSustainedFrames,
+           "direct source acceptance should sustain the 512 Hz partial");
+    expect(bestSustainedMatchCount(result.model, 768.0, 10.0) >= minSustainedFrames,
+           "direct source acceptance should sustain the 768 Hz partial");
+
+    const auto continuity = ats::computeModernAtsContinuityMetrics(result.model);
+    expect(continuity.continuityScore > 0.60, "direct source acceptance continuity regressed");
+
+    ats::ModernAtsSynthConfig synthConfig;
+    synthConfig.outputSampleRate = sampleRate;
+    synthConfig.hopSizeSamples = static_cast<int>(params.hop_size);
+    synthConfig.orphanResidualGain = 0.0;
+    synthConfig.transientGain = 0.0;
+    ats::ModernAtsRenderStats stats;
+    const auto rendered = ats::renderModernAtsModel(result.model, synthConfig, &stats);
+    expect(!rendered.empty(), "direct source acceptance render should not be empty");
+    expect(!ats::hasDenormalOrNonFiniteSamples(rendered.data(), static_cast<int>(rendered.size())),
+           "direct source acceptance render should be finite");
+    expect(stats.peakAbs > 0.01f, "direct source acceptance render should preserve audible energy");
+}
+
 void testAcceptanceReportFlagsFailures()
 {
     ats::ModernAtsAcceptanceInputs inputs;
@@ -295,6 +372,7 @@ int main()
 {
     testMetricHelpers();
     testAcceptanceReportPassesRepresentativeFixtures();
+    testAcceptanceRunsDirectModernSourceAnalysis();
     testAcceptanceReportFlagsFailures();
     testEmptyAcceptanceReportPasses();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

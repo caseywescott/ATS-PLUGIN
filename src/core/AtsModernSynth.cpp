@@ -46,6 +46,16 @@ int frameStartSample(const ModernAtsRenderPlan& plan, int frameIndex)
 
 double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
+double renderTimeFactor(const ModernAtsSynthConfig& config)
+{
+    return std::max(0.01, config.timeFactor);
+}
+
+double renderTimeFactor(const ModernAtsRenderPlan& plan)
+{
+    return renderTimeFactor(plan.config);
+}
+
 float transientFade(int localIndex, int length, int fadeSamples)
 {
     if (fadeSamples <= 0 || length <= 1)
@@ -72,7 +82,21 @@ int transientStartSample(const ModernAtsRenderPlan& plan,
                          const ModernAtsTransientBuffer& buffer)
 {
     (void)buffer;
-    return std::max(0, static_cast<int>(std::llround(marker.windowStartSeconds * plan.outputSampleRate)));
+    return std::max(0, static_cast<int>(std::llround(marker.windowStartSeconds
+                                                     * static_cast<double>(plan.outputSampleRate)
+                                                     * renderTimeFactor(plan))));
+}
+
+int transientLengthSamples(double sourceSampleCount, int sourceSampleRate, int outputSampleRate, double timeFactor)
+{
+    if (sourceSampleCount <= 0.0 || sourceSampleRate <= 0 || outputSampleRate <= 0)
+        return 0;
+
+    const double resampledLength = sourceSampleCount
+                                   * static_cast<double>(outputSampleRate)
+                                   / static_cast<double>(sourceSampleRate)
+                                   * timeFactor;
+    return std::max(1, static_cast<int>(std::ceil(resampledLength)));
 }
 
 double frameEnergy(const ModernAtsFrame& frame)
@@ -114,7 +138,7 @@ bool prepareModernAtsRenderPlan(const ModernAtsModel& model,
         errorMessage = "Render hop size must be positive.";
         return false;
     }
-    const double clampedTimeFactor = std::max(0.01, config.timeFactor);
+    const double clampedTimeFactor = renderTimeFactor(config);
     const int hop = std::max(1, static_cast<int>(std::round(static_cast<double>(baseHop) * clampedTimeFactor)));
 
     int totalSamples = static_cast<int>(model.frames.size()) * hop;
@@ -123,10 +147,13 @@ bool prepareModernAtsRenderPlan(const ModernAtsModel& model,
         const auto* marker = markerForBuffer(model, buffer);
         if (marker == nullptr || buffer.samples.empty())
             continue;
-        const int start = std::max(0, static_cast<int>(std::llround(marker->windowStartSeconds * config.outputSampleRate)));
-        const int length = static_cast<int>(std::ceil((double)buffer.samples.size()
-                                                     * (double)config.outputSampleRate
-                                                     / (double)buffer.sampleRate));
+        const int start = std::max(0, static_cast<int>(std::llround(marker->windowStartSeconds
+                                                                    * static_cast<double>(config.outputSampleRate)
+                                                                    * clampedTimeFactor)));
+        const int length = transientLengthSamples(static_cast<double>(buffer.samples.size()),
+                                                  buffer.sampleRate,
+                                                  config.outputSampleRate,
+                                                  clampedTimeFactor);
         totalSamples = std::max(totalSamples, start + std::max(0, length));
     }
 
@@ -230,9 +257,11 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                 continue;
 
             const int start = transientStartSample(plan, *marker, buffer);
-            const int length = static_cast<int>(std::ceil(static_cast<double>(buffer.samples.size())
-                                                          * static_cast<double>(plan.outputSampleRate)
-                                                          / static_cast<double>(buffer.sampleRate)));
+            const double timeFactor = renderTimeFactor(plan);
+            const int length = transientLengthSamples(static_cast<double>(buffer.samples.size()),
+                                                      buffer.sampleRate,
+                                                      plan.outputSampleRate,
+                                                      timeFactor);
             for (int i = 0; i < length; ++i)
             {
                 const int outIndex = start + i;
@@ -241,7 +270,7 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
 
                 // Linear interpolation between adjacent source samples.
                 const double srcPos = static_cast<double>(i) * static_cast<double>(buffer.sampleRate)
-                                      / static_cast<double>(plan.outputSampleRate);
+                                      / (static_cast<double>(plan.outputSampleRate) * timeFactor);
                 const int srcFloor = std::max(
                     0, std::min(static_cast<int>(buffer.samples.size()) - 1,
                                 static_cast<int>(std::floor(srcPos))));

@@ -372,6 +372,15 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep classic ATSA residual rendering as the residual layer while routing captured attacks through the modern partial layer.
 - [x] Extend the source-path CTest guard so plugin preview cannot silently mute captured transient buffers again.
 
+### Commit 38 - `fix(analysis): close modern source-analysis quality gaps`
+
+**PRD:** section 5.1-section 5.5, section 6.1, section 7.3
+
+- [x] Scale modern transient-buffer start times and playback durations with the synth `timeFactor` so preserved attacks stay aligned with stretched or compressed partial renders.
+- [x] Replace the direct-analysis per-bin DFT with an in-tree FFT-backed spectrum pass, keeping Modern ATS source analysis bounded by window-size FFT cost rather than bins multiplied by window samples.
+- [x] Add deterministic direct-source acceptance coverage that runs `ats::runModernAtsAnalysis` on a two-tone audio fixture, validates sustained 512 Hz and 768 Hz tracks, renders the resulting model, and checks finite audible output.
+- [x] Guard plugin editor auto-fit sizing so small displays cannot invert JUCE `jlimit` or resize-limit bounds.
+
 ---
 
 ## Dependency Index

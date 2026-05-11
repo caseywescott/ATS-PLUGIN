@@ -164,6 +164,39 @@ void testTransientBufferCrossfadeAndGain()
     expect(peakAbs(muted) == 0.0f, "transient gain should mute transient playback");
 }
 
+void testTransientBuffersFollowTimeFactor()
+{
+    auto model = makeBaseModel(0, 4);
+    model.transients.push_back({ 0, 0, 8.0 / 48000.0, 8.0 / 48000.0, 12.0 / 48000.0, 1.0 });
+    ats::ModernAtsTransientBuffer buffer;
+    buffer.markerIndex = 0;
+    buffer.sampleRate = 48000;
+    buffer.gain = 1.0;
+    buffer.samples.assign(4, 1.0f);
+    model.transientBuffers.push_back(buffer);
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 16;
+    config.partialGain = 0.0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 1.0;
+    config.transientCrossfadeSamples = 0;
+
+    config.timeFactor = 2.0;
+    const auto stretched = ats::renderModernAtsModel(model, config);
+    expect(stretched.size() >= 24, "stretched transient render too short");
+    expect(stretched[8] == 0.0f, "stretched transient should not play at unscaled source time");
+    expect(stretched[16] > 0.9f, "stretched transient should start at scaled time");
+    expect(stretched[23] > 0.9f, "stretched transient length should scale with time factor");
+
+    config.timeFactor = 0.5;
+    const auto compressed = ats::renderModernAtsModel(model, config);
+    expect(compressed.size() >= 7, "compressed transient render too short");
+    expect(compressed[4] > 0.9f, "compressed transient should start at scaled time");
+    expect(compressed[6] == 0.0f, "compressed transient length should scale with time factor");
+}
+
 void testDenormalAndSilenceEdges()
 {
     auto model = makeBaseModel(1, 2);
@@ -274,6 +307,7 @@ int main()
     testSnapshotRenderAndSafety();
     testOrphanResidualGainAndSeed();
     testTransientBufferCrossfadeAndGain();
+    testTransientBuffersFollowTimeFactor();
     testDenormalAndSilenceEdges();
     testRepresentativeBudgets();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

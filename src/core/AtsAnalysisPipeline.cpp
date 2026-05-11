@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -180,6 +181,51 @@ double analysisWindowWeight(int index, int size, int windowType)
     }
 }
 
+std::size_t nextPowerOfTwo(std::size_t value)
+{
+    std::size_t out = 1;
+    while (out < value)
+        out <<= 1;
+    return out;
+}
+
+void fftInPlace(std::vector<std::complex<double>>& data)
+{
+    const std::size_t n = data.size();
+    if (n <= 1)
+        return;
+
+    for (std::size_t i = 1, j = 0; i < n; ++i)
+    {
+        std::size_t bit = n >> 1;
+        for (; (j & bit) != 0; bit >>= 1)
+            j ^= bit;
+        j ^= bit;
+
+        if (i < j)
+            std::swap(data[i], data[j]);
+    }
+
+    for (std::size_t len = 2; len <= n; len <<= 1)
+    {
+        const double angle = -kTwoPi / static_cast<double>(len);
+        const std::complex<double> step(std::cos(angle), std::sin(angle));
+        for (std::size_t i = 0; i < n; i += len)
+        {
+            std::complex<double> twiddle(1.0, 0.0);
+            const std::size_t half = len >> 1;
+            for (std::size_t j = 0; j < half; ++j)
+            {
+                const auto even = data[i + j];
+                const auto odd = data[i + j + half] * twiddle;
+                data[i + j] = even + odd;
+                data[i + j + half] = even - odd;
+                twiddle *= step;
+            }
+        }
+    }
+}
+
 std::vector<SpectrumBin> estimateSpectrumBinsForFrame(const std::vector<double>& monoSamples,
                                                       int frameStartSample,
                                                       int windowSize,
@@ -194,14 +240,19 @@ std::vector<SpectrumBin> estimateSpectrumBinsForFrame(const std::vector<double>&
     const double nyquist = 0.5 * static_cast<double>(sampleRate);
     const double lowest = std::max(0.0, params.lowest_freq);
     const double highest = std::max(lowest, std::min(params.highest_freq, nyquist));
-    const int lowestBin = std::max(1, static_cast<int>(std::floor(lowest * windowSize / sampleRate)) - 1);
-    const int highestBin = std::min(windowSize / 2,
-                                    static_cast<int>(std::ceil(highest * windowSize / sampleRate)) + 1);
+    const auto fftSize = nextPowerOfTwo(static_cast<std::size_t>(windowSize));
+    const int lowestBin = std::max(1,
+                                   static_cast<int>(std::floor(lowest * static_cast<double>(fftSize)
+                                                               / static_cast<double>(sampleRate))) - 1);
+    const int highestBin =
+        std::min(static_cast<int>(fftSize / 2),
+                 static_cast<int>(std::ceil(highest * static_cast<double>(fftSize)
+                                            / static_cast<double>(sampleRate))) + 1);
 
     if (highestBin <= lowestBin)
         return {};
 
-    std::vector<double> windowed(static_cast<std::size_t>(windowSize), 0.0);
+    std::vector<std::complex<double>> spectrum(fftSize);
     double windowSum = 0.0;
     double windowPower = 0.0;
     double weightedEnergy = 0.0;
@@ -214,7 +265,7 @@ std::vector<SpectrumBin> estimateSpectrumBinsForFrame(const std::vector<double>&
                                   : 0.0;
         const double w = analysisWindowWeight(i, windowSize, params.win_type);
         const double x = (std::isfinite(sample) ? sample : 0.0) * w;
-        windowed[static_cast<std::size_t>(i)] = x;
+        spectrum[static_cast<std::size_t>(i)] = { x, 0.0 };
         windowSum += w;
         windowPower += w * w;
         weightedEnergy += x * x;
@@ -226,24 +277,17 @@ std::vector<SpectrumBin> estimateSpectrumBinsForFrame(const std::vector<double>&
     bins.reserve(static_cast<std::size_t>(highestBin - lowestBin + 1));
     const double ampNorm = 2.0 / std::max(1.0e-12, windowSum);
 
+    fftInPlace(spectrum);
+
     for (int bin = lowestBin; bin <= highestBin; ++bin)
     {
-        double real = 0.0;
-        double imag = 0.0;
-        for (int i = 0; i < windowSize; ++i)
-        {
-            const double angle = -kTwoPi * static_cast<double>(bin * i) / static_cast<double>(windowSize);
-            const double x = windowed[static_cast<std::size_t>(i)];
-            real += x * std::cos(angle);
-            imag += x * std::sin(angle);
-        }
-
-        const double amp = ampNorm * std::hypot(real, imag);
+        const auto& value = spectrum[static_cast<std::size_t>(bin)];
+        const double amp = ampNorm * std::abs(value);
         SpectrumBin spectrumBin;
         spectrumBin.frequencyHz = static_cast<double>(bin) * static_cast<double>(sampleRate)
-                                  / static_cast<double>(windowSize);
+                                  / static_cast<double>(fftSize);
         spectrumBin.magnitudeDb = ampToDb(amp);
-        spectrumBin.phaseRadians = std::atan2(imag, real);
+        spectrumBin.phaseRadians = std::atan2(value.imag(), value.real());
         bins.push_back(spectrumBin);
     }
 

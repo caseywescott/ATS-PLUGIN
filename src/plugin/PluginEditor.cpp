@@ -36,11 +36,22 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     tabs.addTab("Partials", juce::Colours::transparentBlack, &partialTab, false);
     tabs.addTab("Math", juce::Colours::transparentBlack, &mathTab, false);
 
-    // User request: default window roughly 70% smaller, but resizable.
-    const int defaultW = juce::jmax(300, scaled(276));
-    const int defaultH = juce::jmax(220, scaled(192));
+    // Auto-fit: size the window so the spectrogram panel is visible on launch.
+    auto* disp = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    const int screenW = disp ? disp->totalArea.getWidth() : 1920;
+    const int screenH = disp ? disp->totalArea.getHeight() : 1080;
+    const int resizeMinW = 500;
+    const int resizeMinH = 350;
+    const int resizeMaxW = juce::jmax(resizeMinW, screenW);
+    const int resizeMaxH = juce::jmax(resizeMinH, screenH);
+    const int defaultMinW = juce::jmin(700, juce::jmax(resizeMinW, screenW - 50));
+    const int defaultMinH = juce::jmin(420, juce::jmax(resizeMinH, screenH - 100));
+    const int defaultMaxW = juce::jmax(defaultMinW, screenW - 50);
+    const int defaultMaxH = juce::jmax(defaultMinH, screenH - 100);
+    const int defaultW = juce::jlimit(defaultMinW, defaultMaxW, (int) (screenW * 0.55f));
+    const int defaultH = juce::jlimit(defaultMinH, defaultMaxH, (int) (screenH * 0.58f));
     setResizable(true, true);
-    setResizeLimits(300, 220, scaled(1800), scaled(1200));
+    setResizeLimits(resizeMinW, resizeMinH, resizeMaxW, resizeMaxH);
     setSize(defaultW, defaultH);
 
     startTimerHz(10);

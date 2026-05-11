@@ -6,7 +6,8 @@ covered by a tiered set of CTests.
 
 ## Synthetic fixture gates (always deterministic, always run in CI)
 
-`ats_modern_acceptance` runs entirely in-process with synthetic models:
+`ats_modern_acceptance` runs entirely in-process with synthetic models and
+deterministic generated source-audio fixtures:
 
 - Classic render parity — normalized RMS error and compact spectral distance.
 - Modern tracker vs. classic tracker on crossing/close-partial and sustained fixtures.
@@ -14,6 +15,8 @@ covered by a tiered set of CTests.
 - Partial plus orphan residual energy preservation.
 - Deterministic morph recipe recall and fixed-seed morph renders.
 - Modern synthesis real-time-safety flags, finite sample output, and CPU budget.
+- Direct Modern ATS source analysis of a two-tone audio fixture, including
+  sustained 512 Hz / 768 Hz tracks and finite audible render output.
 
 `ats_modern_acceptance_external_gates` tests the external fixture gate evaluation
 logic (Phase 7 addition) using synthetic data — no audio assets needed.
@@ -32,6 +35,7 @@ fixture-specific threshold struct.
 | Protected attack | transient marker and buffer increase attack sharpness while staying below the click-step guardrail |
 | Morph recall | recipe JSON and fixed-seed rendered output are deterministic |
 | Modern synth | render plan reports caller-owned buffers, no allocation/locks/I/O/analysis, finite samples, and bounded CPU |
+| Direct source analysis | `runModernAtsAnalysis` tracks generated two-tone audio and renders a finite non-silent model |
 
 ## External real-audio gates (optional, gated by ATS_ENABLE_EXTERNAL_FIXTURES)
 
