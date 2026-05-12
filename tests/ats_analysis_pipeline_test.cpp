@@ -11,6 +11,7 @@ namespace
 {
 
 int failures = 0;
+constexpr double kTwoPi = 6.28318530717958647692;
 
 void expect(bool condition, const char* message)
 {
@@ -19,6 +20,11 @@ void expect(bool condition, const char* message)
         std::cerr << message << '\n';
         ++failures;
     }
+}
+
+double wrappedPhaseDelta(double a, double b)
+{
+    return std::remainder(a - b, kTwoPi);
 }
 
 ats::TrackingPeak peak(int sourceIndex, double frequency, double amplitude = 0.5, double smr = 60.0)
@@ -467,6 +473,58 @@ void testDirectModernAnalysisUsesSourcePeaks()
     }
 }
 
+void testDirectModernAnalysisStoresOscillatorStartPhase()
+{
+    const int sampleRate = 4096;
+    const double frequency = 523.25;
+    const double initialPhase = 0.4;
+    std::vector<double> samples(2048, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.45 * std::sin(kTwoPi * frequency * t + initialPhase);
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1000.0;
+    params.lowest_mag = -90.0;
+    params.min_seg_len = 1;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 4;
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    bool checkedPhase = false;
+    for (const auto& partial : result.model.partials)
+    {
+        if (partial.frames.empty())
+            continue;
+
+        const auto& frame = partial.frames.front();
+        if (std::abs(frame.frequencyHz - frequency) > 1.0
+            || frame.reason == ats::ModernAtsFrameReason::Slept
+            || frame.reason == ats::ModernAtsFrameReason::Pruned
+            || frame.reason == ats::ModernAtsFrameReason::Rejected)
+        {
+            continue;
+        }
+
+        checkedPhase = true;
+        expect(std::abs(wrappedPhaseDelta(frame.phaseRadians, initialPhase)) < 0.05,
+               "direct modern analysis should store oscillator phase at the frame start");
+        break;
+    }
+
+    expect(checkedPhase, "phase fixture should find the analyzed off-bin sine partial");
+}
+
 void testDirectModernAnalysisEstimatesStructuredResidualBands()
 {
     const int sampleRate = 4096;
@@ -818,6 +876,7 @@ int main()
     testTransientDetection();
     testExperimentalTransientLanePrototype();
     testDirectModernAnalysisUsesSourcePeaks();
+    testDirectModernAnalysisStoresOscillatorStartPhase();
     testDirectModernAnalysisEstimatesStructuredResidualBands();
     testDirectModernAnalysisSuppressesTrackedSineResidualLeakage();
     testCloseUntrackedToneSurvivesResidualLobe();

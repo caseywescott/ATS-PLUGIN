@@ -477,6 +477,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add an acceptance regression proving a short dropout repaired by Modern assignment gap fill preserves the continuity score.
 - [x] Document the synthetic acceptance gate semantics for gap-filled short dropouts.
 
+### Commit 51 - `fix(analysis): store oscillator-start phases`
+
+**PRD:** section 5.1, section 5.3, section 7.3
+
+- [x] Convert direct Modern STFT peak phases from raw cosine-basis FFT bin phase into sine oscillator phase at the analysis frame start.
+- [x] Correct the off-bin phase rotation introduced by symmetric analysis windows before storing partial frame `phase_radians`.
+- [x] Add a direct-source regression proving an off-bin sine with known initial phase is stored close to the oscillator-start phase.
+
 ---
 
 ## Dependency Index
@@ -510,3 +518,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Global modern assignment solving | 48 |
 | Short modern dropout gap filling | 49 |
 | Gap-filled continuity scoring | 50 |
+| Direct modern oscillator phase storage | 51 |

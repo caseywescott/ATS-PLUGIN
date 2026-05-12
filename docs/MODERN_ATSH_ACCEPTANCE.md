@@ -19,6 +19,8 @@ deterministic generated source-audio fixtures:
 - Modern synthesis real-time-safety flags, finite sample output, and CPU budget.
 - Direct Modern ATS source analysis of a two-tone audio fixture, including
   sustained 512 Hz / 768 Hz tracks and finite audible render output.
+- Direct Modern ATS source analysis stores oscillator-start phases, not raw FFT
+  bin phases, so phase-enabled renders seed partial births consistently.
 
 `ats_modern_acceptance_external_gates` tests the external fixture gate evaluation
 logic (Phase 7 addition) using synthetic data — no audio assets needed.
@@ -37,7 +39,7 @@ fixture-specific threshold struct.
 | Protected attack | transient marker and buffer increase attack sharpness while staying below the click-step guardrail |
 | Morph recall | recipe JSON and fixed-seed rendered output are deterministic |
 | Modern synth | render plan reports caller-owned buffers, no allocation/locks/I/O/analysis, finite samples, and bounded CPU |
-| Direct source analysis | `runModernAtsAnalysis` tracks generated two-tone audio and renders a finite non-silent model |
+| Direct source analysis | `runModernAtsAnalysis` tracks generated two-tone audio, preserves off-bin oscillator phase, and renders a finite non-silent model |
 
 ## External real-audio gates (optional, gated by ATS_ENABLE_EXTERNAL_FIXTURES)
 

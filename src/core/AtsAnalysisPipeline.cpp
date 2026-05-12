@@ -25,6 +25,7 @@ namespace
 {
 
 constexpr double kTwoPi = 6.28318530717958647692;
+constexpr double kHalfPi = 1.57079632679489661923;
 // Treat the local FFT main lobe around an accepted peak as explained energy.
 // Otherwise clean tracked sinusoids leak window skirts into orphan residual bands.
 constexpr int kResidualPeakMaxLobeHalfWidthBins = 16;
@@ -42,6 +43,30 @@ double lerp(double a, double b, double t) { return a + (b - a) * t; }
 bool finite(double value) { return std::isfinite(value); }
 
 double ampFromDb(double db) { return std::pow(10.0, db / 20.0); }
+
+double wrapPhase(double phase)
+{
+    if (!std::isfinite(phase))
+        return 0.0;
+    return std::remainder(phase, kTwoPi);
+}
+
+double oscillatorPhaseAtFrameStart(double spectrumPhase,
+                                   double centerFrequencyHz,
+                                   double interpolatedFrequencyHz,
+                                   double binSpacingHz,
+                                   const PeakEstimationConfig& config)
+{
+    double phase = spectrumPhase + kHalfPi;
+    if (config.windowSizeSamples > 0 && config.fftSizeSamples > 0 && binSpacingHz > 0.0
+        && std::isfinite(centerFrequencyHz) && std::isfinite(interpolatedFrequencyHz))
+    {
+        const double offsetBins = (interpolatedFrequencyHz - centerFrequencyHz) / binSpacingHz;
+        const double windowCenter = 0.5 * static_cast<double>(config.windowSizeSamples - 1);
+        phase -= kTwoPi * offsetBins * windowCenter / static_cast<double>(config.fftSizeSamples);
+    }
+    return wrapPhase(phase);
+}
 
 bool spectrumBinFinite(const SpectrumBin& bin)
 {
@@ -289,6 +314,7 @@ std::string parameterHashForModernAnalysis(const AnalysisParams& params,
         << ";lm=" << params.lowest_mag
         << ";win=" << windowSize
         << ";hop=" << hopSize
+        << ";phase=oscillator_start"
         << ";maxPeaks=" << config.maxPeaksPerFrame
         << ";maxCand=" << config.maxCandidatesPerTrack
         << ";transientBuffers=" << (config.captureTransientBuffers ? 1 : 0)
@@ -965,7 +991,11 @@ std::vector<SpectralPeak> ClassicStftPeakEstimator::estimatePeaks(
         peak.binIndex = static_cast<int>(i);
         peak.frequencyHz = interpolatedFrequency;
         peak.amplitude = ampFromDb(interpolatedMagnitude);
-        peak.phaseRadians = center.phaseRadians;
+        peak.phaseRadians = oscillatorPhaseAtFrameStart(center.phaseRadians,
+                                                        center.frequencyHz,
+                                                        interpolatedFrequency,
+                                                        0.5 * (right.frequencyHz - left.frequencyHz),
+                                                        config);
         // smrDb is set to magnitude as a proxy; a real SMR requires a psychoacoustic
         // masking threshold which is not computed here.
         peak.smrDb = interpolatedMagnitude;
@@ -1029,7 +1059,11 @@ std::vector<SpectralPeak> ExperimentalReassignedPeakEstimator::estimatePeaks(
         peak.magnitudeDb =
             c.magnitudeDb - 0.25 * (bins[i - 1].magnitudeDb - bins[i + 1].magnitudeDb) * reassignedOffset;
         peak.amplitude = ampFromDb(peak.magnitudeDb);
-        peak.phaseRadians = c.phaseRadians;
+        peak.phaseRadians = oscillatorPhaseAtFrameStart(c.phaseRadians,
+                                                        c.frequencyHz,
+                                                        peak.frequencyHz,
+                                                        localSpacing,
+                                                        config);
         peak.smrDb = peak.magnitudeDb;
         peaks.push_back(peak);
         ++diagnostics.acceptedPeaks;
@@ -1186,6 +1220,8 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     peakConfig.highestFrequencyHz = std::min(params.highest_freq, 0.5 * static_cast<double>(sampleRate));
     peakConfig.magnitudeThresholdDb = params.lowest_mag;
     peakConfig.interpolateParabolically = true;
+    peakConfig.windowSizeSamples = windowSize;
+    peakConfig.fftSizeSamples = static_cast<int>(nextPowerOfTwo(static_cast<std::size_t>(windowSize)));
 
     ClassicStftPeakEstimator classicEstimator;
     ExperimentalReassignedPeakEstimator experimentalEstimator;

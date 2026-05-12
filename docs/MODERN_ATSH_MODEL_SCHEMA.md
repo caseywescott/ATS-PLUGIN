@@ -30,7 +30,8 @@ Each `ats::ModernAtsPartialFrame` preserves the classic ATS frame payload:
 
 - amplitude,
 - frequency in Hz,
-- phase in radians,
+- phase in radians, stored as sine-oscillator phase at the analysis frame start
+  for direct Modern source analysis,
 - SMR in dB.
 - per-partial noise energy.
 

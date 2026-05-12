@@ -50,6 +50,8 @@ struct PeakEstimationConfig
     double highestFrequencyHz = 20000.0;
     double magnitudeThresholdDb = -60.0;
     bool interpolateParabolically = true;
+    int windowSizeSamples = 0;
+    int fftSizeSamples = 0;
 };
 
 struct PeakEstimationDiagnostics
