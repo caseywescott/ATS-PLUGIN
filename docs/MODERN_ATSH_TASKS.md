@@ -429,6 +429,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add a deterministic clean-sine regression that fails if a tracked sinusoid's window skirts become orphan residual energy.
 - [x] Preserve the structured residual fixture so untracked spectral components still remain in orphan residual bands.
 
+### Commit 45 - `fix(analysis): keep pruned tracks in residual bands`
+
+**PRD:** section 5.3-section 5.4, section 7.3
+
+- [x] Move Modern residual-band estimation after assignment tracking and short-track pruning so only active partials claim spectral energy.
+- [x] Keep rejected/pruned short tracks represented in orphan residual bands instead of dropping their energy from both Modern partials and residual.
+- [x] Add a deterministic forced-pruning regression while preserving the tracked-sine leakage and structured-residual tests.
+
 ---
 
 ## Dependency Index
@@ -456,3 +464,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern preview source residual playback | 42 |
 | Bark-shaped residual synthesis | 43 |
 | Tracked-peak residual leakage suppression | 44 |
+| Pruned-track residual preservation | 45 |

@@ -409,6 +409,55 @@ TrackingPeakFrame trackingFrameFromPeaks(const std::vector<SpectralPeak>& peaks)
     return frame;
 }
 
+int nearestSpectrumBinIndex(const std::vector<SpectrumBin>& bins, double frequencyHz)
+{
+    if (bins.empty() || !std::isfinite(frequencyHz))
+        return -1;
+
+    int bestIndex = -1;
+    double bestDelta = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < bins.size(); ++i)
+    {
+        if (!spectrumBinFinite(bins[i]))
+            continue;
+
+        const double delta = std::abs(bins[i].frequencyHz - frequencyHz);
+        if (delta < bestDelta)
+        {
+            bestDelta = delta;
+            bestIndex = static_cast<int>(i);
+        }
+    }
+
+    return bestIndex;
+}
+
+TrackingPeakFrame trackingFrameFromActivePartials(const std::vector<ModernAtsPartial>& partials,
+                                                  std::size_t frameIndex,
+                                                  const std::vector<SpectrumBin>& bins)
+{
+    TrackingPeakFrame frame;
+    for (const auto& partial : partials)
+    {
+        if (frameIndex >= partial.frames.size())
+            continue;
+
+        const auto& partialFrame = partial.frames[frameIndex];
+        if (!modernFrameActive(partialFrame))
+            continue;
+
+        TrackingPeak trackingPeak;
+        trackingPeak.sourceIndex = nearestSpectrumBinIndex(bins, partialFrame.frequencyHz);
+        trackingPeak.frequencyHz = partialFrame.frequencyHz;
+        trackingPeak.amplitude = partialFrame.amplitude;
+        trackingPeak.smrDb = partialFrame.smrDb;
+        trackingPeak.phaseRadians = partialFrame.phaseRadians;
+        frame.push_back(trackingPeak);
+    }
+
+    return frame;
+}
+
 void pruneShortModernTracks(AssignmentTrackerResult& result, int minSegmentFrames)
 {
     const int minFrames = std::max(1, minSegmentFrames);
@@ -923,7 +972,7 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     std::vector<TrackingPeakFrame> trackingFrames;
     std::vector<double> frameTimes;
     std::vector<double> frameMeanSquareEnergy;
-    std::vector<std::vector<double>> residualBandsByFrame;
+    std::vector<std::vector<SpectrumBin>> spectrumBinsByFrame;
     std::vector<TransientFeatureFrame> transientFeatures;
 
     double previousPeakEnergy = 0.0;
@@ -931,12 +980,12 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     for (int frameStart = startSample; frameStart < endSample; frameStart += hopSize)
     {
         double frameEnergy = 0.0;
-        const auto bins = estimateSpectrumBinsForFrame(monoSamples,
-                                                       frameStart,
-                                                       windowSize,
-                                                       sampleRate,
-                                                       params,
-                                                       frameEnergy);
+        auto bins = estimateSpectrumBinsForFrame(monoSamples,
+                                                 frameStart,
+                                                 windowSize,
+                                                 sampleRate,
+                                                 params,
+                                                 frameEnergy);
         PeakEstimationDiagnostics diagnostics;
         auto peaks = estimator.estimatePeaks(bins, peakConfig, diagnostics);
         peaks = capAndSortPeaks(std::move(peaks), config.maxPeaksPerFrame);
@@ -945,7 +994,6 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
         result.peakDiagnostics.push_back(std::move(diagnostics));
 
         auto trackingFrame = trackingFrameFromPeaks(peaks);
-        residualBandsByFrame.push_back(estimateOrphanResidualBands(bins, trackingFrame));
         double peakEnergy = 0.0;
         for (const auto& peak : trackingFrame)
             peakEnergy += peak.amplitude * peak.amplitude;
@@ -965,6 +1013,7 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
         frameTimes.push_back(feature.timeSeconds);
         frameMeanSquareEnergy.push_back(frameEnergy);
         trackingFrames.push_back(std::move(trackingFrame));
+        spectrumBinsByFrame.push_back(std::move(bins));
         previousPeakEnergy = peakEnergy;
         previousPeakCount = static_cast<int>(trackingFrames.back().size());
     }
@@ -989,6 +1038,16 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
 
     auto assignment = runAssignmentTrackerPrototype(trackingFrames, trackerConfig);
     pruneShortModernTracks(assignment, params.min_seg_len);
+
+    std::vector<std::vector<double>> residualBandsByFrame;
+    residualBandsByFrame.reserve(spectrumBinsByFrame.size());
+    for (std::size_t frameIndex = 0; frameIndex < spectrumBinsByFrame.size(); ++frameIndex)
+    {
+        const auto activeTrackedPeaks =
+            trackingFrameFromActivePartials(assignment.partials, frameIndex, spectrumBinsByFrame[frameIndex]);
+        residualBandsByFrame.push_back(
+            estimateOrphanResidualBands(spectrumBinsByFrame[frameIndex], activeTrackedPeaks));
+    }
 
     auto& model = result.model;
     model.header.schemaVersion = kModernAtsSchemaVersion;

@@ -510,6 +510,59 @@ void testDirectModernAnalysisSuppressesTrackedSineResidualLeakage()
            "tracked sine window lobe should not leak into orphan residual bands");
 }
 
+void testPrunedModernTracksRemainInResidualBands()
+{
+    const int sampleRate = 4096;
+    std::vector<double> samples(1024, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.45 * std::sin(2.0 * 3.14159265358979323846 * 512.0 * t);
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1200.0;
+    params.lowest_mag = -90.0;
+    params.min_seg_len = 1000; // Force the short direct track out of the partial layer.
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 8;
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    int activeFrames = 0;
+    for (const auto& partial : result.model.partials)
+    {
+        for (const auto& frame : partial.frames)
+        {
+            if (frame.reason != ats::ModernAtsFrameReason::Slept
+                && frame.reason != ats::ModernAtsFrameReason::Pruned
+                && frame.reason != ats::ModernAtsFrameReason::Rejected
+                && frame.amplitude > 0.0)
+            {
+                ++activeFrames;
+            }
+        }
+    }
+
+    double orphanResidualEnergy = 0.0;
+    for (const auto& frame : result.model.frames)
+    {
+        for (const double energy : frame.orphanResidualBandEnergy)
+            orphanResidualEnergy += std::max(0.0, energy);
+    }
+
+    expect(activeFrames == 0, "forced-pruned fixture should remove the short track from partials");
+    expect(orphanResidualEnergy > 1.0e-2,
+           "pruned modern tracks should remain represented as orphan residual energy");
+}
+
 void testDirectModernAnalysisCapturesTransientBuffers()
 {
     const int sampleRate = 4096;
@@ -635,6 +688,7 @@ int main()
     testDirectModernAnalysisUsesSourcePeaks();
     testDirectModernAnalysisEstimatesStructuredResidualBands();
     testDirectModernAnalysisSuppressesTrackedSineResidualLeakage();
+    testPrunedModernTracksRemainInResidualBands();
     testDirectModernAnalysisCapturesTransientBuffers();
     testClassicAtsAnalysisEmptyInput();
     testDdspHelperPolicy();
