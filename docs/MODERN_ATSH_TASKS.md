@@ -509,6 +509,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep second-based transient markers aligned with partial/residual frames when Modern renders target a different sample rate.
 - [x] Add a Modern synth regression proving output-rate hop scaling and time-stretch composition.
 
+### Commit 55 - `fix(synth): phase-lock modern frame renders`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Use stored Modern partial phases as per-frame trajectory targets during phase-enabled synthesis instead of only seeding track births.
+- [x] Apply a bounded per-sample phase correction so oscillator phase lands on the next active frame phase without hard discontinuities.
+- [x] Add a Modern synth regression proving stored phase bends a zero-frequency frame to the next phase and remains disabled when `useStoredPhase` is false.
+
 ---
 
 ## Dependency Index
@@ -546,3 +554,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Wrapped gap-fill phase interpolation | 52 |
 | Phase-aware modern assignment cost | 53 |
 | Output-rate modern render hop scaling | 54 |
+| Phase-locked modern frame rendering | 55 |

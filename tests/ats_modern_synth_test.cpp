@@ -142,6 +142,35 @@ void testRenderPlanScalesHopToOutputSampleRate()
     expect(plan.totalSamples == 256, "time-stretched render length should scale after sample-rate conversion");
 }
 
+void testStoredPhaseGuidesFrameTrajectory()
+{
+    auto model = makeBaseModel(1, 2);
+    for (auto& frame : model.partials[0].frames)
+    {
+        frame.amplitude = 1.0;
+        frame.frequencyHz = 0.0;
+        frame.phaseRadians = 0.0;
+    }
+    model.partials[0].frames[1].phaseRadians = kHalfPi;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 4;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+    config.outputCeiling = 0.0;
+
+    const auto phaseLocked = ats::renderModernAtsModel(model, config);
+    expect(phaseLocked.size() == 8, "phase-locked fixture render length mismatch");
+    expect(std::abs(phaseLocked[0]) < 1.0e-6f, "stored phase fixture should start at first frame phase");
+    expect(phaseLocked[1] > 0.35f, "stored phase should bend the frame toward the next phase");
+    expect(phaseLocked[4] > 0.99f, "stored phase should land on the next frame phase");
+
+    config.useStoredPhase = false;
+    const auto freeRun = ats::renderModernAtsModel(model, config);
+    expect(peakAbs(freeRun) == 0.0f, "disabled stored phase should not apply phase correction");
+}
+
 void testOrphanResidualGainAndSeed()
 {
     auto model = makeBaseModel(0, 3);
@@ -414,6 +443,7 @@ int main()
 {
     testSnapshotRenderAndSafety();
     testRenderPlanScalesHopToOutputSampleRate();
+    testStoredPhaseGuidesFrameTrajectory();
     testOrphanResidualGainAndSeed();
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();

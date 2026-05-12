@@ -26,6 +26,13 @@ int frameStartSample(const ModernAtsRenderPlan& plan, int frameIndex)
 
 double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
+double wrapPhase(double phase)
+{
+    if (!std::isfinite(phase))
+        return 0.0;
+    return std::remainder(phase, kTwoPi);
+}
+
 double renderTimeFactor(const ModernAtsSynthConfig& config)
 {
     return std::max(0.01, config.timeFactor);
@@ -207,19 +214,29 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
             const double amp = lerp(a.amplitude, bActive ? b.amplitude : 0.0, localT) * plan.config.partialGain;
             const double freq = lerp(a.frequencyHz, bActive ? b.frequencyHz : a.frequencyHz, localT)
                                 * plan.config.frequencyFactor;
+            double phaseCorrectionPerSample = 0.0;
+            if (plan.config.useStoredPhase && bActive && nextFrameIndex != frameIndex && plan.hopSizeSamples > 0)
+            {
+                const double nextFreq = b.frequencyHz * plan.config.frequencyFactor;
+                const double averageFreq = 0.5 * (a.frequencyHz * plan.config.frequencyFactor + nextFreq);
+                const double predictedNextPhase =
+                    a.phaseRadians
+                    + kTwoPi * averageFreq * static_cast<double>(plan.hopSizeSamples)
+                          / static_cast<double>(plan.outputSampleRate);
+                phaseCorrectionPerSample =
+                    wrapPhase(b.phaseRadians - predictedNextPhase) / static_cast<double>(plan.hopSizeSamples);
+            }
 
             if (!phaseSeeded)
             {
-                phase = plan.config.useStoredPhase ? a.phaseRadians : 0.0;
+                phase = plan.config.useStoredPhase ? wrapPhase(a.phaseRadians) : 0.0;
                 phaseSeeded = true;
             }
 
             output[sample] += static_cast<float>(amp * std::sin(phase));
-            phase += kTwoPi * freq / static_cast<double>(plan.outputSampleRate);
-            if (phase >= kTwoPi)
-                phase -= kTwoPi;
-            else if (phase < 0.0)
-                phase += kTwoPi;
+            phase = wrapPhase(phase
+                              + kTwoPi * freq / static_cast<double>(plan.outputSampleRate)
+                              + phaseCorrectionPerSample);
         }
     }
 

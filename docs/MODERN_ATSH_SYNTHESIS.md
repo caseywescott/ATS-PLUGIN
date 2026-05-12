@@ -32,7 +32,9 @@ host diagnostics.
 ## Rendered Components
 
 - **Partials:** linear per-frame amplitude/frequency interpolation from modern
-  snapshot partial frames.
+  snapshot partial frames. When stored phase is enabled, each frame also applies
+  a bounded phase correction toward the next stored frame phase so analysis
+  phases and phase edits affect the full trajectory, not just track births.
 - **Orphan residual:** independent deterministic seeded noise streams shaped by
   the stored 25-band Bark residual energy, controlled by `orphanResidualGain`.
 - **Transients:** short transient buffers referenced by transient markers,
@@ -77,6 +79,7 @@ are well below realtime.
 Regression coverage:
 
 - deterministic orphan residual output for a fixed seed,
+- stored phase correction that lands on the next frame phase,
 - Bark-shaped residual output where high-band residual energy renders brighter
   than low-band energy,
 - render-hop scaling from model sample rate to output sample rate,
