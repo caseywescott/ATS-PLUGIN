@@ -118,6 +118,30 @@ void testSnapshotRenderAndSafety()
            "modern snapshot render produced denormal/non-finite samples");
 }
 
+void testRenderPlanScalesHopToOutputSampleRate()
+{
+    auto model = makeBaseModel(1, 4);
+    model.header.sampleRate = 48000;
+    model.header.hopSizeSamples = 64;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 24000;
+    config.hopSizeSamples = 0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+
+    ats::ModernAtsRenderPlan plan;
+    std::string error;
+    expect(ats::prepareModernAtsRenderPlan(model, config, plan, error), error.c_str());
+    expect(plan.hopSizeSamples == 32, "render hop should scale from model rate to output rate");
+    expect(plan.totalSamples == 128, "render length should preserve model duration across sample rates");
+
+    config.timeFactor = 2.0;
+    expect(ats::prepareModernAtsRenderPlan(model, config, plan, error), error.c_str());
+    expect(plan.hopSizeSamples == 64, "time stretch should apply after output sample-rate hop scaling");
+    expect(plan.totalSamples == 256, "time-stretched render length should scale after sample-rate conversion");
+}
+
 void testOrphanResidualGainAndSeed()
 {
     auto model = makeBaseModel(0, 3);
@@ -389,6 +413,7 @@ void testRepresentativeBudgets()
 int main()
 {
     testSnapshotRenderAndSafety();
+    testRenderPlanScalesHopToOutputSampleRate();
     testOrphanResidualGainAndSeed();
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();

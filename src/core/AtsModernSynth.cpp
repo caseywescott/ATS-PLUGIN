@@ -36,6 +36,13 @@ double renderTimeFactor(const ModernAtsRenderPlan& plan)
     return renderTimeFactor(plan.config);
 }
 
+double renderSampleRateFactor(const ModernAtsModel& model, const ModernAtsSynthConfig& config)
+{
+    if (model.header.sampleRate <= 0 || config.outputSampleRate <= 0)
+        return 1.0;
+    return static_cast<double>(config.outputSampleRate) / static_cast<double>(model.header.sampleRate);
+}
+
 float transientFade(int localIndex, int length, int fadeSamples)
 {
     if (fadeSamples <= 0 || length <= 1)
@@ -124,7 +131,11 @@ bool prepareModernAtsRenderPlan(const ModernAtsModel& model,
         return false;
     }
     const double clampedTimeFactor = renderTimeFactor(config);
-    const int hop = std::max(1, static_cast<int>(std::round(static_cast<double>(baseHop) * clampedTimeFactor)));
+    const double sampleRateFactor = renderSampleRateFactor(model, config);
+    const int hop = std::max(1,
+                             static_cast<int>(std::round(static_cast<double>(baseHop)
+                                                         * sampleRateFactor
+                                                         * clampedTimeFactor)));
 
     int totalSamples = static_cast<int>(model.frames.size()) * hop;
     for (const auto& buffer : model.transientBuffers)

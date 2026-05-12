@@ -501,6 +501,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Persist `phase_cost` in assignment diagnostics so modern tracker decisions expose frequency, amplitude, SMR, phase, and slope terms.
 - [x] Add a deterministic tracker regression where frequency/amplitude ties are resolved by phase identity instead of peak order.
 
+### Commit 54 - `fix(synth): scale modern hops to output rate`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Scale Modern partial/residual render hops from model sample-rate samples to the requested output sample rate before applying `timeFactor`.
+- [x] Keep second-based transient markers aligned with partial/residual frames when Modern renders target a different sample rate.
+- [x] Add a Modern synth regression proving output-rate hop scaling and time-stretch composition.
+
 ---
 
 ## Dependency Index
@@ -537,3 +545,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Direct modern oscillator phase storage | 51 |
 | Wrapped gap-fill phase interpolation | 52 |
 | Phase-aware modern assignment cost | 53 |
+| Output-rate modern render hop scaling | 54 |

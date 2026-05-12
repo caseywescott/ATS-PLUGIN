@@ -13,6 +13,7 @@ namespace ats
 struct ModernAtsSynthConfig
 {
     int outputSampleRate = 48000;
+    /** Optional analysis-hop override in model sample-rate samples. Scaled to outputSampleRate at render prepare. */
     int hopSizeSamples = 0;
     double partialGain = 1.0;
     double orphanResidualGain = 1.0;

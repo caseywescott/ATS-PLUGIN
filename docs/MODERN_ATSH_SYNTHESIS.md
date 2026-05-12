@@ -12,6 +12,11 @@ through `src/core/AtsModernSynth.h` / `.cpp`.
 captures immutable render settings, and computes the output length. Allocation
 and validation belong to this prepare step.
 
+Modern partial and residual frame hops are stored in analysis/model sample-rate
+samples. During render-plan preparation, the hop is scaled to
+`outputSampleRate`, then by `timeFactor`, so partials/residuals stay aligned
+with second-based transient markers when rendering at a different host rate.
+
 `renderModernAtsPlanIntoBuffer` writes into caller-owned memory. Its real-time
 safety contract is:
 
@@ -74,6 +79,7 @@ Regression coverage:
 - deterministic orphan residual output for a fixed seed,
 - Bark-shaped residual output where high-band residual energy renders brighter
   than low-band energy,
+- render-hop scaling from model sample rate to output sample rate,
 - transient crossfade begins and ends at zero,
 - transient gain can mute transient playback,
 - output soft limiting preserves below-knee samples while bounding dense
