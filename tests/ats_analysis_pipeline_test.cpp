@@ -214,6 +214,35 @@ void testAssignmentTrackerCrossingPartials()
     expect(!modern.assignmentCosts.empty(), "modern tracker should record assignment costs");
 }
 
+void testAssignmentTrackerUsesGlobalCost()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 500.0, 0.6), peak(1, 500.0, 0.4) },
+        { peak(0, 500.0, 0.5), peak(1, 500.0, 0.8) },
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.useFrequencySlopeContinuity = false;
+    config.frequencyWeight = 0.0;
+    config.amplitudeWeight = 0.2;
+    config.smrWeight = 0.0;
+    config.maxMatchCost = 0.12;
+    config.birthPenalty = 0.25;
+    config.deathPenalty = 0.25;
+    config.spuriousPeakPenalty = 0.25;
+
+    const auto result = ats::runAssignmentTrackerPrototype(frames, config);
+    expect(result.partials.size() == 2,
+           "global assignment should avoid greedy death/birth churn");
+    expect(result.partials[0].frames.size() == 2 && result.partials[1].frames.size() == 2,
+           "global assignment should keep both original tracks active");
+    expect(std::abs(result.partials[0].frames[1].amplitude - 0.8) < 1.0e-12,
+           "global assignment should choose the cheaper two-track solution for partial 0");
+    expect(std::abs(result.partials[1].frames[1].amplitude - 0.5) < 1.0e-12,
+           "global assignment should reserve the only viable peak for partial 1");
+}
+
 void testTransientBreakResetsAssignment()
 {
     const std::vector<ats::TrackingPeakFrame> pluckedLike = {
@@ -746,6 +775,7 @@ int main()
     testLifecycleGapFillAndPruning();
     testLifecycleGapFillAllowedAcrossProtectedFrame();
     testAssignmentTrackerCrossingPartials();
+    testAssignmentTrackerUsesGlobalCost();
     testTransientBreakResetsAssignment();
     testOrphanResidualNoise();
     testTransientDetection();

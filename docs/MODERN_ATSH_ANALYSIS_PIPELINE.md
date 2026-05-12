@@ -63,10 +63,13 @@ Short gaps are marked as `gap_fill`, and short active segments are marked as
 `pruned`.
 
 The modern assignment prototype tracks direct peak frames with a bounded
-candidate set per active track. Its cost matrix includes frequency, amplitude,
+candidate set per active track. Each frame is resolved as a deterministic
+minimum-cost assignment that includes real track-to-peak costs plus dummy
+track-death and peak-birth choices, so local pairwise minima cannot steal a peak
+needed by another active track. Its cost matrix includes frequency, amplitude,
 SMR, optional frequency-slope continuity, birth/death penalties, and spurious
-peak penalty configuration. Cost breakdowns are recorded as
-`assignment_costs` in the modern model schema.
+peak penalty configuration. Cost breakdowns are recorded as `assignment_costs`
+in the modern model schema.
 
 ## Residual and Transients
 
@@ -106,6 +109,8 @@ The `ats_analysis_pipeline` CTest covers:
 - deterministic peak estimation diagnostics,
 - classic lifecycle short-gap fill and short-segment pruning,
 - modern slope-aware assignment on a crossing-partial fixture,
+- global assignment behavior where the tracker avoids greedy death/birth churn
+  on ambiguous candidates,
 - orphan residual energy preservation and deterministic noise render,
 - transient marker detection and diagnostics,
 - attack protection that blocks gap fill and resets assignment at marked

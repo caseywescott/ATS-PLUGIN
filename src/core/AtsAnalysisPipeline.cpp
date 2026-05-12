@@ -29,6 +29,8 @@ constexpr double kTwoPi = 6.28318530717958647692;
 // Otherwise clean tracked sinusoids leak window skirts into orphan residual bands.
 constexpr int kResidualPeakMaxLobeHalfWidthBins = 16;
 constexpr double kResidualStrongNeighbourRelativeDb = 24.0;
+constexpr double kAssignmentForbiddenCost = 1.0e9;
+constexpr double kAssignmentTieBreakScale = 1.0e-9;
 
 double clamp(double value, double lo, double hi)
 {
@@ -660,6 +662,93 @@ struct Candidate
     int peakIndex = 0;
     ModernAtsAssignmentCost cost;
 };
+
+std::vector<int> solveMinCostAssignment(const std::vector<std::vector<double>>& costs)
+{
+    const int n = static_cast<int>(costs.size());
+    if (n == 0)
+        return {};
+
+    const int m = static_cast<int>(costs.front().size());
+    if (m < n)
+        return {};
+
+    std::vector<double> u(static_cast<std::size_t>(n + 1), 0.0);
+    std::vector<double> v(static_cast<std::size_t>(m + 1), 0.0);
+    std::vector<int> p(static_cast<std::size_t>(m + 1), 0);
+    std::vector<int> way(static_cast<std::size_t>(m + 1), 0);
+
+    for (int i = 1; i <= n; ++i)
+    {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<double> minv(static_cast<std::size_t>(m + 1),
+                                 std::numeric_limits<double>::infinity());
+        std::vector<char> used(static_cast<std::size_t>(m + 1), false);
+
+        do
+        {
+            used[static_cast<std::size_t>(j0)] = true;
+            const int i0 = p[static_cast<std::size_t>(j0)];
+            double delta = std::numeric_limits<double>::infinity();
+            int j1 = 0;
+
+            for (int j = 1; j <= m; ++j)
+            {
+                if (used[static_cast<std::size_t>(j)])
+                    continue;
+
+                const double cur = costs[static_cast<std::size_t>(i0 - 1)][static_cast<std::size_t>(j - 1)]
+                                   - u[static_cast<std::size_t>(i0)]
+                                   - v[static_cast<std::size_t>(j)];
+                if (cur < minv[static_cast<std::size_t>(j)])
+                {
+                    minv[static_cast<std::size_t>(j)] = cur;
+                    way[static_cast<std::size_t>(j)] = j0;
+                }
+                if (minv[static_cast<std::size_t>(j)] < delta)
+                {
+                    delta = minv[static_cast<std::size_t>(j)];
+                    j1 = j;
+                }
+            }
+
+            for (int j = 0; j <= m; ++j)
+            {
+                if (used[static_cast<std::size_t>(j)])
+                {
+                    u[static_cast<std::size_t>(p[static_cast<std::size_t>(j)])] += delta;
+                    v[static_cast<std::size_t>(j)] -= delta;
+                }
+                else
+                {
+                    minv[static_cast<std::size_t>(j)] -= delta;
+                }
+            }
+
+            j0 = j1;
+        }
+        while (p[static_cast<std::size_t>(j0)] != 0);
+
+        do
+        {
+            const int j1 = way[static_cast<std::size_t>(j0)];
+            p[static_cast<std::size_t>(j0)] = p[static_cast<std::size_t>(j1)];
+            j0 = j1;
+        }
+        while (j0 != 0);
+    }
+
+    std::vector<int> rowToColumn(static_cast<std::size_t>(n), -1);
+    for (int j = 1; j <= m; ++j)
+    {
+        const int row = p[static_cast<std::size_t>(j)];
+        if (row > 0 && row <= n)
+            rowToColumn[static_cast<std::size_t>(row - 1)] = j - 1;
+    }
+
+    return rowToColumn;
+}
 
 ModernAtsAssignmentCost assignmentCostFor(int frameIndex,
                                           int partialId,
@@ -1294,14 +1383,21 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
             activePartialIds.clear();
         }
 
-        std::vector<bool> peakAssigned(framePeaks.size(), false);
-        std::vector<bool> partialAssigned(result.partials.size(), false);
-        std::vector<Candidate> candidates;
-
+        std::vector<int> activeTrackIds;
+        activeTrackIds.reserve(activePartialIds.size());
         for (const int partialId : activePartialIds)
         {
-            if (partialId < 0 || partialId >= static_cast<int>(result.partials.size()))
-                continue;
+            if (partialId >= 0 && partialId < static_cast<int>(result.partials.size()))
+                activeTrackIds.push_back(partialId);
+        }
+
+        std::vector<bool> peakAssigned(framePeaks.size(), false);
+        std::vector<bool> partialAssigned(result.partials.size(), false);
+        std::vector<std::vector<Candidate>> candidatesByTrack(activeTrackIds.size());
+
+        for (std::size_t trackIndex = 0; trackIndex < activeTrackIds.size(); ++trackIndex)
+        {
+            const int partialId = activeTrackIds[trackIndex];
 
             std::vector<Candidate> perTrack;
             for (std::size_t peakIndex = 0; peakIndex < framePeaks.size(); ++peakIndex)
@@ -1323,38 +1419,76 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
             });
             if (perTrack.size() > config.maxCandidatesPerTrack)
                 perTrack.resize(config.maxCandidatesPerTrack);
-            candidates.insert(candidates.end(), perTrack.begin(), perTrack.end());
+            candidatesByTrack[trackIndex] = std::move(perTrack);
         }
 
-        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
-            if (a.cost.totalCost == b.cost.totalCost)
-                return a.partialId < b.partialId;
-            return a.cost.totalCost < b.cost.totalCost;
-        });
-
         std::vector<int> nextActivePartialIds;
-        for (const auto& candidate : candidates)
+        const std::size_t assignmentSize = activeTrackIds.size() + framePeaks.size();
+        if (assignmentSize > 0)
         {
-            // Alternative to matching (track, peak): the track sleeps (deathPenalty) and
-            // the peak is treated as spurious (spuriousPeakPenalty).  birthPenalty is not
-            // added here — it applies when a peak spawns a new track, not when it is
-            // discarded.  Using birth+death+spurious would triple-count and inflate the gate.
-            const double alternativeCost = config.deathPenalty + config.spuriousPeakPenalty;
-            const double maxAllowedCost = std::min(config.maxMatchCost, alternativeCost);
-            if (candidate.cost.totalCost > maxAllowedCost)
-                continue;
-            if (partialAssigned[static_cast<std::size_t>(candidate.partialId)]
-                || peakAssigned[static_cast<std::size_t>(candidate.peakIndex)])
-                continue;
+            std::vector<std::vector<double>> assignmentCosts(
+                assignmentSize,
+                std::vector<double>(assignmentSize, kAssignmentForbiddenCost));
 
-            auto& partial = result.partials[static_cast<std::size_t>(candidate.partialId)];
-            partial.frames.push_back(frameFromPeak(framePeaks[static_cast<std::size_t>(candidate.peakIndex)],
-                                                   ModernAtsFrameReason::Matched,
-                                                   1.0 - clamp(candidate.cost.totalCost, 0.0, 1.0)));
-            partialAssigned[static_cast<std::size_t>(candidate.partialId)] = true;
-            peakAssigned[static_cast<std::size_t>(candidate.peakIndex)] = true;
-            nextActivePartialIds.push_back(candidate.partialId);
-            result.assignmentCosts.push_back(candidate.cost);
+            for (std::size_t trackIndex = 0; trackIndex < activeTrackIds.size(); ++trackIndex)
+            {
+                for (const auto& candidate : candidatesByTrack[trackIndex])
+                {
+                    const double alternativeCost = config.deathPenalty + config.spuriousPeakPenalty;
+                    const double maxAllowedCost = std::min(config.maxMatchCost, alternativeCost);
+                    if (candidate.cost.totalCost > maxAllowedCost)
+                        continue;
+
+                    assignmentCosts[trackIndex][static_cast<std::size_t>(candidate.peakIndex)] =
+                        candidate.cost.totalCost
+                        + kAssignmentTieBreakScale
+                              * (static_cast<double>(trackIndex + 1)
+                                 + static_cast<double>(candidate.peakIndex + 1) * 0.001);
+                }
+
+                assignmentCosts[trackIndex][framePeaks.size() + trackIndex] =
+                    config.deathPenalty
+                    + kAssignmentTieBreakScale * static_cast<double>(trackIndex + 1);
+            }
+
+            for (std::size_t peakIndex = 0; peakIndex < framePeaks.size(); ++peakIndex)
+            {
+                const std::size_t row = activeTrackIds.size() + peakIndex;
+                assignmentCosts[row][peakIndex] =
+                    config.birthPenalty
+                    + kAssignmentTieBreakScale * static_cast<double>(peakIndex + 1);
+                for (std::size_t trackIndex = 0; trackIndex < activeTrackIds.size(); ++trackIndex)
+                    assignmentCosts[row][framePeaks.size() + trackIndex] = 0.0;
+            }
+
+            const auto rowToColumn = solveMinCostAssignment(assignmentCosts);
+            for (std::size_t trackIndex = 0; trackIndex < activeTrackIds.size(); ++trackIndex)
+            {
+                if (trackIndex >= rowToColumn.size())
+                    continue;
+                const int column = rowToColumn[trackIndex];
+                if (column < 0 || column >= static_cast<int>(framePeaks.size()))
+                    continue;
+
+                const int partialId = activeTrackIds[trackIndex];
+                const auto candidateIt =
+                    std::find_if(candidatesByTrack[trackIndex].begin(),
+                                 candidatesByTrack[trackIndex].end(),
+                                 [column](const Candidate& candidate) {
+                                     return candidate.peakIndex == column;
+                                 });
+                if (candidateIt == candidatesByTrack[trackIndex].end())
+                    continue;
+
+                auto& partial = result.partials[static_cast<std::size_t>(partialId)];
+                partial.frames.push_back(frameFromPeak(framePeaks[static_cast<std::size_t>(column)],
+                                                       ModernAtsFrameReason::Matched,
+                                                       1.0 - clamp(candidateIt->cost.totalCost, 0.0, 1.0)));
+                partialAssigned[static_cast<std::size_t>(partialId)] = true;
+                peakAssigned[static_cast<std::size_t>(column)] = true;
+                nextActivePartialIds.push_back(partialId);
+                result.assignmentCosts.push_back(candidateIt->cost);
+            }
         }
 
         for (const int partialId : activePartialIds)

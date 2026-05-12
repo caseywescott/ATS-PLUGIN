@@ -453,6 +453,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Preserve close untracked source components in orphan residual bands when `maxPeaksPerFrame` forces them out of the Modern partial layer.
 - [x] Add a deterministic close-two-tone regression while keeping the clean tracked-sine leakage and pruned-track residual guards passing.
 
+### Commit 48 - `fix(tracking): solve modern assignments globally`
+
+**PRD:** section 5.3, section 7.3
+
+- [x] Replace greedy sorted candidate acceptance with a deterministic per-frame min-cost assignment that weighs track-to-peak matches against explicit track-death and peak-birth dummy choices.
+- [x] Preserve bounded candidate costs per active track while preventing one cheap local match from causing unnecessary death/birth churn in neighboring tracks.
+- [x] Add a regression fixture where the greedy resolver would choose one local low-cost match, but the global assignment keeps both existing Modern tracks alive.
+
 ---
 
 ## Dependency Index
@@ -483,3 +491,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Pruned-track residual preservation | 45 |
 | Modern preview headroom safety | 46 |
 | Close residual tone preservation | 47 |
+| Global modern assignment solving | 48 |
