@@ -517,6 +517,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Apply a bounded per-sample phase correction so oscillator phase lands on the next active frame phase without hard discontinuities.
 - [x] Add a Modern synth regression proving stored phase bends a zero-frequency frame to the next phase and remains disabled when `useStoredPhase` is false.
 
+### Commit 56 - `fix(synth): preserve transposed phase trajectories`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Keep stored phase seeding for transposed Modern renders while disabling per-frame phase-lock correction when `frequencyFactor` changes pitch.
+- [x] Prevent next-frame analysis phases from canceling intentional pitch-shift trajectories.
+- [x] Add a Modern synth regression proving pitch-shifted renders free-run instead of landing on untransposed stored phase targets.
+
 ---
 
 ## Dependency Index
@@ -555,3 +563,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Phase-aware modern assignment cost | 53 |
 | Output-rate modern render hop scaling | 54 |
 | Phase-locked modern frame rendering | 55 |
+| Pitch-shift-safe modern phase rendering | 56 |

@@ -50,6 +50,11 @@ double renderSampleRateFactor(const ModernAtsModel& model, const ModernAtsSynthC
     return static_cast<double>(config.outputSampleRate) / static_cast<double>(model.header.sampleRate);
 }
 
+bool usesPitchNeutralStoredPhaseCorrection(const ModernAtsSynthConfig& config)
+{
+    return config.useStoredPhase && std::abs(config.frequencyFactor - 1.0) <= 1.0e-9;
+}
+
 float transientFade(int localIndex, int length, int fadeSamples)
 {
     if (fadeSamples <= 0 || length <= 1)
@@ -175,6 +180,7 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
 
     const auto& model = *plan.model;
     std::memset(output, 0, static_cast<std::size_t>(numSamples) * sizeof(float));
+    const bool correctStoredPhaseTrajectory = usesPitchNeutralStoredPhaseCorrection(plan.config);
 
     // Partial sinusoidal synthesis.
     // Outer loop is per-partial so each track carries a continuous phase accumulator
@@ -215,7 +221,8 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
             const double freq = lerp(a.frequencyHz, bActive ? b.frequencyHz : a.frequencyHz, localT)
                                 * plan.config.frequencyFactor;
             double phaseCorrectionPerSample = 0.0;
-            if (plan.config.useStoredPhase && bActive && nextFrameIndex != frameIndex && plan.hopSizeSamples > 0)
+            if (correctStoredPhaseTrajectory && bActive && nextFrameIndex != frameIndex
+                && plan.hopSizeSamples > 0)
             {
                 const double nextFreq = b.frequencyHz * plan.config.frequencyFactor;
                 const double averageFreq = 0.5 * (a.frequencyHz * plan.config.frequencyFactor + nextFreq);

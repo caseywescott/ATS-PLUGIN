@@ -171,6 +171,41 @@ void testStoredPhaseGuidesFrameTrajectory()
     expect(peakAbs(freeRun) == 0.0f, "disabled stored phase should not apply phase correction");
 }
 
+void testPitchShiftedStoredPhaseFreeRunsFromSeed()
+{
+    auto model = makeBaseModel(1, 2);
+    model.header.sampleRate = 8;
+    model.header.hopSizeSamples = 4;
+    model.header.windowSizeSamples = 8;
+    for (std::size_t frameIndex = 0; frameIndex < model.frames.size(); ++frameIndex)
+        model.frames[frameIndex].timeSeconds =
+            static_cast<double>(frameIndex * model.header.hopSizeSamples)
+            / static_cast<double>(model.header.sampleRate);
+
+    for (auto& frame : model.partials[0].frames)
+    {
+        frame.amplitude = 1.0;
+        frame.frequencyHz = 1.0;
+        frame.phaseRadians = 0.0;
+    }
+    model.partials[0].frames[1].phaseRadians = kHalfPi;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 8;
+    config.hopSizeSamples = 4;
+    config.frequencyFactor = 2.0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+    config.outputCeiling = 0.0;
+
+    const auto transposed = ats::renderModernAtsModel(model, config);
+    expect(transposed.size() == 8, "pitch-shifted stored-phase fixture render length mismatch");
+    expect(std::abs(transposed[0]) < 1.0e-6f, "pitch-shifted render should seed from stored phase");
+    expect(std::abs(transposed[4]) < 1.0e-5f,
+           "pitch-shifted render should not phase-lock to the next untransposed frame phase");
+    expect(transposed[5] > 0.99f, "pitch-shifted render should keep the transposed oscillator trajectory");
+}
+
 void testOrphanResidualGainAndSeed()
 {
     auto model = makeBaseModel(0, 3);
@@ -444,6 +479,7 @@ int main()
     testSnapshotRenderAndSafety();
     testRenderPlanScalesHopToOutputSampleRate();
     testStoredPhaseGuidesFrameTrajectory();
+    testPitchShiftedStoredPhaseFreeRunsFromSeed();
     testOrphanResidualGainAndSeed();
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();

@@ -35,6 +35,9 @@ host diagnostics.
   snapshot partial frames. When stored phase is enabled, each frame also applies
   a bounded phase correction toward the next stored frame phase so analysis
   phases and phase edits affect the full trajectory, not just track births.
+  That correction is pitch-neutral: transposed renders still seed from stored
+  phase, but non-unity `frequencyFactor` values free-run so the next original
+  analysis phase cannot cancel an intentional pitch shift.
 - **Orphan residual:** independent deterministic seeded noise streams shaped by
   the stored 25-band Bark residual energy, controlled by `orphanResidualGain`.
 - **Transients:** short transient buffers referenced by transient markers,
@@ -80,6 +83,8 @@ Regression coverage:
 
 - deterministic orphan residual output for a fixed seed,
 - stored phase correction that lands on the next frame phase,
+- pitch-shifted stored-phase rendering that keeps the transposed oscillator
+  trajectory,
 - Bark-shaped residual output where high-band residual energy renders brighter
   than low-band energy,
 - render-hop scaling from model sample rate to output sample rate,
