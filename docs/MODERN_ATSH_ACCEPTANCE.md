@@ -13,6 +13,8 @@ deterministic generated source-audio fixtures:
 - Modern tracker vs. classic tracker on crossing/close-partial and sustained fixtures.
 - Continuity metrics treat short sleeps that are later backfilled by `gap_fill`
   lifecycle events as repaired continuity, not track breaks.
+- Short dropout gap-fill interpolates phase on the wrapped shortest path so
+  repaired frames do not jump across the `pi`/`-pi` boundary.
 - Transient marker/buffer preservation, attack sharpness, and click-step limits.
 - Partial plus orphan residual energy preservation.
 - Deterministic morph recipe recall and fixed-seed morph renders.
@@ -35,7 +37,7 @@ fixture-specific threshold struct.
 | --- | --- |
 | Classic parity sine | normalized RMS and spectral distance stay at zero for identical renders |
 | Crossing partials | modern slope-aware assignment has fewer identity errors than classic nearest matching |
-| Sustained tone | modern continuity and identity match classic behavior, including gap-filled short dropouts |
+| Sustained tone | modern continuity and identity match classic behavior, including phase-wrapped gap-filled short dropouts |
 | Protected attack | transient marker and buffer increase attack sharpness while staying below the click-step guardrail |
 | Morph recall | recipe JSON and fixed-seed rendered output are deterministic |
 | Modern synth | render plan reports caller-owned buffers, no allocation/locks/I/O/analysis, finite samples, and bounded CPU |

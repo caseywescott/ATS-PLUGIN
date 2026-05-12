@@ -11,6 +11,7 @@ namespace
 {
 
 int failures = 0;
+constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 6.28318530717958647692;
 
 void expect(bool condition, const char* message)
@@ -27,13 +28,18 @@ double wrappedPhaseDelta(double a, double b)
     return std::remainder(a - b, kTwoPi);
 }
 
-ats::TrackingPeak peak(int sourceIndex, double frequency, double amplitude = 0.5, double smr = 60.0)
+ats::TrackingPeak peak(int sourceIndex,
+                       double frequency,
+                       double amplitude = 0.5,
+                       double smr = 60.0,
+                       double phaseRadians = 0.0)
 {
     ats::TrackingPeak p;
     p.sourceIndex = sourceIndex;
     p.frequencyHz = frequency;
     p.amplitude = amplitude;
     p.smrDb = smr;
+    p.phaseRadians = phaseRadians;
     return p;
 }
 
@@ -252,9 +258,9 @@ void testAssignmentTrackerUsesGlobalCost()
 void testAssignmentTrackerFillsShortDropouts()
 {
     const std::vector<ats::TrackingPeakFrame> frames = {
-        { peak(0, 440.0, 0.5) },
+        { peak(0, 440.0, 0.5, 60.0, 3.0) },
         {},
-        { peak(0, 444.0, 0.45) },
+        { peak(0, 444.0, 0.45, 60.0, -3.0) },
     };
 
     ats::AssignmentTrackerConfig config;
@@ -270,6 +276,8 @@ void testAssignmentTrackerFillsShortDropouts()
     expect(result.partials[0].frames[1].frequencyHz > 440.0
            && result.partials[0].frames[1].frequencyHz < 444.0,
            "interpolated dropout frequency should bridge neighboring matches");
+    expect(std::abs(std::abs(result.partials[0].frames[1].phaseRadians) - kPi) < 0.05,
+           "interpolated dropout phase should take the wrapped shortest path");
 
     bool sawGapFill = false;
     bool sawUnmatchedDeath = false;

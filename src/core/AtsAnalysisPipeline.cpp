@@ -51,6 +51,11 @@ double wrapPhase(double phase)
     return std::remainder(phase, kTwoPi);
 }
 
+double interpolateWrappedPhase(double a, double b, double t)
+{
+    return wrapPhase(a + wrapPhase(b - a) * t);
+}
+
 double oscillatorPhaseAtFrameStart(double spectrumPhase,
                                    double centerFrequencyHz,
                                    double interpolatedFrequencyHz,
@@ -159,7 +164,7 @@ void fillInterpolatedGap(ModernAtsPartial& partial,
         ModernAtsPartialFrame interpolated;
         interpolated.amplitude = lerp(previous.amplitude, current.amplitude, t);
         interpolated.frequencyHz = lerp(previous.frequencyHz, current.frequencyHz, t);
-        interpolated.phaseRadians = lerp(previous.phaseRadians, current.phaseRadians, t);
+        interpolated.phaseRadians = interpolateWrappedPhase(previous.phaseRadians, current.phaseRadians, t);
         interpolated.smrDb = lerp(previous.smrDb, current.smrDb, t);
         interpolated.noiseEnergy = lerp(previous.noiseEnergy, current.noiseEnergy, t);
         interpolated.confidence = std::min(previous.confidence, current.confidence) * 0.5;

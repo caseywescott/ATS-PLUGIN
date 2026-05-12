@@ -485,6 +485,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Correct the off-bin phase rotation introduced by symmetric analysis windows before storing partial frame `phase_radians`.
 - [x] Add a direct-source regression proving an off-bin sine with known initial phase is stored close to the oscillator-start phase.
 
+### Commit 52 - `fix(tracking): wrap gap-filled phase interpolation`
+
+**PRD:** section 5.3, section 7.3
+
+- [x] Interpolate short-dropout `GapFill` frame phases along the wrapped shortest path instead of linearly crossing through zero.
+- [x] Add an assignment-tracker regression where neighboring phases straddle the `pi`/`-pi` boundary.
+- [x] Document that synthetic continuity coverage includes phase-safe gap-filled dropouts.
+
 ---
 
 ## Dependency Index
@@ -519,3 +527,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Short modern dropout gap filling | 49 |
 | Gap-filled continuity scoring | 50 |
 | Direct modern oscillator phase storage | 51 |
+| Wrapped gap-fill phase interpolation | 52 |
