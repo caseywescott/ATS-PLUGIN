@@ -243,6 +243,42 @@ void testAssignmentTrackerUsesGlobalCost()
            "global assignment should reserve the only viable peak for partial 1");
 }
 
+void testAssignmentTrackerFillsShortDropouts()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 440.0, 0.5) },
+        {},
+        { peak(0, 444.0, 0.45) },
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.useFrequencySlopeContinuity = true;
+    config.maxGapFillFrames = 1;
+
+    const auto result = ats::runAssignmentTrackerPrototype(frames, config);
+    expect(result.partials.size() == 1, "short dropout should not create a replacement track");
+    expect(result.partials[0].frames.size() == 3, "short dropout track should span every frame");
+    expect(result.partials[0].frames[1].reason == ats::ModernAtsFrameReason::Interpolated,
+           "short dropout should be backfilled as an interpolated frame");
+    expect(result.partials[0].frames[1].frequencyHz > 440.0
+           && result.partials[0].frames[1].frequencyHz < 444.0,
+           "interpolated dropout frequency should bridge neighboring matches");
+
+    bool sawGapFill = false;
+    bool sawUnmatchedDeath = false;
+    for (const auto& event : result.trackLifecycle)
+    {
+        if (event.kind == ats::ModernAtsLifecycleKind::GapFill && event.frameIndex == 1)
+            sawGapFill = true;
+        if (event.kind == ats::ModernAtsLifecycleKind::Death && event.detail == "unmatched_track")
+            sawUnmatchedDeath = true;
+    }
+
+    expect(sawGapFill, "short dropout should emit a gap-fill lifecycle event");
+    expect(!sawUnmatchedDeath, "short dropout should not kill the track");
+}
+
 void testTransientBreakResetsAssignment()
 {
     const std::vector<ats::TrackingPeakFrame> pluckedLike = {
@@ -776,6 +812,7 @@ int main()
     testLifecycleGapFillAllowedAcrossProtectedFrame();
     testAssignmentTrackerCrossingPartials();
     testAssignmentTrackerUsesGlobalCost();
+    testAssignmentTrackerFillsShortDropouts();
     testTransientBreakResetsAssignment();
     testOrphanResidualNoise();
     testTransientDetection();

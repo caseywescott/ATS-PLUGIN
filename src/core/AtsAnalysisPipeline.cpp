@@ -37,6 +37,8 @@ double clamp(double value, double lo, double hi)
     return std::max(lo, std::min(hi, value));
 }
 
+double lerp(double a, double b, double t) { return a + (b - a) * t; }
+
 bool finite(double value) { return std::isfinite(value); }
 
 double ampFromDb(double db) { return std::pow(10.0, db / 20.0); }
@@ -87,6 +89,59 @@ bool modernFrameActive(const ModernAtsPartialFrame& frame)
            && frame.reason != ModernAtsFrameReason::Slept
            && frame.reason != ModernAtsFrameReason::Pruned
            && frame.reason != ModernAtsFrameReason::Rejected;
+}
+
+int lastActivePartialFrameIndex(const ModernAtsPartial& partial, int beforeFrameIndex)
+{
+    const int start = std::min(beforeFrameIndex, static_cast<int>(partial.frames.size())) - 1;
+    for (int i = start; i >= 0; --i)
+    {
+        if (modernFrameActive(partial.frames[static_cast<std::size_t>(i)]))
+            return i;
+    }
+    return -1;
+}
+
+void fillInterpolatedGap(ModernAtsPartial& partial,
+                         int currentFrameIndex,
+                         std::vector<ModernAtsTrackLifecycleEvent>& events)
+{
+    if (currentFrameIndex <= 0 || currentFrameIndex >= static_cast<int>(partial.frames.size()))
+        return;
+
+    int gapEnd = currentFrameIndex - 1;
+    while (gapEnd >= 0
+           && partial.frames[static_cast<std::size_t>(gapEnd)].reason == ModernAtsFrameReason::Slept)
+    {
+        --gapEnd;
+    }
+
+    const int previousActiveIndex = gapEnd;
+    const int gapStart = gapEnd + 1;
+    const int gapLength = currentFrameIndex - gapStart;
+    if (gapLength <= 0 || previousActiveIndex < 0
+        || !modernFrameActive(partial.frames[static_cast<std::size_t>(previousActiveIndex)]))
+    {
+        return;
+    }
+
+    const auto previous = partial.frames[static_cast<std::size_t>(previousActiveIndex)];
+    const auto current = partial.frames[static_cast<std::size_t>(currentFrameIndex)];
+    const double denom = static_cast<double>(currentFrameIndex - previousActiveIndex);
+    for (int frameIndex = gapStart; frameIndex < currentFrameIndex; ++frameIndex)
+    {
+        const double t = static_cast<double>(frameIndex - previousActiveIndex) / denom;
+        ModernAtsPartialFrame interpolated;
+        interpolated.amplitude = lerp(previous.amplitude, current.amplitude, t);
+        interpolated.frequencyHz = lerp(previous.frequencyHz, current.frequencyHz, t);
+        interpolated.phaseRadians = lerp(previous.phaseRadians, current.phaseRadians, t);
+        interpolated.smrDb = lerp(previous.smrDb, current.smrDb, t);
+        interpolated.noiseEnergy = lerp(previous.noiseEnergy, current.noiseEnergy, t);
+        interpolated.confidence = std::min(previous.confidence, current.confidence) * 0.5;
+        interpolated.reason = ModernAtsFrameReason::Interpolated;
+        partial.frames[static_cast<std::size_t>(frameIndex)] = interpolated;
+        events.push_back({ partial.id, frameIndex, ModernAtsLifecycleKind::GapFill, "short_assignment_gap" });
+    }
 }
 
 double ampToDb(double amp)
@@ -763,26 +818,41 @@ ModernAtsAssignmentCost assignmentCostFor(int frameIndex,
     cost.peakIndex = peak.sourceIndex;
 
     const auto& last = partial.frames.back();
-    const bool hasPrevious = partial.frames.size() >= 2;
-    const auto& previous = hasPrevious ? partial.frames[partial.frames.size() - 2] : last;
+    const int lastActiveIndex = lastActivePartialFrameIndex(partial, frameIndex);
+    const int previousActiveIndex =
+        lastActiveIndex > 0 ? lastActivePartialFrameIndex(partial, lastActiveIndex) : -1;
+    const auto& lastActive =
+        lastActiveIndex >= 0 ? partial.frames[static_cast<std::size_t>(lastActiveIndex)] : last;
     const bool useSlope = config.analysisMode == ModernAtsAnalysisMode::ModernAts
-                          && config.useFrequencySlopeContinuity && hasPrevious
-                          && previous.reason != ModernAtsFrameReason::Slept;
+                          && config.useFrequencySlopeContinuity && previousActiveIndex >= 0;
 
-    const double previousSlope = useSlope ? last.frequencyHz - previous.frequencyHz : 0.0;
-    const double predictedFrequency = useSlope ? last.frequencyHz + previousSlope : last.frequencyHz;
+    const auto& previousActive = previousActiveIndex >= 0
+                                     ? partial.frames[static_cast<std::size_t>(previousActiveIndex)]
+                                     : lastActive;
+    const double previousSlope = useSlope
+                                     ? (lastActive.frequencyHz - previousActive.frequencyHz)
+                                           / static_cast<double>(std::max(1,
+                                                                          lastActiveIndex
+                                                                              - previousActiveIndex))
+                                     : 0.0;
+    const double predictedFrequency =
+        useSlope ? lastActive.frequencyHz
+                       + previousSlope * static_cast<double>(std::max(1, frameIndex - lastActiveIndex))
+                 : lastActive.frequencyHz;
     const double frequencyDenom = std::max(20.0, std::abs(predictedFrequency));
     cost.frequencyCost = config.frequencyWeight * std::abs(peak.frequencyHz - predictedFrequency) / frequencyDenom;
 
-    const double ampDenom = std::max(1.0e-6, last.amplitude);
-    cost.amplitudeCost = config.amplitudeWeight * std::abs(peak.amplitude - last.amplitude) / ampDenom;
-    cost.smrCost = config.smrWeight * std::abs(peak.smrDb - last.smrDb) / 100.0;
+    const double ampDenom = std::max(1.0e-6, lastActive.amplitude);
+    cost.amplitudeCost = config.amplitudeWeight * std::abs(peak.amplitude - lastActive.amplitude) / ampDenom;
+    cost.smrCost = config.smrWeight * std::abs(peak.smrDb - lastActive.smrDb) / 100.0;
     cost.birthDeathCost = config.birthPenalty + config.deathPenalty;
     cost.spuriousPeakCost = config.spuriousPeakPenalty;
 
     if (useSlope)
     {
-        const double observedSlope = peak.frequencyHz - last.frequencyHz;
+        const double observedSlope =
+            (peak.frequencyHz - lastActive.frequencyHz)
+            / static_cast<double>(std::max(1, frameIndex - lastActiveIndex));
         cost.slopeCost = config.frequencySlopeWeight * std::abs(observedSlope - previousSlope)
                          / std::max(100.0, std::abs(previousSlope));
     }
@@ -1187,6 +1257,7 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
                                      : ModernAtsAnalysisMode::ClassicAts;
     trackerConfig.maxCandidatesPerTrack = config.maxCandidatesPerTrack;
     trackerConfig.useFrequencySlopeContinuity = config.trackerMode == ModernAtsTrackerMode::ModernAssignment;
+    trackerConfig.maxGapFillFrames = std::max(0, params.min_gap_len);
     for (const auto& marker : transients)
         trackerConfig.transientBreakFrameIndices.push_back(marker.frameIndex);
 
@@ -1354,6 +1425,7 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
 
     AssignmentTrackerResult result;
     std::vector<int> activePartialIds;
+    std::vector<int> gapFillCounts;
     int nextPartialId = 0;
 
     for (std::size_t frameIndex = 0; frameIndex < frames.size(); ++frameIndex)
@@ -1379,6 +1451,8 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
                     partial.frames.push_back(sleptFrame());
                 result.trackLifecycle.push_back(
                     { partialId, static_cast<int>(frameIndex), ModernAtsLifecycleKind::Death, "transient_break" });
+                if (partialId < static_cast<int>(gapFillCounts.size()))
+                    gapFillCounts[static_cast<std::size_t>(partialId)] = 0;
             }
             activePartialIds.clear();
         }
@@ -1484,6 +1558,9 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
                 partial.frames.push_back(frameFromPeak(framePeaks[static_cast<std::size_t>(column)],
                                                        ModernAtsFrameReason::Matched,
                                                        1.0 - clamp(candidateIt->cost.totalCost, 0.0, 1.0)));
+                fillInterpolatedGap(partial, static_cast<int>(frameIndex), result.trackLifecycle);
+                if (partialId >= 0 && partialId < static_cast<int>(gapFillCounts.size()))
+                    gapFillCounts[static_cast<std::size_t>(partialId)] = 0;
                 partialAssigned[static_cast<std::size_t>(partialId)] = true;
                 peakAssigned[static_cast<std::size_t>(column)] = true;
                 nextActivePartialIds.push_back(partialId);
@@ -1497,7 +1574,25 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
                 continue;
             if (partialAssigned[static_cast<std::size_t>(partialId)])
                 continue;
+
+            const int nextGapCount =
+                partialId < static_cast<int>(gapFillCounts.size())
+                    ? gapFillCounts[static_cast<std::size_t>(partialId)] + 1
+                    : 1;
             result.partials[static_cast<std::size_t>(partialId)].frames.push_back(sleptFrame());
+            if (nextGapCount <= std::max(0, config.maxGapFillFrames))
+            {
+                if (partialId >= static_cast<int>(gapFillCounts.size()))
+                    gapFillCounts.resize(static_cast<std::size_t>(partialId + 1), 0);
+                gapFillCounts[static_cast<std::size_t>(partialId)] = nextGapCount;
+                result.trackLifecycle.push_back(
+                    { partialId, static_cast<int>(frameIndex), ModernAtsLifecycleKind::Sleep, "short_assignment_gap" });
+                nextActivePartialIds.push_back(partialId);
+                continue;
+            }
+
+            if (partialId < static_cast<int>(gapFillCounts.size()))
+                gapFillCounts[static_cast<std::size_t>(partialId)] = 0;
             result.trackLifecycle.push_back(
                 { partialId, static_cast<int>(frameIndex), ModernAtsLifecycleKind::Death, "unmatched_track" });
         }
@@ -1513,6 +1608,7 @@ AssignmentTrackerResult runAssignmentTrackerPrototype(const std::vector<Tracking
             partial.frames.resize(frameIndex, sleptFrame());
             partial.frames.push_back(frameFromPeak(framePeaks[peakIndex], ModernAtsFrameReason::Born, 1.0));
             result.partials.push_back(partial);
+            gapFillCounts.push_back(0);
             nextActivePartialIds.push_back(partial.id);
             result.trackLifecycle.push_back(
                 { partial.id, static_cast<int>(frameIndex), ModernAtsLifecycleKind::Birth, "unmatched_peak" });

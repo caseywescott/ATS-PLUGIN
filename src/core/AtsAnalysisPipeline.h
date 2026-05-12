@@ -182,6 +182,7 @@ struct AssignmentTrackerConfig
     double spuriousPeakPenalty = 0.25;
     bool useFrequencySlopeContinuity = true;
     bool allowInterpolationAcrossTransients = false;
+    int maxGapFillFrames = 0;
     std::vector<int> transientBreakFrameIndices;
 };
 

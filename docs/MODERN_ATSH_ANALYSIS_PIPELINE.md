@@ -69,7 +69,11 @@ track-death and peak-birth choices, so local pairwise minima cannot steal a peak
 needed by another active track. Its cost matrix includes frequency, amplitude,
 SMR, optional frequency-slope continuity, birth/death penalties, and spurious
 peak penalty configuration. Cost breakdowns are recorded as `assignment_costs`
-in the modern model schema.
+in the modern model schema. Direct Modern analysis also passes the classic
+`min_gap_len` into the assignment tracker: tracks may sleep for that many frames,
+then a returning match backfills those frames as `interpolated` with
+`gap_fill` lifecycle events. Protected transient breaks still reset active
+tracks instead of gap-filling across attacks.
 
 ## Residual and Transients
 
@@ -111,6 +115,8 @@ The `ats_analysis_pipeline` CTest covers:
 - modern slope-aware assignment on a crossing-partial fixture,
 - global assignment behavior where the tracker avoids greedy death/birth churn
   on ambiguous candidates,
+- short-dropout gap filling where a missing peak is backfilled as an
+  interpolated frame instead of fragmenting the track,
 - orphan residual energy preservation and deterministic noise render,
 - transient marker detection and diagnostics,
 - attack protection that blocks gap fill and resets assignment at marked

@@ -461,6 +461,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Preserve bounded candidate costs per active track while preventing one cheap local match from causing unnecessary death/birth churn in neighboring tracks.
 - [x] Add a regression fixture where the greedy resolver would choose one local low-cost match, but the global assignment keeps both existing Modern tracks alive.
 
+### Commit 49 - `fix(tracking): fill short modern dropouts`
+
+**PRD:** section 5.3, section 7.3
+
+- [x] Carry direct Modern assignment tracks through bounded short peak dropouts using the analysis `min_gap_len` setting instead of immediately emitting death/birth churn.
+- [x] Backfill returning short gaps as `Interpolated` partial frames and `GapFill` lifecycle events so model diagnostics and synthesis preserve continuity.
+- [x] Keep transient-break resets authoritative so attack protection still prevents gap filling across marked onsets.
+
 ---
 
 ## Dependency Index
@@ -492,3 +500,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern preview headroom safety | 46 |
 | Close residual tone preservation | 47 |
 | Global modern assignment solving | 48 |
+| Short modern dropout gap filling | 49 |
