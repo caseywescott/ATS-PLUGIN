@@ -533,6 +533,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Fail external fixture runs that emit zero gate checks so unavailable metrics cannot masquerade as a passing real-audio comparison.
 - [x] Add a deterministic Python driver contract CTest that exercises missing-asset and zero-check failures without requiring real audio assets.
 
+### Commit 58 - `feat(tools): add modern offline candidate gate`
+
+**PRD:** section 5.1-section 5.7, section 7.1-section 7.3
+
+- [x] Add `tools/ats_modern_offline` so external real-audio acceptance can run direct Modern ATS analysis instead of invoking the classic-only offline tool as the candidate.
+- [x] Emit flat Modern candidate metadata metrics for continuity, residual ratio, and transient sharpness alongside the rendered Modern snapshot WAV.
+- [x] Route the external acceptance CTest to the Modern candidate tool and add a deterministic CLI smoke test proving the tool analyzes and renders a generated two-tone fixture.
+
 ---
 
 ## Dependency Index
@@ -573,3 +581,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Phase-locked modern frame rendering | 55 |
 | Pitch-shift-safe modern phase rendering | 56 |
 | Enforced external real-audio gate readiness | 57 |
+| Modern offline external candidate tool | 58 |

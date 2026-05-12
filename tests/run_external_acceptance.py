@@ -7,7 +7,7 @@ and pre-generated reference metrics are present.
 
 Usage (normally invoked by CTest, not directly):
   python3 run_external_acceptance.py \\
-    <path-to-ats_offline> \\
+    <path-to-modern-candidate-offline> \\
     <path-to-ats_external_fixture_manifest.json> \\
     <path-to-reference-dir>
 
@@ -225,7 +225,7 @@ GATE_EVALUATORS = {
 # ---------------------------------------------------------------------------
 
 def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
-                ats_offline: str) -> tuple[bool, int, int]:
+                candidate_offline: str) -> tuple[bool, int, int]:
     """Run one fixture. Returns (any_failures, checks_run, checks_skipped)."""
     fixture_id = fixture["id"]
     audio_rel = fixture.get("input_audio", "")
@@ -248,13 +248,14 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
 
     ref_metrics = json.loads(summary_path.read_text(encoding="utf-8"))
 
-    # Run ats_offline on the fixture audio to produce our metrics.
+    # Run the modern candidate offline tool on the fixture audio to produce our metrics.
+    candidate_analysis_mode = fixture.get("candidate_analysis_mode", "modern_ats")
     with tempfile.TemporaryDirectory() as tmpdir:
         out_wav = os.path.join(tmpdir, "out.wav")
         out_meta = os.path.join(tmpdir, "meta.json")
         cmd = [
-            ats_offline,
-            "--analysis-mode", "classic_ats",
+            candidate_offline,
+            "--analysis-mode", candidate_analysis_mode,
             "--metadata", out_meta,
             str(audio_path),
             out_wav,
@@ -262,7 +263,7 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as exc:
-            print(f"  ERROR — ats_offline failed: {exc.stderr.decode(errors='replace')[:200]}",
+            print(f"  ERROR — candidate offline analysis failed: {exc.stderr.decode(errors='replace')[:200]}",
                   file=sys.stderr)
             return True, 0, 0
 
@@ -315,17 +316,17 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
 def main() -> int:
     if len(sys.argv) != 4:
         print(
-            "usage: run_external_acceptance.py <ats_offline> <manifest.json> <reference-dir>",
+            "usage: run_external_acceptance.py <modern-candidate-offline> <manifest.json> <reference-dir>",
             file=sys.stderr,
         )
         return 2
 
-    ats_offline = sys.argv[1]
+    candidate_offline = sys.argv[1]
     manifest_path = Path(sys.argv[2]).resolve()
     reference_dir = Path(sys.argv[3]).resolve()
 
-    if not os.path.isfile(ats_offline):
-        print(f"error: ats_offline not found: {ats_offline}", file=sys.stderr)
+    if not os.path.isfile(candidate_offline):
+        print(f"error: candidate offline tool not found: {candidate_offline}", file=sys.stderr)
         return 2
     if not manifest_path.is_file():
         print(f"error: manifest not found: {manifest_path}", file=sys.stderr)
@@ -351,7 +352,7 @@ def main() -> int:
 
     for fixture in fixtures:
         any_fail, n_checks, n_skip = run_fixture(
-            fixture, manifest_dir, reference_dir, ats_offline
+            fixture, manifest_dir, reference_dir, candidate_offline
         )
         total_checks += n_checks
         total_skipped += n_skip

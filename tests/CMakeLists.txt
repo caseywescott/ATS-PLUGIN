@@ -75,6 +75,11 @@ add_test(
           "${CMAKE_SOURCE_DIR}")
 
 add_test(
+  NAME modern_offline_tool
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/modern_offline_tool_test.py"
+          "$<TARGET_FILE:ats_modern_offline>")
+
+add_test(
   NAME classic_compat_baseline
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/classic_compat_baseline.py"
           "$<TARGET_FILE:ats_offline>" "${CMAKE_BINARY_DIR}"
@@ -126,7 +131,7 @@ if(ATS_ENABLE_EXTERNAL_FIXTURES)
     NAME ats_modern_acceptance_external
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/run_external_acceptance.py"
-            "$<TARGET_FILE:ats_offline>"
+            "$<TARGET_FILE:ats_modern_offline>"
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ats_external_fixture_manifest.json"
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reference"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

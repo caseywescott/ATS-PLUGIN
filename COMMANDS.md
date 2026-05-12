@@ -181,7 +181,7 @@ ctest --test-dir build -R ats_modern_acceptance_external --output-on-failure
 
 ```sh
 python3 tests/run_external_acceptance.py \
-  ./build/tools/ats_offline \
+  ./build/tools/ats_modern_offline \
   tests/fixtures/ats_external_fixture_manifest.json \
   tests/fixtures/reference
 ```

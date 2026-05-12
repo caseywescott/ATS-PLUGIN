@@ -17,8 +17,10 @@ compatibility default.
 The plugin analysis call now routes through `ats::runClassicAtsAnalysis`, which
 wraps the existing ATSA `tracker` call for compatibility, ATS export, and the
 classic preview/render path. `tools/ats_offline` accepts
-`--analysis-mode classic_ats` and remains classic-only for external parity
-tests.
+`--analysis-mode classic_ats` and remains classic-only for ATSA reference
+generation. `tools/ats_modern_offline` is the Modern candidate CLI used by the
+external acceptance driver; it runs `ats::runModernAtsAnalysis`, renders the
+modern snapshot, and writes flat metadata metrics for real-audio gates.
 
 Phase 5 plugin integration snapshots the selected mode/tracker/peak-estimator
 parameters at Analyze time. Classic ATS remains the compatibility audio model,

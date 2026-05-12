@@ -35,6 +35,10 @@ import shutil
 import sys
 
 metadata_path = sys.argv[sys.argv.index("--metadata") + 1]
+analysis_mode = sys.argv[sys.argv.index("--analysis-mode") + 1]
+if analysis_mode != "modern_ats":
+    print(f"unexpected analysis mode: {analysis_mode}", file=sys.stderr)
+    raise SystemExit(7)
 input_path = sys.argv[-2]
 output_path = sys.argv[-1]
 with open(metadata_path, "w", encoding="utf-8") as handle:

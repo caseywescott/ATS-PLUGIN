@@ -18,6 +18,7 @@
       },
       "expected_sample_rate": 48000,
       "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["classic_parity", "residual_energy_preservation"],
       "threshold_overrides": {},
       "atsa_reference": {
@@ -37,6 +38,7 @@
       },
       "expected_sample_rate": 48000,
       "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["transient_preservation", "tracker_continuity"],
       "threshold_overrides": {
         "min_transient_sharpness_improvement": 0.03
@@ -58,6 +60,7 @@
       },
       "expected_sample_rate": 48000,
       "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["classic_parity", "tracker_continuity", "residual_energy_preservation"],
       "threshold_overrides": {},
       "atsa_reference": {
@@ -77,6 +80,7 @@
       },
       "expected_sample_rate": 48000,
       "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["transient_preservation", "residual_energy_preservation"],
       "threshold_overrides": {
         "min_residual_energy_ratio": 0.95
@@ -98,6 +102,7 @@
       },
       "expected_sample_rate": 48000,
       "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["tracker_continuity", "classic_parity"],
       "threshold_overrides": {
         "max_continuity_regression": 0.08
