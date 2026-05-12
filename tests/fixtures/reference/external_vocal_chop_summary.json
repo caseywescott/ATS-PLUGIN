@@ -1,0 +1,16 @@
+{
+  "analysis_mode": "classic_ats",
+  "attack_sharpness": -1.0,
+  "continuity_score": -1.0,
+  "fixture_id": "external_vocal_chop",
+  "frames": 4,
+  "identity_errors": -1,
+  "max_buffer_step": -1.0,
+  "normalized_rms_error": 1.1799709840890387,
+  "orphan_residual_ratio": -1.0,
+  "partials": 143,
+  "sample_rate": 44100,
+  "schema_version": 1,
+  "spectral_distance_db": 14.553791691256944,
+  "tracker_mode": "classic_recursive_frequency_smr"
+}

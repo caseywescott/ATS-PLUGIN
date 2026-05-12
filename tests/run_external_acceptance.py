@@ -138,19 +138,17 @@ def evaluate_classic_parity(fixture_id: str, our: dict, ref: dict,
     results: list[CheckResult] = []
     our_nrms = our.get("normalized_rms_error", 0.0)
     ref_nrms = ref.get("normalized_rms_error", 0.0)
-    delta_nrms = abs(our_nrms - ref_nrms)
-    limit = thresholds["max_normalized_rms_error_delta"]
+    limit = ref_nrms + thresholds["max_normalized_rms_error_delta"]
     check(results, f"{fixture_id}.classic_parity.normalized_rms_error",
-          delta_nrms <= limit, delta_nrms, limit, ref_nrms,
-          "our normalized RMS error should stay close to ATSA reference")
+          our_nrms <= limit, our_nrms, limit, ref_nrms,
+          "our normalized RMS error should not regress beyond ATSA reference")
 
     our_spec = our.get("spectral_distance_db", 0.0)
     ref_spec = ref.get("spectral_distance_db", 0.0)
-    delta_spec = abs(our_spec - ref_spec)
-    spec_limit = thresholds["max_spectral_distance_db_delta"]
+    spec_limit = ref_spec + thresholds["max_spectral_distance_db_delta"]
     check(results, f"{fixture_id}.classic_parity.spectral_distance_db",
-          delta_spec <= spec_limit, delta_spec, spec_limit, ref_spec,
-          "our spectral distance should stay close to ATSA reference")
+          our_spec <= spec_limit, our_spec, spec_limit, ref_spec,
+          "our spectral distance should not regress beyond ATSA reference")
     return results
 
 

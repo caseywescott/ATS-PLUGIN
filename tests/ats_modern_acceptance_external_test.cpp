@@ -92,8 +92,8 @@ void testClassicParityGatePasses()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "test_fixture";
-    our.normalizedRmsError = 0.0006;  // delta = 0.0001 < 5e-4 threshold
-    our.spectralDistanceDb = 0.25;    // delta = 0.05 < 0.5 threshold
+    our.normalizedRmsError = 0.0006;  // within allowed regression threshold
+    our.spectralDistanceDb = 0.25;    // within allowed regression threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ClassicParity });
@@ -105,6 +105,24 @@ void testClassicParityGatePasses()
            "classic parity: spectral distance check present");
 }
 
+void testClassicParityAllowsCandidateImprovement()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "better_fixture";
+    ref.normalizedRmsError = 0.75;
+    ref.spectralDistanceDb = 12.0;
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "better_fixture";
+    our.normalizedRmsError = 0.25;
+    our.spectralDistanceDb = 4.0;
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::ClassicParity });
+
+    expect(report.passed(), "classic parity: candidate improvements should pass");
+}
+
 void testClassicParityGateFails()
 {
     ats::ExternalFixtureReferenceMetrics ref;
@@ -114,8 +132,8 @@ void testClassicParityGateFails()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "flute_a4";
-    our.normalizedRmsError = 0.005;  // delta = 0.004 > 5e-4 threshold
-    our.spectralDistanceDb = 1.5;    // delta = 1.4 > 0.5 threshold
+    our.normalizedRmsError = 0.005;  // worse than reference plus threshold
+    our.spectralDistanceDb = 1.5;    // worse than reference plus threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ClassicParity });
@@ -479,6 +497,7 @@ int main()
     testParseExternalFixtureGate();
 
     testClassicParityGatePasses();
+    testClassicParityAllowsCandidateImprovement();
     testClassicParityGateFails();
 
     testTrackerContinuityGatePasses();

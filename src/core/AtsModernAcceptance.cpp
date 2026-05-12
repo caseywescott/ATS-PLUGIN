@@ -552,21 +552,23 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
         {
         case ExternalFixtureGate::ClassicParity:
         {
-            const double nrmsDelta = std::abs(our.normalizedRmsError - reference.normalizedRmsError);
+            const double nrmsLimit =
+                reference.normalizedRmsError + thresholds.maxNormalizedRmsErrorDelta;
             addCheck(report,
                      id + ".classic_parity.normalized_rms_error",
-                     nrmsDelta <= thresholds.maxNormalizedRmsErrorDelta,
-                     nrmsDelta,
-                     thresholds.maxNormalizedRmsErrorDelta,
-                     "normalized RMS error delta vs ATSA reference (fixture=" + id + ")");
+                     our.normalizedRmsError <= nrmsLimit,
+                     our.normalizedRmsError,
+                     nrmsLimit,
+                     "normalized RMS error should not regress beyond ATSA reference (fixture=" + id + ")");
 
-            const double specDelta = std::abs(our.spectralDistanceDb - reference.spectralDistanceDb);
+            const double specLimit =
+                reference.spectralDistanceDb + thresholds.maxSpectralDistanceDbDelta;
             addCheck(report,
                      id + ".classic_parity.spectral_distance_db",
-                     specDelta <= thresholds.maxSpectralDistanceDbDelta,
-                     specDelta,
-                     thresholds.maxSpectralDistanceDbDelta,
-                     "spectral distance delta vs ATSA reference (fixture=" + id + ")");
+                     our.spectralDistanceDb <= specLimit,
+                     our.spectralDistanceDb,
+                     specLimit,
+                     "spectral distance should not regress beyond ATSA reference (fixture=" + id + ")");
             break;
         }
 

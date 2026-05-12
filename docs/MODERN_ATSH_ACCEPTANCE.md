@@ -78,7 +78,7 @@ Each entry declares:
 
 | Name | What is checked |
 | --- | --- |
-| `classic_parity` | Normalized RMS error and spectral distance vs. ATSA reference |
+| `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance |
 | `tracker_continuity` | Continuity score regression and identity error increase vs. ATSA |
 | `residual_energy_preservation` | Orphan residual ratio delta vs. ATSA reference |
 | `transient_preservation` | Attack sharpness ratio vs. ATSA reference |
@@ -103,9 +103,14 @@ Output per fixture:
 
 ### Current external fixture status
 
-All five fixtures (sustained_flute, plucked_guitar, sung_vowel, drum_hit,
-crossing_strings) have PENDING license status. Audio files must not be committed
-until a redistribution-compatible license is confirmed and added to the manifest.
+Four first-party fixtures are committed under `tests/fixtures/audio/`:
+plucked_guitar, crotale_hit, vocal_chop, and vowel_phrase. These samples were
+created by Casey Wescott for ATS-PLUGIN testing, downmixed/converted to mono
+PCM16 where needed, and are permitted for repository tests and redistribution
+with the project. The initial real-audio gate enables `classic_parity` for all
+four fixtures; `external_crotale_hit` carries a wider spectral-distance
+tolerance for its resonant percussive onset while retaining the no-RMS-regression
+check.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

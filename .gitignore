@@ -4,6 +4,7 @@ cmake-build*/
 .DS_Store
 *.wav
 !tests/fixtures/**/*.wav
+tests/fixtures/reference/*_resynth.wav
 
 # Upstream clones (keep local; CI clones qatsh). Use submodules later if desired.
 qatsh/

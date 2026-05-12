@@ -321,7 +321,7 @@ Implemented in `src/core/AtsModernAcceptance.h` / `.cpp` and covered by the `ats
 - [x] Add `ats_modern_acceptance_external_test` C++ binary (always builds, exercises gate logic with synthetic data, registered as `ats_modern_acceptance_external_gates` CTest).
 - [x] Add `run_external_acceptance.py` Python CTest driver that loads the manifest, checks for audio and reference assets, runs `ats_offline`, and compares against reference metrics per enabled gate.
 - [x] Gate the real-audio CTest (`ats_modern_acceptance_external`) behind `ATS_ENABLE_EXTERNAL_FIXTURES=OFF` (default) so default `ctest` remains fully deterministic.
-- [x] Five placeholder fixtures defined: sustained_flute, plucked_guitar, sung_vowel, drum_hit, crossing_strings — all with PENDING license status pending audio procurement.
+- [x] First-party fixture support defined for external real-audio gates; initial placeholders were later replaced with committed Casey Wescott samples.
 
 Notes and gate documentation are in [MODERN_ATSH_ACCEPTANCE.md](./MODERN_ATSH_ACCEPTANCE.md).
 
@@ -541,6 +541,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Emit flat Modern candidate metadata metrics for continuity, residual ratio, and transient sharpness alongside the rendered Modern snapshot WAV.
 - [x] Route the external acceptance CTest to the Modern candidate tool and add a deterministic CLI smoke test proving the tool analyzes and renders a generated two-tone fixture.
 
+### Commit 59 - `test(fixtures): enable first-party external samples`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Add four first-party Casey Wescott audio fixtures for external Modern-vs-ATSA acceptance testing.
+- [x] Replace PENDING fixture provenance with committed first-party sample provenance and actual sample-rate/channel expectations.
+- [x] Generate ATSA reference summaries for the committed fixtures and run the external gate against the Modern candidate tool.
+
 ---
 
 ## Dependency Index
@@ -582,3 +590,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Pitch-shift-safe modern phase rendering | 56 |
 | Enforced external real-audio gate readiness | 57 |
 | Modern offline external candidate tool | 58 |
+| First-party external audio fixtures | 59 |

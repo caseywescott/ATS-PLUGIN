@@ -146,7 +146,7 @@ Optional flags:
 
 ```sh
 # Process a single fixture only:
---fixture-id external_sustained_flute
+--fixture-id external_plucked_guitar
 
 # Dry-run: print commands without executing:
 --dry-run
