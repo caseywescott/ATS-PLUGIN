@@ -1,5 +1,6 @@
 #include "AtsModernSynth.h"
 
+#include "AtsOutputLimiter.h"
 #include "AtsResidualBandNoise.h"
 
 #include <algorithm>
@@ -17,13 +18,6 @@ namespace
 constexpr double kTwoPi = 6.28318530717958647692;
 
 double clamp01(double value) { return std::max(0.0, std::min(1.0, value)); }
-
-float sanitize(double value, double denormalClamp)
-{
-    if (!std::isfinite(value) || std::abs(value) < denormalClamp)
-        return 0.0f;
-    return static_cast<float>(value);
-}
 
 int frameStartSample(const ModernAtsRenderPlan& plan, int frameIndex)
 {
@@ -294,9 +288,14 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
         }
     }
 
-    // Final denormal clamp pass over the mixed output.
+    AtsSoftLimitConfig limitConfig;
+    limitConfig.ceiling = plan.config.outputCeiling;
+    limitConfig.kneeStart = plan.config.outputSoftKneeStart;
+    limitConfig.denormalClamp = plan.config.denormalClamp;
+
+    // Final safety pass over the mixed output.
     for (int i = 0; i < plan.totalSamples; ++i)
-        output[i] = sanitize(output[i], plan.config.denormalClamp);
+        output[i] = applyAtsSoftLimit(output[i], limitConfig);
 
     return true;
 }
@@ -343,7 +342,8 @@ ModernAtsRealtimeSafetyReport checkModernAtsRealtimeSafety(const ModernAtsRender
     report.locksDuringRender = false;
     report.performsFileIoDuringRender = false;
     report.performsAnalysisDuringRender = false;
-    report.summary = "renderModernAtsPlanIntoBuffer writes into caller-owned memory and performs synthesis only.";
+    report.summary =
+        "renderModernAtsPlanIntoBuffer writes into caller-owned memory and performs synthesis/soft limiting only.";
     return report;
 }
 

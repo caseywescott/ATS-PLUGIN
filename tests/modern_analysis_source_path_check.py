@@ -37,6 +37,8 @@ def main() -> int:
             "plugin Modern residual layer should not duplicate captured transient buffers")
     require("renderModernAtsModel(modernModelSnapshot, cfgR)" in plugin_text,
             "plugin Modern residual layer must use the Modern ATS synth path")
+    require("softLimitPreviewMix(" in plugin_text and "applyAtsSoftLimit" in plugin_text,
+            "plugin preview mix should apply the shared ATS soft limiter after partial/residual summing")
     require("ModernAtsAnalysisResult" in pipeline_text,
             "core direct modern analysis result type is missing")
 

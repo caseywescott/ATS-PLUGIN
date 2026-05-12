@@ -11,6 +11,7 @@ namespace
 {
 
 int failures = 0;
+constexpr double kHalfPi = 1.57079632679489661923;
 
 void expect(bool condition, const char* message)
 {
@@ -234,6 +235,52 @@ void testTransientBuffersFollowTimeFactor()
     expect(compressed[6] == 0.0f, "compressed transient length should scale with time factor");
 }
 
+void testOutputSoftLimitBoundsDenseMix()
+{
+    auto quietModel = makeBaseModel(1, 2);
+    for (auto& frame : quietModel.partials[0].frames)
+    {
+        frame.amplitude = 0.75;
+        frame.frequencyHz = 0.0;
+        frame.phaseRadians = kHalfPi;
+    }
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 32;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 0.0;
+
+    const auto quiet = ats::renderModernAtsModel(quietModel, config);
+    expect(!quiet.empty(), "quiet limiter fixture should render");
+    expect(std::abs(quiet.front() - 0.75f) < 1.0e-6f,
+           "soft limiter should preserve samples below the knee");
+
+    auto denseModel = makeBaseModel(96, 2);
+    for (auto& partial : denseModel.partials)
+    {
+        for (auto& frame : partial.frames)
+        {
+            frame.amplitude = 0.08;
+            frame.frequencyHz = 0.0;
+            frame.phaseRadians = kHalfPi;
+        }
+    }
+
+    ats::ModernAtsRenderStats limitedStats;
+    const auto limited = ats::renderModernAtsModel(denseModel, config, &limitedStats);
+    expect(!limited.empty(), "dense limiter fixture should render");
+    expect(limitedStats.peakAbs <= 1.0f + 1.0e-6f,
+           "modern render soft limiter should bound dense partial sums");
+    expect(limitedStats.peakAbs > 0.95f, "modern render soft limiter should preserve audible headroom");
+
+    config.outputCeiling = 0.0;
+    ats::ModernAtsRenderStats rawStats;
+    const auto raw = ats::renderModernAtsModel(denseModel, config, &rawStats);
+    expect(!raw.empty(), "unlimited dense fixture should render");
+    expect(rawStats.peakAbs > 4.0f, "disabled output limiter should expose the raw dense partial sum");
+}
+
 void testDenormalAndSilenceEdges()
 {
     auto model = makeBaseModel(1, 2);
@@ -346,6 +393,7 @@ int main()
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();
     testTransientBuffersFollowTimeFactor();
+    testOutputSoftLimitBoundsDenseMix();
     testDenormalAndSilenceEdges();
     testRepresentativeBudgets();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

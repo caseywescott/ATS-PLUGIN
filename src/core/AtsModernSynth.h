@@ -21,6 +21,10 @@ struct ModernAtsSynthConfig
     std::uint32_t deterministicNoiseSeed = 1;
     int transientCrossfadeSamples = 64;
     double denormalClamp = 1.0e-20;
+    /** Final render safety ceiling. Set <= 0.0 to disable limiting. */
+    double outputCeiling = 1.0;
+    /** Samples below this absolute level pass through unchanged before limiting. */
+    double outputSoftKneeStart = 0.9;
     /** Scales output duration: >1 stretches time, <1 compresses. Default 1.0 (no change). */
     double timeFactor = 1.0;
     /** Scales all partial frequencies: >1 raises pitch, <1 lowers. Default 1.0 (no change). */

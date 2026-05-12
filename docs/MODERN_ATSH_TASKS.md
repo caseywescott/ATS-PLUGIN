@@ -437,6 +437,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep rejected/pruned short tracks represented in orphan residual bands instead of dropping their energy from both Modern partials and residual.
 - [x] Add a deterministic forced-pruning regression while preserving the tracked-sine leakage and structured-residual tests.
 
+### Commit 46 - `fix(synth): bound modern preview headroom`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Add a shared deterministic ATS soft-knee limiter so Modern partial/residual/transient snapshot sums cannot emit unchecked full-scale overs.
+- [x] Route the plugin's final preview mix through the same limiter after partial gain, residual gain, residual-only mode, and output trim are applied.
+- [x] Add a Modern synth regression that proves below-knee samples are unchanged, dense partial sums are bounded to full scale, and diagnostic unlimited renders remain opt-in.
+
 ---
 
 ## Dependency Index
@@ -465,3 +473,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Bark-shaped residual synthesis | 43 |
 | Tracked-peak residual leakage suppression | 44 |
 | Pruned-track residual preservation | 45 |
+| Modern preview headroom safety | 46 |

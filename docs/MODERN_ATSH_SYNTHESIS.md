@@ -32,8 +32,10 @@ host diagnostics.
   the stored 25-band Bark residual energy, controlled by `orphanResidualGain`.
 - **Transients:** short transient buffers referenced by transient markers,
   mixed with raised-cosine edge fades and controlled by `transientGain`.
-- **Silence safety:** non-finite samples and denormal-sized values are clamped to
-  zero.
+- **Output safety:** non-finite samples and denormal-sized values are clamped to
+  zero, and the final mixed snapshot passes through a deterministic soft-knee
+  limiter. By default, samples at or below 0.9 pass through unchanged and dense
+  partial/residual/transient sums are bounded to full scale.
 
 The classic renderer remains `do_synthesis` through the existing ATSA path and
 is still covered by `golden_offline`, `ats_roundtrip`, and plugin build
@@ -47,6 +49,9 @@ the residual-only control focused on the Modern model's untracked source energy.
 The residual renderer is shared through `AtsResidualBandNoise` so the older
 analysis helper and Modern preview both preserve the spectral placement of
 orphan residual bands instead of collapsing them to broadband noise.
+The plugin's final preview mixer uses the same `AtsOutputLimiter` helper after
+partials, residuals, and master trim are summed, so aggressive audition gains do
+not emit unchecked full-scale overs.
 
 ## Representative Budgets
 
@@ -54,15 +59,15 @@ Measured by `ats_modern_synth` on this development machine at 48 kHz, 256-sample
 hop. The guardrail is intentionally generous for CI variance; the observed runs
 are well below realtime.
 
-| Shape | Samples | State bytes | Output bytes | Render seconds | CPU ratio |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Sustained | 46,080 | 940,010 | 184,320 | 0.046668 | 0.048613 |
-| Vibrato | 92,160 | 2,287,126 | 368,640 | 0.099113 | 0.051621 |
-| Close/crossing partials | 76,800 | 2,247,762 | 307,200 | 0.089963 | 0.056227 |
-| Plucked/percussive | 61,440 | 2,368,089 | 245,760 | 0.086714 | 0.067745 |
-| Noisy voice/flute | 76,800 | 2,247,762 | 307,200 | 0.091672 | 0.057295 |
-| Dense polyphony | 122,880 | 9,052,530 | 491,520 | 0.277118 | 0.108249 |
-| Percussive hit | 46,080 | 2,598,406 | 184,320 | 0.084328 | 0.087842 |
+| Shape | Samples | State bytes | Output bytes | Render seconds | CPU ratio | Peak abs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sustained | 46,080 | 940,010 | 184,320 | 0.046318 | 0.048248 | 0.844233 |
+| Vibrato | 92,160 | 2,287,126 | 368,640 | 0.102078 | 0.053166 | 0.979048 |
+| Close/crossing partials | 76,800 | 2,247,762 | 307,200 | 0.094183 | 0.058865 | 0.997505 |
+| Plucked/percussive | 61,440 | 2,368,089 | 245,760 | 0.088862 | 0.069424 | 0.999964 |
+| Noisy voice/flute | 76,800 | 2,247,762 | 307,200 | 0.093534 | 0.058459 | 0.997505 |
+| Dense polyphony | 122,880 | 9,052,530 | 491,520 | 0.281418 | 0.109929 | 1.000000 |
+| Percussive hit | 46,080 | 2,598,406 | 184,320 | 0.085701 | 0.089271 | 1.000000 |
 
 Regression coverage:
 
@@ -71,6 +76,8 @@ Regression coverage:
   than low-band energy,
 - transient crossfade begins and ends at zero,
 - transient gain can mute transient playback,
+- output soft limiting preserves below-knee samples while bounding dense
+  partial sums to full scale,
 - denormal and non-finite sample detection,
 - empty/silent modern snapshots preserve timeline length without non-finite
   output.

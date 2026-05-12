@@ -15,6 +15,7 @@
 #include "AtsAnalysisPipeline.h"
 #include "AtsMathExpr.h"
 #include "AtsModernMorph.h"
+#include "AtsOutputLimiter.h"
 #include "AtsModernSynth.h"
 #include "PluginEditor.h"
 
@@ -41,6 +42,15 @@ constexpr int kPeakEstimatorExperimental = 1;
 constexpr int kMorphSourceCurrent = 0;
 constexpr int kMorphSourcePrevious = 1;
 constexpr int kMorphSourceDisabled = 2;
+
+float softLimitPreviewMix(double sample)
+{
+    ats::AtsSoftLimitConfig config;
+    config.ceiling = 1.0;
+    config.kneeStart = 0.9;
+    config.denormalClamp = 1.0e-20;
+    return ats::applyAtsSoftLimit(sample, config);
+}
 
 juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::SynthParams& sp)
 {
@@ -1055,7 +1065,7 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
             const float part = playback->getSample(0, playbackPosition);
             const float res = nCh > 1 ? playback->getSample(1, playbackPosition) : 0.0f;
             const float mixed = residualOnlyMix ? (res * rg) : (part * pg + res * rg);
-            v = mixed * trim;
+            v = softLimitPreviewMix(static_cast<double>(mixed) * static_cast<double>(trim));
             ++playbackPosition;
         }
 
