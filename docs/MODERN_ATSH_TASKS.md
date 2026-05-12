@@ -421,6 +421,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add a Modern synth regression proving high-band residual energy renders brighter/faster than low-band residual energy.
 - [x] Refresh synthesis documentation and representative budgets for the shared band-shaped residual renderer.
 
+### Commit 44 - `fix(analysis): suppress tracked-peak residual leakage`
+
+**PRD:** section 5.4, section 7.3
+
+- [x] Subtract each accepted peak's local FFT main lobe from source-derived residual bands instead of subtracting only scalar peak amplitude.
+- [x] Add a deterministic clean-sine regression that fails if a tracked sinusoid's window skirts become orphan residual energy.
+- [x] Preserve the structured residual fixture so untracked spectral components still remain in orphan residual bands.
+
 ---
 
 ## Dependency Index
@@ -447,3 +455,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Plugin preservation of modern residual bands | 41 |
 | Modern preview source residual playback | 42 |
 | Bark-shaped residual synthesis | 43 |
+| Tracked-peak residual leakage suppression | 44 |

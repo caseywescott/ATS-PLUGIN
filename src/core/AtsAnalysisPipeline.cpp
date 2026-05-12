@@ -25,6 +25,9 @@ namespace
 {
 
 constexpr double kTwoPi = 6.28318530717958647692;
+// Treat the local FFT main lobe around an accepted peak as explained energy.
+// Otherwise clean tracked sinusoids leak window skirts into orphan residual bands.
+constexpr int kResidualPeakLobeHalfWidthBins = 16;
 
 double clamp(double value, double lo, double hi)
 {
@@ -101,6 +104,13 @@ double spectralEnergyFromAmplitude(double amplitude)
 {
     const double amp = std::isfinite(amplitude) ? std::max(0.0, amplitude) : 0.0;
     return 0.5 * amp * amp;
+}
+
+double spectralEnergyFromBin(const SpectrumBin& bin)
+{
+    if (!spectrumBinFinite(bin))
+        return 0.0;
+    return spectralEnergyFromAmplitude(ampFromDb(bin.magnitudeDb));
 }
 
 std::uint64_t fnv1aUpdate(std::uint64_t hash, std::uint64_t value)
@@ -334,6 +344,7 @@ std::vector<double> estimateOrphanResidualBands(const std::vector<SpectrumBin>& 
 {
     std::vector<double> total(kModernAtsDefaultResidualBands, 0.0);
     std::vector<double> assigned(kModernAtsDefaultResidualBands, 0.0);
+    std::vector<double> assignedBinEnergy(bins.size(), 0.0);
 
     for (const auto& bin : bins)
     {
@@ -341,7 +352,7 @@ std::vector<double> estimateOrphanResidualBands(const std::vector<SpectrumBin>& 
             continue;
 
         const int band = barkBandIndexForFrequency(bin.frequencyHz);
-        total[static_cast<std::size_t>(band)] += spectralEnergyFromAmplitude(ampFromDb(bin.magnitudeDb));
+        total[static_cast<std::size_t>(band)] += spectralEnergyFromBin(bin);
     }
 
     for (const auto& peak : assignedPeaks)
@@ -349,8 +360,33 @@ std::vector<double> estimateOrphanResidualBands(const std::vector<SpectrumBin>& 
         if (!std::isfinite(peak.frequencyHz))
             continue;
 
-        const int band = barkBandIndexForFrequency(peak.frequencyHz);
-        assigned[static_cast<std::size_t>(band)] += spectralEnergyFromAmplitude(peak.amplitude);
+        if (peak.sourceIndex < 0 || peak.sourceIndex >= static_cast<int>(bins.size()))
+        {
+            const int band = barkBandIndexForFrequency(peak.frequencyHz);
+            assigned[static_cast<std::size_t>(band)] += spectralEnergyFromAmplitude(peak.amplitude);
+            continue;
+        }
+
+        for (int offset = -kResidualPeakLobeHalfWidthBins; offset <= kResidualPeakLobeHalfWidthBins;
+             ++offset)
+        {
+            const int binIndex = peak.sourceIndex + offset;
+            if (binIndex < 0 || binIndex >= static_cast<int>(bins.size()))
+                continue;
+
+            assignedBinEnergy[static_cast<std::size_t>(binIndex)] =
+                std::max(assignedBinEnergy[static_cast<std::size_t>(binIndex)],
+                         spectralEnergyFromBin(bins[static_cast<std::size_t>(binIndex)]));
+        }
+    }
+
+    for (std::size_t binIndex = 0; binIndex < assignedBinEnergy.size(); ++binIndex)
+    {
+        if (assignedBinEnergy[binIndex] <= 0.0 || !spectrumBinFinite(bins[binIndex]))
+            continue;
+
+        const int band = barkBandIndexForFrequency(bins[binIndex].frequencyHz);
+        assigned[static_cast<std::size_t>(band)] += assignedBinEnergy[binIndex];
     }
 
     return computeOrphanResidualBandEnergy(total, assigned);

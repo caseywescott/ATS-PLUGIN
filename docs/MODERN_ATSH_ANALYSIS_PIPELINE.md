@@ -72,11 +72,14 @@ peak penalty configuration. Cost breakdowns are recorded as
 
 Direct Modern ATS analysis now estimates source-derived 25-band Bark residual
 energy for every analyzed frame by accumulating STFT-bin energy per Bark band
-and subtracting the capped source peaks assigned to partial tracking.
-`computeOrphanResidualBandEnergy` keeps the unassigned band energy as orphan
-residual instead of discarding it. `renderOrphanResidualBandNoise` adds a
-deterministic seeded noise render path for that orphan residual lane using the
-same Bark-shaped renderer as Modern preview.
+and subtracting the accepted source peaks assigned to partial tracking. The
+subtraction reserves each accepted peak's local FFT main lobe, not just the
+single scalar peak amplitude, so clean tracked sinusoids do not leak analysis
+window skirts into orphan residual bands. `computeOrphanResidualBandEnergy`
+keeps the remaining unassigned band energy as orphan residual instead of
+discarding it. `renderOrphanResidualBandNoise` adds a deterministic seeded noise
+render path for that orphan residual lane using the same Bark-shaped renderer as
+Modern preview.
 
 `detectTransientMarkers` combines spectral flux, positive energy rise, and
 model discontinuity into a thresholded onset score. Diagnostics expose scores,
@@ -108,5 +111,7 @@ The `ats_analysis_pipeline` CTest covers:
 - source-derived modern residual-band estimation, including a structured
   residual fixture that fails if residual energy falls back to uniform
   placeholders,
+- tracked-sinusoid residual suppression, ensuring accepted peak lobes do not
+  become fake orphan residual energy,
 - direct transient-buffer capture from source audio, including marker/buffer
   reference validation and source-impulse preservation.

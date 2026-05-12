@@ -456,6 +456,60 @@ void testDirectModernAnalysisEstimatesStructuredResidualBands()
            "source-derived residual should stay concentrated in spectral bands");
 }
 
+void testDirectModernAnalysisSuppressesTrackedSineResidualLeakage()
+{
+    const int sampleRate = 4096;
+    const double frequency = 512.0;
+    std::vector<double> samples(2048, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.5 * std::sin(2.0 * 3.14159265358979323846 * frequency * t);
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1200.0;
+    params.lowest_mag = -90.0;
+    params.min_seg_len = 1;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 8;
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    double orphanResidualEnergy = 0.0;
+    for (const auto& frame : result.model.frames)
+    {
+        for (const double energy : frame.orphanResidualBandEnergy)
+            orphanResidualEnergy += std::max(0.0, energy);
+    }
+
+    bool sawTrackedSine = false;
+    for (const auto& partial : result.model.partials)
+    {
+        for (const auto& frame : partial.frames)
+        {
+            if (std::abs(frame.frequencyHz - frequency) < 10.0
+                && frame.reason != ats::ModernAtsFrameReason::Slept
+                && frame.reason != ats::ModernAtsFrameReason::Pruned
+                && frame.reason != ats::ModernAtsFrameReason::Rejected)
+            {
+                sawTrackedSine = true;
+            }
+        }
+    }
+
+    expect(sawTrackedSine, "tracked sine fixture should produce an active modern partial");
+    expect(orphanResidualEnergy < 2.0e-3,
+           "tracked sine window lobe should not leak into orphan residual bands");
+}
+
 void testDirectModernAnalysisCapturesTransientBuffers()
 {
     const int sampleRate = 4096;
@@ -580,6 +634,7 @@ int main()
     testExperimentalTransientLanePrototype();
     testDirectModernAnalysisUsesSourcePeaks();
     testDirectModernAnalysisEstimatesStructuredResidualBands();
+    testDirectModernAnalysisSuppressesTrackedSineResidualLeakage();
     testDirectModernAnalysisCapturesTransientBuffers();
     testClassicAtsAnalysisEmptyInput();
     testDdspHelperPolicy();
