@@ -196,59 +196,6 @@ const char* peakEstimatorIdForIndex(int idx)
                                              : "classic_stft_peak_estimator";
 }
 
-double atsCell(double** table, int row, int column)
-{
-    if (table == nullptr || row < 0 || column < 0 || table[row] == nullptr)
-        return 0.0;
-    const double value = table[row][column];
-    return std::isfinite(value) ? value : 0.0;
-}
-
-double atsFrameTime(const ATS_SOUND& sound, int frameIndex)
-{
-    const double stored = atsCell(sound.time, 0, frameIndex);
-    if (stored > 0.0 || frameIndex == 0)
-        return stored;
-    if (sound.srate > 0 && sound.frame_size > 0)
-        return (double) frameIndex * (double) sound.frame_size / (double) sound.srate;
-    return (double) frameIndex;
-}
-
-std::vector<double> residualBandsForFrame(const ATS_SOUND& sound, int frameIndex)
-{
-    std::vector<double> bands;
-    if (sound.band_energy == nullptr)
-        return bands;
-
-    bands.assign(ats::kModernAtsDefaultResidualBands, 0.0);
-    for (int band = 0; band < ats::kModernAtsDefaultResidualBands; ++band)
-        bands[(std::size_t) band] = std::max(0.0, atsCell(sound.band_energy, band, frameIndex));
-    return bands;
-}
-
-void overlayClassicResidualBands(ats::ModernAtsModel& model, const ATS_SOUND& sound)
-{
-    if (model.frames.empty() || sound.frames <= 0 || sound.band_energy == nullptr)
-        return;
-
-    int classicFrame = 0;
-    for (auto& frame : model.frames)
-    {
-        while (classicFrame + 1 < sound.frames)
-        {
-            const double currentDelta = std::abs(atsFrameTime(sound, classicFrame) - frame.timeSeconds);
-            const double nextDelta = std::abs(atsFrameTime(sound, classicFrame + 1) - frame.timeSeconds);
-            if (nextDelta > currentDelta)
-                break;
-            ++classicFrame;
-        }
-
-        auto bands = residualBandsForFrame(sound, classicFrame);
-        if (!bands.empty())
-            frame.orphanResidualBandEnergy = std::move(bands);
-    }
-}
-
 ats::MorphRecipe morphRecipeFromApvts(const juce::AudioProcessorValueTreeState& apvts)
 {
     const int recipeIndex =
@@ -738,9 +685,8 @@ void AtsAudioProcessor::startAnalysis()
             if (modernResult.errorMessage.empty())
             {
                 modernModel = std::move(modernResult.model);
-                overlayClassicResidualBands(modernModel, *result.sound.get());
                 modernModel.warnings.push_back(
-                    "Classic ATS model retained for ATS export and residual-layer rendering.");
+                    "Classic ATS model retained for ATS export and residual-layer rendering; Modern model keeps source-derived residual bands.");
                 modernModelValid = ats::validateModernAtsModel(modernModel, modernValidationError);
             }
             else

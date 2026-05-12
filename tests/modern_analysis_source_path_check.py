@@ -27,8 +27,8 @@ def main() -> int:
 
     require("runModernAtsAnalysis(ap, localMono, fileSr, modernConfig)" in plugin_text,
             "plugin Modern/Experimental analysis must call runModernAtsAnalysis on source audio")
-    require("overlayClassicResidualBands(modernModel" in plugin_text,
-            "plugin should only use classic ATS data to overlay residual bands")
+    require("source-derived residual bands" in plugin_text,
+            "plugin should document that Modern models keep source-derived residual bands")
     require("cfgP.transientGain = 1.0;" in plugin_text,
             "plugin Modern preview must render captured transient buffers")
     require("ModernAtsAnalysisResult" in pipeline_text,
@@ -41,6 +41,7 @@ def main() -> int:
         "populateModernFramesFromPartials",
         "derived ATS peak frames",
         "sourceHash = \"classic:\"",
+        "overlayClassicResidualBands",
     ]
     for pattern in forbidden:
         require(pattern not in plugin_text,

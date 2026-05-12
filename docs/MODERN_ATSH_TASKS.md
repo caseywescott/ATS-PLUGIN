@@ -397,6 +397,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Subtract capped source peaks from per-band spectral energy so untracked/noisy components remain in orphan residual bands for diagnostics and morphing.
 - [x] Add deterministic analysis and acceptance tests that fail if direct Modern ATS stops producing structured, non-zero source residual energy.
 
+### Commit 41 - `fix(plugin): preserve modern source residual bands`
+
+**PRD:** section 5.1, section 5.4, section 6.1
+
+- [x] Stop overwriting direct Modern ATS source-derived residual bands with classic ATSA residual bands after plugin analysis.
+- [x] Keep the classic `ATS_SOUND` model available for ATS export and residual-layer rendering without mutating the Modern model diagnostics/morph data.
+- [x] Update the source-path regression guard so classic-derived residual overlay helpers cannot be reintroduced silently.
+
 ---
 
 ## Dependency Index
@@ -420,3 +428,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern preview transient playback | 37 |
 | Diagnostic UI stability | 39 |
 | Direct modern residual estimation | 40 |
+| Plugin preservation of modern residual bands | 41 |

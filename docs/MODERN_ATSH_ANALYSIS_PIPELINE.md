@@ -26,9 +26,10 @@ but Modern ATS and Experimental mode now call `ats::runModernAtsAnalysis` on
 the downmixed source samples. That direct path estimates STFT peaks before
 tracking, applies the selected tracker to those source-derived peak frames, and
 stores a versioned `ModernAtsModel` whose `sourceHash` is based on the audio
-input rather than an intermediate `ATS_SOUND`. The plugin then overlays classic
-ATSA residual-band energy when available so residual display/rendering remains
-compatible while modern partial tracking can improve independently.
+input rather than an intermediate `ATS_SOUND`. The plugin keeps those
+source-derived Modern partial, transient, and residual-band diagnostics intact.
+The classic ATSA model is still retained separately for ATS export and the
+classic residual render layer.
 
 ## Peak Estimation
 
