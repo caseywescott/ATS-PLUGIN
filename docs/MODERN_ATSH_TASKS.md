@@ -389,6 +389,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Size Modern/Classic diagnostics, compatibility warnings, preset metadata, and CPU warnings from wrapped line counts instead of clipping them to one fixed short row.
 - [x] Stop forcing a full `SessionTabPanel::resized()` pass on every editor timer tick; relayout only when dynamic text actually changes.
 
+### Commit 40 - `feat(residual): estimate modern residual bands from source`
+
+**PRD:** section 5.4, section 5.7, section 7.3
+
+- [x] Replace direct Modern ATS uniform residual placeholders with source-derived 25-band Bark residual estimates from the same FFT-backed STFT frames used for peak estimation.
+- [x] Subtract capped source peaks from per-band spectral energy so untracked/noisy components remain in orphan residual bands for diagnostics and morphing.
+- [x] Add deterministic analysis and acceptance tests that fail if direct Modern ATS stops producing structured, non-zero source residual energy.
+
 ---
 
 ## Dependency Index
@@ -411,3 +419,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Direct transient-buffer capture | 36 |
 | Modern preview transient playback | 37 |
 | Diagnostic UI stability | 39 |
+| Direct modern residual estimation | 40 |

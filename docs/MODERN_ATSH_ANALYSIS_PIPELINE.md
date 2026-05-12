@@ -43,9 +43,9 @@ provides diagnostics for:
 - magnitude threshold,
 - rejection reasons.
 
-`ats::runModernAtsAnalysis` computes deterministic windowed DFT frames from the
-source audio, feeds those bins into the selected estimator, caps accepted peaks
-per frame for predictable CPU, and records per-frame diagnostics. Classic
+`ats::runModernAtsAnalysis` computes deterministic FFT-backed STFT frames from
+the source audio, feeds those bins into the selected estimator, caps accepted
+peaks per frame for predictable CPU, and records per-frame diagnostics. Classic
 plugin analysis still uses the original ATSA tracker path unchanged.
 
 ## Tracking
@@ -69,8 +69,11 @@ peak penalty configuration. Cost breakdowns are recorded as
 
 ## Residual and Transients
 
-`computeOrphanResidualBandEnergy` keeps unassigned critical-band energy as
-orphan residual instead of discarding it. `renderOrphanResidualBandNoise` adds a
+Direct Modern ATS analysis now estimates source-derived 25-band Bark residual
+energy for every analyzed frame by accumulating STFT-bin energy per Bark band
+and subtracting the capped source peaks assigned to partial tracking.
+`computeOrphanResidualBandEnergy` keeps the unassigned band energy as orphan
+residual instead of discarding it. `renderOrphanResidualBandNoise` adds a
 deterministic seeded noise render path for that orphan residual lane.
 
 `detectTransientMarkers` combines spectral flux, positive energy rise, and
@@ -100,5 +103,8 @@ The `ats_analysis_pipeline` CTest covers:
 - direct audio-to-modern-model analysis, including source-audio hashing,
   channel-policy metadata, assignment-cost diagnostics, validation, and
   source sine peak tracking,
+- source-derived modern residual-band estimation, including a structured
+  residual fixture that fails if residual energy falls back to uniform
+  placeholders,
 - direct transient-buffer capture from source audio, including marker/buffer
   reference validation and source-impulse preservation.

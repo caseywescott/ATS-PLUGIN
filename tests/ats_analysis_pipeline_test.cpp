@@ -398,8 +398,62 @@ void testDirectModernAnalysisUsesSourcePeaks()
     for (const auto& frame : result.model.frames)
     {
         expect(frame.orphanResidualBandEnergy.size() == ats::kModernAtsDefaultResidualBands,
-               "direct modern analysis should emit residual-band placeholders");
+               "direct modern analysis should emit source-derived residual bands");
     }
+}
+
+void testDirectModernAnalysisEstimatesStructuredResidualBands()
+{
+    const int sampleRate = 4096;
+    std::vector<double> samples(2048, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.42 * std::sin(2.0 * 3.14159265358979323846 * 512.0 * t)
+                     + 0.24 * std::sin(2.0 * 3.14159265358979323846 * 1536.0 * t);
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1900.0;
+    params.lowest_mag = -90.0;
+    params.min_seg_len = 1;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 1; // Force the quieter partial into residual-band energy.
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    std::vector<double> bandTotals(ats::kModernAtsDefaultResidualBands, 0.0);
+    for (const auto& frame : result.model.frames)
+    {
+        expect(frame.orphanResidualBandEnergy.size() == ats::kModernAtsDefaultResidualBands,
+               "structured residual frame should contain 25 bands");
+        for (std::size_t band = 0; band < frame.orphanResidualBandEnergy.size(); ++band)
+            bandTotals[band] += frame.orphanResidualBandEnergy[band];
+    }
+
+    double total = 0.0;
+    double maxBand = 0.0;
+    int energeticBands = 0;
+    for (const double energy : bandTotals)
+    {
+        total += energy;
+        maxBand = std::max(maxBand, energy);
+        if (energy > 1.0e-6)
+            ++energeticBands;
+    }
+
+    const double average = total / static_cast<double>(ats::kModernAtsDefaultResidualBands);
+    expect(total > 1.0e-4, "direct modern analysis should retain untracked source residual energy");
+    expect(maxBand > average * 4.0, "source-derived residual bands should not be uniform placeholders");
+    expect(energeticBands < ats::kModernAtsDefaultResidualBands,
+           "source-derived residual should stay concentrated in spectral bands");
 }
 
 void testDirectModernAnalysisCapturesTransientBuffers()
@@ -525,6 +579,7 @@ int main()
     testTransientDetection();
     testExperimentalTransientLanePrototype();
     testDirectModernAnalysisUsesSourcePeaks();
+    testDirectModernAnalysisEstimatesStructuredResidualBands();
     testDirectModernAnalysisCapturesTransientBuffers();
     testClassicAtsAnalysisEmptyInput();
     testDdspHelperPolicy();

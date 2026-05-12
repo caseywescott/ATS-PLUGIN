@@ -329,6 +329,11 @@ void testAcceptanceRunsDirectModernSourceAnalysis()
 
     const auto continuity = ats::computeModernAtsContinuityMetrics(result.model);
     expect(continuity.continuityScore > 0.60, "direct source acceptance continuity regressed");
+    const auto residual = ats::computeModernAtsResidualMetrics(result.model);
+    expect(residual.orphanResidualEnergy > 0.0,
+           "direct source acceptance should include source-derived orphan residual energy");
+    expect(residual.orphanResidualRatio > 0.0,
+           "direct source acceptance should expose a non-zero orphan residual ratio");
 
     ats::ModernAtsSynthConfig synthConfig;
     synthConfig.outputSampleRate = sampleRate;

@@ -86,6 +86,21 @@ double ampToDb(double amp)
     return amp > 1.0e-15 ? 20.0 * std::log10(amp) : -300.0;
 }
 
+int barkBandIndexForFrequency(double frequencyHz)
+{
+    const double f = std::max(0.0, frequencyHz);
+    const double bark = 13.0 * std::atan(0.00076 * f)
+                        + 3.5 * std::atan((f / 7500.0) * (f / 7500.0));
+    return std::max(0, std::min(kModernAtsDefaultResidualBands - 1,
+                                static_cast<int>(std::floor(bark))));
+}
+
+double spectralEnergyFromAmplitude(double amplitude)
+{
+    const double amp = std::isfinite(amplitude) ? std::max(0.0, amplitude) : 0.0;
+    return 0.5 * amp * amp;
+}
+
 std::uint64_t fnv1aUpdate(std::uint64_t hash, std::uint64_t value)
 {
     for (int i = 0; i < 8; ++i)
@@ -312,6 +327,33 @@ std::vector<SpectralPeak> capAndSortPeaks(std::vector<SpectralPeak> peaks, std::
     return peaks;
 }
 
+std::vector<double> estimateOrphanResidualBands(const std::vector<SpectrumBin>& bins,
+                                                const TrackingPeakFrame& assignedPeaks)
+{
+    std::vector<double> total(kModernAtsDefaultResidualBands, 0.0);
+    std::vector<double> assigned(kModernAtsDefaultResidualBands, 0.0);
+
+    for (const auto& bin : bins)
+    {
+        if (!spectrumBinFinite(bin))
+            continue;
+
+        const int band = barkBandIndexForFrequency(bin.frequencyHz);
+        total[static_cast<std::size_t>(band)] += spectralEnergyFromAmplitude(ampFromDb(bin.magnitudeDb));
+    }
+
+    for (const auto& peak : assignedPeaks)
+    {
+        if (!std::isfinite(peak.frequencyHz))
+            continue;
+
+        const int band = barkBandIndexForFrequency(peak.frequencyHz);
+        assigned[static_cast<std::size_t>(band)] += spectralEnergyFromAmplitude(peak.amplitude);
+    }
+
+    return computeOrphanResidualBandEnergy(total, assigned);
+}
+
 TrackingPeakFrame trackingFrameFromPeaks(const std::vector<SpectralPeak>& peaks)
 {
     TrackingPeakFrame frame;
@@ -364,7 +406,8 @@ void pruneShortModernTracks(AssignmentTrackerResult& result, int minSegmentFrame
 void populateModernFramesFromTrackedPartials(ModernAtsModel& model,
                                              const std::vector<double>& frameTimes,
                                              const std::vector<double>& frameMeanSquareEnergy,
-                                             const std::vector<TrackingPeakFrame>& peakFrames)
+                                             const std::vector<TrackingPeakFrame>& peakFrames,
+                                             const std::vector<std::vector<double>>& residualBandsByFrame)
 {
     model.frames.clear();
     model.frames.reserve(frameTimes.size());
@@ -390,9 +433,18 @@ void populateModernFramesFromTrackedPartials(ModernAtsModel& model,
         const double frameEnergy = frameIndex < frameMeanSquareEnergy.size()
                                        ? std::max(0.0, frameMeanSquareEnergy[frameIndex])
                                        : 0.0;
-        const double orphanEnergy = std::max(0.0, frameEnergy - assignedEnergy);
-        frame.orphanResidualBandEnergy.assign(kModernAtsDefaultResidualBands,
-                                              orphanEnergy / static_cast<double>(kModernAtsDefaultResidualBands));
+        if (frameIndex < residualBandsByFrame.size()
+            && residualBandsByFrame[frameIndex].size() == kModernAtsDefaultResidualBands)
+        {
+            frame.orphanResidualBandEnergy = residualBandsByFrame[frameIndex];
+        }
+        else
+        {
+            const double orphanEnergy = std::max(0.0, frameEnergy - assignedEnergy);
+            frame.orphanResidualBandEnergy.assign(kModernAtsDefaultResidualBands,
+                                                  orphanEnergy
+                                                      / static_cast<double>(kModernAtsDefaultResidualBands));
+        }
 
         model.frames.push_back(std::move(frame));
     }
@@ -833,6 +885,7 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     std::vector<TrackingPeakFrame> trackingFrames;
     std::vector<double> frameTimes;
     std::vector<double> frameMeanSquareEnergy;
+    std::vector<std::vector<double>> residualBandsByFrame;
     std::vector<TransientFeatureFrame> transientFeatures;
 
     double previousPeakEnergy = 0.0;
@@ -854,6 +907,7 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
         result.peakDiagnostics.push_back(std::move(diagnostics));
 
         auto trackingFrame = trackingFrameFromPeaks(peaks);
+        residualBandsByFrame.push_back(estimateOrphanResidualBands(bins, trackingFrame));
         double peakEnergy = 0.0;
         for (const auto& peak : trackingFrame)
             peakEnergy += peak.amplitude * peak.amplitude;
@@ -913,7 +967,11 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     model.trackLifecycle = std::move(assignment.trackLifecycle);
     model.assignmentCosts = std::move(assignment.assignmentCosts);
     model.transients = std::move(transients);
-    populateModernFramesFromTrackedPartials(model, frameTimes, frameMeanSquareEnergy, trackingFrames);
+    populateModernFramesFromTrackedPartials(model,
+                                            frameTimes,
+                                            frameMeanSquareEnergy,
+                                            trackingFrames,
+                                            residualBandsByFrame);
     if (config.captureTransientBuffers)
         attachTransientBuffersFromSource(model, monoSamples, sampleRate, config.maxTransientBufferSeconds);
 
@@ -937,6 +995,9 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
         model.warnings.push_back("Captured " + std::to_string(model.transientBuffers.size())
                                  + " transient source buffers for attack preservation.");
     }
+    model.warnings.push_back("Estimated source-derived orphan residual energy in "
+                             + std::to_string(kModernAtsDefaultResidualBands)
+                             + " Bark bands for modern model diagnostics and morphing.");
 
     std::string validationError;
     if (!validateModernAtsModel(model, validationError))
