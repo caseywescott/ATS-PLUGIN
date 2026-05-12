@@ -77,11 +77,14 @@ after assignment and short-track pruning, so rejected or pruned peaks remain in
 orphan residual bands instead of disappearing from both partial and residual
 layers. The subtraction reserves each active peak's local FFT main lobe, not
 just the single scalar peak amplitude, so clean tracked sinusoids do not leak
-analysis window skirts into orphan residual bands. `computeOrphanResidualBandEnergy`
-keeps the remaining unassigned band energy as orphan residual instead of
-discarding it. `renderOrphanResidualBandNoise` adds a deterministic seeded noise
-render path for that orphan residual lane using the same Bark-shaped renderer as
-Modern preview.
+analysis window skirts into orphan residual bands. That lobe reservation is
+adaptive: when a strong neighboring spectral maximum appears inside the nominal
+lobe span, the reservation stops at the intervening valley so close untracked
+tones remain orphan residual energy instead of being claimed by a tracked
+partial. `computeOrphanResidualBandEnergy` keeps the remaining unassigned band
+energy as orphan residual instead of discarding it. `renderOrphanResidualBandNoise`
+adds a deterministic seeded noise render path for that orphan residual lane using
+the same Bark-shaped renderer as Modern preview.
 
 `detectTransientMarkers` combines spectral flux, positive energy rise, and
 model discontinuity into a thresholded onset score. Diagnostics expose scores,
@@ -115,6 +118,8 @@ The `ats_analysis_pipeline` CTest covers:
   placeholders,
 - tracked-sinusoid residual suppression, ensuring accepted peak lobes do not
   become fake orphan residual energy,
+- close untracked tone residual preservation, ensuring adaptive lobe boundaries
+  do not erase neighboring unassigned components,
 - pruned-track residual preservation, ensuring rejected short tracks are still
   represented as orphan residual energy,
 - direct transient-buffer capture from source audio, including marker/buffer

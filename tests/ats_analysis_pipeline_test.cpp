@@ -510,6 +510,71 @@ void testDirectModernAnalysisSuppressesTrackedSineResidualLeakage()
            "tracked sine window lobe should not leak into orphan residual bands");
 }
 
+void testCloseUntrackedToneSurvivesResidualLobe()
+{
+    const int sampleRate = 4096;
+    std::vector<double> samples(2048, 0.0);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(sampleRate);
+        samples[i] = 0.42 * std::sin(2.0 * 3.14159265358979323846 * 512.0 * t)
+                     + 0.26 * std::sin(2.0 * 3.14159265358979323846 * 640.0 * t);
+    }
+
+    ats::AnalysisParams params;
+    params.win_size = 256;
+    params.hop_size = 128.0;
+    params.lowest_freq = 100.0;
+    params.highest_freq = 1000.0;
+    params.lowest_mag = -90.0;
+    params.min_seg_len = 1;
+
+    ats::ModernAtsAnalysisConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.trackerMode = ats::ModernAtsTrackerMode::ModernAssignment;
+    config.maxPeaksPerFrame = 1; // Force the quieter close component into residual-band energy.
+
+    const auto result = ats::runModernAtsAnalysis(params, samples, sampleRate, config);
+    expect(result.errorMessage.empty(), result.errorMessage.c_str());
+
+    bool sawTrackedFundamental = false;
+    bool sawActiveCloseTone = false;
+    for (const auto& partial : result.model.partials)
+    {
+        for (const auto& frame : partial.frames)
+        {
+            if (frame.reason == ats::ModernAtsFrameReason::Slept
+                || frame.reason == ats::ModernAtsFrameReason::Pruned
+                || frame.reason == ats::ModernAtsFrameReason::Rejected)
+            {
+                continue;
+            }
+
+            if (std::abs(frame.frequencyHz - 512.0) < 12.0)
+                sawTrackedFundamental = true;
+            if (std::abs(frame.frequencyHz - 640.0) < 12.0)
+                sawActiveCloseTone = true;
+        }
+    }
+
+    double orphanResidualEnergy = 0.0;
+    double closeBandEnergy = 0.0;
+    for (const auto& frame : result.model.frames)
+    {
+        for (const double energy : frame.orphanResidualBandEnergy)
+            orphanResidualEnergy += std::max(0.0, energy);
+        if (frame.orphanResidualBandEnergy.size() > 5)
+            closeBandEnergy += std::max(0.0, frame.orphanResidualBandEnergy[5]);
+    }
+
+    expect(sawTrackedFundamental, "close residual fixture should track the louder fundamental");
+    expect(!sawActiveCloseTone, "close residual fixture should force the quieter tone out of partials");
+    expect(orphanResidualEnergy > 5.0e-3,
+           "adaptive residual lobe should preserve close untracked tone energy");
+    expect(closeBandEnergy > 2.0e-3,
+           "close untracked tone should remain concentrated in its residual Bark band");
+}
+
 void testPrunedModernTracksRemainInResidualBands()
 {
     const int sampleRate = 4096;
@@ -688,6 +753,7 @@ int main()
     testDirectModernAnalysisUsesSourcePeaks();
     testDirectModernAnalysisEstimatesStructuredResidualBands();
     testDirectModernAnalysisSuppressesTrackedSineResidualLeakage();
+    testCloseUntrackedToneSurvivesResidualLobe();
     testPrunedModernTracksRemainInResidualBands();
     testDirectModernAnalysisCapturesTransientBuffers();
     testClassicAtsAnalysisEmptyInput();

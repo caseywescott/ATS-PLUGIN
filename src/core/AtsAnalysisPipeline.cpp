@@ -27,7 +27,8 @@ namespace
 constexpr double kTwoPi = 6.28318530717958647692;
 // Treat the local FFT main lobe around an accepted peak as explained energy.
 // Otherwise clean tracked sinusoids leak window skirts into orphan residual bands.
-constexpr int kResidualPeakLobeHalfWidthBins = 16;
+constexpr int kResidualPeakMaxLobeHalfWidthBins = 16;
+constexpr double kResidualStrongNeighbourRelativeDb = 24.0;
 
 double clamp(double value, double lo, double hi)
 {
@@ -111,6 +112,70 @@ double spectralEnergyFromBin(const SpectrumBin& bin)
     if (!spectrumBinFinite(bin))
         return 0.0;
     return spectralEnergyFromAmplitude(ampFromDb(bin.magnitudeDb));
+}
+
+bool localSpectrumMaximum(const std::vector<SpectrumBin>& bins, int index)
+{
+    if (index <= 0 || index + 1 >= static_cast<int>(bins.size()))
+        return false;
+    if (!spectrumBinFinite(bins[static_cast<std::size_t>(index - 1)])
+        || !spectrumBinFinite(bins[static_cast<std::size_t>(index)])
+        || !spectrumBinFinite(bins[static_cast<std::size_t>(index + 1)]))
+    {
+        return false;
+    }
+
+    const double center = bins[static_cast<std::size_t>(index)].magnitudeDb;
+    return center >= bins[static_cast<std::size_t>(index - 1)].magnitudeDb
+           && center >= bins[static_cast<std::size_t>(index + 1)].magnitudeDb;
+}
+
+int residualLobeBoundaryForDirection(const std::vector<SpectrumBin>& bins, int sourceIndex, int direction)
+{
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(bins.size()) || (direction != -1 && direction != 1)
+        || !spectrumBinFinite(bins[static_cast<std::size_t>(sourceIndex)]))
+    {
+        return sourceIndex;
+    }
+
+    const double peakMagnitudeDb = bins[static_cast<std::size_t>(sourceIndex)].magnitudeDb;
+    const int hardBoundary = sourceIndex + direction * kResidualPeakMaxLobeHalfWidthBins;
+    const int clampedHardBoundary =
+        std::max(0, std::min(static_cast<int>(bins.size()) - 1, hardBoundary));
+
+    for (int offset = 2; offset <= kResidualPeakMaxLobeHalfWidthBins; ++offset)
+    {
+        const int candidate = sourceIndex + direction * offset;
+        if (candidate <= 0 || candidate + 1 >= static_cast<int>(bins.size()))
+            break;
+
+        const auto& bin = bins[static_cast<std::size_t>(candidate)];
+        if (!localSpectrumMaximum(bins, candidate)
+            || bin.magnitudeDb < peakMagnitudeDb - kResidualStrongNeighbourRelativeDb)
+        {
+            continue;
+        }
+
+        int valley = sourceIndex;
+        double valleyMagnitudeDb = peakMagnitudeDb;
+        for (int i = sourceIndex + direction; i != candidate; i += direction)
+        {
+            const auto& valleyBin = bins[static_cast<std::size_t>(i)];
+            if (!spectrumBinFinite(valleyBin))
+                continue;
+            if (valleyBin.magnitudeDb < valleyMagnitudeDb)
+            {
+                valleyMagnitudeDb = valleyBin.magnitudeDb;
+                valley = i;
+            }
+        }
+
+        return valley == sourceIndex
+                   ? sourceIndex
+                   : std::max(0, std::min(static_cast<int>(bins.size()) - 1, valley - direction));
+    }
+
+    return clampedHardBoundary;
 }
 
 std::uint64_t fnv1aUpdate(std::uint64_t hash, std::uint64_t value)
@@ -367,10 +432,10 @@ std::vector<double> estimateOrphanResidualBands(const std::vector<SpectrumBin>& 
             continue;
         }
 
-        for (int offset = -kResidualPeakLobeHalfWidthBins; offset <= kResidualPeakLobeHalfWidthBins;
-             ++offset)
+        const int leftBoundary = residualLobeBoundaryForDirection(bins, peak.sourceIndex, -1);
+        const int rightBoundary = residualLobeBoundaryForDirection(bins, peak.sourceIndex, 1);
+        for (int binIndex = leftBoundary; binIndex <= rightBoundary; ++binIndex)
         {
-            const int binIndex = peak.sourceIndex + offset;
             if (binIndex < 0 || binIndex >= static_cast<int>(bins.size()))
                 continue;
 

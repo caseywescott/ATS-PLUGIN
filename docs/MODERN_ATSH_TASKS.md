@@ -445,6 +445,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Route the plugin's final preview mix through the same limiter after partial gain, residual gain, residual-only mode, and output trim are applied.
 - [x] Add a Modern synth regression that proves below-knee samples are unchanged, dense partial sums are bounded to full scale, and diagnostic unlimited renders remain opt-in.
 
+### Commit 47 - `fix(analysis): preserve close residual tones`
+
+**PRD:** section 5.4, section 7.3
+
+- [x] Make tracked-peak residual lobe subtraction adaptive so broad clean-sine lobe suppression stops at the valley before a strong neighboring spectral maximum.
+- [x] Preserve close untracked source components in orphan residual bands when `maxPeaksPerFrame` forces them out of the Modern partial layer.
+- [x] Add a deterministic close-two-tone regression while keeping the clean tracked-sine leakage and pruned-track residual guards passing.
+
 ---
 
 ## Dependency Index
@@ -474,3 +482,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Tracked-peak residual leakage suppression | 44 |
 | Pruned-track residual preservation | 45 |
 | Modern preview headroom safety | 46 |
+| Close residual tone preservation | 47 |
