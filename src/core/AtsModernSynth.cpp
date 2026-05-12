@@ -1,6 +1,9 @@
 #include "AtsModernSynth.h"
 
+#include "AtsResidualBandNoise.h"
+
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -20,23 +23,6 @@ float sanitize(double value, double denormalClamp)
     if (!std::isfinite(value) || std::abs(value) < denormalClamp)
         return 0.0f;
     return static_cast<float>(value);
-}
-
-std::uint32_t mix32(std::uint32_t x)
-{
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
-float deterministicNoise(std::uint32_t seed, int sampleIndex, int streamIndex)
-{
-    const auto x = mix32(seed ^ (0x9e3779b9u * static_cast<std::uint32_t>(streamIndex + 1))
-                         ^ static_cast<std::uint32_t>(sampleIndex + 0x85ebca6bu));
-    return (static_cast<float>(x & 0x00ffffffu) / 8388607.5f) - 1.0f;
 }
 
 int frameStartSample(const ModernAtsRenderPlan& plan, int frameIndex)
@@ -99,12 +85,17 @@ int transientLengthSamples(double sourceSampleCount, int sourceSampleRate, int o
     return std::max(1, static_cast<int>(std::ceil(resampledLength)));
 }
 
-double frameEnergy(const ModernAtsFrame& frame)
+double orphanResidualBandEnergyAt(const ModernAtsModel& model, int frameIndex, int bandIndex)
 {
-    double total = 0.0;
-    for (const double energy : frame.orphanResidualBandEnergy)
-        total += std::max(0.0, energy);
-    return total;
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(model.frames.size()))
+        return 0.0;
+
+    const auto& frame = model.frames[static_cast<std::size_t>(frameIndex)];
+    if (bandIndex < 0 || bandIndex >= static_cast<int>(frame.orphanResidualBandEnergy.size()))
+        return 0.0;
+
+    const double energy = frame.orphanResidualBandEnergy[static_cast<std::size_t>(bandIndex)];
+    return std::isfinite(energy) ? std::max(0.0, energy) : 0.0;
 }
 
 } // namespace
@@ -230,18 +221,33 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
     // Orphan residual band noise.
     if (plan.config.orphanResidualGain > 0.0)
     {
+        std::array<ResidualBandNoiseState, kModernAtsDefaultResidualBands> residualBandStates {};
         for (int sample = 0; sample < plan.totalSamples; ++sample)
         {
             const int frameIndex = plan.hopSizeSamples > 0 ? sample / plan.hopSizeSamples : 0;
             if (frameIndex < 0 || frameIndex >= static_cast<int>(model.frames.size()))
                 continue;
-            const double orphanEnergy = frameEnergy(model.frames[static_cast<std::size_t>(frameIndex)]);
-            if (orphanEnergy > 0.0)
+
+            const int nextFrameIndex =
+                std::min(frameIndex + 1, static_cast<int>(model.frames.size()) - 1);
+            const double localT = plan.hopSizeSamples > 0
+                                      ? static_cast<double>(sample - frameIndex * plan.hopSizeSamples)
+                                            / static_cast<double>(plan.hopSizeSamples)
+                                      : 0.0;
+
+            for (int band = 0; band < kModernAtsDefaultResidualBands; ++band)
             {
-                const double noise =
-                    deterministicNoise(plan.config.deterministicNoiseSeed, sample, frameIndex);
-                output[sample] +=
-                    static_cast<float>(std::sqrt(orphanEnergy) * plan.config.orphanResidualGain * noise);
+                const double energy = lerp(orphanResidualBandEnergyAt(model, frameIndex, band),
+                                           orphanResidualBandEnergyAt(model, nextFrameIndex, band),
+                                           localT);
+                output[sample] += renderResidualBandNoiseSample(
+                    energy,
+                    band,
+                    sample,
+                    plan.config.deterministicNoiseSeed,
+                    plan.outputSampleRate,
+                    plan.config.orphanResidualGain,
+                    residualBandStates[static_cast<std::size_t>(band)]);
             }
         }
     }

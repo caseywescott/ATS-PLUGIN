@@ -75,7 +75,8 @@ energy for every analyzed frame by accumulating STFT-bin energy per Bark band
 and subtracting the capped source peaks assigned to partial tracking.
 `computeOrphanResidualBandEnergy` keeps the unassigned band energy as orphan
 residual instead of discarding it. `renderOrphanResidualBandNoise` adds a
-deterministic seeded noise render path for that orphan residual lane.
+deterministic seeded noise render path for that orphan residual lane using the
+same Bark-shaped renderer as Modern preview.
 
 `detectTransientMarkers` combines spectral flux, positive energy rise, and
 model discontinuity into a thresholded onset score. Diagnostics expose scores,

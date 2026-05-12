@@ -28,8 +28,8 @@ host diagnostics.
 
 - **Partials:** linear per-frame amplitude/frequency interpolation from modern
   snapshot partial frames.
-- **Orphan residual:** independent deterministic seeded noise from per-frame
-  orphan residual band energy, controlled by `orphanResidualGain`.
+- **Orphan residual:** independent deterministic seeded noise streams shaped by
+  the stored 25-band Bark residual energy, controlled by `orphanResidualGain`.
 - **Transients:** short transient buffers referenced by transient markers,
   mixed with raised-cosine edge fades and controlled by `transientGain`.
 - **Silence safety:** non-finite samples and denormal-sized values are clamped to
@@ -44,6 +44,9 @@ the partial layer (`transientGain = 1.0`) and renders source-derived Modern
 residual bands into the residual layer (`orphanResidualGain = 1.0`). This lets
 preserved attacks participate in the normal partials/residual mix while keeping
 the residual-only control focused on the Modern model's untracked source energy.
+The residual renderer is shared through `AtsResidualBandNoise` so the older
+analysis helper and Modern preview both preserve the spectral placement of
+orphan residual bands instead of collapsing them to broadband noise.
 
 ## Representative Budgets
 
@@ -53,17 +56,19 @@ are well below realtime.
 
 | Shape | Samples | State bytes | Output bytes | Render seconds | CPU ratio |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Sustained | 46,080 | 810,310 | 184,320 | 0.127167 | 0.132466 |
-| Vibrato | 92,160 | 2,010,939 | 368,640 | 0.309021 | 0.160948 |
-| Close/crossing partials | 76,800 | 1,998,723 | 307,200 | 0.289762 | 0.181101 |
-| Plucked/percussive | 61,440 | 2,152,177 | 245,760 | 0.301128 | 0.235256 |
-| Noisy voice/flute | 76,800 | 1,998,723 | 307,200 | 0.291483 | 0.182177 |
-| Dense polyphony | 122,880 | 8,461,680 | 491,520 | 1.12852 | 0.440828 |
-| Percussive hit | 46,080 | 2,406,837 | 184,320 | 0.327039 | 0.340665 |
+| Sustained | 46,080 | 940,010 | 184,320 | 0.046668 | 0.048613 |
+| Vibrato | 92,160 | 2,287,126 | 368,640 | 0.099113 | 0.051621 |
+| Close/crossing partials | 76,800 | 2,247,762 | 307,200 | 0.089963 | 0.056227 |
+| Plucked/percussive | 61,440 | 2,368,089 | 245,760 | 0.086714 | 0.067745 |
+| Noisy voice/flute | 76,800 | 2,247,762 | 307,200 | 0.091672 | 0.057295 |
+| Dense polyphony | 122,880 | 9,052,530 | 491,520 | 0.277118 | 0.108249 |
+| Percussive hit | 46,080 | 2,598,406 | 184,320 | 0.084328 | 0.087842 |
 
 Regression coverage:
 
 - deterministic orphan residual output for a fixed seed,
+- Bark-shaped residual output where high-band residual energy renders brighter
+  than low-band energy,
 - transient crossfade begins and ends at zero,
 - transient gain can mute transient playback,
 - denormal and non-finite sample detection,

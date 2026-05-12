@@ -202,7 +202,8 @@ std::vector<double> computeOrphanResidualBandEnergy(const std::vector<double>& t
 std::vector<float> renderOrphanResidualBandNoise(const std::vector<std::vector<double>>& orphanBandEnergyByFrame,
                                                  int hopSizeSamples,
                                                  float gain,
-                                                 std::uint32_t seed);
+                                                 std::uint32_t seed,
+                                                 int sampleRate = 48000);
 
 struct TransientFeatureFrame
 {

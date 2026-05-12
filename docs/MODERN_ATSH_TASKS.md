@@ -413,6 +413,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Keep captured transient buffers isolated to the partial layer and mute partial/transient playback in the residual layer so residual-only controls audition untracked source energy.
 - [x] Extend the source-path guard and synthesis docs so Modern preview cannot silently fall back to classic residual rendering again.
 
+### Commit 43 - `fix(synth): preserve residual band shape`
+
+**PRD:** section 5.4, section 5.7, section 7.3
+
+- [x] Replace the broadband orphan residual noise collapse with deterministic per-Bark-band noise shaping shared by Modern synth and the analysis helper.
+- [x] Add a Modern synth regression proving high-band residual energy renders brighter/faster than low-band residual energy.
+- [x] Refresh synthesis documentation and representative budgets for the shared band-shaped residual renderer.
+
 ---
 
 ## Dependency Index
@@ -438,3 +446,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Direct modern residual estimation | 40 |
 | Plugin preservation of modern residual bands | 41 |
 | Modern preview source residual playback | 42 |
+| Bark-shaped residual synthesis | 43 |

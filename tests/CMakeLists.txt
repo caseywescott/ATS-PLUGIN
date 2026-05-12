@@ -12,7 +12,8 @@ add_executable(
   ats_modern_synth_test
   ats_modern_synth_test.cpp
   ../src/core/AtsModernModel.cpp
-  ../src/core/AtsModernSynth.cpp)
+  ../src/core/AtsModernSynth.cpp
+  ../src/core/AtsResidualBandNoise.cpp)
 target_include_directories(ats_modern_synth_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(ats_modern_synth_test PRIVATE cxx_std_17)
 
@@ -21,7 +22,8 @@ add_executable(
   ats_modern_morph_test.cpp
   ../src/core/AtsModernModel.cpp
   ../src/core/AtsModernMorph.cpp
-  ../src/core/AtsModernSynth.cpp)
+  ../src/core/AtsModernSynth.cpp
+  ../src/core/AtsResidualBandNoise.cpp)
 target_include_directories(ats_modern_morph_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(ats_modern_morph_test PRIVATE cxx_std_17)
 
@@ -31,7 +33,8 @@ add_executable(
   ../src/core/AtsAnalysisPipeline.cpp
   ../src/core/AtsModel.cpp
   ../src/core/AtsModernModel.cpp
-  ../src/core/AtsParams.cpp)
+  ../src/core/AtsParams.cpp
+  ../src/core/AtsResidualBandNoise.cpp)
 target_include_directories(ats_analysis_pipeline_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
                                                               "${ATS_ATSA_SOURCE_DIR}")
 target_link_libraries(ats_analysis_pipeline_test PRIVATE atsa)
@@ -46,7 +49,8 @@ add_executable(
   ../src/core/AtsModernModel.cpp
   ../src/core/AtsModernMorph.cpp
   ../src/core/AtsModernSynth.cpp
-  ../src/core/AtsParams.cpp)
+  ../src/core/AtsParams.cpp
+  ../src/core/AtsResidualBandNoise.cpp)
 target_include_directories(ats_modern_acceptance_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
                                                               "${ATS_ATSA_SOURCE_DIR}")
 target_link_libraries(ats_modern_acceptance_test PRIVATE atsa)
@@ -99,7 +103,8 @@ add_executable(
   ../src/core/AtsModernModel.cpp
   ../src/core/AtsModernMorph.cpp
   ../src/core/AtsModernSynth.cpp
-  ../src/core/AtsParams.cpp)
+  ../src/core/AtsParams.cpp
+  ../src/core/AtsResidualBandNoise.cpp)
 target_include_directories(ats_modern_acceptance_external_test
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${ATS_ATSA_SOURCE_DIR}")
 target_link_libraries(ats_modern_acceptance_external_test PRIVATE atsa)

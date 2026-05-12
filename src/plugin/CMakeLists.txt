@@ -51,6 +51,7 @@ target_sources(
           ../core/AtsModernModel.cpp
           ../core/AtsModernSynth.cpp
           ../core/AtsParams.cpp
+          ../core/AtsResidualBandNoise.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

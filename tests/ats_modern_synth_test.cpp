@@ -77,6 +77,17 @@ float peakAbs(const std::vector<float>& samples)
     return peak;
 }
 
+double meanAbsDiff(const std::vector<float>& samples)
+{
+    if (samples.size() < 2)
+        return 0.0;
+
+    double total = 0.0;
+    for (std::size_t i = 1; i < samples.size(); ++i)
+        total += std::abs(static_cast<double>(samples[i]) - static_cast<double>(samples[i - 1]));
+    return total / static_cast<double>(samples.size() - 1);
+}
+
 void testSnapshotRenderAndSafety()
 {
     const auto model = makeBaseModel();
@@ -132,6 +143,32 @@ void testOrphanResidualGainAndSeed()
     config.orphanResidualGain = 0.0;
     const auto muted = ats::renderModernAtsModel(model, config);
     expect(peakAbs(muted) == 0.0f, "orphan residual gain should mute orphan residual render");
+}
+
+void testOrphanResidualBandsAreSpectrallyShaped()
+{
+    auto lowBandModel = makeBaseModel(0, 80);
+    auto highBandModel = makeBaseModel(0, 80);
+    for (auto& frame : lowBandModel.frames)
+        frame.orphanResidualBandEnergy[2] = 0.5;
+    for (auto& frame : highBandModel.frames)
+        frame.orphanResidualBandEnergy[20] = 0.5;
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 64;
+    config.partialGain = 0.0;
+    config.transientGain = 0.0;
+    config.orphanResidualGain = 0.8;
+    config.deterministicNoiseSeed = 2468u;
+
+    const auto lowBand = ats::renderModernAtsModel(lowBandModel, config);
+    const auto highBand = ats::renderModernAtsModel(highBandModel, config);
+    expect(!lowBand.empty() && !highBand.empty(), "band-shaped residual render should produce output");
+    expect(peakAbs(lowBand) > 0.0f && peakAbs(highBand) > 0.0f,
+           "band-shaped residual render should be audible");
+    expect(meanAbsDiff(highBand) > meanAbsDiff(lowBand) * 2.0,
+           "high residual Bark bands should render brighter/faster than low bands");
 }
 
 void testTransientBufferCrossfadeAndGain()
@@ -306,6 +343,7 @@ int main()
 {
     testSnapshotRenderAndSafety();
     testOrphanResidualGainAndSeed();
+    testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();
     testTransientBuffersFollowTimeFactor();
     testDenormalAndSilenceEdges();

@@ -1,5 +1,7 @@
 #include "AtsAnalysisPipeline.h"
 
+#include "AtsResidualBandNoise.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1257,35 +1259,10 @@ std::vector<double> computeOrphanResidualBandEnergy(const std::vector<double>& t
 std::vector<float> renderOrphanResidualBandNoise(const std::vector<std::vector<double>>& orphanBandEnergyByFrame,
                                                  int hopSizeSamples,
                                                  float gain,
-                                                 std::uint32_t seed)
+                                                 std::uint32_t seed,
+                                                 int sampleRate)
 {
-    if (hopSizeSamples <= 0 || orphanBandEnergyByFrame.empty() || gain <= 0.0f)
-        return {};
-    if (!std::isfinite(gain))
-        return {};
-
-    std::vector<float> output(orphanBandEnergyByFrame.size() * static_cast<std::size_t>(hopSizeSamples), 0.0f);
-    std::uint32_t state = seed == 0 ? 1u : seed;
-
-    for (std::size_t frameIndex = 0; frameIndex < orphanBandEnergyByFrame.size(); ++frameIndex)
-    {
-        double energy = 0.0;
-        for (const double bandEnergy : orphanBandEnergyByFrame[frameIndex])
-        {
-            if (std::isfinite(bandEnergy))
-                energy += std::max(0.0, bandEnergy);
-        }
-        const float amplitude = gain * static_cast<float>(std::sqrt(std::max(0.0, energy)));
-        for (int i = 0; i < hopSizeSamples; ++i)
-        {
-            state = state * 1664525u + 1013904223u;
-            const float noise = (static_cast<float>((state >> 8) & 0x00ffffffu) / 8388607.5f) - 1.0f;
-            output[frameIndex * static_cast<std::size_t>(hopSizeSamples) + static_cast<std::size_t>(i)] =
-                amplitude * noise;
-        }
-    }
-
-    return output;
+    return renderResidualBandNoiseFrames(orphanBandEnergyByFrame, hopSizeSamples, gain, seed, sampleRate);
 }
 
 std::vector<ModernAtsTransientMarker> detectTransientMarkers(
