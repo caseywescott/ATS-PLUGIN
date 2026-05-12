@@ -208,6 +208,30 @@ void testMetricHelpers()
     expect(transient.attackSharpness > 0.0, "transient metrics should measure attack sharpness");
 }
 
+void testGapFilledSleepDoesNotLowerContinuity()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 440.0, 0.5) },
+        {},
+        { peak(0, 444.0, 0.45) },
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.maxGapFillFrames = 1;
+
+    const auto model =
+        modelFromTrackerResult(ats::runAssignmentTrackerPrototype(frames, config),
+                               ats::ModernAtsAnalysisMode::ModernAts);
+    const auto continuity = ats::computeModernAtsContinuityMetrics(model);
+
+    expect(continuity.interpolatedFrameCount == 1, "gap-filled metric fixture should interpolate one frame");
+    expect(continuity.lifecycleBreakCount == 0,
+           "gap-filled sleep should not be counted as a continuity break");
+    expect(continuity.continuityScore > 0.99,
+           "gap-filled sleep should preserve continuity score");
+}
+
 void testAcceptanceReportPassesRepresentativeFixtures()
 {
     const std::vector<ats::TrackingPeakFrame> crossing = {
@@ -376,6 +400,7 @@ void testEmptyAcceptanceReportPasses()
 int main()
 {
     testMetricHelpers();
+    testGapFilledSleepDoesNotLowerContinuity();
     testAcceptanceReportPassesRepresentativeFixtures();
     testAcceptanceRunsDirectModernSourceAnalysis();
     testAcceptanceReportFlagsFailures();

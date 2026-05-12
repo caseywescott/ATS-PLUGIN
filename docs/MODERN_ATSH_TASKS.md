@@ -469,6 +469,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Backfill returning short gaps as `Interpolated` partial frames and `GapFill` lifecycle events so model diagnostics and synthesis preserve continuity.
 - [x] Keep transient-break resets authoritative so attack protection still prevents gap filling across marked onsets.
 
+### Commit 50 - `fix(acceptance): score gap-filled sleeps as continuous`
+
+**PRD:** section 7.3
+
+- [x] Update Modern continuity metrics so `Sleep` lifecycle events repaired by same-frame `GapFill` events do not count as track breaks.
+- [x] Add an acceptance regression proving a short dropout repaired by Modern assignment gap fill preserves the continuity score.
+- [x] Document the synthetic acceptance gate semantics for gap-filled short dropouts.
+
 ---
 
 ## Dependency Index
@@ -501,3 +509,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Close residual tone preservation | 47 |
 | Global modern assignment solving | 48 |
 | Short modern dropout gap filling | 49 |
+| Gap-filled continuity scoring | 50 |

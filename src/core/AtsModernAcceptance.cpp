@@ -81,6 +81,20 @@ bool renderSafetyPassed(const ModernAtsRealtimeSafetyReport& safety)
            && !safety.performsAnalysisDuringRender;
 }
 
+bool hasGapFillForSleep(const std::vector<ModernAtsTrackLifecycleEvent>& events,
+                        const ModernAtsTrackLifecycleEvent& sleepEvent)
+{
+    for (const auto& event : events)
+    {
+        if (event.partialId == sleepEvent.partialId && event.frameIndex == sleepEvent.frameIndex
+            && event.kind == ModernAtsLifecycleKind::GapFill)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 bool ModernAtsAcceptanceReport::passed() const
@@ -181,8 +195,9 @@ ModernAtsContinuityMetrics computeModernAtsContinuityMetrics(const ModernAtsMode
 
     for (const auto& event : model.trackLifecycle)
     {
-        if (event.kind == ModernAtsLifecycleKind::Sleep || event.kind == ModernAtsLifecycleKind::Death
-            || event.kind == ModernAtsLifecycleKind::Pruned)
+        if (event.kind == ModernAtsLifecycleKind::Sleep && !hasGapFillForSleep(model.trackLifecycle, event))
+            ++metrics.lifecycleBreakCount;
+        if (event.kind == ModernAtsLifecycleKind::Death || event.kind == ModernAtsLifecycleKind::Pruned)
             ++metrics.lifecycleBreakCount;
     }
 
