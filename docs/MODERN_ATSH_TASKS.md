@@ -525,6 +525,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Prevent next-frame analysis phases from canceling intentional pitch-shift trajectories.
 - [x] Add a Modern synth regression proving pitch-shifted renders free-run instead of landing on untransposed stored phase targets.
 
+### Commit 57 - `test(acceptance): fail incomplete external gates`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Make enabled external real-audio acceptance fail when configured fixtures are skipped for missing audio or reference metrics.
+- [x] Fail external fixture runs that emit zero gate checks so unavailable metrics cannot masquerade as a passing real-audio comparison.
+- [x] Add a deterministic Python driver contract CTest that exercises missing-asset and zero-check failures without requiring real audio assets.
+
 ---
 
 ## Dependency Index
@@ -564,3 +572,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Output-rate modern render hop scaling | 54 |
 | Phase-locked modern frame rendering | 55 |
 | Pitch-shift-safe modern phase rendering | 56 |
+| Enforced external real-audio gate readiness | 57 |

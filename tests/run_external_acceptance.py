@@ -12,8 +12,8 @@ Usage (normally invoked by CTest, not directly):
     <path-to-reference-dir>
 
 Exit codes:
-  0  All present fixtures passed, or all fixtures were skipped (assets missing).
-  1  One or more fixtures failed a gate check.
+  0  All configured fixtures produced checks and passed.
+  1  One or more fixtures failed, were skipped, or produced no checks.
   2  Argument or manifest error.
 """
 
@@ -295,14 +295,15 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
     if unknown_gates:
         print(f"  WARNING: unknown gate names ignored: {unknown_gates}", file=sys.stderr)
 
-    any_fail = False
+    any_fail = bool(unknown_gates)
     for result in all_checks:
         print(result.format())
         if not result.passed:
             any_fail = True
 
     if not all_checks:
-        print(f"  note: no gate checks produced (gates={enabled_gates})")
+        print(f"  FAIL — no gate checks produced (gates={enabled_gates})", file=sys.stderr)
+        any_fail = True
 
     return any_fail, len(all_checks), 0
 
@@ -365,9 +366,17 @@ def main() -> int:
         print("EXTERNAL ACCEPTANCE FAILED", file=sys.stderr)
         return 1
 
-    if total_checks == 0 and total_skipped == len(fixtures):
-        print("All fixtures skipped — no external audio assets present.")
-        print("To run this gate: add audio files and reference metrics, then re-run.")
+    if total_skipped > 0:
+        print("EXTERNAL ACCEPTANCE INCOMPLETE", file=sys.stderr)
+        print("One or more configured fixtures were skipped because audio assets or reference metrics are missing.",
+              file=sys.stderr)
+        print("Add licensed audio files and generated reference metrics, then re-run.", file=sys.stderr)
+        return 1
+
+    if total_checks == 0:
+        print("EXTERNAL ACCEPTANCE FAILED", file=sys.stderr)
+        print("No gate checks were emitted. Check enabled_gates and reference metric fields.", file=sys.stderr)
+        return 1
 
     print("ok")
     return 0

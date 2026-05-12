@@ -155,6 +155,8 @@ Optional flags:
 ### Run external real-audio acceptance gate
 
 Requires: audio files under `tests/fixtures/audio/`, reference metrics in `tests/fixtures/reference/`, and `ATS_ENABLE_EXTERNAL_FIXTURES=ON`.
+When this gate is enabled, missing assets/reference metrics or fixtures that
+emit zero checks are failures rather than skips.
 
 **Configure with external fixtures enabled:**
 

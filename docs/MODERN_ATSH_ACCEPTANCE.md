@@ -28,6 +28,9 @@ deterministic generated source-audio fixtures:
 
 `ats_modern_acceptance_external_gates` tests the external fixture gate evaluation
 logic (Phase 7 addition) using synthetic data — no audio assets needed.
+`ats_external_acceptance_driver_contract` also verifies the Python real-audio
+driver fails loudly when an enabled external run has missing assets or produces
+zero gate checks.
 
 Each gate emits a stable id, observed value, threshold, pass/fail state, and a
 short detail string. Callers can keep the default thresholds or supply a stricter
@@ -102,9 +105,11 @@ All five fixtures (sustained_flute, plucked_guitar, sung_vowel, drum_hit,
 crossing_strings) have PENDING license status. Audio files must not be committed
 until a redistribution-compatible license is confirmed and added to the manifest.
 
-When assets are missing, the Python CTest skips fixtures cleanly and exits 0
-with a message. The gate-logic C++ test always runs and always passes on
-synthetic data.
+When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
+missing reference metrics, unknown gates, and zero emitted gate checks as
+failures. This keeps an explicitly enabled real-audio gate from reporting
+success while proving nothing. The gate-logic C++ test and driver contract test
+always run on synthetic data.
 
 ## Design principle
 
@@ -113,4 +118,5 @@ external assets and run deterministically everywhere.
 
 **External fixtures are the stricter real-audio parity gate.** They catch
 divergence from original ATSA behavior on actual recorded material. They are
-optional so CI remains fully reproducible without committing audio files.
+optional so CI remains fully reproducible without committing audio files, but
+once enabled they require complete fixture assets and reference metrics.

@@ -114,6 +114,12 @@ target_compile_features(ats_modern_acceptance_external_test PRIVATE cxx_std_17)
 add_test(NAME ats_modern_acceptance_external_gates
   COMMAND $<TARGET_FILE:ats_modern_acceptance_external_test>)
 
+add_test(
+  NAME ats_external_acceptance_driver_contract
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/external_acceptance_driver_test.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/run_external_acceptance.py")
+
 if(ATS_ENABLE_EXTERNAL_FIXTURES)
   # Real-audio parity test — only when option is ON and assets may be present.
   add_test(
