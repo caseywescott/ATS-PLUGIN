@@ -62,6 +62,15 @@ int countWrappedLines(const juce::String& text)
     }
     return lines;
 }
+
+bool setRawTextIfChanged(juce::String& current, const juce::String& next)
+{
+    if (current == next)
+        return false;
+
+    current = next;
+    return true;
+}
 } // namespace
 
 SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
@@ -336,26 +345,39 @@ void SessionTabPanel::resized()
     ioRow.removeFromLeft(sc(8));
     previewStopButton.setBounds(ioRow.removeFromLeft(sc(90)));
 
-    r.removeFromTop(sc(10));
+    r.removeFromTop(sc(6));
     statusLabel.setBounds(r.removeFromTop(sc(22)));
-    r.removeFromTop(sc(6));
-    errorLabel.setBounds(r.removeFromTop(sc(38)));
-    r.removeFromTop(sc(6));
-    modeWarningLabel.setBounds(r.removeFromTop(sc(28)));
+
+    auto placeDynamicLabel = [&](juce::Label& label,
+                                 const juce::String& rawText,
+                                 int minHeight,
+                                 int maxHeight,
+                                 int lineHeight)
+    {
+        if (rawText.isEmpty())
+        {
+            label.setText({}, juce::dontSendNotification);
+            label.setBounds({});
+            return;
+        }
+
+        r.removeFromTop(sc(3));
+        const auto wrapped = wrapTextToWidth(rawText, label.getFont(), juce::jmax(sc(100), r.getWidth()));
+        const int lines = countWrappedLines(wrapped);
+        const int height = juce::jlimit(sc(minHeight), sc(maxHeight), lines * sc(lineHeight) + sc(4));
+        label.setText(wrapped, juce::dontSendNotification);
+        label.setBounds(r.removeFromTop(height));
+    };
+
+    placeDynamicLabel(errorLabel, rawErrorText, 20, 54, 14);
+    placeDynamicLabel(modeWarningLabel, rawModeWarningText, 18, 56, 14);
+    placeDynamicLabel(presetMetadataLabel, rawPresetMetadataText, 14, 60, 14);
+    placeDynamicLabel(diagnosticsLabel, rawDiagnosticsText, 20, 66, 14);
+    placeDynamicLabel(cpuWarningLabel, rawCpuWarningText, 18, 56, 14);
+
     r.removeFromTop(sc(4));
-    const int metadataW = r.getWidth();
-    const auto metadataWrapped =
-        wrapTextToWidth(rawPresetMetadataText, presetMetadataLabel.getFont(), juce::jmax(sc(100), metadataW));
-    const int metadataLines = countWrappedLines(metadataWrapped);
-    const int metadataH = juce::jlimit(sc(20), sc(78), metadataLines * sc(14) + sc(4));
-    presetMetadataLabel.setBounds(r.removeFromTop(metadataH));
-    r.removeFromTop(sc(4));
-    diagnosticsLabel.setBounds(r.removeFromTop(sc(52)));
-    r.removeFromTop(sc(4));
-    cpuWarningLabel.setBounds(r.removeFromTop(sc(20)));
-    r.removeFromTop(sc(8));
     progressBar.setBounds(r.removeFromTop(sc(14)));
-    r.removeFromTop(sc(12));
+    r.removeFromTop(sc(6));
 
     auto body = r;
     const int specW = juce::jmax(sc(280), body.getWidth() / 3);
@@ -382,8 +404,6 @@ void SessionTabPanel::resized()
     modeRow.removeFromLeft(sc(8));
     trackerModeLabel.setBounds(modeRow.removeFromLeft(sc(56)));
     trackerModeCombo.setBounds(modeRow.removeFromLeft(sc(220)));
-
-    refreshPresetMetadataWrapping();
 }
 
 void SessionTabPanel::refreshFromProcessor()
@@ -421,70 +441,61 @@ void SessionTabPanel::refreshFromProcessor()
         break;
     }
 
+    bool layoutNeedsRefresh = false;
+
     const auto err = audioProcessor.getLastError();
-    errorLabel.setText(err.isEmpty() ? juce::String() : ("Last error: " + err),
-                       juce::dontSendNotification);
-    juce::String diagnostics;
-    juce::String warnings;
-    if (audioProcessor.getModernDiagnosticsSummary(diagnostics, warnings))
-    {
-        diagnosticsLabel.setText(diagnostics, juce::dontSendNotification);
-        modeWarningLabel.setText(warnings, juce::dontSendNotification);
-    }
-    else
+    const juce::String nextError = err.isEmpty() ? juce::String() : ("Last error: " + err);
+    layoutNeedsRefresh |= setRawTextIfChanged(rawErrorText, nextError);
+
+    juce::String nextDiagnostics;
+    juce::String nextWarnings;
+    if (!audioProcessor.getModernDiagnosticsSummary(nextDiagnostics, nextWarnings))
     {
         // Classic ATS mode: show basic model info when a model is available.
         int classicPartials = 0, classicFrames = 0;
         bool classicHasRes = false;
         if (audioProcessor.getModelFootprint(classicPartials, classicFrames, classicHasRes))
         {
-            diagnosticsLabel.setText(
-                "Classic ATS - partials: " + juce::String(classicPartials)
-                + ", frames: " + juce::String(classicFrames)
-                + ", residual bands: " + (classicHasRes ? juce::String("yes") : juce::String("no")),
-                juce::dontSendNotification);
+            nextDiagnostics = "Classic ATS - partials: " + juce::String(classicPartials)
+                              + ", frames: " + juce::String(classicFrames)
+                              + ", residual bands: "
+                              + (classicHasRes ? juce::String("yes") : juce::String("no"));
         }
-        else
-        {
-            diagnosticsLabel.setText({}, juce::dontSendNotification);
-        }
-        modeWarningLabel.setText({}, juce::dontSendNotification);
     }
 
     const int selectedAnalysisId = analysisModeCombo.getSelectedId();
     const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
     trackerModeLabel.setEnabled(trackerSelectable);
     trackerModeCombo.setEnabled(trackerSelectable);
-    if (!trackerSelectable && modeWarningLabel.getText().isEmpty())
+    if (!trackerSelectable && nextWarnings.isEmpty())
     {
-        modeWarningLabel.setText("Tracker selector is enabled only when Analysis mode is Modern ATS or Experimental reassigned/DDM.",
-                                 juce::dontSendNotification);
+        nextWarnings =
+            "Tracker selector is enabled only when Analysis mode is Modern ATS or Experimental reassigned/DDM.";
     }
+
+    layoutNeedsRefresh |= setRawTextIfChanged(rawDiagnosticsText, nextDiagnostics);
+    layoutNeedsRefresh |= setRawTextIfChanged(rawModeWarningText, nextWarnings);
 
     int partials = 0;
     int frames = 0;
     bool hasRes = false;
+    juce::String nextCpuWarning;
     if (audioProcessor.getModelFootprint(partials, frames, hasRes))
     {
         const int64_t prod = (int64_t) partials * (int64_t) frames;
         if (prod > ats_editor::kModelSizeSoftCap)
         {
-            cpuWarningLabel.setText(
-                "Large model: " + juce::String(partials) + " partials x " + juce::String(frames)
-                    + " frames (product " + juce::String(prod) + " exceeds soft limit "
-                    + juce::String(ats_editor::kModelSizeSoftCap)
-                    + "; analysis and resynth may be slow or memory-heavy).",
-                juce::dontSendNotification);
-        }
-        else
-        {
-            cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
+            nextCpuWarning = "Large model: " + juce::String(partials) + " partials x "
+                             + juce::String(frames) + " frames (product " + juce::String(prod)
+                             + " exceeds soft limit " + juce::String(ats_editor::kModelSizeSoftCap)
+                             + "; analysis and resynth may be slow or memory-heavy).";
         }
     }
-    else
-    {
-        cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
-    }
+
+    layoutNeedsRefresh |= setRawTextIfChanged(rawCpuWarningText, nextCpuWarning);
+
+    if (layoutNeedsRefresh)
+        resized();
 }
 
 void SessionTabPanel::pickImportAts()
@@ -531,13 +542,9 @@ void SessionTabPanel::pickFile()
 
 void SessionTabPanel::setPresetMetadataText(const juce::String& text)
 {
-    rawPresetMetadataText = text;
-    refreshPresetMetadataWrapping();
-}
+    if (rawPresetMetadataText == text)
+        return;
 
-void SessionTabPanel::refreshPresetMetadataWrapping()
-{
-    const int width = juce::jmax(80, presetMetadataLabel.getWidth());
-    const auto wrapped = wrapTextToWidth(rawPresetMetadataText, presetMetadataLabel.getFont(), width);
-    presetMetadataLabel.setText(wrapped, juce::dontSendNotification);
+    rawPresetMetadataText = text;
+    resized();
 }

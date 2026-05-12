@@ -24,7 +24,6 @@ private:
     void onPresetComboChanged();
     void saveUserPreset();
     void setPresetMetadataText(const juce::String& text);
-    void refreshPresetMetadataWrapping();
 
     AtsAudioProcessor& audioProcessor;
 
@@ -56,6 +55,10 @@ private:
 
     juce::Array<juce::File> userPresetFiles;
     juce::String rawPresetMetadataText;
+    juce::String rawErrorText;
+    juce::String rawModeWarningText;
+    juce::String rawDiagnosticsText;
+    juce::String rawCpuWarningText;
 
     juce::Label partGainLabel;
     juce::Label resGainLabel;

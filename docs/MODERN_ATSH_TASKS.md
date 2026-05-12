@@ -381,6 +381,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add deterministic direct-source acceptance coverage that runs `ats::runModernAtsAnalysis` on a two-tone audio fixture, validates sustained 512 Hz and 768 Hz tracks, renders the resulting model, and checks finite audible output.
 - [x] Guard plugin editor auto-fit sizing so small displays cannot invert JUCE `jlimit` or resize-limit bounds.
 
+### Commit 39 - `fix(ui): stabilize diagnostics layout refresh`
+
+**PRD:** section 5.8, section 7.3
+
+- [x] Keep raw status/diagnostic/warning strings separate from wrapped label text so resize-driven wrapping does not fight timer refreshes.
+- [x] Size Modern/Classic diagnostics, compatibility warnings, preset metadata, and CPU warnings from wrapped line counts instead of clipping them to one fixed short row.
+- [x] Stop forcing a full `SessionTabPanel::resized()` pass on every editor timer tick; relayout only when dynamic text actually changes.
+
 ---
 
 ## Dependency Index
@@ -402,3 +410,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern source-path regression guard | 35 |
 | Direct transient-buffer capture | 36 |
 | Modern preview transient playback | 37 |
+| Diagnostic UI stability | 39 |
