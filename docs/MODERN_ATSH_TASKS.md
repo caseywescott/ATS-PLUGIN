@@ -493,6 +493,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add an assignment-tracker regression where neighboring phases straddle the `pi`/`-pi` boundary.
 - [x] Document that synthetic continuity coverage includes phase-safe gap-filled dropouts.
 
+### Commit 53 - `fix(tracking): add phase-aware assignment cost`
+
+**PRD:** section 5.3, section 7.3
+
+- [x] Add phase-continuity weighting to Modern assignment costs when analysis sample-rate and hop-size context are available.
+- [x] Persist `phase_cost` in assignment diagnostics so modern tracker decisions expose frequency, amplitude, SMR, phase, and slope terms.
+- [x] Add a deterministic tracker regression where frequency/amplitude ties are resolved by phase identity instead of peak order.
+
 ---
 
 ## Dependency Index
@@ -528,3 +536,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Gap-filled continuity scoring | 50 |
 | Direct modern oscillator phase storage | 51 |
 | Wrapped gap-fill phase interpolation | 52 |
+| Phase-aware modern assignment cost | 53 |

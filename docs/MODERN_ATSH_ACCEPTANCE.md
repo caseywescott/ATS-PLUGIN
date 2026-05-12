@@ -11,6 +11,8 @@ deterministic generated source-audio fixtures:
 
 - Classic render parity — normalized RMS error and compact spectral distance.
 - Modern tracker vs. classic tracker on crossing/close-partial and sustained fixtures.
+- Modern assignment cost includes phase-continuity diagnostics when sample-rate
+  and hop-size context are available.
 - Continuity metrics treat short sleeps that are later backfilled by `gap_fill`
   lifecycle events as repaired continuity, not track breaks.
 - Short dropout gap-fill interpolates phase on the wrapped shortest path so

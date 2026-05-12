@@ -255,6 +255,44 @@ void testAssignmentTrackerUsesGlobalCost()
            "global assignment should reserve the only viable peak for partial 1");
 }
 
+void testAssignmentTrackerUsesPhaseContinuity()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 100.0, 0.5, 60.0, 0.0), peak(1, 100.0, 0.5, 60.0, kPi) },
+        { peak(0, 100.0, 0.5, 60.0, kPi), peak(1, 100.0, 0.5, 60.0, 0.0) },
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.useFrequencySlopeContinuity = false;
+    config.frequencyWeight = 0.0;
+    config.amplitudeWeight = 0.0;
+    config.smrWeight = 0.0;
+    config.frequencySlopeWeight = 0.0;
+    config.phaseWeight = 0.25;
+    config.maxMatchCost = 0.5;
+    config.birthPenalty = 0.5;
+    config.deathPenalty = 0.5;
+    config.spuriousPeakPenalty = 0.5;
+    config.sampleRate = 48000;
+    config.hopSizeSamples = 480; // 100 Hz advances by exactly one cycle per frame.
+
+    const auto result = ats::runAssignmentTrackerPrototype(frames, config);
+    expect(result.partials.size() == 2, "phase continuity fixture should keep two tracks");
+    expect(std::abs(wrappedPhaseDelta(result.partials[0].frames[1].phaseRadians, 0.0)) < 1.0e-12,
+           "phase-aware assignment should preserve track 0 phase identity");
+    expect(std::abs(wrappedPhaseDelta(result.partials[1].frames[1].phaseRadians, kPi)) < 1.0e-12,
+           "phase-aware assignment should preserve track 1 phase identity");
+
+    bool sawPhaseCost = false;
+    for (const auto& cost : result.assignmentCosts)
+    {
+        if (cost.frameIndex == 1 && cost.phaseCost >= 0.0)
+            sawPhaseCost = true;
+    }
+    expect(sawPhaseCost, "phase-aware assignment should record phase cost diagnostics");
+}
+
 void testAssignmentTrackerFillsShortDropouts()
 {
     const std::vector<ats::TrackingPeakFrame> frames = {
@@ -878,6 +916,7 @@ int main()
     testLifecycleGapFillAllowedAcrossProtectedFrame();
     testAssignmentTrackerCrossingPartials();
     testAssignmentTrackerUsesGlobalCost();
+    testAssignmentTrackerUsesPhaseContinuity();
     testAssignmentTrackerFillsShortDropouts();
     testTransientBreakResetsAssignment();
     testOrphanResidualNoise();

@@ -178,6 +178,7 @@ struct AssignmentTrackerConfig
     double frequencyWeight = 1.0;
     double amplitudeWeight = 0.2;
     double smrWeight = 0.05;
+    double phaseWeight = 0.15;
     double frequencySlopeWeight = 0.6;
     double birthPenalty = 0.25;
     double deathPenalty = 0.25;
@@ -185,6 +186,8 @@ struct AssignmentTrackerConfig
     bool useFrequencySlopeContinuity = true;
     bool allowInterpolationAcrossTransients = false;
     int maxGapFillFrames = 0;
+    int sampleRate = 0;
+    int hopSizeSamples = 0;
     std::vector<int> transientBreakFrameIndices;
 };
 

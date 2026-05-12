@@ -116,6 +116,7 @@ struct ModernAtsAssignmentCost
     double frequencyCost = 0.0;
     double amplitudeCost = 0.0;
     double smrCost = 0.0;
+    double phaseCost = 0.0;
     double slopeCost = 0.0;
     double birthDeathCost = 0.0;
     double spuriousPeakCost = 0.0;

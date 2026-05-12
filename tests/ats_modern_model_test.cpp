@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -261,6 +262,34 @@ void testValidationRejectsNonIncreasingFrameTimes()
            "frame times must be strictly increasing");
 }
 
+void testAssignmentCostPhaseSerialization()
+{
+    auto model = makeSmallModel();
+    ats::ModernAtsAssignmentCost cost;
+    cost.frameIndex = 0;
+    cost.partialId = 7;
+    cost.peakIndex = 3;
+    cost.frequencyCost = 0.1;
+    cost.amplitudeCost = 0.2;
+    cost.smrCost = 0.3;
+    cost.phaseCost = 0.4;
+    cost.slopeCost = 0.5;
+    cost.birthDeathCost = 0.6;
+    cost.spuriousPeakCost = 0.7;
+    cost.totalCost = 1.5;
+    model.assignmentCosts.push_back(cost);
+
+    std::string error;
+    expect(ats::validateModernAtsModel(model, error), error.c_str());
+    const auto json = ats::serializeModernAtsModelToJson(model);
+    expect(json.find("\"phase_cost\":0.40000000000000002") != std::string::npos,
+           "assignment phase cost should serialize deterministically");
+
+    model.assignmentCosts[0].phaseCost = std::numeric_limits<double>::quiet_NaN();
+    expect(!ats::validateModernAtsModel(model, error),
+           "non-finite assignment phase cost should be rejected");
+}
+
 void testRepresentativeStateSizes()
 {
     struct Shape
@@ -305,6 +334,7 @@ int main()
     testOptionalFieldsStayEmpty();
     testValidationRejectsDanglingReferences();
     testValidationRejectsNonIncreasingFrameTimes();
+    testAssignmentCostPhaseSerialization();
     testRepresentativeStateSizes();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

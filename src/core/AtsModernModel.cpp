@@ -288,8 +288,8 @@ bool validateModernAtsModel(const ModernAtsModel& model, std::string& errorMessa
             return false;
         }
         if (!finite(cost.frequencyCost) || !finite(cost.amplitudeCost) || !finite(cost.smrCost)
-            || !finite(cost.slopeCost) || !finite(cost.birthDeathCost) || !finite(cost.spuriousPeakCost)
-            || !finite(cost.totalCost))
+            || !finite(cost.phaseCost) || !finite(cost.slopeCost) || !finite(cost.birthDeathCost)
+            || !finite(cost.spuriousPeakCost) || !finite(cost.totalCost))
         {
             errorMessage = "Assignment cost values must be finite.";
             return false;
@@ -456,6 +456,7 @@ std::string serializeModernAtsModelToJson(const ModernAtsModel& model)
         out << ",\"frequency_cost\":" << number(cost.frequencyCost);
         out << ",\"amplitude_cost\":" << number(cost.amplitudeCost);
         out << ",\"smr_cost\":" << number(cost.smrCost);
+        out << ",\"phase_cost\":" << number(cost.phaseCost);
         out << ",\"slope_cost\":" << number(cost.slopeCost);
         out << ",\"birth_death_cost\":" << number(cost.birthDeathCost);
         out << ",\"spurious_peak_cost\":" << number(cost.spuriousPeakCost);
@@ -524,7 +525,7 @@ std::size_t estimateModernAtsModelStateBytes(const ModernAtsModel& model)
     for (const auto& partial : model.partials)
         bytes += 64 + partial.label.size() + partial.frames.size() * 130;
     bytes += model.trackLifecycle.size() * 80;
-    bytes += model.assignmentCosts.size() * 170;
+    bytes += model.assignmentCosts.size() * 195;
     bytes += model.transients.size() * 145;
     for (const auto& buf : model.transientBuffers)
         bytes += 70 + buf.samples.size() * 17;

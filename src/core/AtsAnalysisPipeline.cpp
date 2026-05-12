@@ -320,6 +320,7 @@ std::string parameterHashForModernAnalysis(const AnalysisParams& params,
         << ";win=" << windowSize
         << ";hop=" << hopSize
         << ";phase=oscillator_start"
+        << ";phaseCost=0.15"
         << ";maxPeaks=" << config.maxPeaksPerFrame
         << ";maxCand=" << config.maxCandidatesPerTrack
         << ";transientBuffers=" << (config.captureTransientBuffers ? 1 : 0)
@@ -879,6 +880,21 @@ ModernAtsAssignmentCost assignmentCostFor(int frameIndex,
     cost.birthDeathCost = config.birthPenalty + config.deathPenalty;
     cost.spuriousPeakCost = config.spuriousPeakPenalty;
 
+    if (config.analysisMode == ModernAtsAnalysisMode::ModernAts && config.phaseWeight > 0.0
+        && config.sampleRate > 0 && config.hopSizeSamples > 0
+        && std::isfinite(lastActive.phaseRadians) && std::isfinite(peak.phaseRadians))
+    {
+        const int frameDelta = std::max(1, frameIndex - lastActiveIndex);
+        const double expectedPhase =
+            wrapPhase(lastActive.phaseRadians
+                      + kTwoPi * predictedFrequency
+                            * static_cast<double>(config.hopSizeSamples)
+                            * static_cast<double>(frameDelta)
+                            / static_cast<double>(config.sampleRate));
+        const double phaseError = std::abs(wrapPhase(peak.phaseRadians - expectedPhase));
+        cost.phaseCost = config.phaseWeight * phaseError / (0.5 * kTwoPi);
+    }
+
     if (useSlope)
     {
         const double observedSlope =
@@ -888,7 +904,7 @@ ModernAtsAssignmentCost assignmentCostFor(int frameIndex,
                          / std::max(100.0, std::abs(previousSlope));
     }
 
-    cost.totalCost = cost.frequencyCost + cost.amplitudeCost + cost.smrCost + cost.slopeCost;
+    cost.totalCost = cost.frequencyCost + cost.amplitudeCost + cost.smrCost + cost.phaseCost + cost.slopeCost;
     return cost;
 }
 
@@ -1299,6 +1315,8 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     trackerConfig.maxCandidatesPerTrack = config.maxCandidatesPerTrack;
     trackerConfig.useFrequencySlopeContinuity = config.trackerMode == ModernAtsTrackerMode::ModernAssignment;
     trackerConfig.maxGapFillFrames = std::max(0, params.min_gap_len);
+    trackerConfig.sampleRate = sampleRate;
+    trackerConfig.hopSizeSamples = hopSize;
     for (const auto& marker : transients)
         trackerConfig.transientBreakFrameIndices.push_back(marker.frameIndex);
 

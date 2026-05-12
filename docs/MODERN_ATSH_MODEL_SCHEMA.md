@@ -49,7 +49,7 @@ model can serialize without synthetic transient or residual data.
 - Per-frame orphan residual band energy: empty or 25 Bark-band values.
 - Track lifecycle events: partial id, frame index, event kind, and detail.
 - Assignment cost breakdowns: frame, partial, peak, frequency, amplitude, SMR,
-  slope, birth/death, spurious-peak, and total cost.
+  phase, slope, birth/death, spurious-peak, and total cost.
 - Transient markers: frame index, onset time, window bounds, and gain.
 - Transient buffers: marker index, sample rate, gain, and short grain samples.
 - Warnings: deterministic strings for analysis warnings.
