@@ -31,6 +31,12 @@ def main() -> int:
             "plugin should document that Modern models keep source-derived residual bands")
     require("cfgP.transientGain = 1.0;" in plugin_text,
             "plugin Modern preview must render captured transient buffers")
+    require("cfgR.orphanResidualGain = 1.0;" in plugin_text,
+            "plugin Modern preview must render source-derived residual bands")
+    require("cfgR.transientGain = 0.0;" in plugin_text,
+            "plugin Modern residual layer should not duplicate captured transient buffers")
+    require("renderModernAtsModel(modernModelSnapshot, cfgR)" in plugin_text,
+            "plugin Modern residual layer must use the Modern ATS synth path")
     require("ModernAtsAnalysisResult" in pipeline_text,
             "core direct modern analysis result type is missing")
 

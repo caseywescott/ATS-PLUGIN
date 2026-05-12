@@ -16,7 +16,7 @@ compatibility default.
 
 The plugin analysis call now routes through `ats::runClassicAtsAnalysis`, which
 wraps the existing ATSA `tracker` call for compatibility, ATS export, and the
-classic residual render layer. `tools/ats_offline` accepts
+classic preview/render path. `tools/ats_offline` accepts
 `--analysis-mode classic_ats` and remains classic-only for external parity
 tests.
 
@@ -28,8 +28,8 @@ tracking, applies the selected tracker to those source-derived peak frames, and
 stores a versioned `ModernAtsModel` whose `sourceHash` is based on the audio
 input rather than an intermediate `ATS_SOUND`. The plugin keeps those
 source-derived Modern partial, transient, and residual-band diagnostics intact.
-The classic ATSA model is still retained separately for ATS export and the
-classic residual render layer.
+The classic ATSA model is still retained separately for ATS export and classic
+preview/render compatibility.
 
 ## Peak Estimation
 

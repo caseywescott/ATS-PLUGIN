@@ -686,7 +686,7 @@ void AtsAudioProcessor::startAnalysis()
             {
                 modernModel = std::move(modernResult.model);
                 modernModel.warnings.push_back(
-                    "Classic ATS model retained for ATS export and residual-layer rendering; Modern model keeps source-derived residual bands.");
+                    "Classic ATS model retained for ATS export and classic preview; Modern model keeps source-derived residual bands.");
                 modernModelValid = ats::validateModernAtsModel(modernModel, modernValidationError);
             }
             else
@@ -820,14 +820,9 @@ void AtsAudioProcessor::startResynthWorker()
                     modelSr = modernModelSnapshot.header.sampleRate > 0
                                   ? modernModelSnapshot.header.sampleRate
                                   : analyzedModel.get()->srate;
-                    // Use classic ATS residual synthesis for the residual layer.
-                    // The orphan-residual noise path in renderModernAtsModel uses
-                    // raw Bark-band energy sums from ATSA which are NOT normalised
-                    // to [-1,1] amplitude (sqrt(882) ≈ 29.7 → immediate clipping).
-                    ats::SynthParams spResidual = core;
-                    spResidual.partialsGain = 0.0;
-                    spResidual.residualGain = 1.0;
-                    monoR = runDoSynthesis(analyzedModel.get(), spResidual);
+                    // Modern models carry normalized source-derived residual-band
+                    // energy; render the Modern preview residual lane from that
+                    // snapshot below instead of falling back to classic ATSA audio.
                 }
                 else
                 {
@@ -848,14 +843,16 @@ void AtsAudioProcessor::startResynthWorker()
 
         if (!useLayerCache && useModernSynth)
         {
-            ats::ModernAtsSynthConfig cfgP;
-            cfgP.outputSampleRate = modelSr;
+            ats::ModernAtsSynthConfig cfg;
+            cfg.outputSampleRate = modelSr;
+            cfg.useStoredPhase = core.usePartialsPhase;
+            cfg.timeFactor = core.timeFactor;
+            cfg.frequencyFactor = core.frequencyFactor;
+
+            auto cfgP = cfg;
             cfgP.partialGain = 1.0;
             cfgP.orphanResidualGain = 0.0;
             cfgP.transientGain = 1.0;
-            cfgP.useStoredPhase = core.usePartialsPhase;
-            cfgP.timeFactor = core.timeFactor;
-            cfgP.frequencyFactor = core.frequencyFactor;
 
             auto partialsVec = ats::renderModernAtsModel(modernModelSnapshot, cfgP);
             if (!partialsVec.empty())
@@ -864,9 +861,19 @@ void AtsAudioProcessor::startResynthWorker()
                 for (int i = 0; i < static_cast<int>(partialsVec.size()); ++i)
                     monoP.setSample(0, i, partialsVec[i]);
             }
-            // monoR was already computed from classic ATS do_synthesis inside the
-            // model lock.  The orphan-residual noise path is intentionally not used
-            // because raw ATSA Bark-band energy values are not amplitude-normalised.
+
+            auto cfgR = cfg;
+            cfgR.partialGain = 0.0;
+            cfgR.orphanResidualGain = 1.0;
+            cfgR.transientGain = 0.0;
+
+            auto residualVec = ats::renderModernAtsModel(modernModelSnapshot, cfgR);
+            if (!residualVec.empty())
+            {
+                monoR.setSize(1, static_cast<int>(residualVec.size()));
+                for (int i = 0; i < static_cast<int>(residualVec.size()); ++i)
+                    monoR.setSample(0, i, residualVec[i]);
+            }
         }
 
         if (jobGeneration.load() != gen || mySerial != resynthJobSerial.load(std::memory_order_acquire))

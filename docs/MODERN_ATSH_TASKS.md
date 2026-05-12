@@ -345,7 +345,7 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 
 - [x] Close the unfinished architecture gap: Modern ATS plugin analysis no longer derives partial tracks from already-tracked classic `ATS_SOUND` cells.
 - [x] Add `ats::runModernAtsAnalysis` as a core audio-to-modern-model path with deterministic STFT peak estimation, peak diagnostics, source-audio hashing, transient markers, and assignment tracking.
-- [x] Keep Classic ATS available for compatibility, ATS export, and residual-layer rendering while Modern ATS partials improve independently.
+- [x] Keep Classic ATS available for compatibility, ATS export, and classic preview/render fallback while Modern ATS partials improve independently.
 - [x] Add a deterministic CTest proving direct modern analysis tracks a source sine peak, preserves original channel-count metadata, records assignment costs, and validates the modern model.
 
 ### Commit 35 - `test(analysis): prevent classic-derived modern regression`
@@ -402,8 +402,16 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 **PRD:** section 5.1, section 5.4, section 6.1
 
 - [x] Stop overwriting direct Modern ATS source-derived residual bands with classic ATSA residual bands after plugin analysis.
-- [x] Keep the classic `ATS_SOUND` model available for ATS export and residual-layer rendering without mutating the Modern model diagnostics/morph data.
+- [x] Keep the classic `ATS_SOUND` model available for ATS export and classic preview/render compatibility without mutating the Modern model diagnostics/morph data.
 - [x] Update the source-path regression guard so classic-derived residual overlay helpers cannot be reintroduced silently.
+
+### Commit 42 - `fix(synth): render modern source residual preview lane`
+
+**PRD:** section 5.4, section 5.7, section 6.1
+
+- [x] Render the Modern/Experimental preview residual channel from the Modern model's source-derived orphan residual bands instead of classic `do_synthesis` residual audio.
+- [x] Keep captured transient buffers isolated to the partial layer and mute partial/transient playback in the residual layer so residual-only controls audition untracked source energy.
+- [x] Extend the source-path guard and synthesis docs so Modern preview cannot silently fall back to classic residual rendering again.
 
 ---
 
@@ -429,3 +437,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Diagnostic UI stability | 39 |
 | Direct modern residual estimation | 40 |
 | Plugin preservation of modern residual bands | 41 |
+| Modern preview source residual playback | 42 |
