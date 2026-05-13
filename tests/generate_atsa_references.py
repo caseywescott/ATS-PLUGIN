@@ -95,6 +95,28 @@ def wav_float_samples(path: str, max_samples: int = 4096) -> list[float]:
     return [x / 32768.0 for x in struct.unpack("<" + "h" * n, raw)]
 
 
+def rendered_audio_shape_metrics(path: str) -> dict:
+    """Compact rendered-audio proxies for transient and residual/noise checks."""
+    samples = wav_float_samples(path)
+    if not samples:
+        return {
+            "attack_sharpness": 0.0,
+            "max_buffer_step": 0.0,
+            "residual_highpass_ratio": 0.0,
+        }
+
+    peak = max(abs(x) for x in samples)
+    energy = sum(x * x for x in samples)
+    rms_value = math.sqrt(energy / len(samples)) if energy > 0.0 else 0.0
+    steps = [samples[i] - samples[i - 1] for i in range(1, len(samples))]
+    diff_energy = sum(x * x for x in steps)
+    return {
+        "attack_sharpness": peak / rms_value if rms_value > 0.0 else 0.0,
+        "max_buffer_step": max((abs(x) for x in steps), default=0.0),
+        "residual_highpass_ratio": diff_energy / (diff_energy + energy) if energy > 0.0 else 0.0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Normalised reconstruction error between two WAVs
 # ---------------------------------------------------------------------------
@@ -113,10 +135,12 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     error_rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(ref_padded, cand_padded)) / n)
     normalized_rms = error_rms / max(ref_rms, 1e-12)
     spec_dist = spectral_distance_db(ref_padded, cand_padded)
+    shape = rendered_audio_shape_metrics(cand_path)
 
     return {
         "normalized_rms_error": normalized_rms,
         "spectral_distance_db": spec_dist,
+        **shape,
     }
 
 
@@ -136,13 +160,20 @@ def extract_summary(metadata: dict, recon: dict) -> dict:
         "frames": model.get("frames", 0),
         "normalized_rms_error": recon.get("normalized_rms_error", 0.0),
         "spectral_distance_db": recon.get("spectral_distance_db", 0.0),
-        # Continuity, identity, and residual fields are populated if available.
-        # Future: extend ats_offline --metadata to emit per-tracker diagnostics.
+        # Continuity and identity are model diagnostics; residual/transient
+        # checks prefer compact rendered-audio proxies when available.
         "continuity_score": metadata.get("continuity_score", -1.0),
         "identity_errors": metadata.get("identity_errors", -1),
+        "partial_noise_energy": metadata.get("partial_noise_energy", -1.0),
+        "orphan_residual_energy": metadata.get("orphan_residual_energy", -1.0),
+        "total_residual_energy": metadata.get("total_residual_energy", -1.0),
         "orphan_residual_ratio": metadata.get("orphan_residual_ratio", -1.0),
-        "attack_sharpness": metadata.get("attack_sharpness", -1.0),
-        "max_buffer_step": metadata.get("max_buffer_step", -1.0),
+        "residual_highpass_ratio": recon.get(
+            "residual_highpass_ratio",
+            metadata.get("residual_highpass_ratio", -1.0),
+        ),
+        "attack_sharpness": recon.get("attack_sharpness", metadata.get("attack_sharpness", -1.0)),
+        "max_buffer_step": recon.get("max_buffer_step", metadata.get("max_buffer_step", -1.0)),
     }
 
 

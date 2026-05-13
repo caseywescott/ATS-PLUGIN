@@ -8,12 +8,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 #include <sndfile.h>
 
 #include "atsa.h"
 
 #define BUFFER_LEN 1024
+
+/* Qatsh residual synthesis seeds rand() from time(0).  The offline reference
+ * CLI needs reproducible WAV-derived metrics, so keep time deterministic here
+ * without changing the embedded ATSA sources or plugin builds. */
+time_t time(time_t *timer)
+{
+  const time_t fixed_time = 1;
+  if (timer)
+    *timer = fixed_time;
+  return fixed_time;
+}
 
 static void usage(const char *prog)
 {
@@ -100,6 +112,167 @@ static void parameter_hash_fnv1a64(const ANARGS *a, char out_hex[17])
   fnv1a64_to_hex(hash, out_hex);
 }
 
+typedef struct {
+  int expected_frames;
+  int active_frames;
+  int lifecycle_breaks;
+  double continuity_score;
+  int identity_errors;
+  double partial_noise_energy;
+  double orphan_residual_energy;
+  double total_residual_energy;
+  double orphan_residual_ratio;
+  double attack_sharpness;
+  double max_buffer_step;
+  double residual_highpass_ratio;
+} OFFLINE_METADATA_METRICS;
+
+static double finite_positive(double value)
+{
+  return isfinite(value) && value > 0.0 ? value : 0.0;
+}
+
+static int active_cell(const ATS_SOUND *sound, int partial, int frame)
+{
+  if (!sound || !sound->amp || !sound->frq || partial < 0 || frame < 0 ||
+      partial >= sound->partials || frame >= sound->frames || !sound->amp[partial] ||
+      !sound->frq[partial]) {
+    return 0;
+  }
+  return isfinite(sound->amp[partial][frame]) && isfinite(sound->frq[partial][frame]) &&
+         sound->amp[partial][frame] > 0.0 && sound->frq[partial][frame] > 0.0;
+}
+
+static int identity_discontinuity(double previous_frequency_hz, double next_frequency_hz)
+{
+  double octave_jump;
+  double hz_jump;
+  if (previous_frequency_hz <= 0.0 || next_frequency_hz <= 0.0 ||
+      !isfinite(previous_frequency_hz) || !isfinite(next_frequency_hz)) {
+    return 0;
+  }
+
+  octave_jump = fabs(log(next_frequency_hz / previous_frequency_hz) / log(2.0));
+  hz_jump = fabs(next_frequency_hz - previous_frequency_hz);
+  return octave_jump > 0.5 && hz_jump > 80.0;
+}
+
+static void compute_sound_model_metrics(const ATS_SOUND *sound, OFFLINE_METADATA_METRICS *metrics)
+{
+  int partial;
+  int frame;
+  int transition_count = 0;
+  int continuity_error_count = 0;
+  double band_energy = 0.0;
+
+  memset(metrics, 0, sizeof(*metrics));
+  if (!sound || sound->partials <= 0 || sound->frames <= 0) {
+    return;
+  }
+
+  metrics->expected_frames = sound->partials * sound->frames;
+  for (partial = 0; partial < sound->partials; ++partial) {
+    int saw_active = 0;
+    int in_gap = 0;
+    int has_previous_active = 0;
+    double previous_frequency_hz = 0.0;
+
+    for (frame = 0; frame < sound->frames; ++frame) {
+      if (active_cell(sound, partial, frame)) {
+        ++metrics->active_frames;
+        if (has_previous_active) {
+          ++transition_count;
+          if (in_gap || identity_discontinuity(previous_frequency_hz, sound->frq[partial][frame])) {
+            ++continuity_error_count;
+          }
+        }
+        if (saw_active && in_gap) {
+          ++metrics->lifecycle_breaks;
+        }
+        if (has_previous_active &&
+            identity_discontinuity(previous_frequency_hz, sound->frq[partial][frame])) {
+          ++metrics->identity_errors;
+        }
+        previous_frequency_hz = sound->frq[partial][frame];
+        has_previous_active = 1;
+        saw_active = 1;
+        in_gap = 0;
+      } else if (saw_active) {
+        in_gap = 1;
+      }
+
+      if (sound->res && sound->res[partial]) {
+        metrics->partial_noise_energy += finite_positive(sound->res[partial][frame]);
+      }
+    }
+  }
+
+  if (sound->band_energy) {
+    int band;
+    for (band = 0; band < ATSA_CRITICAL_BANDS; ++band) {
+      if (!sound->band_energy[band]) {
+        continue;
+      }
+      for (frame = 0; frame < sound->frames; ++frame) {
+        band_energy += finite_positive(sound->band_energy[band][frame]);
+      }
+    }
+  }
+
+  metrics->total_residual_energy = band_energy > 0.0 ? band_energy : metrics->partial_noise_energy;
+  metrics->orphan_residual_energy =
+      metrics->total_residual_energy > metrics->partial_noise_energy
+          ? metrics->total_residual_energy - metrics->partial_noise_energy
+          : 0.0;
+  metrics->orphan_residual_ratio =
+      metrics->total_residual_energy > 0.0
+          ? metrics->orphan_residual_energy / metrics->total_residual_energy
+          : 0.0;
+
+  metrics->continuity_score =
+      transition_count > 0
+          ? 1.0 - (double)(continuity_error_count < transition_count ? continuity_error_count : transition_count) /
+                (double)transition_count
+          : (metrics->active_frames > 0 ? 1.0 : 0.0);
+}
+
+static void compute_rendered_audio_metrics(const double *samples,
+                                           int sample_count,
+                                           OFFLINE_METADATA_METRICS *metrics)
+{
+  int i;
+  int n = sample_count < 4096 ? sample_count : 4096;
+  double peak = 0.0;
+  double energy = 0.0;
+  double diff_energy = 0.0;
+  double previous = 0.0;
+
+  if (!samples || sample_count <= 0 || !metrics) {
+    return;
+  }
+
+  for (i = 0; i < n; ++i) {
+    double sample = isfinite(samples[i]) ? samples[i] : 0.0;
+    double abs_sample = fabs(sample);
+    peak = peak > abs_sample ? peak : abs_sample;
+    energy += sample * sample;
+    if (i > 0) {
+      double step = sample - previous;
+      double abs_step = fabs(step);
+      diff_energy += step * step;
+      metrics->max_buffer_step =
+          metrics->max_buffer_step > abs_step ? metrics->max_buffer_step : abs_step;
+    }
+    previous = sample;
+  }
+
+  if (n > 0 && energy > 0.0) {
+    double rms = sqrt(energy / (double)n);
+    metrics->attack_sharpness = rms > 0.0 ? peak / rms : 0.0;
+    metrics->residual_highpass_ratio = diff_energy / (diff_energy + energy);
+  }
+}
+
 static int write_metadata_json(const char *path,
                                const ANARGS *a,
                                const ATS_SOUND *sound,
@@ -107,10 +280,14 @@ static int write_metadata_json(const char *path,
                                const char *source_hash,
                                sf_count_t input_frames,
                                int input_sr,
+                               const double *rendered_samples,
                                int rendered_frames)
 {
   char parameter_hash[17];
+  OFFLINE_METADATA_METRICS metrics;
   parameter_hash_fnv1a64(a, parameter_hash);
+  compute_sound_model_metrics(sound, &metrics);
+  compute_rendered_audio_metrics(rendered_samples, rendered_frames, &metrics);
 
   FILE *f = fopen(path, "w");
   if (!f) {
@@ -127,6 +304,15 @@ static int write_metadata_json(const char *path,
   fprintf(f, "  \"input_sample_rate\": %d,\n", input_sr);
   fprintf(f, "  \"input_frames\": %lld,\n", (long long)input_frames);
   fprintf(f, "  \"rendered_frames\": %d,\n", rendered_frames);
+  fprintf(f, "  \"continuity_score\": %.17g,\n", metrics.continuity_score);
+  fprintf(f, "  \"identity_errors\": %d,\n", metrics.identity_errors);
+  fprintf(f, "  \"partial_noise_energy\": %.17g,\n", metrics.partial_noise_energy);
+  fprintf(f, "  \"orphan_residual_energy\": %.17g,\n", metrics.orphan_residual_energy);
+  fprintf(f, "  \"total_residual_energy\": %.17g,\n", metrics.total_residual_energy);
+  fprintf(f, "  \"orphan_residual_ratio\": %.17g,\n", metrics.orphan_residual_ratio);
+  fprintf(f, "  \"residual_highpass_ratio\": %.17g,\n", metrics.residual_highpass_ratio);
+  fprintf(f, "  \"attack_sharpness\": %.17g,\n", metrics.attack_sharpness);
+  fprintf(f, "  \"max_buffer_step\": %.17g,\n", metrics.max_buffer_step);
   fprintf(f, "  \"model\": {\n");
   fprintf(f, "    \"sample_rate\": %d,\n", sound->srate);
   fprintf(f, "    \"frame_size\": %d,\n", sound->frame_size);
@@ -407,7 +593,7 @@ int main(int argc, char **argv)
 
   int wr = write_mono_wav(out_path, out, n_out, sr);
   if (wr == 0 && metadata_path)
-    wr = write_metadata_json(metadata_path, &anargs, sound, analysis_mode, source_hash, frames, sr, n_out);
+    wr = write_metadata_json(metadata_path, &anargs, sound, analysis_mode, source_hash, frames, sr, out, n_out);
 
   free(out);
   free_sound(sound);

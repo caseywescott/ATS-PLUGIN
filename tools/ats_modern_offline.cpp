@@ -109,6 +109,7 @@ bool writeMetadataJson(const std::string& path,
                        const ats::ModernAtsModel& model,
                        const ats::ModernAtsRenderStats& renderStats,
                        const ats::ModernAtsContinuityMetrics& continuity,
+                       int identityErrors,
                        const ats::ModernAtsResidualMetrics& residual,
                        const ats::ModernAtsTransientMetrics& transient,
                        std::int64_t inputFrames)
@@ -131,7 +132,10 @@ bool writeMetadataJson(const std::string& path,
     out << "  \"input_frames\": " << inputFrames << ",\n";
     out << "  \"rendered_frames\": " << renderStats.totalSamples << ",\n";
     out << "  \"continuity_score\": " << continuity.continuityScore << ",\n";
-    out << "  \"identity_errors\": -1,\n";
+    out << "  \"identity_errors\": " << identityErrors << ",\n";
+    out << "  \"partial_noise_energy\": " << residual.partialNoiseEnergy << ",\n";
+    out << "  \"orphan_residual_energy\": " << residual.orphanResidualEnergy << ",\n";
+    out << "  \"total_residual_energy\": " << residual.totalResidualEnergy << ",\n";
     out << "  \"orphan_residual_ratio\": " << residual.orphanResidualRatio << ",\n";
     out << "  \"attack_sharpness\": " << transient.attackSharpness << ",\n";
     out << "  \"max_buffer_step\": " << transient.maxBufferStep << ",\n";
@@ -264,12 +268,14 @@ int main(int argc, char** argv)
     if (!metadataPath.empty())
     {
         const auto continuity = ats::computeModernAtsContinuityMetrics(analysis.model);
+        const int identityErrors = ats::estimateModernAtsIdentityErrors(analysis.model);
         const auto residual = ats::computeModernAtsResidualMetrics(analysis.model);
         const auto transient = ats::computeModernAtsTransientMetrics(analysis.model);
         if (!writeMetadataJson(metadataPath,
                                analysis.model,
                                renderStats,
                                continuity,
+                               identityErrors,
                                residual,
                                transient,
                                inputFrames))

@@ -115,6 +115,7 @@ struct ModernAtsAcceptanceInputs
 ModernAtsAudioMetrics computeModernAtsAudioMetrics(const std::vector<float>& reference,
                                                    const std::vector<float>& candidate);
 ModernAtsContinuityMetrics computeModernAtsContinuityMetrics(const ModernAtsModel& model);
+int estimateModernAtsIdentityErrors(const ModernAtsModel& model);
 ModernAtsResidualMetrics computeModernAtsResidualMetrics(const ModernAtsModel& model);
 ModernAtsTransientMetrics computeModernAtsTransientMetrics(const ModernAtsModel& model);
 ModernAtsTrackerFixtureMetrics computeModernAtsTrackerFixtureMetrics(
@@ -146,6 +147,7 @@ struct ExternalFixtureReferenceMetrics
     double continuityScore = -1.0;   // -1 = not available
     int identityErrors = -1;         // -1 = not available
     double orphanResidualRatio = -1.0;
+    double residualHighpassRatio = -1.0;
     double attackSharpness = -1.0;
     double maxBufferStep = -1.0;
 };

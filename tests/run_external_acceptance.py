@@ -44,6 +44,27 @@ def wav_float_samples(path: str, max_samples: int = 4096) -> list[float]:
     return [x / 32768.0 for x in struct.unpack("<" + "h" * n, raw)]
 
 
+def rendered_audio_shape_metrics(path: str) -> dict:
+    samples = wav_float_samples(path)
+    if not samples:
+        return {
+            "attack_sharpness": 0.0,
+            "max_buffer_step": 0.0,
+            "residual_highpass_ratio": 0.0,
+        }
+
+    peak = max(abs(x) for x in samples)
+    energy = sum(x * x for x in samples)
+    rms_value = math.sqrt(energy / len(samples)) if energy > 0.0 else 0.0
+    steps = [samples[i] - samples[i - 1] for i in range(1, len(samples))]
+    diff_energy = sum(x * x for x in steps)
+    return {
+        "attack_sharpness": peak / rms_value if rms_value > 0.0 else 0.0,
+        "max_buffer_step": max((abs(x) for x in steps), default=0.0),
+        "residual_highpass_ratio": diff_energy / (diff_energy + energy) if energy > 0.0 else 0.0,
+    }
+
+
 def rms(samples: list[float]) -> float:
     if not samples:
         return 0.0
@@ -81,6 +102,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     return {
         "normalized_rms_error": err_rms / max(ref_rms, 1e-12),
         "spectral_distance_db": spectral_distance_db(ref_p, cand_p),
+        **rendered_audio_shape_metrics(cand_path),
     }
 
 
@@ -94,8 +116,10 @@ GATE_DEFAULTS = {
     "max_spectral_distance_db_delta": 0.5,
     "max_continuity_regression": 0.05,
     "max_identity_error_increase": 2,
+    "max_residual_highpass_ratio_delta": 0.10,
     "min_residual_energy_ratio": 0.99,
     "min_transient_sharpness_improvement": 0.05,
+    "min_transient_sharpness_ratio": 0.90,
 }
 
 
@@ -180,17 +204,19 @@ def evaluate_tracker_continuity(fixture_id: str, our: dict, ref: dict,
 def evaluate_residual_energy(fixture_id: str, our: dict, ref: dict,
                               thresholds: dict) -> list[CheckResult]:
     results: list[CheckResult] = []
-    our_ratio = our.get("orphan_residual_ratio", -1.0)
-    ref_ratio = ref.get("orphan_residual_ratio", -1.0)
+    our_ratio = our.get("residual_highpass_ratio", our.get("orphan_residual_ratio", -1.0))
+    ref_ratio = ref.get("residual_highpass_ratio", ref.get("orphan_residual_ratio", -1.0))
     if our_ratio < 0.0 or ref_ratio < 0.0:
-        print(f"    note: orphan_residual_ratio not available for {fixture_id} — gate skipped")
+        print(f"    note: residual_highpass_ratio not available for {fixture_id} — gate skipped")
         return results
-    limit = thresholds["min_residual_energy_ratio"]
-    # We check that our ratio stays within acceptable bounds relative to reference.
+    limit = thresholds.get(
+        "max_residual_highpass_ratio_delta",
+        1.0 - thresholds["min_residual_energy_ratio"],
+    )
     delta = abs(our_ratio - ref_ratio)
-    check(results, f"{fixture_id}.residual_energy_preservation.orphan_residual_ratio",
-          delta <= (1.0 - limit), delta, 1.0 - limit, ref_ratio,
-          "our orphan residual ratio should match ATSA reference within tolerance")
+    check(results, f"{fixture_id}.residual_energy_preservation.residual_highpass_ratio",
+          delta <= limit, delta, limit, ref_ratio,
+          "our rendered residual/noise ratio should match ATSA reference within tolerance")
     return results
 
 
@@ -202,10 +228,13 @@ def evaluate_transient_preservation(fixture_id: str, our: dict, ref: dict,
     if our_sharp < 0.0 or ref_sharp < 0.0:
         print(f"    note: attack_sharpness not available for {fixture_id} — gate skipped")
         return results
-    improvement_needed = thresholds["min_transient_sharpness_improvement"]
-    threshold_val = ref_sharp - improvement_needed
+    ratio = our_sharp / max(ref_sharp, 1e-12)
+    threshold_val = thresholds.get(
+        "min_transient_sharpness_ratio",
+        1.0 - thresholds["min_transient_sharpness_improvement"],
+    )
     check(results, f"{fixture_id}.transient_preservation.attack_sharpness",
-          our_sharp >= threshold_val, our_sharp, threshold_val, ref_sharp,
+          ratio >= threshold_val, ratio, threshold_val, ref_sharp,
           "our transient attack sharpness should not fall far below ATSA reference")
     return results
 
@@ -274,8 +303,12 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
         "continuity_score": our_metadata.get("continuity_score", -1.0),
         "identity_errors": our_metadata.get("identity_errors", -1),
         "orphan_residual_ratio": our_metadata.get("orphan_residual_ratio", -1.0),
-        "attack_sharpness": our_metadata.get("attack_sharpness", -1.0),
-        "max_buffer_step": our_metadata.get("max_buffer_step", -1.0),
+        "residual_highpass_ratio": recon.get(
+            "residual_highpass_ratio",
+            our_metadata.get("residual_highpass_ratio", -1.0),
+        ),
+        "attack_sharpness": recon.get("attack_sharpness", our_metadata.get("attack_sharpness", -1.0)),
+        "max_buffer_step": recon.get("max_buffer_step", our_metadata.get("max_buffer_step", -1.0)),
     }
 
     enabled_gates = fixture.get("enabled_gates", [])

@@ -79,9 +79,9 @@ Each entry declares:
 | Name | What is checked |
 | --- | --- |
 | `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance |
-| `tracker_continuity` | Continuity score regression and identity error increase vs. ATSA |
-| `residual_energy_preservation` | Orphan residual ratio delta vs. ATSA reference |
-| `transient_preservation` | Attack sharpness ratio vs. ATSA reference |
+| `tracker_continuity` | Smooth active-track continuity regression and identity-discontinuity increase vs. ATSA |
+| `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. ATSA reference |
+| `transient_preservation` | Rendered attack-sharpness ratio vs. ATSA reference |
 
 ### Reference artifacts
 
@@ -101,6 +101,13 @@ Output per fixture:
 - `tests/fixtures/reference/<id>_atsa_metadata.json` — raw `ats_offline` metadata
 - `tests/fixtures/reference/<id>_summary.json` — stable sorted metrics loaded by the gate
 
+The summary includes both model diagnostics and rendered-audio proxies:
+`continuity_score` measures smooth active-to-active track transitions rather
+than sparse-track density, `identity_errors` counts large frequency jumps within
+a track, `residual_highpass_ratio` tracks rendered residual/noise character, and
+`attack_sharpness` is computed from the rendered WAV so Classic and Modern use
+the same measurement.
+
 ### Current external fixture status
 
 Four first-party fixtures are committed under `tests/fixtures/audio/`:
@@ -108,9 +115,12 @@ plucked_guitar, crotale_hit, vocal_chop, and vowel_phrase. These samples were
 created by Casey Wescott for ATS-PLUGIN testing, downmixed/converted to mono
 PCM16 where needed, and are permitted for repository tests and redistribution
 with the project. The initial real-audio gate enables `classic_parity` for all
-four fixtures; `external_crotale_hit` carries a wider spectral-distance
-tolerance for its resonant percussive onset while retaining the no-RMS-regression
-check.
+four fixtures plus real rendered-audio residual/transient checks. The longer
+`external_vowel_phrase` fixture also enables `tracker_continuity` because it has
+enough sustained material for the track-continuity estimate to be meaningful.
+`external_plucked_guitar` and `external_crotale_hit` carry wider
+spectral-distance tolerances for onset-heavy material while retaining the
+no-RMS-regression check.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

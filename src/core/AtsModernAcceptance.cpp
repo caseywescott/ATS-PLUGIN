@@ -13,6 +13,8 @@ namespace
 {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kIdentityJumpOctaves = 0.5;
+constexpr double kIdentityJumpMinHz = 80.0;
 
 bool isActiveFrame(const ModernAtsPartialFrame& frame)
 {
@@ -20,6 +22,19 @@ bool isActiveFrame(const ModernAtsPartialFrame& frame)
            && frame.reason != ModernAtsFrameReason::Slept
            && frame.reason != ModernAtsFrameReason::Pruned
            && frame.reason != ModernAtsFrameReason::Rejected;
+}
+
+bool isIdentityDiscontinuity(double previousFrequencyHz, double nextFrequencyHz)
+{
+    if (previousFrequencyHz <= 0.0 || nextFrequencyHz <= 0.0
+        || !std::isfinite(previousFrequencyHz) || !std::isfinite(nextFrequencyHz))
+    {
+        return false;
+    }
+
+    const double octaveJump = std::abs(std::log2(nextFrequencyHz / previousFrequencyHz));
+    const double hzJump = std::abs(nextFrequencyHz - previousFrequencyHz);
+    return octaveJump > kIdentityJumpOctaves && hzJump > kIdentityJumpMinHz;
 }
 
 double finitePositive(double value)
@@ -176,15 +191,33 @@ ModernAtsContinuityMetrics computeModernAtsContinuityMetrics(const ModernAtsMode
     metrics.partialCount = static_cast<int>(model.partials.size());
 
     double confidenceSum = 0.0;
+    int transitionCount = 0;
+    int continuityErrorCount = 0;
     for (const auto& partial : model.partials)
     {
         metrics.expectedFrameCount += static_cast<int>(partial.frames.size());
-        for (const auto& frame : partial.frames)
+        bool hasPreviousActiveFrame = false;
+        int previousActiveFrameIndex = -1;
+        double previousFrequencyHz = 0.0;
+        for (std::size_t frameIndex = 0; frameIndex < partial.frames.size(); ++frameIndex)
         {
+            const auto& frame = partial.frames[frameIndex];
             if (isActiveFrame(frame))
             {
                 ++metrics.activeFrameCount;
                 confidenceSum += std::max(0.0, std::min(1.0, frame.confidence));
+                if (hasPreviousActiveFrame)
+                {
+                    ++transitionCount;
+                    if (static_cast<int>(frameIndex) != previousActiveFrameIndex + 1
+                        || isIdentityDiscontinuity(previousFrequencyHz, frame.frequencyHz))
+                    {
+                        ++continuityErrorCount;
+                    }
+                }
+                previousActiveFrameIndex = static_cast<int>(frameIndex);
+                previousFrequencyHz = frame.frequencyHz;
+                hasPreviousActiveFrame = true;
             }
             if (frame.reason == ModernAtsFrameReason::Interpolated)
                 ++metrics.interpolatedFrameCount;
@@ -201,13 +234,40 @@ ModernAtsContinuityMetrics computeModernAtsContinuityMetrics(const ModernAtsMode
             ++metrics.lifecycleBreakCount;
     }
 
-    const int denominator = std::max(1, metrics.expectedFrameCount + metrics.lifecycleBreakCount);
-    metrics.continuityScore = static_cast<double>(metrics.activeFrameCount)
-                              / static_cast<double>(denominator);
+    continuityErrorCount += metrics.lifecycleBreakCount;
+    metrics.continuityScore =
+        transitionCount > 0
+            ? 1.0 - static_cast<double>(std::min(transitionCount, continuityErrorCount))
+                        / static_cast<double>(transitionCount)
+            : (metrics.activeFrameCount > 0 ? 1.0 : 0.0);
     metrics.meanConfidence = metrics.activeFrameCount > 0
                                  ? confidenceSum / static_cast<double>(metrics.activeFrameCount)
                                  : 0.0;
     return metrics;
+}
+
+int estimateModernAtsIdentityErrors(const ModernAtsModel& model)
+{
+    int errors = 0;
+    for (const auto& partial : model.partials)
+    {
+        double previousFrequencyHz = 0.0;
+        bool hasPreviousActiveFrame = false;
+        for (const auto& frame : partial.frames)
+        {
+            if (!isActiveFrame(frame))
+                continue;
+
+            if (hasPreviousActiveFrame
+                && isIdentityDiscontinuity(previousFrequencyHz, frame.frequencyHz))
+            {
+                ++errors;
+            }
+            previousFrequencyHz = frame.frequencyHz;
+            hasPreviousActiveFrame = true;
+        }
+    }
+    return errors;
 }
 
 ModernAtsResidualMetrics computeModernAtsResidualMetrics(const ModernAtsModel& model)
@@ -532,6 +592,7 @@ bool loadExternalFixtureReferenceMetrics(const std::string& path,
     out.continuityScore = jsonDoubleValue(json, "continuity_score", -1.0);
     out.identityErrors = jsonIntValue(json, "identity_errors", -1);
     out.orphanResidualRatio = jsonDoubleValue(json, "orphan_residual_ratio", -1.0);
+    out.residualHighpassRatio = jsonDoubleValue(json, "residual_highpass_ratio", -1.0);
     out.attackSharpness = jsonDoubleValue(json, "attack_sharpness", -1.0);
     out.maxBufferStep = jsonDoubleValue(json, "max_buffer_step", -1.0);
     return true;
@@ -600,16 +661,21 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
 
         case ExternalFixtureGate::ResidualEnergyPreservation:
         {
-            if (our.orphanResidualRatio >= 0.0 && reference.orphanResidualRatio >= 0.0)
+            const double ourResidualRatio = our.residualHighpassRatio >= 0.0
+                                                ? our.residualHighpassRatio
+                                                : our.orphanResidualRatio;
+            const double referenceResidualRatio = reference.residualHighpassRatio >= 0.0
+                                                      ? reference.residualHighpassRatio
+                                                      : reference.orphanResidualRatio;
+            if (ourResidualRatio >= 0.0 && referenceResidualRatio >= 0.0)
             {
-                const double delta =
-                    std::abs(our.orphanResidualRatio - reference.orphanResidualRatio);
+                const double delta = std::abs(ourResidualRatio - referenceResidualRatio);
                 addCheck(report,
-                         id + ".residual_energy_preservation.orphan_residual_ratio",
+                         id + ".residual_energy_preservation.residual_highpass_ratio",
                          delta <= thresholds.maxOrphanResidualRatioDelta,
                          delta,
                          thresholds.maxOrphanResidualRatioDelta,
-                         "orphan residual ratio delta vs ATSA reference (fixture=" + id + ")");
+                         "residual noise ratio delta vs ATSA reference (fixture=" + id + ")");
             }
             break;
         }

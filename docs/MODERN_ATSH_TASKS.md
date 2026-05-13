@@ -549,6 +549,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Replace PENDING fixture provenance with committed first-party sample provenance and actual sample-rate/channel expectations.
 - [x] Generate ATSA reference summaries for the committed fixtures and run the external gate against the Modern candidate tool.
 
+### Commit 60 - `test(acceptance): gate real fixture quality metrics`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Emit comparable Classic and Modern metadata for continuity, identity-discontinuity, residual energy, rendered residual/noise ratio, and attack sharpness.
+- [x] Update real-audio external acceptance to use rendered-audio residual and transient proxies instead of placeholder summary fields.
+- [x] Enable non-parity real-audio gates on the first-party fixtures, including tracker continuity for the sustained vowel phrase.
+
 ---
 
 ## Dependency Index
@@ -591,3 +599,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Enforced external real-audio gate readiness | 57 |
 | Modern offline external candidate tool | 58 |
 | First-party external audio fixtures | 59 |
+| Real fixture quality metric gates | 60 |

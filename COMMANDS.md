@@ -142,6 +142,10 @@ python3 tests/generate_atsa_references.py \
   --output-dir tests/fixtures/reference
 ```
 
+The generated summaries include model diagnostics (`continuity_score`,
+`identity_errors`) and rendered-audio proxies (`residual_highpass_ratio`,
+`attack_sharpness`) used by the external quality gates.
+
 Optional flags:
 
 ```sh
