@@ -557,6 +557,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Update real-audio external acceptance to use rendered-audio residual and transient proxies instead of placeholder summary fields.
 - [x] Enable non-parity real-audio gates on the first-party fixtures, including tracker continuity for the sustained vowel phrase.
 
+### Commit 61 - `fix(synth): preserve transient-leading attacks`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Stop transient-buffer fade-in from attenuating attacks whose marker onset is at the start of the captured buffer.
+- [x] Add a Modern synth regression proving onset-at-buffer-start samples remain full strength while later-onset buffers still fade in before the marker.
+- [x] Tighten first-party external fixture tolerances for residual highpass ratio, plucked/crotale spectral distance, and crotale transient sharpness.
+
 ---
 
 ## Dependency Index
@@ -600,3 +608,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern offline external candidate tool | 58 |
 | First-party external audio fixtures | 59 |
 | Real fixture quality metric gates | 60 |
+| Transient-leading attack preservation | 61 |

@@ -55,17 +55,21 @@ bool usesPitchNeutralStoredPhaseCorrection(const ModernAtsSynthConfig& config)
     return config.useStoredPhase && std::abs(config.frequencyFactor - 1.0) <= 1.0e-9;
 }
 
-float transientFade(int localIndex, int length, int fadeSamples)
+float transientFade(int localIndex, int length, int fadeInSamples, int fadeOutSamples)
 {
-    if (fadeSamples <= 0 || length <= 1)
+    if (length <= 1)
         return 1.0f;
 
-    const int edge = std::min(fadeSamples, std::max(1, length / 2));
-    if (localIndex < edge)
-        return static_cast<float>(0.5 - 0.5 * std::cos(kTwoPi * 0.5 * (double)localIndex / (double)edge));
+    const int fadeInEdge = std::min(fadeInSamples, std::max(0, length / 2));
+    if (fadeInEdge > 0 && localIndex < fadeInEdge)
+        return static_cast<float>(0.5 - 0.5 * std::cos(kTwoPi * 0.5 * (double)localIndex
+                                                       / (double)fadeInEdge));
+
     const int fromEnd = length - 1 - localIndex;
-    if (fromEnd < edge)
-        return static_cast<float>(0.5 - 0.5 * std::cos(kTwoPi * 0.5 * (double)fromEnd / (double)edge));
+    const int fadeOutEdge = std::min(fadeOutSamples, std::max(1, length / 2));
+    if (fadeOutEdge > 0 && fromEnd < fadeOutEdge)
+        return static_cast<float>(0.5 - 0.5 * std::cos(kTwoPi * 0.5 * (double)fromEnd
+                                                       / (double)fadeOutEdge));
     return 1.0f;
 }
 
@@ -297,6 +301,13 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                                                       buffer.sampleRate,
                                                       plan.outputSampleRate,
                                                       timeFactor);
+            const double onsetOffsetSeconds = std::max(0.0, marker->onsetSeconds - marker->windowStartSeconds);
+            const int onsetOffsetSamples = std::max(
+                0,
+                static_cast<int>(std::llround(onsetOffsetSeconds
+                                              * static_cast<double>(plan.outputSampleRate)
+                                              * timeFactor)));
+            const int fadeInSamples = std::min(plan.config.transientCrossfadeSamples, onsetOffsetSamples);
             for (int i = 0; i < length; ++i)
             {
                 const int outIndex = start + i;
@@ -316,7 +327,8 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
                     static_cast<double>(buffer.samples[static_cast<std::size_t>(srcFloor)]) * (1.0 - frac)
                     + static_cast<double>(buffer.samples[static_cast<std::size_t>(srcCeil)]) * frac;
 
-                const double fade = transientFade(i, length, plan.config.transientCrossfadeSamples);
+                const double fade = transientFade(i, length, fadeInSamples,
+                                                  plan.config.transientCrossfadeSamples);
                 output[outIndex] += static_cast<float>(
                     srcSample * plan.config.transientGain * marker->gain * buffer.gain * fade);
             }

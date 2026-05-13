@@ -228,7 +228,7 @@ void testResidualEnergyGatePasses()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "flute_breathy";
-    our.orphanResidualRatio = 0.22;  // delta = 0.02 < 0.10 threshold
+    our.orphanResidualRatio = 0.22;  // delta = 0.02 < 0.05 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ResidualEnergyPreservation });
@@ -246,7 +246,7 @@ void testResidualEnergyGateFails()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "noisy_voice";
-    our.orphanResidualRatio = 0.05;  // delta = 0.30 > 0.10 threshold
+    our.orphanResidualRatio = 0.05;  // delta = 0.30 > 0.05 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ResidualEnergyPreservation });

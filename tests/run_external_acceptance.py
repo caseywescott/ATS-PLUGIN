@@ -116,7 +116,7 @@ GATE_DEFAULTS = {
     "max_spectral_distance_db_delta": 0.5,
     "max_continuity_regression": 0.05,
     "max_identity_error_increase": 2,
-    "max_residual_highpass_ratio_delta": 0.10,
+    "max_residual_highpass_ratio_delta": 0.05,
     "min_residual_energy_ratio": 0.99,
     "min_transient_sharpness_improvement": 0.05,
     "min_transient_sharpness_ratio": 0.90,

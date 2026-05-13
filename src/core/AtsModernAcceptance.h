@@ -159,7 +159,7 @@ struct ExternalFixtureThresholds
     double maxSpectralDistanceDbDelta = 0.5;
     double maxContinuityRegression = 0.05;
     int maxIdentityErrorIncrease = 2;
-    double maxOrphanResidualRatioDelta = 0.10;
+    double maxOrphanResidualRatioDelta = 0.05;
     double minTransientSharpnessRatio = 0.90;  // candidate / reference >= this ratio
 };
 

@@ -263,7 +263,7 @@ void testOrphanResidualBandsAreSpectrallyShaped()
 void testTransientBufferCrossfadeAndGain()
 {
     auto model = makeBaseModel(0, 2);
-    model.transients.push_back({ 0, 0, 0.0, 0.0, 0.00033333333333333332, 0.5 });
+    model.transients.push_back({ 0, 0, 4.0 / 48000.0, 0.0, 0.00033333333333333332, 0.5 });
     ats::ModernAtsTransientBuffer buffer;
     buffer.markerIndex = 0;
     buffer.sampleRate = 48000;
@@ -282,12 +282,41 @@ void testTransientBufferCrossfadeAndGain()
     const auto rendered = ats::renderModernAtsModel(model, config);
     expect(rendered.size() >= 16, "transient render too short");
     expect(rendered.front() == 0.0f, "transient crossfade should start at zero");
+    expect(std::abs(rendered[4] - 0.75f) < 1.0e-5f,
+           "transient fade-in should finish before the marked onset");
     expect(std::abs(rendered[8] - 0.75f) < 1.0e-5f, "transient gain path mismatch");
     expect(rendered[15] == 0.0f, "transient crossfade should end at zero");
 
     config.transientGain = 0.0;
     const auto muted = ats::renderModernAtsModel(model, config);
     expect(peakAbs(muted) == 0.0f, "transient gain should mute transient playback");
+}
+
+void testTransientAtBufferStartKeepsAttack()
+{
+    auto model = makeBaseModel(0, 2);
+    model.transients.push_back({ 0, 0, 0.0, 0.0, 8.0 / 48000.0, 1.0 });
+    ats::ModernAtsTransientBuffer buffer;
+    buffer.markerIndex = 0;
+    buffer.sampleRate = 48000;
+    buffer.gain = 1.0;
+    buffer.samples.assign(8, 0.0f);
+    buffer.samples[0] = 1.0f;
+    model.transientBuffers.push_back(buffer);
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 16;
+    config.partialGain = 0.0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 1.0;
+    config.transientCrossfadeSamples = 4;
+    config.outputCeiling = 0.0;
+
+    const auto rendered = ats::renderModernAtsModel(model, config);
+    expect(rendered.size() >= 8, "onset-at-start transient render too short");
+    expect(rendered.front() > 0.99f,
+           "transient fade-in should not attenuate an attack at the buffer start");
 }
 
 void testTransientBuffersFollowTimeFactor()
@@ -483,6 +512,7 @@ int main()
     testOrphanResidualGainAndSeed();
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();
+    testTransientAtBufferStartKeepsAttack();
     testTransientBuffersFollowTimeFactor();
     testOutputSoftLimitBoundsDenseMix();
     testDenormalAndSilenceEdges();

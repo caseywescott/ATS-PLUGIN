@@ -118,9 +118,11 @@ with the project. The initial real-audio gate enables `classic_parity` for all
 four fixtures plus real rendered-audio residual/transient checks. The longer
 `external_vowel_phrase` fixture also enables `tracker_continuity` because it has
 enough sustained material for the track-continuity estimate to be meaningful.
-`external_plucked_guitar` and `external_crotale_hit` carry wider
+`external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
-no-RMS-regression check.
+no-RMS-regression check. The Crotale transient-sharpness floor is stricter than
+the generic fallback so later transient-render changes cannot silently soften
+the attack.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as
