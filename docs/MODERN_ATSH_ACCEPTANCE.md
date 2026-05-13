@@ -108,6 +108,12 @@ a track, `residual_highpass_ratio` tracks rendered residual/noise character, and
 `attack_sharpness` is computed from the rendered WAV so Classic and Modern use
 the same measurement.
 
+The Modern assignment tracker treats large last-active-to-next frequency jumps
+as identity breaks even when the short-term slope predictor would otherwise make
+the jump cheap. The sustained `external_vowel_phrase` gate therefore requires
+zero Modern identity errors against the ATSA reference rather than accepting a
+fixture-specific increase.
+
 ### Current external fixture status
 
 Four first-party fixtures are committed under `tests/fixtures/audio/`:
@@ -118,6 +124,8 @@ with the project. The initial real-audio gate enables `classic_parity` for all
 four fixtures plus real rendered-audio residual/transient checks. The longer
 `external_vowel_phrase` fixture also enables `tracker_continuity` because it has
 enough sustained material for the track-continuity estimate to be meaningful.
+It also ratchets identity continuity to zero permitted errors so long vocal
+material cannot pass by jumping one partial between unrelated harmonics.
 `external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
 no-RMS-regression check. The Crotale transient-sharpness floor is stricter than

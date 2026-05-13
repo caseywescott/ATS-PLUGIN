@@ -293,6 +293,37 @@ void testAssignmentTrackerUsesPhaseContinuity()
     expect(sawPhaseCost, "phase-aware assignment should record phase cost diagnostics");
 }
 
+void testAssignmentTrackerRejectsLargeIdentityJump()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 200.0) },
+        { peak(0, 260.0) },
+        {},
+        { peak(0, 380.0) },
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.useFrequencySlopeContinuity = true;
+    config.amplitudeWeight = 0.0;
+    config.smrWeight = 0.0;
+    config.phaseWeight = 0.0;
+    config.frequencySlopeWeight = 0.0;
+    config.maxMatchCost = 0.35;
+    config.maxGapFillFrames = 1;
+
+    const auto result = ats::runAssignmentTrackerPrototype(frames, config);
+    expect(result.partials.size() == 2,
+           "large octave identity jump should be represented as a new track");
+    expect(result.partials[0].frames.size() == 4
+           && result.partials[0].frames[3].reason == ats::ModernAtsFrameReason::Slept,
+           "source track should not continue across a large identity jump");
+    expect(result.partials[1].frames.size() == 4
+           && result.partials[1].frames[3].reason == ats::ModernAtsFrameReason::Born
+           && std::abs(result.partials[1].frames[3].frequencyHz - 380.0) < 1.0e-12,
+           "large-jump peak should birth a replacement track");
+}
+
 void testAssignmentTrackerFillsShortDropouts()
 {
     const std::vector<ats::TrackingPeakFrame> frames = {
@@ -917,6 +948,7 @@ int main()
     testAssignmentTrackerCrossingPartials();
     testAssignmentTrackerUsesGlobalCost();
     testAssignmentTrackerUsesPhaseContinuity();
+    testAssignmentTrackerRejectsLargeIdentityJump();
     testAssignmentTrackerFillsShortDropouts();
     testTransientBreakResetsAssignment();
     testOrphanResidualNoise();

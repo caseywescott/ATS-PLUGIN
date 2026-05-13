@@ -32,6 +32,8 @@ constexpr int kResidualPeakMaxLobeHalfWidthBins = 16;
 constexpr double kResidualStrongNeighbourRelativeDb = 24.0;
 constexpr double kAssignmentForbiddenCost = 1.0e9;
 constexpr double kAssignmentTieBreakScale = 1.0e-9;
+constexpr double kIdentityJumpOctaves = 0.5;
+constexpr double kIdentityJumpMinHz = 80.0;
 
 double clamp(double value, double lo, double hi)
 {
@@ -49,6 +51,19 @@ double wrapPhase(double phase)
     if (!std::isfinite(phase))
         return 0.0;
     return std::remainder(phase, kTwoPi);
+}
+
+bool isIdentityJump(double previousFrequencyHz, double nextFrequencyHz)
+{
+    if (previousFrequencyHz <= 0.0 || nextFrequencyHz <= 0.0
+        || !std::isfinite(previousFrequencyHz) || !std::isfinite(nextFrequencyHz))
+    {
+        return false;
+    }
+
+    const double octaveJump = std::abs(std::log2(nextFrequencyHz / previousFrequencyHz));
+    const double hzJump = std::abs(nextFrequencyHz - previousFrequencyHz);
+    return octaveJump > kIdentityJumpOctaves && hzJump > kIdentityJumpMinHz;
 }
 
 double interpolateWrappedPhase(double a, double b, double t)
@@ -873,6 +888,11 @@ ModernAtsAssignmentCost assignmentCostFor(int frameIndex,
                  : lastActive.frequencyHz;
     const double frequencyDenom = std::max(20.0, std::abs(predictedFrequency));
     cost.frequencyCost = config.frequencyWeight * std::abs(peak.frequencyHz - predictedFrequency) / frequencyDenom;
+    if (config.analysisMode == ModernAtsAnalysisMode::ModernAts
+        && isIdentityJump(lastActive.frequencyHz, peak.frequencyHz))
+    {
+        cost.frequencyCost += config.maxMatchCost + 1.0e-6;
+    }
 
     const double ampDenom = std::max(1.0e-6, lastActive.amplitude);
     cost.amplitudeCost = config.amplitudeWeight * std::abs(peak.amplitude - lastActive.amplitude) / ampDenom;

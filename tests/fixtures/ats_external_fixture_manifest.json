@@ -92,7 +92,7 @@
       ],
       "threshold_overrides": {
         "max_continuity_regression": 0.12,
-        "max_identity_error_increase": 3,
+        "max_identity_error_increase": 0,
         "min_transient_sharpness_ratio": 0.75
       },
       "atsa_reference": {

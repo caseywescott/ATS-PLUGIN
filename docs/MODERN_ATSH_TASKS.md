@@ -565,6 +565,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add a Modern synth regression proving onset-at-buffer-start samples remain full strength while later-onset buffers still fade in before the marker.
 - [x] Tighten first-party external fixture tolerances for residual highpass ratio, plucked/crotale spectral distance, and crotale transient sharpness.
 
+### Commit 62 - `fix(analysis): reject modern identity jumps`
+
+**PRD:** section 5.3, section 7.3
+
+- [x] Reject Modern assignment continuations whose last-active-to-next frequency jump crosses the acceptance identity-break threshold, even when slope prediction makes the candidate cheap.
+- [x] Add a deterministic assignment regression proving a large harmonic jump births a replacement track instead of corrupting an existing partial identity.
+- [x] Tighten the sustained first-party vowel phrase gate to allow zero Modern identity errors against the ATSA reference.
+
 ---
 
 ## Dependency Index
@@ -609,3 +617,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | First-party external audio fixtures | 59 |
 | Real fixture quality metric gates | 60 |
 | Transient-leading attack preservation | 61 |
+| Modern assignment identity-jump rejection | 62 |
