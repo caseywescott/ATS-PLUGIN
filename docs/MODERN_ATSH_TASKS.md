@@ -573,6 +573,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Add a deterministic assignment regression proving a large harmonic jump births a replacement track instead of corrupting an existing partial identity.
 - [x] Tighten the sustained first-party vowel phrase gate to allow zero Modern identity errors against the ATSA reference.
 
+### Commit 63 - `test(acceptance): score modern continuity comparably`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Keep Modern lifecycle break counts as diagnostics while removing terminal death/prune events from the active-to-active continuity score.
+- [x] Emit Modern offline continuity submetrics, including lifecycle breaks and mean confidence, so track churn remains visible outside the score.
+- [x] Tighten the sustained first-party vowel phrase continuity gate to allow no regression against the ATSA reference.
+
 ---
 
 ## Dependency Index
@@ -618,3 +626,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Real fixture quality metric gates | 60 |
 | Transient-leading attack preservation | 61 |
 | Modern assignment identity-jump rejection | 62 |
+| Comparable real-audio continuity scoring | 63 |

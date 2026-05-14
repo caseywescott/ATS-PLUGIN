@@ -91,7 +91,7 @@
         "transient_preservation"
       ],
       "threshold_overrides": {
-        "max_continuity_regression": 0.12,
+        "max_continuity_regression": 0.0,
         "max_identity_error_increase": 0,
         "min_transient_sharpness_ratio": 0.75
       },

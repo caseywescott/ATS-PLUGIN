@@ -75,6 +75,8 @@ def main() -> int:
         require(metadata.get("input_sample_rate") == 48000, "metadata input sample rate mismatch")
         require(metadata.get("rendered_frames", 0) > 0, "metadata rendered_frames should be positive")
         require(metadata.get("continuity_score", -1.0) >= 0.0, "continuity_score should be emitted")
+        require(metadata.get("lifecycle_breaks", -1) >= 0, "lifecycle_breaks should be emitted")
+        require(metadata.get("mean_confidence", -1.0) >= 0.0, "mean_confidence should be emitted")
         require(metadata.get("identity_errors", -1) >= 0, "identity_errors should be emitted")
         require(metadata.get("total_residual_energy", -1.0) >= 0.0, "total_residual_energy should be emitted")
         require(metadata.get("orphan_residual_ratio", -1.0) >= 0.0, "orphan_residual_ratio should be emitted")

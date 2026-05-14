@@ -232,6 +232,28 @@ void testGapFilledSleepDoesNotLowerContinuity()
            "gap-filled sleep should preserve continuity score");
 }
 
+void testTerminalLifecycleEventsRemainContinuityDiagnostics()
+{
+    const std::vector<ats::TrackingPeakFrame> frames = {
+        { peak(0, 440.0, 0.5) },
+        {},
+    };
+
+    ats::AssignmentTrackerConfig config;
+    config.analysisMode = ats::ModernAtsAnalysisMode::ModernAts;
+    config.maxGapFillFrames = 0;
+
+    const auto model =
+        modelFromTrackerResult(ats::runAssignmentTrackerPrototype(frames, config),
+                               ats::ModernAtsAnalysisMode::ModernAts);
+    const auto continuity = ats::computeModernAtsContinuityMetrics(model);
+
+    expect(continuity.lifecycleBreakCount > 0,
+           "terminal track death should remain visible as a lifecycle diagnostic");
+    expect(continuity.continuityScore > 0.99,
+           "terminal lifecycle diagnostics should not lower active-to-active continuity");
+}
+
 void testAcceptanceReportPassesRepresentativeFixtures()
 {
     const std::vector<ats::TrackingPeakFrame> crossing = {
@@ -401,6 +423,7 @@ int main()
 {
     testMetricHelpers();
     testGapFilledSleepDoesNotLowerContinuity();
+    testTerminalLifecycleEventsRemainContinuityDiagnostics();
     testAcceptanceReportPassesRepresentativeFixtures();
     testAcceptanceRunsDirectModernSourceAnalysis();
     testAcceptanceReportFlagsFailures();

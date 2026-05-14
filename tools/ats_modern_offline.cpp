@@ -132,6 +132,12 @@ bool writeMetadataJson(const std::string& path,
     out << "  \"input_frames\": " << inputFrames << ",\n";
     out << "  \"rendered_frames\": " << renderStats.totalSamples << ",\n";
     out << "  \"continuity_score\": " << continuity.continuityScore << ",\n";
+    out << "  \"expected_frames\": " << continuity.expectedFrameCount << ",\n";
+    out << "  \"active_frames\": " << continuity.activeFrameCount << ",\n";
+    out << "  \"interpolated_frames\": " << continuity.interpolatedFrameCount << ",\n";
+    out << "  \"rejected_frames\": " << continuity.rejectedFrameCount << ",\n";
+    out << "  \"lifecycle_breaks\": " << continuity.lifecycleBreakCount << ",\n";
+    out << "  \"mean_confidence\": " << continuity.meanConfidence << ",\n";
     out << "  \"identity_errors\": " << identityErrors << ",\n";
     out << "  \"partial_noise_energy\": " << residual.partialNoiseEnergy << ",\n";
     out << "  \"orphan_residual_energy\": " << residual.orphanResidualEnergy << ",\n";

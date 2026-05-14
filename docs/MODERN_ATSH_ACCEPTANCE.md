@@ -103,10 +103,12 @@ Output per fixture:
 
 The summary includes both model diagnostics and rendered-audio proxies:
 `continuity_score` measures smooth active-to-active track transitions rather
-than sparse-track density, `identity_errors` counts large frequency jumps within
-a track, `residual_highpass_ratio` tracks rendered residual/noise character, and
-`attack_sharpness` is computed from the rendered WAV so Classic and Modern use
-the same measurement.
+than sparse-track density or terminal lifecycle events, `identity_errors` counts
+large frequency jumps within a track, `residual_highpass_ratio` tracks rendered
+residual/noise character, and `attack_sharpness` is computed from the rendered
+WAV so Classic and Modern use the same measurement. Modern offline metadata also
+emits lifecycle-break counts separately so track churn remains diagnosable
+without distorting the active-to-active continuity score.
 
 The Modern assignment tracker treats large last-active-to-next frequency jumps
 as identity breaks even when the short-term slope predictor would otherwise make
@@ -124,8 +126,9 @@ with the project. The initial real-audio gate enables `classic_parity` for all
 four fixtures plus real rendered-audio residual/transient checks. The longer
 `external_vowel_phrase` fixture also enables `tracker_continuity` because it has
 enough sustained material for the track-continuity estimate to be meaningful.
-It also ratchets identity continuity to zero permitted errors so long vocal
-material cannot pass by jumping one partial between unrelated harmonics.
+It also ratchets continuity to no regression and identity continuity to zero
+permitted errors so long vocal material cannot pass by jumping one partial
+between unrelated harmonics.
 `external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
 no-RMS-regression check. The Crotale transient-sharpness floor is stricter than

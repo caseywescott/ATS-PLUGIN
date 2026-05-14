@@ -234,7 +234,8 @@ ModernAtsContinuityMetrics computeModernAtsContinuityMetrics(const ModernAtsMode
             ++metrics.lifecycleBreakCount;
     }
 
-    continuityErrorCount += metrics.lifecycleBreakCount;
+    // Keep lifecycle churn diagnosable without making the score stricter than
+    // the Classic ATSA active-to-active continuity reference.
     metrics.continuityScore =
         transitionCount > 0
             ? 1.0 - static_cast<double>(std::min(transitionCount, continuityErrorCount))
