@@ -154,6 +154,82 @@ def normalized_rms_error_for_segment(ref: list[float], cand: list[float],
     return err_rms / max(ref_rms, 1e-12)
 
 
+def decay_envelope_metrics(ref: list[float], cand: list[float],
+                           window: int = 4096, hop: int = 2048) -> dict:
+    n = max(len(ref), len(cand))
+    if n == 0:
+        return {
+            "decay_envelope_error": 0.0,
+            "decay_energy_ratio": 1.0,
+            "decay_envelope_correlation": 1.0,
+            "decay_level_bias": 0.0,
+            "decay_envelope_error_early": 0.0,
+            "decay_envelope_error_middle": 0.0,
+            "decay_envelope_error_late": 0.0,
+            "dominant_decay_error_region": "none",
+        }
+
+    ref_padded = ref + [0.0] * (n - len(ref))
+    cand_padded = cand + [0.0] * (n - len(cand))
+    source_env: list[float] = []
+    candidate_env: list[float] = []
+    for start in range(0, n, hop):
+        end = min(n, start + window)
+        if end <= start:
+            continue
+        source_env.append(rms(ref_padded[start:end]))
+        candidate_env.append(rms(cand_padded[start:end]))
+
+    if not source_env:
+        return {
+            "decay_envelope_error": 0.0,
+            "decay_energy_ratio": 1.0,
+            "decay_envelope_correlation": 1.0,
+            "decay_level_bias": 0.0,
+            "decay_envelope_error_early": 0.0,
+            "decay_envelope_error_middle": 0.0,
+            "decay_envelope_error_late": 0.0,
+            "dominant_decay_error_region": "none",
+        }
+
+    err = [c - s for s, c in zip(source_env, candidate_env)]
+    source_env_rms = math.sqrt(sum(x * x for x in source_env) / len(source_env))
+    error_rms = math.sqrt(sum(x * x for x in err) / len(err))
+    source_energy = sum(x * x for x in source_env)
+    candidate_energy = sum(x * x for x in candidate_env)
+    source_mean = sum(source_env) / len(source_env)
+    candidate_mean = sum(candidate_env) / len(candidate_env)
+    source_var = sum((x - source_mean) ** 2 for x in source_env)
+    candidate_var = sum((x - candidate_mean) ** 2 for x in candidate_env)
+    covariance = sum((s - source_mean) * (c - candidate_mean)
+                     for s, c in zip(source_env, candidate_env))
+    correlation = (covariance / math.sqrt(source_var * candidate_var)
+                   if source_var > 1.0e-20 and candidate_var > 1.0e-20 else 1.0)
+
+    region_names = ["early", "middle", "late"]
+    region_errors: dict[str, float] = {}
+    for region_index, region_name in enumerate(region_names):
+        start_index = region_index * len(err) // len(region_names)
+        end_index = (region_index + 1) * len(err) // len(region_names)
+        region_source = source_env[start_index:end_index]
+        region_err = err[start_index:end_index]
+        denom = math.sqrt(sum(x * x for x in region_source) / max(len(region_source), 1))
+        region_error = math.sqrt(sum(x * x for x in region_err) / max(len(region_err), 1))
+        region_errors[region_name] = region_error / max(denom, 1.0e-12)
+
+    dominant_region = max(region_errors, key=region_errors.get)
+    return {
+        "decay_envelope_error": error_rms / max(source_env_rms, 1.0e-12),
+        "decay_energy_ratio": candidate_energy / max(source_energy, 1.0e-12),
+        "decay_envelope_correlation": correlation,
+        "decay_level_bias": sum(err) / max(sum(source_env), 1.0e-12),
+        "decay_envelope_error_early": region_errors["early"],
+        "decay_envelope_error_middle": region_errors["middle"],
+        "decay_envelope_error_late": region_errors["late"],
+        "dominant_decay_error_region": dominant_region,
+    }
+
+
 def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
     ref = wav_float_samples(ref_path, max_samples=None)
     cand = wav_float_samples(cand_path, max_samples=None)
@@ -167,6 +243,7 @@ def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
             "spectral_distance_mid_db": 0.0,
             "spectral_distance_high_db": 0.0,
             "dominant_spectral_error_band": "none",
+            **decay_envelope_metrics(ref, cand),
         }
 
     ref_padded = ref + [0.0] * (n - len(ref))
@@ -189,6 +266,7 @@ def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
         "spectral_distance_mid_db": bands["mid"],
         "spectral_distance_high_db": bands["high"],
         "dominant_spectral_error_band": dominant_band,
+        **decay_envelope_metrics(ref_padded, cand_padded),
     }
 
 
@@ -250,6 +328,14 @@ def extract_summary(metadata: dict, recon: dict) -> dict:
         "spectral_distance_mid_db": recon.get("spectral_distance_mid_db", 0.0),
         "spectral_distance_high_db": recon.get("spectral_distance_high_db", 0.0),
         "dominant_spectral_error_band": recon.get("dominant_spectral_error_band", "unknown"),
+        "decay_envelope_error": recon.get("decay_envelope_error", 0.0),
+        "decay_energy_ratio": recon.get("decay_energy_ratio", 1.0),
+        "decay_envelope_correlation": recon.get("decay_envelope_correlation", 1.0),
+        "decay_level_bias": recon.get("decay_level_bias", 0.0),
+        "decay_envelope_error_early": recon.get("decay_envelope_error_early", 0.0),
+        "decay_envelope_error_middle": recon.get("decay_envelope_error_middle", 0.0),
+        "decay_envelope_error_late": recon.get("decay_envelope_error_late", 0.0),
+        "dominant_decay_error_region": recon.get("dominant_decay_error_region", "unknown"),
         # Continuity and identity are model diagnostics; residual/transient
         # checks prefer compact rendered-audio proxies when available.
         "continuity_score": metadata.get("continuity_score", -1.0),

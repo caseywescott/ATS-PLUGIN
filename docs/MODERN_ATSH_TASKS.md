@@ -621,6 +621,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Make external source normalized-RMS reconstruction checks measure the full fixture duration, not just the first analysis window, and regenerate ATSA summaries with full-duration NRMS plus attribution fields.
 - [x] Ratchet first-party source-reconstruction ceilings around the improved full-duration Modern quality, especially the crotale hit.
 
+### Commit 69 - `test(acceptance): diagnose decay envelopes`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Add non-gating full-duration decay-envelope attribution metrics to the real-audio external driver and ATSA reference generator.
+- [x] Print decay envelope error, energy ratio, correlation, level bias, and early/middle/late focus alongside the existing reconstruction diagnostics.
+- [x] Regenerate first-party ATSA reference summaries so future fixture refreshes preserve decay-envelope context for resonant-tail work.
+
 ---
 
 ## Dependency Index
@@ -672,3 +680,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Source-bound reconstruction parity | 66 |
 | Reconstruction error attribution diagnostics | 67 |
 | Percussive resonant onset preservation | 68 |
+| Decay envelope attribution diagnostics | 69 |

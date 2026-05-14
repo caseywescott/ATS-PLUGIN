@@ -176,6 +176,10 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                 "real-audio driver should print dominant spectral-band diagnostics")
         require("layer proxies:" in combined,
                 "real-audio driver should print residual/transient layer proxy diagnostics")
+        require("decay envelope: error=" in combined,
+                "real-audio driver should print decay-envelope reconstruction diagnostics")
+        require("decay_focus=" in combined,
+                "real-audio driver should print ranked decay-envelope focus diagnostics")
         require("Diagnostic ranking by source normalized RMS error:" in combined,
                 "real-audio driver should print a ranked fixture diagnostic summary")
 
