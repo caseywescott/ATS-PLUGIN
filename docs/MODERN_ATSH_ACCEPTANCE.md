@@ -78,7 +78,7 @@ Each entry declares:
 
 | Name | What is checked |
 | --- | --- |
-| `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance, and must also stay under source-reconstruction ceilings |
+| `classic_parity` | Lower-is-better full-duration normalized RMS error and compact onset spectral distance must not regress beyond the ATSA reference plus fixture tolerance, and must also stay under source-reconstruction ceilings |
 | `tracker_continuity` | Smooth active-track continuity regression and identity-discontinuity increase vs. ATSA |
 | `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. source audio, falling back to ATSA summaries for older artifacts |
 | `transient_preservation` | Rendered attack-sharpness ratio vs. source audio, falling back to ATSA summaries for older artifacts |
@@ -106,6 +106,10 @@ The summary includes both model diagnostics and rendered-audio proxies:
 than sparse-track density or terminal lifecycle events, `identity_errors` counts
 large frequency jumps within a track, `residual_highpass_ratio` tracks rendered
 residual/noise character, and `attack_sharpness` is computed from rendered WAVs.
+`normalized_rms_error` is measured across the full fixture duration so long
+resonant decays cannot pass based only on onset quality; compact spectral
+distance remains onset-focused because it is intended to catch early tonal
+coloration and attack smearing.
 Reference generation also records non-gating reconstruction attribution fields:
 attack-window and tail-window normalized RMS error, low/mid/high spectral
 distance, and the dominant time and spectral error buckets. These fields make
@@ -145,6 +149,9 @@ passing merely because they remain better than a loose ATSA baseline. All four
 fixtures use a tightened 0.005 source-referenced residual highpass delta and
 the shared 0.95 source-referenced transient-sharpness floor so later
 residual/transient render changes cannot silently soften or recolor attacks.
+Modern transient source buffers protect 80 ms after each detected onset, which
+keeps percussive resonant attacks source-anchored long enough for the modeled
+partial/residual tail to take over without early spectral overshoot.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

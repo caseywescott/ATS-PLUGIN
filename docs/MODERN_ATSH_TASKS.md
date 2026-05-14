@@ -613,6 +613,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Print per-fixture residual/transient layer proxies and a ranked external-fixture summary so the next Modern analysis/synthesis target is obvious after each acceptance run.
 - [x] Extend ATSA reference generation and the Python driver contract test to keep reconstruction attribution available for future fixture refreshes.
 
+### Commit 68 - `fix(analysis): preserve percussive resonant onsets`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Extend Modern transient source-buffer protection from 30 ms to 80 ms after each onset so percussive resonant attacks do not hand off to synthetic partials too early.
+- [x] Make external source normalized-RMS reconstruction checks measure the full fixture duration, not just the first analysis window, and regenerate ATSA summaries with full-duration NRMS plus attribution fields.
+- [x] Ratchet first-party source-reconstruction ceilings around the improved full-duration Modern quality, especially the crotale hit.
+
 ---
 
 ## Dependency Index
@@ -663,3 +671,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Source-referenced residual shape preservation | 65 |
 | Source-bound reconstruction parity | 66 |
 | Reconstruction error attribution diagnostics | 67 |
+| Percussive resonant onset preservation | 68 |

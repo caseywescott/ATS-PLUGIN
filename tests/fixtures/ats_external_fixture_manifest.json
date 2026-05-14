@@ -22,8 +22,8 @@
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.8,
-        "max_source_normalized_rms_error": 0.075,
-        "max_source_spectral_distance_db": 1.35
+        "max_source_normalized_rms_error": 0.12,
+        "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
         "metadata": "reference/external_plucked_guitar_atsa_metadata.json",
@@ -46,8 +46,8 @@
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.5,
-        "max_source_normalized_rms_error": 0.60,
-        "max_source_spectral_distance_db": 3.4
+        "max_source_normalized_rms_error": 0.24,
+        "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
         "metadata": "reference/external_crotale_hit_atsa_metadata.json",
@@ -69,8 +69,8 @@
       "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
-        "max_source_normalized_rms_error": 0.30,
-        "max_source_spectral_distance_db": 1.2
+        "max_source_normalized_rms_error": 0.16,
+        "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
         "metadata": "reference/external_vocal_chop_atsa_metadata.json",
@@ -99,8 +99,8 @@
       "threshold_overrides": {
         "max_continuity_regression": 0.0,
         "max_identity_error_increase": 0,
-        "max_source_normalized_rms_error": 0.27,
-        "max_source_spectral_distance_db": 2.7
+        "max_source_normalized_rms_error": 0.18,
+        "max_source_spectral_distance_db": 0.15
       },
       "atsa_reference": {
         "metadata": "reference/external_vowel_phrase_atsa_metadata.json",

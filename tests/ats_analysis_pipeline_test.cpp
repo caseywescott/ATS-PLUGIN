@@ -455,6 +455,28 @@ void testTransientDetection()
     expect(diagnostics.scores.size() == features.size(), "transient diagnostic scores missing");
 }
 
+void testDefaultTransientWindowProtectsPercussiveTail()
+{
+    std::vector<ats::TransientFeatureFrame> features;
+    for (int i = 0; i < 16; ++i)
+    {
+        ats::TransientFeatureFrame frame;
+        frame.timeSeconds = 0.01 * (double)i;
+        frame.energy = i == 8 ? 4.0 : 0.1;
+        frame.spectralFlux = i == 8 ? 8.0 : 0.0;
+        frame.modelDiscontinuity = i == 8 ? 1.0 : 0.0;
+        features.push_back(frame);
+    }
+
+    ats::TransientDetectionConfig config;
+    ats::TransientDetectionDiagnostics diagnostics;
+    const auto markers = ats::detectTransientMarkers(features, config, diagnostics);
+
+    expect(markers.size() == 1, "default transient detection should find the percussive attack");
+    expect(markers[0].windowEndSeconds - markers[0].onsetSeconds >= 0.079,
+           "default transient window should protect the early resonant tail");
+}
+
 void testExperimentalTransientLanePrototype()
 {
     std::vector<ats::ModernAtsTransientMarker> markers;
@@ -953,6 +975,7 @@ int main()
     testTransientBreakResetsAssignment();
     testOrphanResidualNoise();
     testTransientDetection();
+    testDefaultTransientWindowProtectsPercussiveTail();
     testExperimentalTransientLanePrototype();
     testDirectModernAnalysisUsesSourcePeaks();
     testDirectModernAnalysisStoresOscillatorStartPhase();

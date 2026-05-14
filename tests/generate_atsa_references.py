@@ -197,8 +197,8 @@ def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
-    ref = wav_float_samples(ref_path)
-    cand = wav_float_samples(cand_path)
+    ref = wav_float_samples(ref_path, max_samples=None)
+    cand = wav_float_samples(cand_path, max_samples=None)
     n = max(len(ref), len(cand))
     if n == 0:
         return {

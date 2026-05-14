@@ -227,7 +227,7 @@ struct TransientDetectionConfig
     double thresholdStdDevMultiplier = 1.0;
     double minimumScore = 0.1;
     double preWindowSeconds = 0.01;
-    double postWindowSeconds = 0.03;
+    double postWindowSeconds = 0.08;
     double minimumGapSeconds = 0.04;
     double markerGain = 1.0;
 };
