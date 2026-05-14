@@ -115,12 +115,34 @@ void testClassicParityAllowsCandidateImprovement()
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "better_fixture";
     our.normalizedRmsError = 0.25;
-    our.spectralDistanceDb = 4.0;
+    our.spectralDistanceDb = 3.0;
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ClassicParity });
 
     expect(report.passed(), "classic parity: candidate improvements should pass");
+}
+
+void testClassicParitySourceCeilingFails()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "ceiling_fixture";
+    ref.normalizedRmsError = 1.0;
+    ref.spectralDistanceDb = 10.0;
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "ceiling_fixture";
+    our.normalizedRmsError = 0.70;  // better than ATSA, but above the source ceiling
+    our.spectralDistanceDb = 3.8;   // better than ATSA, but above the source ceiling
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::ClassicParity });
+
+    expect(!report.passed(), "classic parity: source ceilings should fail loose ATSA-relative passes");
+    expect(!checkPassed(report, "ceiling_fixture.classic_parity.source_normalized_rms_error"),
+           "classic parity: source normalized RMS ceiling should fail");
+    expect(!checkPassed(report, "ceiling_fixture.classic_parity.source_spectral_distance_db"),
+           "classic parity: source spectral ceiling should fail");
 }
 
 void testClassicParityGateFails()
@@ -506,6 +528,7 @@ int main()
 
     testClassicParityGatePasses();
     testClassicParityAllowsCandidateImprovement();
+    testClassicParitySourceCeilingFails();
     testClassicParityGateFails();
 
     testTrackerContinuityGatePasses();

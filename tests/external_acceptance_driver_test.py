@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import stat
 import subprocess
 import sys
@@ -74,6 +75,15 @@ def run_driver(driver: Path, tmpdir: Path, manifest: dict) -> subprocess.Complet
         capture_output=True,
         text=True,
     )
+
+
+def load_driver_module(driver: Path):
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("run_external_acceptance_under_test", driver)
+    require(spec is not None and spec.loader is not None, "driver module should be importable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_missing_assets_fail(driver: Path) -> None:
@@ -162,6 +172,31 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                 "source-referenced transient gate should emit a check")
 
 
+def test_classic_parity_source_ceilings(driver: Path) -> None:
+    module = load_driver_module(driver)
+    checks = module.evaluate_classic_parity(
+        "loose_atsa_reference",
+        {
+            "normalized_rms_error": 0.70,
+            "spectral_distance_db": 3.8,
+        },
+        {
+            "normalized_rms_error": 1.0,
+            "spectral_distance_db": 10.0,
+        },
+        module.merged_thresholds({}),
+    )
+    by_id = {check.check_id: check for check in checks}
+    require(by_id["loose_atsa_reference.classic_parity.normalized_rms_error"].passed,
+            "ATSA-relative normalized RMS check should pass for a source-improving candidate")
+    require(not by_id["loose_atsa_reference.classic_parity.source_normalized_rms_error"].passed,
+            "source normalized RMS ceiling should fail when reconstruction is still too loose")
+    require(by_id["loose_atsa_reference.classic_parity.spectral_distance_db"].passed,
+            "ATSA-relative spectral check should pass for a source-improving candidate")
+    require(not by_id["loose_atsa_reference.classic_parity.source_spectral_distance_db"].passed,
+            "source spectral ceiling should fail when reconstruction is still too loose")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: external_acceptance_driver_test.py <run_external_acceptance.py>", file=sys.stderr)
@@ -172,6 +207,7 @@ def main() -> int:
     test_missing_assets_fail(driver)
     test_zero_checks_fail(driver)
     test_shape_gates_use_source_audio(driver)
+    test_classic_parity_source_ceilings(driver)
     print("ok")
     return 0
 

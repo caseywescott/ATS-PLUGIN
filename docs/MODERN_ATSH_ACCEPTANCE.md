@@ -78,7 +78,7 @@ Each entry declares:
 
 | Name | What is checked |
 | --- | --- |
-| `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance |
+| `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance, and must also stay under source-reconstruction ceilings |
 | `tracker_continuity` | Smooth active-track continuity regression and identity-discontinuity increase vs. ATSA |
 | `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. source audio, falling back to ATSA summaries for older artifacts |
 | `transient_preservation` | Rendered attack-sharpness ratio vs. source audio, falling back to ATSA summaries for older artifacts |
@@ -133,10 +133,13 @@ permitted errors so long vocal material cannot pass by jumping one partial
 between unrelated harmonics.
 `external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
-no-RMS-regression check. All four fixtures use a tightened 0.005
-source-referenced residual highpass delta and the shared 0.95
-source-referenced transient-sharpness floor so later residual/transient render
-changes cannot silently soften or recolor attacks.
+no-RMS-regression check. Classic parity also includes source-quality ceilings
+for normalized RMS error and spectral distance, with tighter per-fixture
+ratchets on the first-party samples. This keeps future Modern changes from
+passing merely because they remain better than a loose ATSA baseline. All four
+fixtures use a tightened 0.005 source-referenced residual highpass delta and
+the shared 0.95 source-referenced transient-sharpness floor so later
+residual/transient render changes cannot silently soften or recolor attacks.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

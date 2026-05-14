@@ -597,6 +597,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Tighten the shared residual highpass-ratio delta from 0.05 to 0.005 now that Modern renders preserve source shape across the first-party fixtures.
 - [x] Extend Python and C++ gate contract tests so copied source audio passes residual/transient shape checks even when ATSA summaries are colored differently.
 
+### Commit 66 - `test(acceptance): source-bound reconstruction parity`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Extend the `classic_parity` real-audio gate with absolute source-quality ceilings for normalized RMS error and spectral distance, so Modern cannot pass solely by remaining better than a loose ATSA baseline.
+- [x] Ratchet the four first-party fixture manifests to current Modern source-reconstruction quality with per-fixture normalized-RMS and spectral-distance ceilings.
+- [x] Add Python and C++ gate contract tests proving ATSA-relative improvement still fails when source reconstruction remains too loose.
+
 ---
 
 ## Dependency Index
@@ -645,3 +653,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Comparable real-audio continuity scoring | 63 |
 | Source-referenced transient preservation | 64 |
 | Source-referenced residual shape preservation | 65 |
+| Source-bound reconstruction parity | 66 |

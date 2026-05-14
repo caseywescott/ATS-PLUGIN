@@ -159,6 +159,8 @@ struct ExternalFixtureThresholds
 {
     double maxNormalizedRmsErrorDelta = 5.0e-4;
     double maxSpectralDistanceDbDelta = 0.5;
+    double maxSourceNormalizedRmsError = 0.65;
+    double maxSourceSpectralDistanceDb = 3.5;
     double maxContinuityRegression = 0.05;
     int maxIdentityErrorIncrease = 2;
     double maxOrphanResidualRatioDelta = 0.005;

@@ -121,6 +121,8 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
 GATE_DEFAULTS = {
     "max_normalized_rms_error_delta": 5.0e-4,
     "max_spectral_distance_db_delta": 0.5,
+    "max_source_normalized_rms_error": 0.65,
+    "max_source_spectral_distance_db": 3.5,
     "max_continuity_regression": 0.05,
     "max_identity_error_increase": 2,
     "max_residual_highpass_ratio_delta": 0.005,
@@ -173,6 +175,11 @@ def evaluate_classic_parity(fixture_id: str, our: dict, ref: dict,
     check(results, f"{fixture_id}.classic_parity.normalized_rms_error",
           our_nrms <= limit, our_nrms, limit, ref_nrms,
           "our normalized RMS error should not regress beyond ATSA reference")
+    source_nrms_limit = thresholds.get("max_source_normalized_rms_error", -1.0)
+    if source_nrms_limit >= 0.0:
+        check(results, f"{fixture_id}.classic_parity.source_normalized_rms_error",
+              our_nrms <= source_nrms_limit, our_nrms, source_nrms_limit, ref_nrms,
+              "our normalized RMS error should stay within the source-quality ceiling")
 
     our_spec = our.get("spectral_distance_db", 0.0)
     ref_spec = ref.get("spectral_distance_db", 0.0)
@@ -180,6 +187,11 @@ def evaluate_classic_parity(fixture_id: str, our: dict, ref: dict,
     check(results, f"{fixture_id}.classic_parity.spectral_distance_db",
           our_spec <= spec_limit, our_spec, spec_limit, ref_spec,
           "our spectral distance should not regress beyond ATSA reference")
+    source_spec_limit = thresholds.get("max_source_spectral_distance_db", -1.0)
+    if source_spec_limit >= 0.0:
+        check(results, f"{fixture_id}.classic_parity.source_spectral_distance_db",
+              our_spec <= source_spec_limit, our_spec, source_spec_limit, ref_spec,
+              "our spectral distance should stay within the source-quality ceiling")
     return results
 
 

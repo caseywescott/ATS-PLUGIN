@@ -624,6 +624,16 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
                      our.normalizedRmsError,
                      nrmsLimit,
                      "normalized RMS error should not regress beyond ATSA reference (fixture=" + id + ")");
+            if (thresholds.maxSourceNormalizedRmsError >= 0.0)
+            {
+                addCheck(report,
+                         id + ".classic_parity.source_normalized_rms_error",
+                         our.normalizedRmsError <= thresholds.maxSourceNormalizedRmsError,
+                         our.normalizedRmsError,
+                         thresholds.maxSourceNormalizedRmsError,
+                         "normalized RMS error should stay within source-quality ceiling (fixture=" + id
+                             + ")");
+            }
 
             const double specLimit =
                 reference.spectralDistanceDb + thresholds.maxSpectralDistanceDbDelta;
@@ -633,6 +643,15 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
                      our.spectralDistanceDb,
                      specLimit,
                      "spectral distance should not regress beyond ATSA reference (fixture=" + id + ")");
+            if (thresholds.maxSourceSpectralDistanceDb >= 0.0)
+            {
+                addCheck(report,
+                         id + ".classic_parity.source_spectral_distance_db",
+                         our.spectralDistanceDb <= thresholds.maxSourceSpectralDistanceDb,
+                         our.spectralDistanceDb,
+                         thresholds.maxSourceSpectralDistanceDb,
+                         "spectral distance should stay within source-quality ceiling (fixture=" + id + ")");
+            }
             break;
         }
 
