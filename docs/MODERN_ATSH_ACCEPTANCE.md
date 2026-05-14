@@ -80,7 +80,7 @@ Each entry declares:
 | --- | --- |
 | `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance |
 | `tracker_continuity` | Smooth active-track continuity regression and identity-discontinuity increase vs. ATSA |
-| `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. ATSA reference |
+| `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. source audio, falling back to ATSA summaries for older artifacts |
 | `transient_preservation` | Rendered attack-sharpness ratio vs. source audio, falling back to ATSA summaries for older artifacts |
 
 ### Reference artifacts
@@ -106,9 +106,9 @@ The summary includes both model diagnostics and rendered-audio proxies:
 than sparse-track density or terminal lifecycle events, `identity_errors` counts
 large frequency jumps within a track, `residual_highpass_ratio` tracks rendered
 residual/noise character, and `attack_sharpness` is computed from rendered WAVs.
-Transient preservation compares Modern rendered sharpness against source-audio
-sharpness when the source fixture is available so Classic under-rendering cannot
-be mistaken for a better attack. Modern offline metadata also emits
+Residual and transient preservation compare Modern rendered shape against the
+source fixture when available so Classic coloration or under-rendering cannot be
+mistaken for better source preservation. Modern offline metadata also emits
 lifecycle-break counts separately so track churn remains diagnosable without
 distorting the active-to-active continuity score.
 
@@ -133,9 +133,10 @@ permitted errors so long vocal material cannot pass by jumping one partial
 between unrelated harmonics.
 `external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
-no-RMS-regression check. All four fixtures use the shared 0.95
-source-referenced transient-sharpness floor so later transient-render changes
-cannot silently soften attacks.
+no-RMS-regression check. All four fixtures use a tightened 0.005
+source-referenced residual highpass delta and the shared 0.95
+source-referenced transient-sharpness floor so later residual/transient render
+changes cannot silently soften or recolor attacks.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

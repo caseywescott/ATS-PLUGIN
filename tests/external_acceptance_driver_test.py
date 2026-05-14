@@ -122,7 +122,7 @@ def test_zero_checks_fail(driver: Path) -> None:
         require("no gate checks produced" in combined, "zero-check failure should name the problem")
 
 
-def test_transient_gate_uses_source_attack(driver: Path) -> None:
+def test_shape_gates_use_source_audio(driver: Path) -> None:
     with tempfile.TemporaryDirectory() as raw_tmpdir:
         tmpdir = Path(raw_tmpdir)
         write_transient_fixture_wav(tmpdir / "audio" / "pluck.wav")
@@ -130,6 +130,7 @@ def test_transient_gate_uses_source_attack(driver: Path) -> None:
         reference_path.parent.mkdir(parents=True, exist_ok=True)
         reference_path.write_text(json.dumps({
             "fixture_id": "pluck",
+            "residual_highpass_ratio": 1.0,
             "attack_sharpness": 100.0,
         }), encoding="utf-8")
         manifest = {
@@ -139,8 +140,14 @@ def test_transient_gate_uses_source_attack(driver: Path) -> None:
                     "id": "pluck",
                     "category": "plucked",
                     "input_audio": "audio/pluck.wav",
-                    "enabled_gates": ["transient_preservation"],
-                    "threshold_overrides": {"min_transient_sharpness_ratio": 0.99},
+                    "enabled_gates": [
+                        "residual_energy_preservation",
+                        "transient_preservation",
+                    ],
+                    "threshold_overrides": {
+                        "max_residual_highpass_ratio_delta": 0.001,
+                        "min_transient_sharpness_ratio": 0.99,
+                    },
                     "atsa_reference": {"summary_metrics": "reference/pluck_summary.json"},
                 }
             ],
@@ -148,7 +155,9 @@ def test_transient_gate_uses_source_attack(driver: Path) -> None:
         result = run_driver(driver, tmpdir, manifest)
         combined = result.stdout + result.stderr
         require(result.returncode == 0,
-                "copying source audio should pass transient preservation even if ATSA is over-sharp")
+                "copying source audio should pass shape gates even when ATSA summaries differ")
+        require("residual_energy_preservation.residual_highpass_ratio" in combined,
+                "source-referenced residual gate should emit a check")
         require("transient_preservation.attack_sharpness" in combined,
                 "source-referenced transient gate should emit a check")
 
@@ -162,7 +171,7 @@ def main() -> int:
     require(driver.is_file(), f"driver not found: {driver}")
     test_missing_assets_fail(driver)
     test_zero_checks_fail(driver)
-    test_transient_gate_uses_source_attack(driver)
+    test_shape_gates_use_source_audio(driver)
     print("ok")
     return 0
 

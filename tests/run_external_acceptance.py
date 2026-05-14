@@ -97,6 +97,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
         return {
             "normalized_rms_error": 0.0,
             "spectral_distance_db": 0.0,
+            "source_residual_highpass_ratio": 0.0,
             "source_attack_sharpness": 0.0,
         }
     ref_p = ref + [0.0] * (n - len(ref))
@@ -106,6 +107,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     return {
         "normalized_rms_error": err_rms / max(ref_rms, 1e-12),
         "spectral_distance_db": spectral_distance_db(ref_p, cand_p),
+        "source_residual_highpass_ratio": rendered_audio_shape_metrics(ref_path)["residual_highpass_ratio"],
         "source_attack_sharpness": rendered_audio_shape_metrics(ref_path)["attack_sharpness"],
         **rendered_audio_shape_metrics(cand_path),
     }
@@ -121,7 +123,7 @@ GATE_DEFAULTS = {
     "max_spectral_distance_db_delta": 0.5,
     "max_continuity_regression": 0.05,
     "max_identity_error_increase": 2,
-    "max_residual_highpass_ratio_delta": 0.05,
+    "max_residual_highpass_ratio_delta": 0.005,
     "min_residual_energy_ratio": 0.99,
     "min_transient_sharpness_improvement": 0.05,
     "min_transient_sharpness_ratio": 0.95,
@@ -210,18 +212,21 @@ def evaluate_residual_energy(fixture_id: str, our: dict, ref: dict,
                               thresholds: dict) -> list[CheckResult]:
     results: list[CheckResult] = []
     our_ratio = our.get("residual_highpass_ratio", our.get("orphan_residual_ratio", -1.0))
-    ref_ratio = ref.get("residual_highpass_ratio", ref.get("orphan_residual_ratio", -1.0))
-    if our_ratio < 0.0 or ref_ratio < 0.0:
+    baseline_ratio = our.get("source_residual_highpass_ratio",
+                             ref.get("source_residual_highpass_ratio", -1.0))
+    if baseline_ratio < 0.0:
+        baseline_ratio = ref.get("residual_highpass_ratio", ref.get("orphan_residual_ratio", -1.0))
+    if our_ratio < 0.0 or baseline_ratio < 0.0:
         print(f"    note: residual_highpass_ratio not available for {fixture_id} — gate skipped")
         return results
     limit = thresholds.get(
         "max_residual_highpass_ratio_delta",
         1.0 - thresholds["min_residual_energy_ratio"],
     )
-    delta = abs(our_ratio - ref_ratio)
+    delta = abs(our_ratio - baseline_ratio)
     check(results, f"{fixture_id}.residual_energy_preservation.residual_highpass_ratio",
-          delta <= limit, delta, limit, ref_ratio,
-          "our rendered residual/noise ratio should match ATSA reference within tolerance")
+          delta <= limit, delta, limit, baseline_ratio,
+          "our rendered residual/noise ratio should preserve the source shape")
     return results
 
 
@@ -314,6 +319,7 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
             "residual_highpass_ratio",
             our_metadata.get("residual_highpass_ratio", -1.0),
         ),
+        "source_residual_highpass_ratio": recon.get("source_residual_highpass_ratio", -1.0),
         "attack_sharpness": recon.get("attack_sharpness", our_metadata.get("attack_sharpness", -1.0)),
         "source_attack_sharpness": recon.get("source_attack_sharpness", -1.0),
         "max_buffer_step": recon.get("max_buffer_step", our_metadata.get("max_buffer_step", -1.0)),

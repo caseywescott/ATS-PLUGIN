@@ -224,16 +224,17 @@ void testResidualEnergyGatePasses()
 {
     ats::ExternalFixtureReferenceMetrics ref;
     ref.fixtureId = "flute_breathy";
-    ref.orphanResidualRatio = 0.20;
+    ref.residualHighpassRatio = 0.35; // ATSA can differ from source highpass character.
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "flute_breathy";
-    our.orphanResidualRatio = 0.22;  // delta = 0.02 < 0.05 threshold
+    our.sourceResidualHighpassRatio = 0.20;
+    our.residualHighpassRatio = 0.204;  // source delta = 0.004 < 0.005 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ResidualEnergyPreservation });
 
-    expect(report.passed(), "residual energy: small ratio delta should pass");
+    expect(report.passed(), "residual energy: small source-ratio delta should pass");
     expect(hasCheck(report, "flute_breathy.residual_energy_preservation"),
            "residual energy: check id present");
 }
@@ -246,12 +247,12 @@ void testResidualEnergyGateFails()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "noisy_voice";
-    our.orphanResidualRatio = 0.05;  // delta = 0.30 > 0.05 threshold
+    our.orphanResidualRatio = 0.34;  // delta = 0.01 > 0.005 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::ResidualEnergyPreservation });
 
-    expect(!report.passed(), "residual energy: large ratio delta should fail");
+    expect(!report.passed(), "residual energy: ratio delta above tightened threshold should fail");
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +402,7 @@ void testLoadExternalFixtureReferenceMetrics()
             << "  \"continuity_score\": 0.94,\n"
             << "  \"identity_errors\": 0,\n"
             << "  \"orphan_residual_ratio\": 0.15,\n"
+            << "  \"source_residual_highpass_ratio\": 0.11,\n"
             << "  \"source_attack_sharpness\": 1.7,\n"
             << "  \"attack_sharpness\": 1.8,\n"
             << "  \"max_buffer_step\": 0.12\n"
@@ -421,6 +423,8 @@ void testLoadExternalFixtureReferenceMetrics()
            "loadExternalFixtureReferenceMetrics: identity_errors parsed as zero");
     expect(loaded.orphanResidualRatio > 0.14 && loaded.orphanResidualRatio < 0.16,
            "loadExternalFixtureReferenceMetrics: orphan_residual_ratio parsed");
+    expect(loaded.sourceResidualHighpassRatio > 0.10 && loaded.sourceResidualHighpassRatio < 0.12,
+           "loadExternalFixtureReferenceMetrics: source_residual_highpass_ratio parsed");
     expect(loaded.attackSharpness > 1.79 && loaded.attackSharpness < 1.81,
            "loadExternalFixtureReferenceMetrics: attack_sharpness parsed");
     expect(loaded.sourceAttackSharpness > 1.69 && loaded.sourceAttackSharpness < 1.71,

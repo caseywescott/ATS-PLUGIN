@@ -594,6 +594,7 @@ bool loadExternalFixtureReferenceMetrics(const std::string& path,
     out.identityErrors = jsonIntValue(json, "identity_errors", -1);
     out.orphanResidualRatio = jsonDoubleValue(json, "orphan_residual_ratio", -1.0);
     out.residualHighpassRatio = jsonDoubleValue(json, "residual_highpass_ratio", -1.0);
+    out.sourceResidualHighpassRatio = jsonDoubleValue(json, "source_residual_highpass_ratio", -1.0);
     out.sourceAttackSharpness = jsonDoubleValue(json, "source_attack_sharpness", -1.0);
     out.attackSharpness = jsonDoubleValue(json, "attack_sharpness", -1.0);
     out.maxBufferStep = jsonDoubleValue(json, "max_buffer_step", -1.0);
@@ -666,18 +667,24 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
             const double ourResidualRatio = our.residualHighpassRatio >= 0.0
                                                 ? our.residualHighpassRatio
                                                 : our.orphanResidualRatio;
-            const double referenceResidualRatio = reference.residualHighpassRatio >= 0.0
-                                                      ? reference.residualHighpassRatio
-                                                      : reference.orphanResidualRatio;
-            if (ourResidualRatio >= 0.0 && referenceResidualRatio >= 0.0)
+            double baselineResidualRatio = our.sourceResidualHighpassRatio >= 0.0
+                                               ? our.sourceResidualHighpassRatio
+                                               : reference.sourceResidualHighpassRatio;
+            if (baselineResidualRatio < 0.0)
             {
-                const double delta = std::abs(ourResidualRatio - referenceResidualRatio);
+                baselineResidualRatio = reference.residualHighpassRatio >= 0.0
+                                            ? reference.residualHighpassRatio
+                                            : reference.orphanResidualRatio;
+            }
+            if (ourResidualRatio >= 0.0 && baselineResidualRatio >= 0.0)
+            {
+                const double delta = std::abs(ourResidualRatio - baselineResidualRatio);
                 addCheck(report,
                          id + ".residual_energy_preservation.residual_highpass_ratio",
                          delta <= thresholds.maxOrphanResidualRatioDelta,
                          delta,
                          thresholds.maxOrphanResidualRatioDelta,
-                         "residual noise ratio delta vs ATSA reference (fixture=" + id + ")");
+                         "residual noise ratio delta vs source audio when available (fixture=" + id + ")");
             }
             break;
         }

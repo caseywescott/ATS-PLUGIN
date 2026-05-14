@@ -589,6 +589,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Make the real-audio transient gate compare Modern attack sharpness against the source fixture when available, with ATSA summaries retained as a fallback for older artifacts.
 - [x] Raise the shared transient-sharpness floor to 0.95 and remove fixture-specific low transient thresholds.
 
+### Commit 65 - `test(acceptance): source-reference residual shape`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Make the real-audio residual/noise gate compare rendered highpass shape against the source fixture when available, with ATSA summaries retained as a fallback for older artifacts.
+- [x] Tighten the shared residual highpass-ratio delta from 0.05 to 0.005 now that Modern renders preserve source shape across the first-party fixtures.
+- [x] Extend Python and C++ gate contract tests so copied source audio passes residual/transient shape checks even when ATSA summaries are colored differently.
+
 ---
 
 ## Dependency Index
@@ -636,3 +644,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Modern assignment identity-jump rejection | 62 |
 | Comparable real-audio continuity scoring | 63 |
 | Source-referenced transient preservation | 64 |
+| Source-referenced residual shape preservation | 65 |
