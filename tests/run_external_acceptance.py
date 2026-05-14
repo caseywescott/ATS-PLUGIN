@@ -34,9 +34,10 @@ from pathlib import Path
 # Helpers
 # ---------------------------------------------------------------------------
 
-def wav_float_samples(path: str, max_samples: int = 4096) -> list[float]:
+def wav_float_samples(path: str, max_samples=4096) -> list[float]:
     with wave.open(path, "r") as w:
-        n = min(w.getnframes(), max_samples)
+        frame_count = w.getnframes()
+        n = frame_count if max_samples is None else min(frame_count, max_samples)
         sw = w.getsampwidth()
         raw = w.readframes(n)
     if sw != 2:
@@ -89,6 +90,72 @@ def spectral_distance_db(ref: list[float], cand: list[float],
     return dist / n_bins
 
 
+def spectral_distance_for_bins(ref: list[float], cand: list[float],
+                               bins: range, window: int = 2048) -> float:
+    r = (ref + [0.0] * window)[:window]
+    c = (cand + [0.0] * window)[:window]
+    values: list[float] = []
+    for b in bins:
+        rd = 20.0 * math.log10(max(dft_mag(r, b, window), 1e-12))
+        cd = 20.0 * math.log10(max(dft_mag(c, b, window), 1e-12))
+        values.append(abs(cd - rd))
+    return sum(values) / max(len(values), 1)
+
+
+def normalized_rms_error_for_segment(ref: list[float], cand: list[float],
+                                     start: int, end: int) -> float:
+    if end <= start:
+        return 0.0
+    ref_seg = ref[start:end]
+    cand_seg = cand[start:end]
+    n = min(len(ref_seg), len(cand_seg))
+    if n == 0:
+        return 0.0
+    ref_seg = ref_seg[:n]
+    cand_seg = cand_seg[:n]
+    ref_rms = rms(ref_seg)
+    err_rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(ref_seg, cand_seg)) / n)
+    return err_rms / max(ref_rms, 1e-12)
+
+
+def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
+    ref = wav_float_samples(ref_path, max_samples=None)
+    cand = wav_float_samples(cand_path, max_samples=None)
+    n = max(len(ref), len(cand))
+    if n == 0:
+        return {
+            "attack_normalized_rms_error": 0.0,
+            "tail_normalized_rms_error": 0.0,
+            "dominant_time_error_region": "none",
+            "spectral_distance_low_db": 0.0,
+            "spectral_distance_mid_db": 0.0,
+            "spectral_distance_high_db": 0.0,
+            "dominant_spectral_error_band": "none",
+        }
+
+    ref_p = ref + [0.0] * (n - len(ref))
+    cand_p = cand + [0.0] * (n - len(cand))
+    segment = min(2048, n)
+    attack_nrms = normalized_rms_error_for_segment(ref_p, cand_p, 0, segment)
+    tail_nrms = normalized_rms_error_for_segment(ref_p, cand_p, n - segment, n)
+    bands = {
+        "low": spectral_distance_for_bins(ref_p, cand_p, range(1, 5)),
+        "mid": spectral_distance_for_bins(ref_p, cand_p, range(5, 11)),
+        "high": spectral_distance_for_bins(ref_p, cand_p, range(11, 17)),
+    }
+    dominant_band = max(bands, key=bands.get)
+    dominant_time = "attack" if attack_nrms >= tail_nrms else "tail"
+    return {
+        "attack_normalized_rms_error": attack_nrms,
+        "tail_normalized_rms_error": tail_nrms,
+        "dominant_time_error_region": dominant_time,
+        "spectral_distance_low_db": bands["low"],
+        "spectral_distance_mid_db": bands["mid"],
+        "spectral_distance_high_db": bands["high"],
+        "dominant_spectral_error_band": dominant_band,
+    }
+
+
 def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     ref = wav_float_samples(ref_path)
     cand = wav_float_samples(cand_path)
@@ -109,6 +176,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
         "spectral_distance_db": spectral_distance_db(ref_p, cand_p),
         "source_residual_highpass_ratio": rendered_audio_shape_metrics(ref_path)["residual_highpass_ratio"],
         "source_attack_sharpness": rendered_audio_shape_metrics(ref_path)["attack_sharpness"],
+        **reconstruction_attribution_metrics(ref_path, cand_path),
         **rendered_audio_shape_metrics(cand_path),
     }
 
@@ -272,12 +340,93 @@ GATE_EVALUATORS = {
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic reporting
+# ---------------------------------------------------------------------------
+
+def float_metric(metrics: dict, key: str, default: float = 0.0) -> float:
+    value = metrics.get(key, default)
+    return value if isinstance(value, (int, float)) and math.isfinite(value) else default
+
+
+def reconstruction_diagnostics(fixture_id: str, category: str, metrics: dict,
+                               metadata: dict) -> dict:
+    source_residual = float_metric(metrics, "source_residual_highpass_ratio", -1.0)
+    rendered_residual = float_metric(metrics, "residual_highpass_ratio", -1.0)
+    residual_delta = (abs(rendered_residual - source_residual)
+                      if source_residual >= 0.0 and rendered_residual >= 0.0 else -1.0)
+    source_attack = float_metric(metrics, "source_attack_sharpness", -1.0)
+    rendered_attack = float_metric(metrics, "attack_sharpness", -1.0)
+    transient_ratio = (rendered_attack / max(source_attack, 1e-12)
+                       if source_attack >= 0.0 and rendered_attack >= 0.0 else -1.0)
+    model = metadata.get("model", {})
+    return {
+        "fixture_id": fixture_id,
+        "category": category,
+        "normalized_rms_error": float_metric(metrics, "normalized_rms_error"),
+        "spectral_distance_db": float_metric(metrics, "spectral_distance_db"),
+        "attack_normalized_rms_error": float_metric(metrics, "attack_normalized_rms_error"),
+        "tail_normalized_rms_error": float_metric(metrics, "tail_normalized_rms_error"),
+        "dominant_time_error_region": metrics.get("dominant_time_error_region", "unknown"),
+        "spectral_distance_low_db": float_metric(metrics, "spectral_distance_low_db"),
+        "spectral_distance_mid_db": float_metric(metrics, "spectral_distance_mid_db"),
+        "spectral_distance_high_db": float_metric(metrics, "spectral_distance_high_db"),
+        "dominant_spectral_error_band": metrics.get("dominant_spectral_error_band", "unknown"),
+        "residual_highpass_delta": residual_delta,
+        "transient_sharpness_ratio": transient_ratio,
+        "orphan_residual_ratio": float_metric(metadata, "orphan_residual_ratio", -1.0),
+        "partial_noise_energy": float_metric(metadata, "partial_noise_energy", -1.0),
+        "transient_markers": model.get("transients", -1),
+        "transient_buffers": model.get("transient_buffers", -1),
+    }
+
+
+def print_reconstruction_diagnostics(diagnostics: dict) -> None:
+    time_region = diagnostics["dominant_time_error_region"]
+    time_value = diagnostics.get(f"{time_region}_normalized_rms_error", 0.0)
+    band = diagnostics["dominant_spectral_error_band"]
+    band_value = diagnostics.get(f"spectral_distance_{band}_db", 0.0)
+    print("  diagnostics:"
+          f" time attack_nrms={diagnostics['attack_normalized_rms_error']:.6g}"
+          f" tail_nrms={diagnostics['tail_normalized_rms_error']:.6g}"
+          f" dominant={time_region}:{time_value:.6g};"
+          f" spectral low={diagnostics['spectral_distance_low_db']:.6g}dB"
+          f" mid={diagnostics['spectral_distance_mid_db']:.6g}dB"
+          f" high={diagnostics['spectral_distance_high_db']:.6g}dB"
+          f" dominant_band={band}:{band_value:.6g}dB;")
+    print("  layer proxies:"
+          f" residual_highpass_delta={diagnostics['residual_highpass_delta']:.6g}"
+          f" transient_sharpness_ratio={diagnostics['transient_sharpness_ratio']:.6g}"
+          f" orphan_residual_ratio={diagnostics['orphan_residual_ratio']:.6g}"
+          f" partial_noise_energy={diagnostics['partial_noise_energy']:.6g}"
+          f" transients={diagnostics['transient_markers']}"
+          f" buffers={diagnostics['transient_buffers']}")
+
+
+def print_diagnostic_ranking(rows: list[dict]) -> None:
+    if not rows:
+        return
+    print("\nDiagnostic ranking by source normalized RMS error:")
+    for row in sorted(rows, key=lambda item: item["normalized_rms_error"], reverse=True):
+        time_region = row["dominant_time_error_region"]
+        time_value = row.get(f"{time_region}_normalized_rms_error", 0.0)
+        band = row["dominant_spectral_error_band"]
+        band_value = row.get(f"spectral_distance_{band}_db", 0.0)
+        print(f"  {row['fixture_id']}:"
+              f" nrms={row['normalized_rms_error']:.6g}"
+              f" spectral={row['spectral_distance_db']:.6g}dB"
+              f" time_focus={time_region}:{time_value:.6g}"
+              f" spectral_focus={band}:{band_value:.6g}dB"
+              f" residual_delta={row['residual_highpass_delta']:.6g}"
+              f" transient_ratio={row['transient_sharpness_ratio']:.6g}")
+
+
+# ---------------------------------------------------------------------------
 # Per-fixture runner
 # ---------------------------------------------------------------------------
 
 def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
-                candidate_offline: str) -> tuple[bool, int, int]:
-    """Run one fixture. Returns (any_failures, checks_run, checks_skipped)."""
+                candidate_offline: str):
+    """Run one fixture. Returns (any_failures, checks_run, checks_skipped, diagnostics)."""
     fixture_id = fixture["id"]
     audio_rel = fixture.get("input_audio", "")
     audio_path = manifest_dir / audio_rel
@@ -289,13 +438,13 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
     if not audio_path.is_file():
         print(f"  SKIP — audio asset not found: {audio_path}")
         print(f"         Run generate_atsa_references.py once the audio file is available.")
-        return False, 0, 1
+        return False, 0, 1, None
 
     if summary_path is None or not summary_path.is_file():
         print(f"  SKIP — reference metrics not found: {summary_path}")
         print(f"         Run: python3 tests/generate_atsa_references.py --ats-offline <bin> "
               f"--manifest ... --output-dir tests/fixtures/reference")
-        return False, 0, 1
+        return False, 0, 1, None
 
     ref_metrics = json.loads(summary_path.read_text(encoding="utf-8"))
 
@@ -316,7 +465,7 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
         except subprocess.CalledProcessError as exc:
             print(f"  ERROR — candidate offline analysis failed: {exc.stderr.decode(errors='replace')[:200]}",
                   file=sys.stderr)
-            return True, 0, 0
+            return True, 0, 0, None
 
         our_metadata = json.loads(Path(out_meta).read_text(encoding="utf-8"))
         recon = reconstruction_metrics(str(audio_path), out_wav)
@@ -335,7 +484,17 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
         "attack_sharpness": recon.get("attack_sharpness", our_metadata.get("attack_sharpness", -1.0)),
         "source_attack_sharpness": recon.get("source_attack_sharpness", -1.0),
         "max_buffer_step": recon.get("max_buffer_step", our_metadata.get("max_buffer_step", -1.0)),
+        "attack_normalized_rms_error": recon.get("attack_normalized_rms_error", 0.0),
+        "tail_normalized_rms_error": recon.get("tail_normalized_rms_error", 0.0),
+        "dominant_time_error_region": recon.get("dominant_time_error_region", "unknown"),
+        "spectral_distance_low_db": recon.get("spectral_distance_low_db", 0.0),
+        "spectral_distance_mid_db": recon.get("spectral_distance_mid_db", 0.0),
+        "spectral_distance_high_db": recon.get("spectral_distance_high_db", 0.0),
+        "dominant_spectral_error_band": recon.get("dominant_spectral_error_band", "unknown"),
     }
+    diagnostics = reconstruction_diagnostics(
+        fixture_id, fixture.get("category", "?"), our_metrics, our_metadata
+    )
 
     enabled_gates = fixture.get("enabled_gates", [])
     overrides = fixture.get("threshold_overrides", {})
@@ -358,12 +517,13 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
         print(result.format())
         if not result.passed:
             any_fail = True
+    print_reconstruction_diagnostics(diagnostics)
 
     if not all_checks:
         print(f"  FAIL — no gate checks produced (gates={enabled_gates})", file=sys.stderr)
         any_fail = True
 
-    return any_fail, len(all_checks), 0
+    return any_fail, len(all_checks), 0, diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -406,15 +566,20 @@ def main() -> int:
     total_failed = 0
     total_checks = 0
     total_skipped = 0
+    diagnostic_rows: list[dict] = []
 
     for fixture in fixtures:
-        any_fail, n_checks, n_skip = run_fixture(
+        any_fail, n_checks, n_skip, diagnostics = run_fixture(
             fixture, manifest_dir, reference_dir, candidate_offline
         )
         total_checks += n_checks
         total_skipped += n_skip
+        if diagnostics is not None:
+            diagnostic_rows.append(diagnostics)
         if any_fail:
             total_failed += 1
+
+    print_diagnostic_ranking(diagnostic_rows)
 
     print(f"\nSummary: {total_checks} checks run, "
           f"{total_skipped} fixture(s) skipped (assets missing), "

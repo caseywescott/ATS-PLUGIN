@@ -106,6 +106,11 @@ The summary includes both model diagnostics and rendered-audio proxies:
 than sparse-track density or terminal lifecycle events, `identity_errors` counts
 large frequency jumps within a track, `residual_highpass_ratio` tracks rendered
 residual/noise character, and `attack_sharpness` is computed from rendered WAVs.
+Reference generation also records non-gating reconstruction attribution fields:
+attack-window and tail-window normalized RMS error, low/mid/high spectral
+distance, and the dominant time and spectral error buckets. These fields make
+quality failures easier to assign to attack capture, sustained partial tracking,
+or residual/spectral-shape work without turning every diagnostic into a gate.
 Residual and transient preservation compare Modern rendered shape against the
 source fixture when available so Classic coloration or under-rendering cannot be
 mistaken for better source preservation. Modern offline metadata also emits
@@ -146,6 +151,14 @@ missing reference metrics, unknown gates, and zero emitted gate checks as
 failures. This keeps an explicitly enabled real-audio gate from reporting
 success while proving nothing. The gate-logic C++ test and driver contract test
 always run on synthetic data.
+
+The external driver prints an advisory diagnostic block for each fixture after
+the gate checks. It breaks source reconstruction error into attack-vs-tail
+normalized RMS, low/mid/high compact spectral distance, residual highpass
+source delta, transient sharpness ratio, and available Modern model proxies
+such as orphan residual ratio and transient buffer counts. A final ranked
+summary orders fixtures by source normalized RMS error so the next improvement
+target is visible immediately after a run.
 
 ## Design principle
 

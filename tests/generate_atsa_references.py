@@ -84,10 +84,11 @@ def spectral_distance_db(ref_samples: list[float], cand_samples: list[float],
     return dist / n_bins
 
 
-def wav_float_samples(path: str, max_samples: int = 4096) -> list[float]:
+def wav_float_samples(path: str, max_samples=4096) -> list[float]:
     """Read up to max_samples from a 16-bit WAV as float [-1, 1]."""
     with wave.open(path, "r") as w:
-        n = min(w.getnframes(), max_samples)
+        frame_count = w.getnframes()
+        n = frame_count if max_samples is None else min(frame_count, max_samples)
         sw = w.getsampwidth()
         raw = w.readframes(n)
     if sw != 2:
@@ -114,6 +115,80 @@ def rendered_audio_shape_metrics(path: str) -> dict:
         "attack_sharpness": peak / rms_value if rms_value > 0.0 else 0.0,
         "max_buffer_step": max((abs(x) for x in steps), default=0.0),
         "residual_highpass_ratio": diff_energy / (diff_energy + energy) if energy > 0.0 else 0.0,
+    }
+
+
+def spectral_distance_for_bins(ref_samples: list[float], cand_samples: list[float],
+                               bins: range, window: int = 2048) -> float:
+    ref = ref_samples[:window] + [0.0] * max(0, window - len(ref_samples))
+    cand = cand_samples[:window] + [0.0] * max(0, window - len(cand_samples))
+    values: list[float] = []
+    for b in bins:
+        ref_mag = dft_magnitude(ref, b, window)
+        cand_mag = dft_magnitude(cand, b, window)
+        ref_db = 20.0 * math.log10(max(ref_mag, 1e-12))
+        cand_db = 20.0 * math.log10(max(cand_mag, 1e-12))
+        values.append(abs(cand_db - ref_db))
+    return sum(values) / max(len(values), 1)
+
+
+def rms(samples: list[float]) -> float:
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(x * x for x in samples) / len(samples))
+
+
+def normalized_rms_error_for_segment(ref: list[float], cand: list[float],
+                                     start: int, end: int) -> float:
+    if end <= start:
+        return 0.0
+    ref_seg = ref[start:end]
+    cand_seg = cand[start:end]
+    n = min(len(ref_seg), len(cand_seg))
+    if n == 0:
+        return 0.0
+    ref_seg = ref_seg[:n]
+    cand_seg = cand_seg[:n]
+    ref_rms = rms(ref_seg)
+    err_rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(ref_seg, cand_seg)) / n)
+    return err_rms / max(ref_rms, 1e-12)
+
+
+def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
+    ref = wav_float_samples(ref_path, max_samples=None)
+    cand = wav_float_samples(cand_path, max_samples=None)
+    n = max(len(ref), len(cand))
+    if n == 0:
+        return {
+            "attack_normalized_rms_error": 0.0,
+            "tail_normalized_rms_error": 0.0,
+            "dominant_time_error_region": "none",
+            "spectral_distance_low_db": 0.0,
+            "spectral_distance_mid_db": 0.0,
+            "spectral_distance_high_db": 0.0,
+            "dominant_spectral_error_band": "none",
+        }
+
+    ref_padded = ref + [0.0] * (n - len(ref))
+    cand_padded = cand + [0.0] * (n - len(cand))
+    segment = min(2048, n)
+    attack_nrms = normalized_rms_error_for_segment(ref_padded, cand_padded, 0, segment)
+    tail_nrms = normalized_rms_error_for_segment(ref_padded, cand_padded, n - segment, n)
+    bands = {
+        "low": spectral_distance_for_bins(ref_padded, cand_padded, range(1, 5)),
+        "mid": spectral_distance_for_bins(ref_padded, cand_padded, range(5, 11)),
+        "high": spectral_distance_for_bins(ref_padded, cand_padded, range(11, 17)),
+    }
+    dominant_band = max(bands, key=bands.get)
+    dominant_time = "attack" if attack_nrms >= tail_nrms else "tail"
+    return {
+        "attack_normalized_rms_error": attack_nrms,
+        "tail_normalized_rms_error": tail_nrms,
+        "dominant_time_error_region": dominant_time,
+        "spectral_distance_low_db": bands["low"],
+        "spectral_distance_mid_db": bands["mid"],
+        "spectral_distance_high_db": bands["high"],
+        "dominant_spectral_error_band": dominant_band,
     }
 
 
@@ -147,6 +222,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
         "spectral_distance_db": spec_dist,
         "source_residual_highpass_ratio": rendered_audio_shape_metrics(ref_path)["residual_highpass_ratio"],
         "source_attack_sharpness": rendered_audio_shape_metrics(ref_path)["attack_sharpness"],
+        **reconstruction_attribution_metrics(ref_path, cand_path),
         **shape,
     }
 
@@ -166,7 +242,14 @@ def extract_summary(metadata: dict, recon: dict) -> dict:
         "partials": model.get("partials", 0),
         "frames": model.get("frames", 0),
         "normalized_rms_error": recon.get("normalized_rms_error", 0.0),
+        "attack_normalized_rms_error": recon.get("attack_normalized_rms_error", 0.0),
+        "tail_normalized_rms_error": recon.get("tail_normalized_rms_error", 0.0),
+        "dominant_time_error_region": recon.get("dominant_time_error_region", "unknown"),
         "spectral_distance_db": recon.get("spectral_distance_db", 0.0),
+        "spectral_distance_low_db": recon.get("spectral_distance_low_db", 0.0),
+        "spectral_distance_mid_db": recon.get("spectral_distance_mid_db", 0.0),
+        "spectral_distance_high_db": recon.get("spectral_distance_high_db", 0.0),
+        "dominant_spectral_error_band": recon.get("dominant_spectral_error_band", "unknown"),
         # Continuity and identity are model diagnostics; residual/transient
         # checks prefer compact rendered-audio proxies when available.
         "continuity_score": metadata.get("continuity_score", -1.0),

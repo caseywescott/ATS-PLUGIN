@@ -170,6 +170,14 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                 "source-referenced residual gate should emit a check")
         require("transient_preservation.attack_sharpness" in combined,
                 "source-referenced transient gate should emit a check")
+        require("diagnostics: time attack_nrms=" in combined,
+                "real-audio driver should print time-window reconstruction diagnostics")
+        require("dominant_band=" in combined,
+                "real-audio driver should print dominant spectral-band diagnostics")
+        require("layer proxies:" in combined,
+                "real-audio driver should print residual/transient layer proxy diagnostics")
+        require("Diagnostic ranking by source normalized RMS error:" in combined,
+                "real-audio driver should print a ranked fixture diagnostic summary")
 
 
 def test_classic_parity_source_ceilings(driver: Path) -> None:

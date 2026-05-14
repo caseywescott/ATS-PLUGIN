@@ -605,6 +605,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Ratchet the four first-party fixture manifests to current Modern source-reconstruction quality with per-fixture normalized-RMS and spectral-distance ceilings.
 - [x] Add Python and C++ gate contract tests proving ATSA-relative improvement still fails when source reconstruction remains too loose.
 
+### Commit 67 - `test(acceptance): attribute reconstruction errors`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Add non-gating real-audio diagnostics that split reconstruction error into attack-window vs tail-window normalized RMS and low/mid/high spectral-distance buckets.
+- [x] Print per-fixture residual/transient layer proxies and a ranked external-fixture summary so the next Modern analysis/synthesis target is obvious after each acceptance run.
+- [x] Extend ATSA reference generation and the Python driver contract test to keep reconstruction attribution available for future fixture refreshes.
+
 ---
 
 ## Dependency Index
@@ -654,3 +662,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Source-referenced transient preservation | 64 |
 | Source-referenced residual shape preservation | 65 |
 | Source-bound reconstruction parity | 66 |
+| Reconstruction error attribution diagnostics | 67 |
