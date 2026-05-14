@@ -148,6 +148,7 @@ struct ExternalFixtureReferenceMetrics
     int identityErrors = -1;         // -1 = not available
     double orphanResidualRatio = -1.0;
     double residualHighpassRatio = -1.0;
+    double sourceAttackSharpness = -1.0;
     double attackSharpness = -1.0;
     double maxBufferStep = -1.0;
 };
@@ -160,7 +161,7 @@ struct ExternalFixtureThresholds
     double maxContinuityRegression = 0.05;
     int maxIdentityErrorIncrease = 2;
     double maxOrphanResidualRatioDelta = 0.05;
-    double minTransientSharpnessRatio = 0.90;  // candidate / reference >= this ratio
+    double minTransientSharpnessRatio = 0.95;  // candidate / source-or-reference >= this ratio
 };
 
 // Gate names that may be listed in a fixture manifest.

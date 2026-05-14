@@ -581,6 +581,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Emit Modern offline continuity submetrics, including lifecycle breaks and mean confidence, so track churn remains visible outside the score.
 - [x] Tighten the sustained first-party vowel phrase continuity gate to allow no regression against the ATSA reference.
 
+### Commit 64 - `fix(synth): replace synthetic layer under transients`
+
+**PRD:** section 5.7, section 7.3
+
+- [x] Crossfade preserved transient buffers over the synthetic partial/residual layer so captured attacks replace duplicated modeled energy instead of stacking on top.
+- [x] Make the real-audio transient gate compare Modern attack sharpness against the source fixture when available, with ATSA summaries retained as a fallback for older artifacts.
+- [x] Raise the shared transient-sharpness floor to 0.95 and remove fixture-specific low transient thresholds.
+
 ---
 
 ## Dependency Index
@@ -627,3 +635,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Transient-leading attack preservation | 61 |
 | Modern assignment identity-jump rejection | 62 |
 | Comparable real-audio continuity scoring | 63 |
+| Source-referenced transient preservation | 64 |

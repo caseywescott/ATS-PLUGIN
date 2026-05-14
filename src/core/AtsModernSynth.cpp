@@ -329,8 +329,11 @@ bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* outpu
 
                 const double fade = transientFade(i, length, fadeInSamples,
                                                   plan.config.transientCrossfadeSamples);
+                const double transientGain = plan.config.transientGain * marker->gain * buffer.gain;
+                const double duck = clamp01(transientGain * fade);
+                output[outIndex] *= static_cast<float>(1.0 - duck);
                 output[outIndex] += static_cast<float>(
-                    srcSample * plan.config.transientGain * marker->gain * buffer.gain * fade);
+                    srcSample * transientGain * fade);
             }
         }
     }

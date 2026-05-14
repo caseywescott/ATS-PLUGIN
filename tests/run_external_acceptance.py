@@ -94,7 +94,11 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     cand = wav_float_samples(cand_path)
     n = max(len(ref), len(cand))
     if n == 0:
-        return {"normalized_rms_error": 0.0, "spectral_distance_db": 0.0}
+        return {
+            "normalized_rms_error": 0.0,
+            "spectral_distance_db": 0.0,
+            "source_attack_sharpness": 0.0,
+        }
     ref_p = ref + [0.0] * (n - len(ref))
     cand_p = cand + [0.0] * (n - len(cand))
     ref_rms = rms(ref_p)
@@ -102,6 +106,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     return {
         "normalized_rms_error": err_rms / max(ref_rms, 1e-12),
         "spectral_distance_db": spectral_distance_db(ref_p, cand_p),
+        "source_attack_sharpness": rendered_audio_shape_metrics(ref_path)["attack_sharpness"],
         **rendered_audio_shape_metrics(cand_path),
     }
 
@@ -119,7 +124,7 @@ GATE_DEFAULTS = {
     "max_residual_highpass_ratio_delta": 0.05,
     "min_residual_energy_ratio": 0.99,
     "min_transient_sharpness_improvement": 0.05,
-    "min_transient_sharpness_ratio": 0.90,
+    "min_transient_sharpness_ratio": 0.95,
 }
 
 
@@ -224,18 +229,20 @@ def evaluate_transient_preservation(fixture_id: str, our: dict, ref: dict,
                                      thresholds: dict) -> list[CheckResult]:
     results: list[CheckResult] = []
     our_sharp = our.get("attack_sharpness", -1.0)
-    ref_sharp = ref.get("attack_sharpness", -1.0)
-    if our_sharp < 0.0 or ref_sharp < 0.0:
+    baseline_sharp = our.get("source_attack_sharpness", ref.get("source_attack_sharpness", -1.0))
+    if baseline_sharp < 0.0:
+        baseline_sharp = ref.get("attack_sharpness", -1.0)
+    if our_sharp < 0.0 or baseline_sharp < 0.0:
         print(f"    note: attack_sharpness not available for {fixture_id} — gate skipped")
         return results
-    ratio = our_sharp / max(ref_sharp, 1e-12)
+    ratio = our_sharp / max(baseline_sharp, 1e-12)
     threshold_val = thresholds.get(
         "min_transient_sharpness_ratio",
         1.0 - thresholds["min_transient_sharpness_improvement"],
     )
     check(results, f"{fixture_id}.transient_preservation.attack_sharpness",
-          ratio >= threshold_val, ratio, threshold_val, ref_sharp,
-          "our transient attack sharpness should not fall far below ATSA reference")
+          ratio >= threshold_val, ratio, threshold_val, baseline_sharp,
+          "our transient attack sharpness should preserve the source attack")
     return results
 
 
@@ -308,6 +315,7 @@ def run_fixture(fixture: dict, manifest_dir: Path, reference_dir: Path,
             our_metadata.get("residual_highpass_ratio", -1.0),
         ),
         "attack_sharpness": recon.get("attack_sharpness", our_metadata.get("attack_sharpness", -1.0)),
+        "source_attack_sharpness": recon.get("source_attack_sharpness", -1.0),
         "max_buffer_step": recon.get("max_buffer_step", our_metadata.get("max_buffer_step", -1.0)),
     }
 

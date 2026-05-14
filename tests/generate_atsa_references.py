@@ -126,7 +126,11 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     cand = wav_float_samples(cand_path)
     n = max(len(ref), len(cand))
     if n == 0:
-        return {"normalized_rms_error": 0.0, "spectral_distance_db": 0.0}
+        return {
+            "normalized_rms_error": 0.0,
+            "spectral_distance_db": 0.0,
+            "source_attack_sharpness": 0.0,
+        }
 
     ref_padded = ref + [0.0] * (n - len(ref))
     cand_padded = cand + [0.0] * (n - len(cand))
@@ -140,6 +144,7 @@ def reconstruction_metrics(ref_path: str, cand_path: str) -> dict:
     return {
         "normalized_rms_error": normalized_rms,
         "spectral_distance_db": spec_dist,
+        "source_attack_sharpness": rendered_audio_shape_metrics(ref_path)["attack_sharpness"],
         **shape,
     }
 
@@ -172,6 +177,7 @@ def extract_summary(metadata: dict, recon: dict) -> dict:
             "residual_highpass_ratio",
             metadata.get("residual_highpass_ratio", -1.0),
         ),
+        "source_attack_sharpness": recon.get("source_attack_sharpness", -1.0),
         "attack_sharpness": recon.get("attack_sharpness", metadata.get("attack_sharpness", -1.0)),
         "max_buffer_step": recon.get("max_buffer_step", metadata.get("max_buffer_step", -1.0)),
     }

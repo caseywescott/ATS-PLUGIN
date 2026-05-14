@@ -43,8 +43,7 @@
       "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
-        "max_spectral_distance_db_delta": 0.5,
-        "min_transient_sharpness_ratio": 0.84
+        "max_spectral_distance_db_delta": 0.5
       },
       "atsa_reference": {
         "metadata": "reference/external_crotale_hit_atsa_metadata.json",
@@ -92,8 +91,7 @@
       ],
       "threshold_overrides": {
         "max_continuity_regression": 0.0,
-        "max_identity_error_increase": 0,
-        "min_transient_sharpness_ratio": 0.75
+        "max_identity_error_increase": 0
       },
       "atsa_reference": {
         "metadata": "reference/external_vowel_phrase_atsa_metadata.json",

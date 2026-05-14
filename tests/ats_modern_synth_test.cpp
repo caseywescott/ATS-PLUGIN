@@ -319,6 +319,42 @@ void testTransientAtBufferStartKeepsAttack()
            "transient fade-in should not attenuate an attack at the buffer start");
 }
 
+void testTransientBuffersReplaceUnderlyingSyntheticLayer()
+{
+    auto model = makeBaseModel(1, 2);
+    for (auto& frame : model.partials[0].frames)
+    {
+        frame.amplitude = 0.5;
+        frame.frequencyHz = 0.0;
+        frame.phaseRadians = kHalfPi;
+    }
+    model.transients.push_back({ 0, 0, 0.0, 0.0, 4.0 / 48000.0, 1.0 });
+    ats::ModernAtsTransientBuffer buffer;
+    buffer.markerIndex = 0;
+    buffer.sampleRate = 48000;
+    buffer.gain = 1.0;
+    buffer.samples.assign(4, 0.25f);
+    model.transientBuffers.push_back(buffer);
+
+    ats::ModernAtsSynthConfig config;
+    config.outputSampleRate = 48000;
+    config.hopSizeSamples = 8;
+    config.partialGain = 1.0;
+    config.orphanResidualGain = 0.0;
+    config.transientGain = 1.0;
+    config.transientCrossfadeSamples = 0;
+    config.outputCeiling = 0.0;
+
+    const auto rendered = ats::renderModernAtsModel(model, config);
+    expect(rendered.size() >= 4, "replacement transient render too short");
+    expect(std::abs(rendered[0] - 0.25f) < 1.0e-5f,
+           "preserved transient should replace, not stack over, the synthetic layer");
+    expect(std::abs(rendered[3] - 0.25f) < 1.0e-5f,
+           "replacement should remain active across the transient buffer");
+    expect(rendered[4] > 0.49f,
+           "synthetic layer should return after the transient replacement window");
+}
+
 void testTransientBuffersFollowTimeFactor()
 {
     auto model = makeBaseModel(0, 4);
@@ -513,6 +549,7 @@ int main()
     testOrphanResidualBandsAreSpectrallyShaped();
     testTransientBufferCrossfadeAndGain();
     testTransientAtBufferStartKeepsAttack();
+    testTransientBuffersReplaceUnderlyingSyntheticLayer();
     testTransientBuffersFollowTimeFactor();
     testOutputSoftLimitBoundsDenseMix();
     testDenormalAndSilenceEdges();

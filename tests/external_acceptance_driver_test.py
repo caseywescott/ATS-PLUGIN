@@ -27,6 +27,19 @@ def write_fixture_wav(path: Path) -> None:
         handle.writeframes(b"\x00\x00" * 32)
 
 
+def write_transient_fixture_wav(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    samples = [0] * 4096
+    samples[4] = 24000
+    for i in range(5, 4096):
+        samples[i] = int(3000 * (0.997 ** (i - 5)))
+    with wave.open(str(path), "w") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(b"".join(int(s).to_bytes(2, "little", signed=True) for s in samples))
+
+
 def write_fake_ats_offline(path: Path) -> None:
     path.write_text(
         """#!/usr/bin/env python3
@@ -109,6 +122,37 @@ def test_zero_checks_fail(driver: Path) -> None:
         require("no gate checks produced" in combined, "zero-check failure should name the problem")
 
 
+def test_transient_gate_uses_source_attack(driver: Path) -> None:
+    with tempfile.TemporaryDirectory() as raw_tmpdir:
+        tmpdir = Path(raw_tmpdir)
+        write_transient_fixture_wav(tmpdir / "audio" / "pluck.wav")
+        reference_path = tmpdir / "reference" / "pluck_summary.json"
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        reference_path.write_text(json.dumps({
+            "fixture_id": "pluck",
+            "attack_sharpness": 100.0,
+        }), encoding="utf-8")
+        manifest = {
+            "schema_version": 1,
+            "fixtures": [
+                {
+                    "id": "pluck",
+                    "category": "plucked",
+                    "input_audio": "audio/pluck.wav",
+                    "enabled_gates": ["transient_preservation"],
+                    "threshold_overrides": {"min_transient_sharpness_ratio": 0.99},
+                    "atsa_reference": {"summary_metrics": "reference/pluck_summary.json"},
+                }
+            ],
+        }
+        result = run_driver(driver, tmpdir, manifest)
+        combined = result.stdout + result.stderr
+        require(result.returncode == 0,
+                "copying source audio should pass transient preservation even if ATSA is over-sharp")
+        require("transient_preservation.attack_sharpness" in combined,
+                "source-referenced transient gate should emit a check")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: external_acceptance_driver_test.py <run_external_acceptance.py>", file=sys.stderr)
@@ -118,6 +162,7 @@ def main() -> int:
     require(driver.is_file(), f"driver not found: {driver}")
     test_missing_assets_fail(driver)
     test_zero_checks_fail(driver)
+    test_transient_gate_uses_source_attack(driver)
     print("ok")
     return 0
 

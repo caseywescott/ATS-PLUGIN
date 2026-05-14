@@ -594,6 +594,7 @@ bool loadExternalFixtureReferenceMetrics(const std::string& path,
     out.identityErrors = jsonIntValue(json, "identity_errors", -1);
     out.orphanResidualRatio = jsonDoubleValue(json, "orphan_residual_ratio", -1.0);
     out.residualHighpassRatio = jsonDoubleValue(json, "residual_highpass_ratio", -1.0);
+    out.sourceAttackSharpness = jsonDoubleValue(json, "source_attack_sharpness", -1.0);
     out.attackSharpness = jsonDoubleValue(json, "attack_sharpness", -1.0);
     out.maxBufferStep = jsonDoubleValue(json, "max_buffer_step", -1.0);
     return true;
@@ -683,15 +684,21 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
 
         case ExternalFixtureGate::TransientPreservation:
         {
-            if (our.attackSharpness >= 0.0 && reference.attackSharpness > 0.0)
+            double baselineSharpness = our.sourceAttackSharpness >= 0.0
+                                           ? our.sourceAttackSharpness
+                                           : reference.sourceAttackSharpness;
+            if (baselineSharpness < 0.0)
+                baselineSharpness = reference.attackSharpness;
+
+            if (our.attackSharpness >= 0.0 && baselineSharpness > 0.0)
             {
-                const double ratio = our.attackSharpness / reference.attackSharpness;
+                const double ratio = our.attackSharpness / baselineSharpness;
                 addCheck(report,
                          id + ".transient_preservation.attack_sharpness",
                          ratio >= thresholds.minTransientSharpnessRatio,
                          ratio,
                          thresholds.minTransientSharpnessRatio,
-                         "attack sharpness ratio vs ATSA reference (fixture=" + id + ")");
+                         "attack sharpness ratio vs source audio when available (fixture=" + id + ")");
             }
             break;
         }

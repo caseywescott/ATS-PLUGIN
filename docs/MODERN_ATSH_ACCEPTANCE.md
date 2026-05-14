@@ -81,7 +81,7 @@ Each entry declares:
 | `classic_parity` | Lower-is-better normalized RMS error and spectral distance must not regress beyond the ATSA reference plus fixture tolerance |
 | `tracker_continuity` | Smooth active-track continuity regression and identity-discontinuity increase vs. ATSA |
 | `residual_energy_preservation` | Rendered residual/noise highpass-ratio delta vs. ATSA reference |
-| `transient_preservation` | Rendered attack-sharpness ratio vs. ATSA reference |
+| `transient_preservation` | Rendered attack-sharpness ratio vs. source audio, falling back to ATSA summaries for older artifacts |
 
 ### Reference artifacts
 
@@ -105,10 +105,12 @@ The summary includes both model diagnostics and rendered-audio proxies:
 `continuity_score` measures smooth active-to-active track transitions rather
 than sparse-track density or terminal lifecycle events, `identity_errors` counts
 large frequency jumps within a track, `residual_highpass_ratio` tracks rendered
-residual/noise character, and `attack_sharpness` is computed from the rendered
-WAV so Classic and Modern use the same measurement. Modern offline metadata also
-emits lifecycle-break counts separately so track churn remains diagnosable
-without distorting the active-to-active continuity score.
+residual/noise character, and `attack_sharpness` is computed from rendered WAVs.
+Transient preservation compares Modern rendered sharpness against source-audio
+sharpness when the source fixture is available so Classic under-rendering cannot
+be mistaken for a better attack. Modern offline metadata also emits
+lifecycle-break counts separately so track churn remains diagnosable without
+distorting the active-to-active continuity score.
 
 The Modern assignment tracker treats large last-active-to-next frequency jumps
 as identity breaks even when the short-term slope predictor would otherwise make
@@ -131,9 +133,9 @@ permitted errors so long vocal material cannot pass by jumping one partial
 between unrelated harmonics.
 `external_plucked_guitar` and `external_crotale_hit` carry fixture-specific
 spectral-distance tolerances for onset-heavy material while retaining the
-no-RMS-regression check. The Crotale transient-sharpness floor is stricter than
-the generic fallback so later transient-render changes cannot silently soften
-the attack.
+no-RMS-regression check. All four fixtures use the shared 0.95
+source-referenced transient-sharpness floor so later transient-render changes
+cannot silently soften attacks.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,
 missing reference metrics, unknown gates, and zero emitted gate checks as

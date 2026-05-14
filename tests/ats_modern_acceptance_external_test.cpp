@@ -262,16 +262,17 @@ void testTransientPreservationGatePasses()
 {
     ats::ExternalFixtureReferenceMetrics ref;
     ref.fixtureId = "plucked_guitar";
-    ref.attackSharpness = 3.5;
+    ref.attackSharpness = 30.0; // ATSA can over-sharpen by under-rendering RMS.
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "plucked_guitar";
-    our.attackSharpness = 3.3;  // ratio = 3.3/3.5 = 0.943 >= 0.90 threshold
+    our.sourceAttackSharpness = 3.5;
+    our.attackSharpness = 3.4;  // ratio = 3.4/3.5 = 0.971 >= 0.95 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::TransientPreservation });
 
-    expect(report.passed(), "transient preservation: ratio above 0.90 should pass");
+    expect(report.passed(), "transient preservation: source-ratio above 0.95 should pass");
 }
 
 void testTransientPreservationGateFails()
@@ -282,12 +283,12 @@ void testTransientPreservationGateFails()
 
     ats::ExternalFixtureReferenceMetrics our;
     our.fixtureId = "drum_hit";
-    our.attackSharpness = 2.0;  // ratio = 0.40 < 0.90 threshold
+    our.attackSharpness = 2.0;  // ratio = 0.40 < 0.95 threshold
 
     const auto report = ats::evaluateExternalFixtureGates(
         our, ref, { ats::ExternalFixtureGate::TransientPreservation });
 
-    expect(!report.passed(), "transient preservation: ratio below 0.90 should fail");
+    expect(!report.passed(), "transient preservation: ratio below 0.95 should fail");
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +401,7 @@ void testLoadExternalFixtureReferenceMetrics()
             << "  \"continuity_score\": 0.94,\n"
             << "  \"identity_errors\": 0,\n"
             << "  \"orphan_residual_ratio\": 0.15,\n"
+            << "  \"source_attack_sharpness\": 1.7,\n"
             << "  \"attack_sharpness\": 1.8,\n"
             << "  \"max_buffer_step\": 0.12\n"
             << "}\n";
@@ -421,6 +423,8 @@ void testLoadExternalFixtureReferenceMetrics()
            "loadExternalFixtureReferenceMetrics: orphan_residual_ratio parsed");
     expect(loaded.attackSharpness > 1.79 && loaded.attackSharpness < 1.81,
            "loadExternalFixtureReferenceMetrics: attack_sharpness parsed");
+    expect(loaded.sourceAttackSharpness > 1.69 && loaded.sourceAttackSharpness < 1.71,
+           "loadExternalFixtureReferenceMetrics: source_attack_sharpness parsed");
 }
 
 void testLoadExternalFixtureReferenceMetricsMissingFile()
