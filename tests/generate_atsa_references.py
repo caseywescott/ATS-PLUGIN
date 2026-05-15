@@ -96,6 +96,11 @@ def wav_float_samples(path: str, max_samples=4096) -> list[float]:
     return [x / 32768.0 for x in struct.unpack("<" + "h" * n, raw)]
 
 
+def wav_sample_rate(path: str) -> int:
+    with wave.open(path, "r") as w:
+        return w.getframerate()
+
+
 def rendered_audio_shape_metrics(path: str) -> dict:
     """Compact rendered-audio proxies for transient and residual/noise checks."""
     samples = wav_float_samples(path)
@@ -230,9 +235,165 @@ def decay_envelope_metrics(ref: list[float], cand: list[float],
     }
 
 
+def correlation_for_segments(ref: list[float], cand: list[float]) -> float:
+    n = min(len(ref), len(cand))
+    if n == 0:
+        return 1.0
+    ref = ref[:n]
+    cand = cand[:n]
+    ref_mean = sum(ref) / n
+    cand_mean = sum(cand) / n
+    ref_var = sum((x - ref_mean) ** 2 for x in ref)
+    cand_var = sum((x - cand_mean) ** 2 for x in cand)
+    if ref_var <= 1.0e-20 or cand_var <= 1.0e-20:
+        return 1.0 if ref_var <= 1.0e-20 and cand_var <= 1.0e-20 else 0.0
+    covariance = sum((a - ref_mean) * (b - cand_mean) for a, b in zip(ref, cand))
+    return covariance / math.sqrt(ref_var * cand_var)
+
+
+def normalized_rms_error_for_segments(ref: list[float], cand: list[float]) -> float:
+    n = min(len(ref), len(cand))
+    if n == 0:
+        return 0.0
+    ref = ref[:n]
+    cand = cand[:n]
+    ref_rms = rms(ref)
+    err_rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(ref, cand)) / n)
+    return err_rms / max(ref_rms, 1.0e-12)
+
+
+def lagged_segments(ref: list[float], cand: list[float], lag: int) -> tuple[list[float], list[float]]:
+    # Positive lag means the candidate waveform is delayed relative to the source.
+    if lag >= 0:
+        n = min(len(ref), len(cand) - lag)
+        return ref[:max(0, n)], cand[lag:lag + max(0, n)]
+    n = min(len(ref) + lag, len(cand))
+    return ref[-lag:-lag + max(0, n)], cand[:max(0, n)]
+
+
+def best_lag_alignment(ref: list[float], cand: list[float], max_lag: int) -> dict:
+    best = {
+        "lag": 0,
+        "correlation": correlation_for_segments(ref, cand),
+        "normalized_rms_error": normalized_rms_error_for_segments(ref, cand),
+    }
+    for lag in range(-max_lag, max_lag + 1):
+        ref_lagged, cand_lagged = lagged_segments(ref, cand, lag)
+        if len(ref_lagged) < 128 or len(cand_lagged) < 128:
+            continue
+        corr = correlation_for_segments(ref_lagged, cand_lagged)
+        if corr > best["correlation"]:
+            best = {
+                "lag": lag,
+                "correlation": corr,
+                "normalized_rms_error": normalized_rms_error_for_segments(ref_lagged, cand_lagged),
+            }
+    return best
+
+
+def timing_phase_metrics(ref: list[float], cand: list[float], sample_rate: int,
+                         window: int = 4096, hop: int = 8192, max_lag: int = 512) -> dict:
+    n = max(len(ref), len(cand))
+    if n == 0:
+        return {
+            "timing_phase_zero_lag_correlation": 1.0,
+            "timing_phase_aligned_correlation": 1.0,
+            "timing_phase_aligned_normalized_rms_error": 0.0,
+            "timing_phase_alignment_improvement": 0.0,
+            "timing_phase_lag_samples": 0,
+            "timing_phase_lag_ms": 0.0,
+            "dominant_timing_phase_region": "none",
+            "timing_phase_lag_early_samples": 0,
+            "timing_phase_lag_middle_samples": 0,
+            "timing_phase_lag_late_samples": 0,
+        }
+
+    ref_padded = ref + [0.0] * (n - len(ref))
+    cand_padded = cand + [0.0] * (n - len(cand))
+    max_source_rms = 0.0
+    windows: list[dict] = []
+    for start in range(0, n, hop):
+        end = min(n, start + window)
+        if end - start < 128:
+            continue
+        ref_seg = ref_padded[start:end]
+        cand_seg = cand_padded[start:end]
+        source_rms = rms(ref_seg)
+        max_source_rms = max(max_source_rms, source_rms)
+        err_rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(ref_seg, cand_seg)) / len(ref_seg))
+        region_index = min(2, (3 * (start + (end - start) // 2)) // max(1, n))
+        windows.append({
+            "start": start,
+            "end": end,
+            "region": ["early", "middle", "late"][region_index],
+            "source_rms": source_rms,
+            "error_rms": err_rms,
+        })
+
+    if not windows:
+        return {
+            "timing_phase_zero_lag_correlation": 1.0,
+            "timing_phase_aligned_correlation": 1.0,
+            "timing_phase_aligned_normalized_rms_error": 0.0,
+            "timing_phase_alignment_improvement": 0.0,
+            "timing_phase_lag_samples": 0,
+            "timing_phase_lag_ms": 0.0,
+            "dominant_timing_phase_region": "none",
+            "timing_phase_lag_early_samples": 0,
+            "timing_phase_lag_middle_samples": 0,
+            "timing_phase_lag_late_samples": 0,
+        }
+
+    min_source_rms = max(1.0e-7, max_source_rms * 1.0e-4)
+    by_region: dict[str, dict] = {}
+    for region in ("early", "middle", "late"):
+        candidates = [w for w in windows if w["region"] == region and w["source_rms"] >= min_source_rms]
+        if not candidates:
+            candidates = [w for w in windows if w["region"] == region]
+        if candidates:
+            by_region[region] = max(candidates, key=lambda w: w["error_rms"])
+
+    if not by_region:
+        by_region["early"] = max(windows, key=lambda w: w["error_rms"])
+
+    region_metrics: dict[str, dict] = {}
+    for region, selected in by_region.items():
+        ref_seg = ref_padded[selected["start"]:selected["end"]]
+        cand_seg = cand_padded[selected["start"]:selected["end"]]
+        zero_corr = correlation_for_segments(ref_seg, cand_seg)
+        zero_nrms = normalized_rms_error_for_segments(ref_seg, cand_seg)
+        aligned = best_lag_alignment(ref_seg, cand_seg, max_lag)
+        region_metrics[region] = {
+            "zero_corr": zero_corr,
+            "zero_nrms": zero_nrms,
+            "aligned_corr": aligned["correlation"],
+            "aligned_nrms": aligned["normalized_rms_error"],
+            "lag": aligned["lag"],
+            "error_rms": selected["error_rms"],
+        }
+
+    dominant_region = max(region_metrics, key=lambda key: region_metrics[key]["error_rms"])
+    dominant = region_metrics[dominant_region]
+    improvement = dominant["zero_nrms"] / max(dominant["aligned_nrms"], 1.0e-12)
+    sr = float(sample_rate if sample_rate > 0 else 44100)
+    return {
+        "timing_phase_zero_lag_correlation": dominant["zero_corr"],
+        "timing_phase_aligned_correlation": dominant["aligned_corr"],
+        "timing_phase_aligned_normalized_rms_error": dominant["aligned_nrms"],
+        "timing_phase_alignment_improvement": improvement,
+        "timing_phase_lag_samples": dominant["lag"],
+        "timing_phase_lag_ms": 1000.0 * dominant["lag"] / sr,
+        "dominant_timing_phase_region": dominant_region,
+        "timing_phase_lag_early_samples": region_metrics.get("early", {}).get("lag", 0),
+        "timing_phase_lag_middle_samples": region_metrics.get("middle", {}).get("lag", 0),
+        "timing_phase_lag_late_samples": region_metrics.get("late", {}).get("lag", 0),
+    }
+
+
 def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
     ref = wav_float_samples(ref_path, max_samples=None)
     cand = wav_float_samples(cand_path, max_samples=None)
+    sample_rate = wav_sample_rate(ref_path)
     n = max(len(ref), len(cand))
     if n == 0:
         return {
@@ -244,6 +405,7 @@ def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
             "spectral_distance_high_db": 0.0,
             "dominant_spectral_error_band": "none",
             **decay_envelope_metrics(ref, cand),
+            **timing_phase_metrics(ref, cand, sample_rate),
         }
 
     ref_padded = ref + [0.0] * (n - len(ref))
@@ -267,6 +429,7 @@ def reconstruction_attribution_metrics(ref_path: str, cand_path: str) -> dict:
         "spectral_distance_high_db": bands["high"],
         "dominant_spectral_error_band": dominant_band,
         **decay_envelope_metrics(ref_padded, cand_padded),
+        **timing_phase_metrics(ref_padded, cand_padded, sample_rate),
     }
 
 
@@ -336,6 +499,17 @@ def extract_summary(metadata: dict, recon: dict) -> dict:
         "decay_envelope_error_middle": recon.get("decay_envelope_error_middle", 0.0),
         "decay_envelope_error_late": recon.get("decay_envelope_error_late", 0.0),
         "dominant_decay_error_region": recon.get("dominant_decay_error_region", "unknown"),
+        "timing_phase_zero_lag_correlation": recon.get("timing_phase_zero_lag_correlation", 1.0),
+        "timing_phase_aligned_correlation": recon.get("timing_phase_aligned_correlation", 1.0),
+        "timing_phase_aligned_normalized_rms_error": recon.get(
+            "timing_phase_aligned_normalized_rms_error", 0.0),
+        "timing_phase_alignment_improvement": recon.get("timing_phase_alignment_improvement", 0.0),
+        "timing_phase_lag_samples": recon.get("timing_phase_lag_samples", 0),
+        "timing_phase_lag_ms": recon.get("timing_phase_lag_ms", 0.0),
+        "dominant_timing_phase_region": recon.get("dominant_timing_phase_region", "unknown"),
+        "timing_phase_lag_early_samples": recon.get("timing_phase_lag_early_samples", 0),
+        "timing_phase_lag_middle_samples": recon.get("timing_phase_lag_middle_samples", 0),
+        "timing_phase_lag_late_samples": recon.get("timing_phase_lag_late_samples", 0),
         # Continuity and identity are model diagnostics; residual/transient
         # checks prefer compact rendered-audio proxies when available.
         "continuity_score": metadata.get("continuity_score", -1.0),

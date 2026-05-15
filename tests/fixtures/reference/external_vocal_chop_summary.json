@@ -13,6 +13,7 @@
   "dominant_decay_error_region": "late",
   "dominant_spectral_error_band": "mid",
   "dominant_time_error_region": "tail",
+  "dominant_timing_phase_region": "early",
   "fixture_id": "external_vocal_chop",
   "frames": 4,
   "identity_errors": 0,
@@ -32,6 +33,15 @@
   "spectral_distance_low_db": 11.084690084780144,
   "spectral_distance_mid_db": 15.508932488451137,
   "tail_normalized_rms_error": 3.7570100330778184,
+  "timing_phase_aligned_correlation": 0.4945345307964294,
+  "timing_phase_aligned_normalized_rms_error": 0.8892088815446065,
+  "timing_phase_alignment_improvement": 1.2393508545179444,
+  "timing_phase_lag_early_samples": 217,
+  "timing_phase_lag_late_samples": 82,
+  "timing_phase_lag_middle_samples": 0,
+  "timing_phase_lag_ms": 4.920634920634921,
+  "timing_phase_lag_samples": 217,
+  "timing_phase_zero_lag_correlation": 0.1823076212649394,
   "total_residual_energy": 75.4128787675426,
   "tracker_mode": "classic_recursive_frequency_smr"
 }

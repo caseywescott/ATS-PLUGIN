@@ -112,11 +112,12 @@ distance remains onset-focused because it is intended to catch early tonal
 coloration and attack smearing.
 Reference generation also records non-gating reconstruction attribution fields:
 attack-window and tail-window normalized RMS error, low/mid/high spectral
-distance, decay-envelope error/energy/correlation/bias, and dominant time,
-spectral, and early/middle/late decay error buckets. These fields make quality
+distance, decay-envelope error/energy/correlation/bias, bounded waveform
+alignment lag/correlation, and dominant time, spectral, early/middle/late decay,
+and early/middle/late timing/phase error buckets. These fields make quality
 failures easier to assign to attack capture, sustained partial tracking,
-resonant decay-envelope preservation, or residual/spectral-shape work without
-turning every diagnostic into a gate.
+resonant decay-envelope preservation, timing/phase drift, or residual/spectral
+shape work without turning every diagnostic into a gate.
 Residual and transient preservation compare Modern rendered shape against the
 source fixture when available so Classic coloration or under-rendering cannot be
 mistaken for better source preservation. Modern offline metadata also emits
@@ -165,11 +166,12 @@ The external driver prints an advisory diagnostic block for each fixture after
 the gate checks. It breaks source reconstruction error into attack-vs-tail
 normalized RMS, low/mid/high compact spectral distance, residual highpass
 source delta, transient sharpness ratio, full-duration decay-envelope error,
-decay energy ratio, decay correlation/bias, early/middle/late decay focus, and
-available Modern model proxies such as orphan residual ratio and transient
-buffer counts. A final ranked summary orders fixtures by source normalized RMS
-error while showing the dominant decay focus, so the next improvement target is
-visible immediately after a run.
+decay energy ratio, decay correlation/bias, early/middle/late decay focus,
+bounded waveform-alignment lag/correlation/aligned NRMS, and available Modern
+model proxies such as orphan residual ratio and transient buffer counts. A
+final ranked summary orders fixtures by source normalized RMS error while
+showing the dominant decay focus and alignment gain, so the next improvement
+target is visible immediately after a run.
 
 ## Design principle
 

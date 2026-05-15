@@ -629,6 +629,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Print decay envelope error, energy ratio, correlation, level bias, and early/middle/late focus alongside the existing reconstruction diagnostics.
 - [x] Regenerate first-party ATSA reference summaries so future fixture refreshes preserve decay-envelope context for resonant-tail work.
 
+### Commit 70 - `test(acceptance): attribute waveform alignment`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Add bounded early/middle/late waveform-alignment diagnostics to distinguish timing/phase drift from decay-envelope mismatch.
+- [x] Print dominant alignment lag, zero-lag vs aligned correlation, aligned NRMS, and alignment-improvement ratio in the external driver and ranking.
+- [x] Regenerate first-party ATSA reference summaries with the same alignment fields so Modern-vs-Classic fixture refreshes remain comparable.
+
 ---
 
 ## Dependency Index
@@ -681,3 +689,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Reconstruction error attribution diagnostics | 67 |
 | Percussive resonant onset preservation | 68 |
 | Decay envelope attribution diagnostics | 69 |
+| Waveform alignment attribution diagnostics | 70 |

@@ -13,6 +13,7 @@
   "dominant_decay_error_region": "late",
   "dominant_spectral_error_band": "high",
   "dominant_time_error_region": "tail",
+  "dominant_timing_phase_region": "early",
   "fixture_id": "external_plucked_guitar",
   "frames": 6,
   "identity_errors": 0,
@@ -32,6 +33,15 @@
   "spectral_distance_low_db": 2.3840733776316334,
   "spectral_distance_mid_db": 5.114569917957906,
   "tail_normalized_rms_error": 78.93591202315663,
+  "timing_phase_aligned_correlation": 0.7011675531776208,
+  "timing_phase_aligned_normalized_rms_error": 0.7321013571603373,
+  "timing_phase_alignment_improvement": 1.5976829318688914,
+  "timing_phase_lag_early_samples": 478,
+  "timing_phase_lag_late_samples": 119,
+  "timing_phase_lag_middle_samples": 0,
+  "timing_phase_lag_ms": 10.839002267573695,
+  "timing_phase_lag_samples": 478,
+  "timing_phase_zero_lag_correlation": 0.20873229163031778,
   "total_residual_energy": 49.60171328660361,
   "tracker_mode": "classic_recursive_frequency_smr"
 }

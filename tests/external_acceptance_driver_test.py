@@ -180,6 +180,10 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                 "real-audio driver should print decay-envelope reconstruction diagnostics")
         require("decay_focus=" in combined,
                 "real-audio driver should print ranked decay-envelope focus diagnostics")
+        require("waveform alignment:" in combined,
+                "real-audio driver should print waveform timing/phase diagnostics")
+        require("align_gain=" in combined,
+                "real-audio driver should print ranked waveform alignment diagnostics")
         require("Diagnostic ranking by source normalized RMS error:" in combined,
                 "real-audio driver should print a ranked fixture diagnostic summary")
 
