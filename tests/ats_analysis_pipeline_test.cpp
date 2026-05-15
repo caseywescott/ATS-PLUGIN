@@ -473,7 +473,7 @@ void testDefaultTransientWindowProtectsPercussiveTail()
     const auto markers = ats::detectTransientMarkers(features, config, diagnostics);
 
     expect(markers.size() == 1, "default transient detection should find the percussive attack");
-    expect(markers[0].windowEndSeconds - markers[0].onsetSeconds >= 0.079,
+    expect(markers[0].windowEndSeconds - markers[0].onsetSeconds >= 0.119,
            "default transient window should protect the early resonant tail");
 }
 

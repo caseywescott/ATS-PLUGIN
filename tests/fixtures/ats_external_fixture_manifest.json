@@ -22,7 +22,7 @@
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.8,
-        "max_source_normalized_rms_error": 0.12,
+        "max_source_normalized_rms_error": 0.10,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -46,7 +46,7 @@
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.5,
-        "max_source_normalized_rms_error": 0.24,
+        "max_source_normalized_rms_error": 0.18,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -69,7 +69,7 @@
       "candidate_analysis_mode": "modern_ats",
       "enabled_gates": ["classic_parity", "residual_energy_preservation", "transient_preservation"],
       "threshold_overrides": {
-        "max_source_normalized_rms_error": 0.16,
+        "max_source_normalized_rms_error": 0.10,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -99,7 +99,7 @@
       "threshold_overrides": {
         "max_continuity_regression": 0.0,
         "max_identity_error_increase": 0,
-        "max_source_normalized_rms_error": 0.18,
+        "max_source_normalized_rms_error": 0.16,
         "max_source_spectral_distance_db": 0.15
       },
       "atsa_reference": {

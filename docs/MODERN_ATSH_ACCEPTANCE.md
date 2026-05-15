@@ -152,7 +152,7 @@ passing merely because they remain better than a loose ATSA baseline. All four
 fixtures use a tightened 0.005 source-referenced residual highpass delta and
 the shared 0.95 source-referenced transient-sharpness floor so later
 residual/transient render changes cannot silently soften or recolor attacks.
-Modern transient source buffers protect 80 ms after each detected onset, which
+Modern transient source buffers protect 120 ms after each detected onset, which
 keeps percussive resonant attacks source-anchored long enough for the modeled
 partial/residual tail to take over without early spectral overshoot.
 

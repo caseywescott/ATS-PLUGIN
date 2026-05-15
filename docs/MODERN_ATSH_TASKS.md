@@ -637,6 +637,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Print dominant alignment lag, zero-lag vs aligned correlation, aligned NRMS, and alignment-improvement ratio in the external driver and ranking.
 - [x] Regenerate first-party ATSA reference summaries with the same alignment fields so Modern-vs-Classic fixture refreshes remain comparable.
 
+### Commit 71 - `fix(transient): extend resonant handoff protection`
+
+**PRD:** section 5.5, section 5.7, section 7.3
+
+- [x] Extend default Modern transient protection from 80 ms to 120 ms after detected onsets and allow captured source buffers up to 160 ms.
+- [x] Preserve more of the source-backed resonant handoff before synthetic partial/residual synthesis takes over.
+- [x] Ratchet first-party source normalized-RMS ceilings around the improved pluck, crotale, vocal, and vowel reconstruction quality.
+
 ---
 
 ## Dependency Index
@@ -690,3 +698,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Percussive resonant onset preservation | 68 |
 | Decay envelope attribution diagnostics | 69 |
 | Waveform alignment attribution diagnostics | 70 |
+| Resonant transient handoff protection | 71 |
