@@ -645,6 +645,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Preserve more of the source-backed resonant handoff before synthetic partial/residual synthesis takes over.
 - [x] Ratchet first-party source normalized-RMS ceilings around the improved pluck, crotale, vocal, and vowel reconstruction quality.
 
+### Commit 72 - `fix(transient): protect resonant tail handoff`
+
+**PRD:** section 5.5, section 5.7, section 7.3
+
+- [x] Extend default Modern transient protection from 120 ms to 160 ms after detected onsets and allow captured source buffers up to 220 ms.
+- [x] Include transient detection window parameters in the Modern analysis parameter hash so future handoff-window changes invalidate stale analysis metadata.
+- [x] Ratchet first-party source normalized-RMS ceilings around the improved resonant-tail reconstruction, especially crotale and short vocal material.
+
 ---
 
 ## Dependency Index
@@ -699,3 +707,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Decay envelope attribution diagnostics | 69 |
 | Waveform alignment attribution diagnostics | 70 |
 | Resonant transient handoff protection | 71 |
+| Resonant tail handoff protection | 72 |

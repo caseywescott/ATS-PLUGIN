@@ -319,6 +319,7 @@ std::string sourceHashForAudio(const std::vector<double>& monoSamples, int sampl
 
 std::string parameterHashForModernAnalysis(const AnalysisParams& params,
                                            const ModernAtsAnalysisConfig& config,
+                                           const TransientDetectionConfig& transientConfig,
                                            int windowSize,
                                            int hopSize)
 {
@@ -339,6 +340,9 @@ std::string parameterHashForModernAnalysis(const AnalysisParams& params,
         << ";maxPeaks=" << config.maxPeaksPerFrame
         << ";maxCand=" << config.maxCandidatesPerTrack
         << ";transientBuffers=" << (config.captureTransientBuffers ? 1 : 0)
+        << ";transientPreWindowSeconds=" << transientConfig.preWindowSeconds
+        << ";transientPostWindowSeconds=" << transientConfig.postWindowSeconds
+        << ";transientMinimumGapSeconds=" << transientConfig.minimumGapSeconds
         << ";maxTransientBufferSeconds=" << config.maxTransientBufferSeconds;
     return out.str();
 }
@@ -1325,8 +1329,9 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
         return result;
     }
 
+    const TransientDetectionConfig transientConfig;
     TransientDetectionDiagnostics transientDiagnostics;
-    auto transients = detectTransientMarkers(transientFeatures, TransientDetectionConfig {}, transientDiagnostics);
+    auto transients = detectTransientMarkers(transientFeatures, transientConfig, transientDiagnostics);
 
     AssignmentTrackerConfig trackerConfig;
     trackerConfig.analysisMode = config.trackerMode == ModernAtsTrackerMode::ModernAssignment
@@ -1362,7 +1367,11 @@ ModernAtsAnalysisResult runModernAtsAnalysis(const AnalysisParams& params,
     model.header.windowSizeSamples = windowSize;
     model.header.inputChannelCount = std::max(1, config.inputChannelCount);
     model.header.channelPolicy = defaultModernAtsChannelPolicyForInput(model.header.inputChannelCount);
-    model.header.parameterHash = parameterHashForModernAnalysis(params, config, windowSize, hopSize);
+    model.header.parameterHash = parameterHashForModernAnalysis(params,
+                                                               config,
+                                                               transientConfig,
+                                                               windowSize,
+                                                               hopSize);
     model.header.sourceHash = sourceHashForAudio(monoSamples, sampleRate);
     model.partials = std::move(assignment.partials);
     model.trackLifecycle = std::move(assignment.trackLifecycle);

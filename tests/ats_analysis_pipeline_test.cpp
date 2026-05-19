@@ -473,7 +473,7 @@ void testDefaultTransientWindowProtectsPercussiveTail()
     const auto markers = ats::detectTransientMarkers(features, config, diagnostics);
 
     expect(markers.size() == 1, "default transient detection should find the percussive attack");
-    expect(markers[0].windowEndSeconds - markers[0].onsetSeconds >= 0.119,
+    expect(markers[0].windowEndSeconds - markers[0].onsetSeconds >= 0.159,
            "default transient window should protect the early resonant tail");
 }
 
@@ -539,6 +539,10 @@ void testDirectModernAnalysisUsesSourcePeaks()
            "direct modern tracker mode mismatch");
     expect(result.model.header.sourceHash.find("direct_audio:") == 0,
            "modern analysis should hash source audio, not a classic ATS_SOUND");
+    expect(result.model.header.parameterHash.find("transientPostWindowSeconds=0.16") != std::string::npos,
+           "modern analysis parameter hash should include transient post-window duration");
+    expect(result.model.header.parameterHash.find("maxTransientBufferSeconds=0.22") != std::string::npos,
+           "modern analysis parameter hash should include transient buffer duration");
     expect(result.model.header.inputChannelCount == 2,
            "modern analysis should preserve original input channel count");
     expect(!result.model.frames.empty(), "direct modern analysis should produce frames");

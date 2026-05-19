@@ -152,8 +152,9 @@ passing merely because they remain better than a loose ATSA baseline. All four
 fixtures use a tightened 0.005 source-referenced residual highpass delta and
 the shared 0.95 source-referenced transient-sharpness floor so later
 residual/transient render changes cannot silently soften or recolor attacks.
-Modern transient source buffers protect 120 ms after each detected onset, which
-keeps percussive resonant attacks source-anchored long enough for the modeled
+Modern transient source buffers protect 160 ms after each detected onset, with
+captured buffers allowed up to 220 ms. This keeps percussive resonant attacks
+and their early ringing source-anchored long enough for the modeled
 partial/residual tail to take over without early spectral overshoot.
 
 When `ATS_ENABLE_EXTERNAL_FIXTURES=ON`, the Python CTest treats missing audio,

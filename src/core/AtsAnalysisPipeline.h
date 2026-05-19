@@ -132,7 +132,7 @@ struct ModernAtsAnalysisConfig
     int inputChannelCount = 1;
     std::size_t maxPeaksPerFrame = 96;
     std::size_t maxCandidatesPerTrack = 8;
-    double maxTransientBufferSeconds = 0.16;
+    double maxTransientBufferSeconds = 0.22;
 };
 
 struct ModernAtsAnalysisResult
@@ -227,7 +227,7 @@ struct TransientDetectionConfig
     double thresholdStdDevMultiplier = 1.0;
     double minimumScore = 0.1;
     double preWindowSeconds = 0.01;
-    double postWindowSeconds = 0.12;
+    double postWindowSeconds = 0.16;
     double minimumGapSeconds = 0.04;
     double markerGain = 1.0;
 };
