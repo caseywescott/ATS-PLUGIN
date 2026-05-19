@@ -653,6 +653,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Include transient detection window parameters in the Modern analysis parameter hash so future handoff-window changes invalidate stale analysis metadata.
 - [x] Ratchet first-party source normalized-RMS ceilings around the improved resonant-tail reconstruction, especially crotale and short vocal material.
 
+### Commit 73 - `test(acceptance): gate decay and timing stability`
+
+**PRD:** section 7.1-section 7.3
+
+- [x] Promote source-referenced decay-envelope diagnostics into an external fixture gate covering envelope error, energy-ratio drift, and envelope correlation.
+- [x] Promote waveform timing/phase diagnostics into an external fixture gate covering aligned correlation, aligned NRMS error, bounded alignment gain, and bounded lag.
+- [x] Enable both gates across the first-party real-audio fixtures and extend Python/C++ gate contract tests so future regressions fail before release.
+
 ---
 
 ## Dependency Index
@@ -708,3 +716,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Waveform alignment attribution diagnostics | 70 |
 | Resonant transient handoff protection | 71 |
 | Resonant tail handoff protection | 72 |
+| Decay and timing stability gates | 73 |

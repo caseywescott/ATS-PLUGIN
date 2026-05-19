@@ -564,6 +564,16 @@ bool parseExternalFixtureGate(const std::string& name, ExternalFixtureGate& out)
         out = ExternalFixtureGate::TransientPreservation;
         return true;
     }
+    if (name == "decay_envelope_preservation")
+    {
+        out = ExternalFixtureGate::DecayEnvelopePreservation;
+        return true;
+    }
+    if (name == "timing_phase_stability")
+    {
+        out = ExternalFixtureGate::TimingPhaseStability;
+        return true;
+    }
     return false;
 }
 
@@ -598,6 +608,14 @@ bool loadExternalFixtureReferenceMetrics(const std::string& path,
     out.sourceAttackSharpness = jsonDoubleValue(json, "source_attack_sharpness", -1.0);
     out.attackSharpness = jsonDoubleValue(json, "attack_sharpness", -1.0);
     out.maxBufferStep = jsonDoubleValue(json, "max_buffer_step", -1.0);
+    out.decayEnvelopeError = jsonDoubleValue(json, "decay_envelope_error", -1.0);
+    out.decayEnergyRatio = jsonDoubleValue(json, "decay_energy_ratio", -1.0);
+    out.decayEnvelopeCorrelation = jsonDoubleValue(json, "decay_envelope_correlation", -1.0);
+    out.timingPhaseAlignedCorrelation = jsonDoubleValue(json, "timing_phase_aligned_correlation", -1.0);
+    out.timingPhaseAlignedNormalizedRmsError =
+        jsonDoubleValue(json, "timing_phase_aligned_normalized_rms_error", -1.0);
+    out.timingPhaseAlignmentImprovement = jsonDoubleValue(json, "timing_phase_alignment_improvement", -1.0);
+    out.timingPhaseLagSamples = jsonIntValue(json, "timing_phase_lag_samples", 0);
     return true;
 }
 
@@ -726,6 +744,78 @@ ModernAtsAcceptanceReport evaluateExternalFixtureGates(
                          thresholds.minTransientSharpnessRatio,
                          "attack sharpness ratio vs source audio when available (fixture=" + id + ")");
             }
+            break;
+        }
+
+        case ExternalFixtureGate::DecayEnvelopePreservation:
+        {
+            if (our.decayEnvelopeError >= 0.0)
+            {
+                addCheck(report,
+                         id + ".decay_envelope_preservation.error",
+                         our.decayEnvelopeError <= thresholds.maxDecayEnvelopeError,
+                         our.decayEnvelopeError,
+                         thresholds.maxDecayEnvelopeError,
+                         "decay envelope error vs source audio (fixture=" + id + ")");
+            }
+            if (our.decayEnergyRatio >= 0.0)
+            {
+                const double delta = std::abs(our.decayEnergyRatio - 1.0);
+                addCheck(report,
+                         id + ".decay_envelope_preservation.energy_ratio",
+                         delta <= thresholds.maxDecayEnergyRatioDelta,
+                         delta,
+                         thresholds.maxDecayEnergyRatioDelta,
+                         "decay energy ratio delta vs source audio (fixture=" + id + ")");
+            }
+            if (our.decayEnvelopeCorrelation >= 0.0)
+            {
+                addCheck(report,
+                         id + ".decay_envelope_preservation.correlation",
+                         our.decayEnvelopeCorrelation >= thresholds.minDecayEnvelopeCorrelation,
+                         our.decayEnvelopeCorrelation,
+                         thresholds.minDecayEnvelopeCorrelation,
+                         "decay envelope correlation vs source audio (fixture=" + id + ")");
+            }
+            break;
+        }
+
+        case ExternalFixtureGate::TimingPhaseStability:
+        {
+            if (our.timingPhaseAlignedCorrelation >= 0.0)
+            {
+                addCheck(report,
+                         id + ".timing_phase_stability.aligned_correlation",
+                         our.timingPhaseAlignedCorrelation >= thresholds.minTimingPhaseAlignedCorrelation,
+                         our.timingPhaseAlignedCorrelation,
+                         thresholds.minTimingPhaseAlignedCorrelation,
+                         "aligned waveform correlation vs source audio (fixture=" + id + ")");
+            }
+            if (our.timingPhaseAlignedNormalizedRmsError >= 0.0)
+            {
+                addCheck(report,
+                         id + ".timing_phase_stability.aligned_normalized_rms_error",
+                         our.timingPhaseAlignedNormalizedRmsError
+                             <= thresholds.maxTimingPhaseAlignedNormalizedRmsError,
+                         our.timingPhaseAlignedNormalizedRmsError,
+                         thresholds.maxTimingPhaseAlignedNormalizedRmsError,
+                         "aligned waveform normalized RMS error vs source audio (fixture=" + id + ")");
+            }
+            if (our.timingPhaseAlignmentImprovement >= 0.0)
+            {
+                addCheck(report,
+                         id + ".timing_phase_stability.alignment_improvement",
+                         our.timingPhaseAlignmentImprovement <= thresholds.maxTimingPhaseAlignmentImprovement,
+                         our.timingPhaseAlignmentImprovement,
+                         thresholds.maxTimingPhaseAlignmentImprovement,
+                         "zero-lag/aligned NRMS improvement should stay bounded (fixture=" + id + ")");
+            }
+            addCheck(report,
+                     id + ".timing_phase_stability.lag_samples",
+                     std::abs(our.timingPhaseLagSamples) <= thresholds.maxTimingPhaseAbsLagSamples,
+                     static_cast<double>(std::abs(our.timingPhaseLagSamples)),
+                     static_cast<double>(thresholds.maxTimingPhaseAbsLagSamples),
+                     "bounded waveform lag vs source audio (fixture=" + id + ")");
             break;
         }
         }

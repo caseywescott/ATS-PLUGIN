@@ -152,6 +152,13 @@ struct ExternalFixtureReferenceMetrics
     double sourceAttackSharpness = -1.0;
     double attackSharpness = -1.0;
     double maxBufferStep = -1.0;
+    double decayEnvelopeError = -1.0;
+    double decayEnergyRatio = -1.0;
+    double decayEnvelopeCorrelation = -1.0;
+    double timingPhaseAlignedCorrelation = -1.0;
+    double timingPhaseAlignedNormalizedRmsError = -1.0;
+    double timingPhaseAlignmentImprovement = -1.0;
+    int timingPhaseLagSamples = 0;
 };
 
 // Per-fixture threshold overrides (all fields optional; negative means "use default").
@@ -165,6 +172,13 @@ struct ExternalFixtureThresholds
     int maxIdentityErrorIncrease = 2;
     double maxOrphanResidualRatioDelta = 0.005;
     double minTransientSharpnessRatio = 0.95;  // candidate / source-or-reference >= this ratio
+    double maxDecayEnvelopeError = 0.08;
+    double maxDecayEnergyRatioDelta = 0.05;
+    double minDecayEnvelopeCorrelation = 0.995;
+    double minTimingPhaseAlignedCorrelation = 0.95;
+    double maxTimingPhaseAlignedNormalizedRmsError = 0.35;
+    double maxTimingPhaseAlignmentImprovement = 2.0;
+    int maxTimingPhaseAbsLagSamples = 512;
 };
 
 // Gate names that may be listed in a fixture manifest.
@@ -174,6 +188,8 @@ enum class ExternalFixtureGate
     TrackerContinuity,
     ResidualEnergyPreservation,
     TransientPreservation,
+    DecayEnvelopePreservation,
+    TimingPhaseStability,
 };
 
 // Parse a gate name string from the manifest.

@@ -438,6 +438,13 @@ GATE_DEFAULTS = {
     "min_residual_energy_ratio": 0.99,
     "min_transient_sharpness_improvement": 0.05,
     "min_transient_sharpness_ratio": 0.95,
+    "max_decay_envelope_error": 0.08,
+    "max_decay_energy_ratio_delta": 0.05,
+    "min_decay_envelope_correlation": 0.995,
+    "min_timing_phase_aligned_correlation": 0.95,
+    "max_timing_phase_aligned_normalized_rms_error": 0.35,
+    "max_timing_phase_alignment_improvement": 2.0,
+    "max_timing_phase_abs_lag_samples": 512,
 }
 
 
@@ -572,11 +579,78 @@ def evaluate_transient_preservation(fixture_id: str, our: dict, ref: dict,
     return results
 
 
+def evaluate_decay_envelope_preservation(fixture_id: str, our: dict, ref: dict,
+                                         thresholds: dict) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    error = our.get("decay_envelope_error", -1.0)
+    energy_ratio = our.get("decay_energy_ratio", -1.0)
+    correlation = our.get("decay_envelope_correlation", -1.0)
+    if error < 0.0 and energy_ratio < 0.0 and correlation < 0.0:
+        print(f"    note: decay-envelope metrics not available for {fixture_id} — gate skipped")
+        return results
+    if error >= 0.0:
+        limit = thresholds["max_decay_envelope_error"]
+        check(results, f"{fixture_id}.decay_envelope_preservation.error",
+              error <= limit, error, limit, ref.get("decay_envelope_error", -1.0),
+              "our decay envelope should stay close to the source")
+    if energy_ratio >= 0.0:
+        delta = abs(energy_ratio - 1.0)
+        limit = thresholds["max_decay_energy_ratio_delta"]
+        check(results, f"{fixture_id}.decay_envelope_preservation.energy_ratio",
+              delta <= limit, delta, limit, ref.get("decay_energy_ratio", -1.0),
+              "our decay energy should stay close to the source")
+    if correlation >= 0.0:
+        floor = thresholds["min_decay_envelope_correlation"]
+        check(results, f"{fixture_id}.decay_envelope_preservation.correlation",
+              correlation >= floor, correlation, floor,
+              ref.get("decay_envelope_correlation", -1.0),
+              "our decay envelope should remain correlated with the source")
+    return results
+
+
+def evaluate_timing_phase_stability(fixture_id: str, our: dict, ref: dict,
+                                    thresholds: dict) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    aligned_corr = our.get("timing_phase_aligned_correlation", -1.0)
+    aligned_nrms = our.get("timing_phase_aligned_normalized_rms_error", -1.0)
+    improvement = our.get("timing_phase_alignment_improvement", -1.0)
+    lag_samples = int(our.get("timing_phase_lag_samples", 0))
+    if aligned_corr < 0.0 and aligned_nrms < 0.0 and improvement < 0.0:
+        print(f"    note: timing/phase metrics not available for {fixture_id} — gate skipped")
+        return results
+    if aligned_corr >= 0.0:
+        floor = thresholds["min_timing_phase_aligned_correlation"]
+        check(results, f"{fixture_id}.timing_phase_stability.aligned_correlation",
+              aligned_corr >= floor, aligned_corr, floor,
+              ref.get("timing_phase_aligned_correlation", -1.0),
+              "our best local waveform alignment should stay correlated with the source")
+    if aligned_nrms >= 0.0:
+        limit = thresholds["max_timing_phase_aligned_normalized_rms_error"]
+        check(results, f"{fixture_id}.timing_phase_stability.aligned_normalized_rms_error",
+              aligned_nrms <= limit, aligned_nrms, limit,
+              ref.get("timing_phase_aligned_normalized_rms_error", -1.0),
+              "our best local waveform alignment should keep bounded NRMS error")
+    if improvement >= 0.0:
+        limit = thresholds["max_timing_phase_alignment_improvement"]
+        check(results, f"{fixture_id}.timing_phase_stability.alignment_improvement",
+              improvement <= limit, improvement, limit,
+              ref.get("timing_phase_alignment_improvement", -1.0),
+              "our render should not depend on excessive lag correction")
+    lag_limit = thresholds["max_timing_phase_abs_lag_samples"]
+    check(results, f"{fixture_id}.timing_phase_stability.lag_samples",
+          abs(lag_samples) <= lag_limit, float(abs(lag_samples)), float(lag_limit),
+          float(ref.get("timing_phase_lag_samples", 0)),
+          "our timing/phase lag should stay within the bounded search window")
+    return results
+
+
 GATE_EVALUATORS = {
     "classic_parity": evaluate_classic_parity,
     "tracker_continuity": evaluate_tracker_continuity,
     "residual_energy_preservation": evaluate_residual_energy,
     "transient_preservation": evaluate_transient_preservation,
+    "decay_envelope_preservation": evaluate_decay_envelope_preservation,
+    "timing_phase_stability": evaluate_timing_phase_stability,
 }
 
 

@@ -149,9 +149,11 @@ no-RMS-regression check. Classic parity also includes source-quality ceilings
 for normalized RMS error and spectral distance, with tighter per-fixture
 ratchets on the first-party samples. This keeps future Modern changes from
 passing merely because they remain better than a loose ATSA baseline. All four
-fixtures use a tightened 0.005 source-referenced residual highpass delta and
-the shared 0.95 source-referenced transient-sharpness floor so later
-residual/transient render changes cannot silently soften or recolor attacks.
+fixtures use a tightened 0.005 source-referenced residual highpass delta,
+the shared 0.95 source-referenced transient-sharpness floor, a source
+decay-envelope preservation gate, and a timing/phase stability gate so later
+render changes cannot silently soften, recolor, smear, or drift attacks and
+their early resonant tails.
 Modern transient source buffers protect 160 ms after each detected onset, with
 captured buffers allowed up to 220 ms. This keeps percussive resonant attacks
 and their early ringing source-anchored long enough for the modeled
@@ -163,16 +165,19 @@ failures. This keeps an explicitly enabled real-audio gate from reporting
 success while proving nothing. The gate-logic C++ test and driver contract test
 always run on synthetic data.
 
-The external driver prints an advisory diagnostic block for each fixture after
-the gate checks. It breaks source reconstruction error into attack-vs-tail
-normalized RMS, low/mid/high compact spectral distance, residual highpass
-source delta, transient sharpness ratio, full-duration decay-envelope error,
-decay energy ratio, decay correlation/bias, early/middle/late decay focus,
-bounded waveform-alignment lag/correlation/aligned NRMS, and available Modern
-model proxies such as orphan residual ratio and transient buffer counts. A
-final ranked summary orders fixtures by source normalized RMS error while
-showing the dominant decay focus and alignment gain, so the next improvement
-target is visible immediately after a run.
+The external driver prints a diagnostic block for each fixture after the gate
+checks. It breaks source reconstruction error into attack-vs-tail normalized
+RMS, low/mid/high compact spectral distance, residual highpass source delta,
+transient sharpness ratio, full-duration decay-envelope error, decay energy
+ratio, decay correlation/bias, early/middle/late decay focus, bounded
+waveform-alignment lag/correlation/aligned NRMS, and available Modern model
+proxies such as orphan residual ratio and transient buffer counts. The decay
+and timing/phase fields now also back explicit fixture gates with source-close
+thresholds; the remaining per-region values stay diagnostic so they can guide
+future quality work without over-constraining low-energy tails. A final ranked
+summary orders fixtures by source normalized RMS error while showing the
+dominant decay focus and alignment gain, so the next improvement target is
+visible immediately after a run.
 
 ## Design principle
 

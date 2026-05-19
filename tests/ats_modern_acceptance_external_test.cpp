@@ -75,6 +75,12 @@ void testParseExternalFixtureGate()
     expect(ats::parseExternalFixtureGate("transient_preservation", gate)
                && gate == ats::ExternalFixtureGate::TransientPreservation,
            "parseExternalFixtureGate: transient_preservation");
+    expect(ats::parseExternalFixtureGate("decay_envelope_preservation", gate)
+               && gate == ats::ExternalFixtureGate::DecayEnvelopePreservation,
+           "parseExternalFixtureGate: decay_envelope_preservation");
+    expect(ats::parseExternalFixtureGate("timing_phase_stability", gate)
+               && gate == ats::ExternalFixtureGate::TimingPhaseStability,
+           "parseExternalFixtureGate: timing_phase_stability");
     expect(!ats::parseExternalFixtureGate("unknown_gate", gate),
            "parseExternalFixtureGate: unknown name returns false");
 }
@@ -315,6 +321,115 @@ void testTransientPreservationGateFails()
 }
 
 // ---------------------------------------------------------------------------
+// Decay envelope preservation gate
+// ---------------------------------------------------------------------------
+
+void testDecayEnvelopeGatePasses()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "resonant_tail";
+    ref.decayEnvelopeError = 0.20;
+    ref.decayEnergyRatio = 1.10;
+    ref.decayEnvelopeCorrelation = 0.97;
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "resonant_tail";
+    our.decayEnvelopeError = 0.04;
+    our.decayEnergyRatio = 0.98;
+    our.decayEnvelopeCorrelation = 0.998;
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::DecayEnvelopePreservation });
+
+    expect(report.passed(), "decay envelope: source-close decay metrics should pass");
+    expect(hasCheck(report, "resonant_tail.decay_envelope_preservation.error"),
+           "decay envelope: error check present");
+    expect(hasCheck(report, "resonant_tail.decay_envelope_preservation.energy_ratio"),
+           "decay envelope: energy-ratio check present");
+    expect(hasCheck(report, "resonant_tail.decay_envelope_preservation.correlation"),
+           "decay envelope: correlation check present");
+}
+
+void testDecayEnvelopeGateFails()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "bad_decay";
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "bad_decay";
+    our.decayEnvelopeError = 0.12;
+    our.decayEnergyRatio = 1.08;
+    our.decayEnvelopeCorrelation = 0.90;
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::DecayEnvelopePreservation });
+
+    expect(!report.passed(), "decay envelope: loose decay metrics should fail");
+    expect(!checkPassed(report, "bad_decay.decay_envelope_preservation.error"),
+           "decay envelope: error check should fail");
+    expect(!checkPassed(report, "bad_decay.decay_envelope_preservation.energy_ratio"),
+           "decay envelope: energy-ratio check should fail");
+    expect(!checkPassed(report, "bad_decay.decay_envelope_preservation.correlation"),
+           "decay envelope: correlation check should fail");
+}
+
+// ---------------------------------------------------------------------------
+// Timing/phase stability gate
+// ---------------------------------------------------------------------------
+
+void testTimingPhaseGatePasses()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "phase_stable";
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "phase_stable";
+    our.timingPhaseAlignedCorrelation = 0.98;
+    our.timingPhaseAlignedNormalizedRmsError = 0.20;
+    our.timingPhaseAlignmentImprovement = 1.4;
+    our.timingPhaseLagSamples = -256;
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::TimingPhaseStability });
+
+    expect(report.passed(), "timing phase: bounded alignment metrics should pass");
+    expect(hasCheck(report, "phase_stable.timing_phase_stability.aligned_correlation"),
+           "timing phase: aligned-correlation check present");
+    expect(hasCheck(report, "phase_stable.timing_phase_stability.aligned_normalized_rms_error"),
+           "timing phase: aligned-NRMS check present");
+    expect(hasCheck(report, "phase_stable.timing_phase_stability.alignment_improvement"),
+           "timing phase: alignment-improvement check present");
+    expect(hasCheck(report, "phase_stable.timing_phase_stability.lag_samples"),
+           "timing phase: lag check present");
+}
+
+void testTimingPhaseGateFails()
+{
+    ats::ExternalFixtureReferenceMetrics ref;
+    ref.fixtureId = "phase_drift";
+
+    ats::ExternalFixtureReferenceMetrics our;
+    our.fixtureId = "phase_drift";
+    our.timingPhaseAlignedCorrelation = 0.80;
+    our.timingPhaseAlignedNormalizedRmsError = 0.60;
+    our.timingPhaseAlignmentImprovement = 3.0;
+    our.timingPhaseLagSamples = 900;
+
+    const auto report = ats::evaluateExternalFixtureGates(
+        our, ref, { ats::ExternalFixtureGate::TimingPhaseStability });
+
+    expect(!report.passed(), "timing phase: loose alignment metrics should fail");
+    expect(!checkPassed(report, "phase_drift.timing_phase_stability.aligned_correlation"),
+           "timing phase: aligned-correlation check should fail");
+    expect(!checkPassed(report, "phase_drift.timing_phase_stability.aligned_normalized_rms_error"),
+           "timing phase: aligned-NRMS check should fail");
+    expect(!checkPassed(report, "phase_drift.timing_phase_stability.alignment_improvement"),
+           "timing phase: alignment-improvement check should fail");
+    expect(!checkPassed(report, "phase_drift.timing_phase_stability.lag_samples"),
+           "timing phase: lag check should fail");
+}
+
+// ---------------------------------------------------------------------------
 // Multiple gates
 // ---------------------------------------------------------------------------
 
@@ -427,6 +542,13 @@ void testLoadExternalFixtureReferenceMetrics()
             << "  \"source_residual_highpass_ratio\": 0.11,\n"
             << "  \"source_attack_sharpness\": 1.7,\n"
             << "  \"attack_sharpness\": 1.8,\n"
+            << "  \"decay_envelope_error\": 0.04,\n"
+            << "  \"decay_energy_ratio\": 0.98,\n"
+            << "  \"decay_envelope_correlation\": 0.998,\n"
+            << "  \"timing_phase_aligned_correlation\": 0.97,\n"
+            << "  \"timing_phase_aligned_normalized_rms_error\": 0.22,\n"
+            << "  \"timing_phase_alignment_improvement\": 1.5,\n"
+            << "  \"timing_phase_lag_samples\": -128,\n"
             << "  \"max_buffer_step\": 0.12\n"
             << "}\n";
     }
@@ -451,6 +573,23 @@ void testLoadExternalFixtureReferenceMetrics()
            "loadExternalFixtureReferenceMetrics: attack_sharpness parsed");
     expect(loaded.sourceAttackSharpness > 1.69 && loaded.sourceAttackSharpness < 1.71,
            "loadExternalFixtureReferenceMetrics: source_attack_sharpness parsed");
+    expect(loaded.decayEnvelopeError > 0.039 && loaded.decayEnvelopeError < 0.041,
+           "loadExternalFixtureReferenceMetrics: decay_envelope_error parsed");
+    expect(loaded.decayEnergyRatio > 0.97 && loaded.decayEnergyRatio < 0.99,
+           "loadExternalFixtureReferenceMetrics: decay_energy_ratio parsed");
+    expect(loaded.decayEnvelopeCorrelation > 0.997 && loaded.decayEnvelopeCorrelation < 0.999,
+           "loadExternalFixtureReferenceMetrics: decay_envelope_correlation parsed");
+    expect(loaded.timingPhaseAlignedCorrelation > 0.96
+               && loaded.timingPhaseAlignedCorrelation < 0.98,
+           "loadExternalFixtureReferenceMetrics: timing_phase_aligned_correlation parsed");
+    expect(loaded.timingPhaseAlignedNormalizedRmsError > 0.21
+               && loaded.timingPhaseAlignedNormalizedRmsError < 0.23,
+           "loadExternalFixtureReferenceMetrics: timing_phase_aligned_normalized_rms_error parsed");
+    expect(loaded.timingPhaseAlignmentImprovement > 1.49
+               && loaded.timingPhaseAlignmentImprovement < 1.51,
+           "loadExternalFixtureReferenceMetrics: timing_phase_alignment_improvement parsed");
+    expect(loaded.timingPhaseLagSamples == -128,
+           "loadExternalFixtureReferenceMetrics: timing_phase_lag_samples parsed");
 }
 
 void testLoadExternalFixtureReferenceMetricsMissingFile()
@@ -540,6 +679,12 @@ int main()
 
     testTransientPreservationGatePasses();
     testTransientPreservationGateFails();
+
+    testDecayEnvelopeGatePasses();
+    testDecayEnvelopeGateFails();
+
+    testTimingPhaseGatePasses();
+    testTimingPhaseGateFails();
 
     testMultipleGatesAllPass();
     testMultipleGatesMixedResults();

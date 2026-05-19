@@ -153,10 +153,19 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                     "enabled_gates": [
                         "residual_energy_preservation",
                         "transient_preservation",
+                        "decay_envelope_preservation",
+                        "timing_phase_stability",
                     ],
                     "threshold_overrides": {
                         "max_residual_highpass_ratio_delta": 0.001,
                         "min_transient_sharpness_ratio": 0.99,
+                        "max_decay_envelope_error": 0.001,
+                        "max_decay_energy_ratio_delta": 0.001,
+                        "min_decay_envelope_correlation": 0.999,
+                        "min_timing_phase_aligned_correlation": 0.999,
+                        "max_timing_phase_aligned_normalized_rms_error": 0.001,
+                        "max_timing_phase_alignment_improvement": 1.001,
+                        "max_timing_phase_abs_lag_samples": 0,
                     },
                     "atsa_reference": {"summary_metrics": "reference/pluck_summary.json"},
                 }
@@ -170,6 +179,10 @@ def test_shape_gates_use_source_audio(driver: Path) -> None:
                 "source-referenced residual gate should emit a check")
         require("transient_preservation.attack_sharpness" in combined,
                 "source-referenced transient gate should emit a check")
+        require("decay_envelope_preservation.error" in combined,
+                "source-referenced decay gate should emit a check")
+        require("timing_phase_stability.aligned_correlation" in combined,
+                "source-referenced timing/phase gate should emit a check")
         require("diagnostics: time attack_nrms=" in combined,
                 "real-audio driver should print time-window reconstruction diagnostics")
         require("dominant_band=" in combined,
