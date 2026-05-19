@@ -661,6 +661,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Promote waveform timing/phase diagnostics into an external fixture gate covering aligned correlation, aligned NRMS error, bounded alignment gain, and bounded lag.
 - [x] Enable both gates across the first-party real-audio fixtures and extend Python/C++ gate contract tests so future regressions fail before release.
 
+### Commit 74 - `fix(transient): add source-quality handoff margin`
+
+**PRD:** section 5.5, section 5.7, section 7.3
+
+- [x] Extend default Modern transient protection from 160 ms to 180 ms after detected onsets and allow captured source buffers up to 250 ms.
+- [x] Choose the shorter passing handoff extension after rejecting a 190/265 ms probe that improved NRMS but failed plucked-guitar timing stability.
+- [x] Ratchet first-party source normalized-RMS ceilings around the improved pluck, crotale, vocal, and vowel reconstruction margins.
+
 ---
 
 ## Dependency Index
@@ -717,3 +725,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Resonant transient handoff protection | 71 |
 | Resonant tail handoff protection | 72 |
 | Decay and timing stability gates | 73 |
+| Source-quality handoff margin | 74 |

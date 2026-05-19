@@ -154,8 +154,8 @@ the shared 0.95 source-referenced transient-sharpness floor, a source
 decay-envelope preservation gate, and a timing/phase stability gate so later
 render changes cannot silently soften, recolor, smear, or drift attacks and
 their early resonant tails.
-Modern transient source buffers protect 160 ms after each detected onset, with
-captured buffers allowed up to 220 ms. This keeps percussive resonant attacks
+Modern transient source buffers protect 180 ms after each detected onset, with
+captured buffers allowed up to 250 ms. This keeps percussive resonant attacks
 and their early ringing source-anchored long enough for the modeled
 partial/residual tail to take over without early spectral overshoot.
 

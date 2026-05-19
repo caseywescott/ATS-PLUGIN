@@ -28,7 +28,7 @@
       ],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.8,
-        "max_source_normalized_rms_error": 0.09,
+        "max_source_normalized_rms_error": 0.085,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -58,7 +58,7 @@
       ],
       "threshold_overrides": {
         "max_spectral_distance_db_delta": 0.5,
-        "max_source_normalized_rms_error": 0.15,
+        "max_source_normalized_rms_error": 0.13,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -87,7 +87,7 @@
         "timing_phase_stability"
       ],
       "threshold_overrides": {
-        "max_source_normalized_rms_error": 0.01,
+        "max_source_normalized_rms_error": 0.001,
         "max_source_spectral_distance_db": 0.05
       },
       "atsa_reference": {
@@ -119,7 +119,7 @@
       "threshold_overrides": {
         "max_continuity_regression": 0.0,
         "max_identity_error_increase": 0,
-        "max_source_normalized_rms_error": 0.15,
+        "max_source_normalized_rms_error": 0.14,
         "max_source_spectral_distance_db": 0.15
       },
       "atsa_reference": {
