@@ -54,6 +54,19 @@ Phase 7 adds a second tier for side-by-side comparison with original ATSA/Qatsh
 on curated real audio clips. These run only when configured with
 `-DATS_ENABLE_EXTERNAL_FIXTURES=ON` and the assets are present.
 
+### Release-candidate verification snapshot
+
+The current Modern ATSH release-candidate baseline is the Commit 74 state:
+
+- `ctest --test-dir build --output-on-failure` passes 14/14 tests.
+- `tests/run_external_acceptance.py` emits 54 real-audio checks across the four
+  first-party fixtures with zero failures.
+- `cmake --build build_plugin --target AtsResynth` builds the plugin target.
+- Source normalized-RMS ceilings are `0.085` plucked guitar, `0.13` crotale,
+  `0.001` vocal chop, and `0.14` vowel phrase.
+- The remaining highest source-NRMS fixtures are vowel phrase and crotale; both
+  pass the source-quality, decay-envelope, and timing/phase gates.
+
 ### Fixture manifest
 
 `tests/fixtures/ats_external_fixture_manifest.json` — schema version 1.

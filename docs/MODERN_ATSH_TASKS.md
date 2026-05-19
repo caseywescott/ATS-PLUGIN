@@ -669,6 +669,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Choose the shorter passing handoff extension after rejecting a 190/265 ms probe that improved NRMS but failed plucked-guitar timing stability.
 - [x] Ratchet first-party source normalized-RMS ceilings around the improved pluck, crotale, vocal, and vowel reconstruction margins.
 
+### Commit 75 - `docs(release): record modern ATSH release baseline`
+
+**PRD:** section 7.1-section 7.3, section 8
+
+- [x] Record the current Modern ATSH release-candidate baseline: 14/14 CTest, 54/54 external real-audio checks, plugin target build, and source-NRMS fixture ceilings.
+- [x] Document the accepted 180/250 ms transient handoff policy and the rejected 190/265 ms probe as the final release-readiness tradeoff.
+- [x] Mirror the release-candidate snapshot into the ATS Obsidian vault for project orientation outside the repo docs.
+
 ---
 
 ## Dependency Index
@@ -726,3 +734,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Resonant tail handoff protection | 72 |
 | Decay and timing stability gates | 73 |
 | Source-quality handoff margin | 74 |
+| Modern ATSH release baseline | 75 |
