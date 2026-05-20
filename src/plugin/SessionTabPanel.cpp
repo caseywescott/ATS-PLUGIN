@@ -208,12 +208,34 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
-    analysisModeLabel.setText("Analysis", juce::dontSendNotification);
+    analysisModeHeaderLabel.setText("Analysis engine for next Analyze", juce::dontSendNotification);
+    analysisModeHeaderLabel.setJustificationType(juce::Justification::centredLeft);
+    analysisModeHeaderLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    analysisModeHeaderLabel.setColour(juce::Label::textColourId, juce::Colour(0xffdce8ff));
+    addAndMakeVisible(analysisModeHeaderLabel);
+
+    analysisModeSummaryLabel.setText("CLASSIC ATS", juce::dontSendNotification);
+    analysisModeSummaryLabel.setJustificationType(juce::Justification::centredLeft);
+    analysisModeSummaryLabel.setFont(juce::Font(20.0f, juce::Font::bold));
+    analysisModeSummaryLabel.setColour(juce::Label::textColourId, analysisModeAccentColour);
+    addAndMakeVisible(analysisModeSummaryLabel);
+
+    analysisModeDetailLabel.setJustificationType(juce::Justification::topLeft);
+    analysisModeDetailLabel.setFont(juce::Font(12.0f));
+    analysisModeDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+    addAndMakeVisible(analysisModeDetailLabel);
+
+    analysisModeLabel.setText("Engine", juce::dontSendNotification);
     trackerModeLabel.setText("Tracker", juce::dontSendNotification);
     analysisModeCombo.addItemList(
-        juce::StringArray { "Classic ATS", "Modern ATS", "Experimental reassigned/DDM" }, 1);
-    analysisModeCombo.setHelpText("Classic ATS uses the original ATSA/Qatsh analysis and do_synthesis. Modern ATS renders through the modern snapshot path. Experimental reassigned/DDM also renders through the modern snapshot path but tags the result experimental.");
+        juce::StringArray { "Classic ATS - legacy compatibility",
+                            "Modern ATS - source/transient analysis",
+                            "Experimental - reassigned/DDM prototype" },
+        1);
+    analysisModeCombo.setHelpText(
+        "This chooses the analysis and preview engine used next time you press Analyze.");
     trackerModeCombo.addItemList(juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" }, 1);
+    trackerModeCombo.setHelpText("Only Modern ATS and Experimental analyses use this tracker selector.");
     addAndMakeVisible(analysisModeLabel);
     addAndMakeVisible(analysisModeCombo);
     addAndMakeVisible(trackerModeLabel);
@@ -315,6 +337,23 @@ void SessionTabPanel::saveUserPreset()
     });
 }
 
+void SessionTabPanel::paint(juce::Graphics& g)
+{
+    if (analysisModeCardBounds.isEmpty())
+        return;
+
+    const auto card = analysisModeCardBounds.toFloat();
+    g.setColour(juce::Colour(0xff181a24));
+    g.fillRoundedRectangle(card, 10.0f);
+    g.setColour(analysisModeAccentColour.withAlpha(0.34f));
+    g.drawRoundedRectangle(card.reduced(0.5f), 10.0f, 1.6f);
+
+    auto accentBounds = analysisModeCardBounds;
+    auto accent = accentBounds.removeFromLeft(5).toFloat();
+    g.setColour(analysisModeAccentColour.withAlpha(0.88f));
+    g.fillRoundedRectangle(accent, 4.0f);
+}
+
 void SessionTabPanel::resized()
 {
     const auto sc = [](int px) { return scaledUi(px); };
@@ -379,6 +418,31 @@ void SessionTabPanel::resized()
     progressBar.setBounds(r.removeFromTop(sc(14)));
     r.removeFromTop(sc(6));
 
+    auto takeLeft = [](juce::Rectangle<int>& area, int width) {
+        return area.removeFromLeft(juce::jlimit(0, area.getWidth(), width));
+    };
+
+    analysisModeCardBounds = r.removeFromTop(juce::jmin(sc(112), r.getHeight()));
+    auto modeCard = analysisModeCardBounds.reduced(sc(14), sc(9));
+    analysisModeHeaderLabel.setBounds(modeCard.removeFromTop(sc(18)));
+    modeCard.removeFromTop(sc(3));
+    auto infoRow = modeCard.removeFromTop(sc(34));
+    analysisModeSummaryLabel.setBounds(takeLeft(infoRow, sc(270)));
+    takeLeft(infoRow, sc(10));
+    analysisModeDetailLabel.setBounds(infoRow);
+    modeCard.removeFromTop(sc(5));
+    auto controls = modeCard.removeFromTop(sc(28));
+    analysisModeLabel.setBounds(takeLeft(controls, sc(58)));
+    const int engineWidth =
+        juce::jlimit(0,
+                     controls.getWidth(),
+                     juce::jmin(sc(330), juce::jmax(sc(190), controls.getWidth() / 2)));
+    analysisModeCombo.setBounds(takeLeft(controls, engineWidth));
+    takeLeft(controls, sc(12));
+    trackerModeLabel.setBounds(takeLeft(controls, sc(60)));
+    trackerModeCombo.setBounds(takeLeft(controls, sc(250)));
+    r.removeFromTop(sc(8));
+
     auto body = r;
     const int specW = juce::jmax(sc(280), body.getWidth() / 3);
     auto specCol = body.removeFromRight(specW);
@@ -397,13 +461,6 @@ void SessionTabPanel::resized()
     placeColumn(partGainLabel, partGainSlider);
     placeColumn(resGainLabel, resGainSlider);
     placeColumn(outputTrimLabel, outputTrimSlider);
-    body.removeFromTop(sc(8));
-    auto modeRow = body.removeFromTop(sc(24));
-    analysisModeLabel.setBounds(modeRow.removeFromLeft(sc(96)));
-    analysisModeCombo.setBounds(modeRow.removeFromLeft(sc(248)));
-    modeRow.removeFromLeft(sc(8));
-    trackerModeLabel.setBounds(modeRow.removeFromLeft(sc(56)));
-    trackerModeCombo.setBounds(modeRow.removeFromLeft(sc(220)));
 }
 
 void SessionTabPanel::refreshFromProcessor()
@@ -463,15 +520,64 @@ void SessionTabPanel::refreshFromProcessor()
         }
     }
 
-    const int selectedAnalysisId = analysisModeCombo.getSelectedId();
+    const int selectedAnalysisId = analysisModeCombo.getSelectedId() > 0 ? analysisModeCombo.getSelectedId() : 1;
+    const int selectedTrackerId = trackerModeCombo.getSelectedId() > 0 ? trackerModeCombo.getSelectedId() : 1;
     const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
+
+    juce::String modeSummary = "CLASSIC ATS";
+    juce::String modeDetails =
+        "Compatibility path: Qatsh/ATSA analysis and classic preview/export.\n"
+        "Modern transient and orphan-residual lanes are off.";
+    juce::String modeNote =
+        "Classic ATS selected: use this for old ATS compatibility and parity-sensitive checks.";
+    juce::Colour nextAccent(0xff8bb8ff);
+
+    if (selectedAnalysisId == 2)
+    {
+        modeSummary = "MODERN ATS";
+        modeDetails =
+            selectedTrackerId == 2
+                ? "Direct source analysis with protected attacks and orphan residuals.\nTracker: modern assignment."
+                : "Direct source analysis with protected attacks and orphan residuals.\nTracker: classic-compatible.";
+        modeNote =
+            "Modern ATS selected: preview uses the modern snapshot path; ATS export still keeps a classic ATS model for interchange.";
+        nextAccent = juce::Colour(0xff6fe7bc);
+    }
+    else if (selectedAnalysisId == 3)
+    {
+        modeSummary = "EXPERIMENTAL";
+        modeDetails =
+            "Prototype reassigned/DDM peak estimation.\nModern snapshot preview is used; not a compatibility target.";
+        modeNote =
+            "Experimental selected: useful for research only; do not use it when you need reproducible Classic or Modern ATS baselines.";
+        nextAccent = juce::Colour(0xffffbd66);
+    }
+
+    analysisModeSummaryLabel.setText(modeSummary, juce::dontSendNotification);
+    analysisModeDetailLabel.setText(modeDetails, juce::dontSendNotification);
+    analysisModeSummaryLabel.setColour(juce::Label::textColourId, nextAccent);
+    analysisModeCombo.setColour(juce::ComboBox::outlineColourId, nextAccent.withAlpha(0.9f));
+    trackerModeCombo.setColour(juce::ComboBox::outlineColourId,
+                               trackerSelectable ? nextAccent.withAlpha(0.76f) : juce::Colour(0xff4a4a62));
+    if (analysisModeAccentColour != nextAccent)
+    {
+        analysisModeAccentColour = nextAccent;
+        repaint();
+    }
+
     trackerModeLabel.setEnabled(trackerSelectable);
     trackerModeCombo.setEnabled(trackerSelectable);
-    if (!trackerSelectable && nextWarnings.isEmpty())
+    trackerModeCombo.setHelpText(trackerSelectable
+                                     ? "Select the tracker used by the next Modern/Experimental analysis."
+                                     : "Disabled in Classic ATS mode because Classic always uses recursive freq/SMR tracking.");
+    if (!trackerSelectable)
     {
-        nextWarnings =
-            "Tracker selector is enabled only when Analysis mode is Modern ATS or Experimental reassigned/DDM.";
+        modeNote << "\nTracker selector is disabled because Classic ATS always uses classic recursive freq/SMR tracking.";
     }
+    if (nextWarnings.isEmpty())
+        nextWarnings = modeNote;
+    else
+        nextWarnings = modeNote + "\n" + nextWarnings;
 
     layoutNeedsRefresh |= setRawTextIfChanged(rawDiagnosticsText, nextDiagnostics);
     layoutNeedsRefresh |= setRawTextIfChanged(rawModeWarningText, nextWarnings);

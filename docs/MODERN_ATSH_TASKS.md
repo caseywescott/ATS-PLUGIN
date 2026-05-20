@@ -677,6 +677,14 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 - [x] Document the accepted 180/250 ms transient handoff policy and the rejected 190/265 ms probe as the final release-readiness tradeoff.
 - [x] Mirror the release-candidate snapshot into the ATS Obsidian vault for project orientation outside the repo docs.
 
+### Commit 76 - `feat(ui): clarify classic vs modern analysis selection`
+
+**PRD:** section 5.1, section 7.5
+
+- [x] Give the Session tab a dedicated "Analysis engine for next Analyze" card so Classic ATS, Modern ATS, and Experimental choices are visible before running analysis.
+- [x] Expand plugin and host-facing analysis mode labels to explain legacy compatibility, source/transient Modern analysis, and Experimental prototype status.
+- [x] Show mode-specific compatibility notes and make the tracker selector clearly disabled in Classic ATS mode.
+
 ---
 
 ## Dependency Index
@@ -735,3 +743,4 @@ Implemented in `src/core/AtsModernModel.h` / `.cpp`; the plugin records imported
 | Decay and timing stability gates | 73 |
 | Source-quality handoff margin | 74 |
 | Modern ATSH release baseline | 75 |
+| Analysis mode UI clarity | 76 |

@@ -12,6 +12,7 @@ class SessionTabPanel : public juce::Component
 {
 public:
     explicit SessionTabPanel(AtsAudioProcessor&);
+    void paint(juce::Graphics&) override;
     void resized() override;
 
     void refreshFromProcessor();
@@ -67,6 +68,11 @@ private:
     juce::Slider partGainSlider;
     juce::Slider resGainSlider;
     juce::Slider outputTrimSlider;
+    juce::Rectangle<int> analysisModeCardBounds;
+    juce::Colour analysisModeAccentColour { 0xff8bb8ff };
+    juce::Label analysisModeHeaderLabel;
+    juce::Label analysisModeSummaryLabel;
+    juce::Label analysisModeDetailLabel;
     juce::Label analysisModeLabel;
     juce::ComboBox analysisModeCombo;
     juce::Label trackerModeLabel;

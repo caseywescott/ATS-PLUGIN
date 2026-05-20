@@ -380,7 +380,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "analysisMode",
         "Analysis mode",
-        juce::StringArray { "Classic ATS", "Modern ATS", "Experimental reassigned/DDM" },
+        juce::StringArray { "Classic ATS - legacy compatibility",
+                            "Modern ATS - source/transient analysis",
+                            "Experimental - reassigned/DDM prototype" },
         0));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "trackerMode",
