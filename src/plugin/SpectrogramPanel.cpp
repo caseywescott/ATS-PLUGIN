@@ -2,6 +2,8 @@
 
 #include "PluginProcessor.h"
 
+#include "AtsModernModel.h"
+
 namespace
 {
 constexpr int kTexW = 256;
@@ -61,6 +63,53 @@ void SpectrogramPanel::rebuildImageAsync()
     img.clear(juce::Rectangle<int>(kTexW, kTexH), juce::Colours::black);
     processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
     spectroImage = img;
+
+    // Update the mode label: Modern/Experimental when a modern model is valid, Classic otherwise.
+    {
+        juce::String summary, warnings;
+        if (processor.getModernDiagnosticsSummary(summary, warnings))
+        {
+            // Extract just the mode name from the diagnostics summary.
+            const int modeStart = summary.indexOf("mode: ");
+            const int modeEnd = summary.indexOf(", tracker:");
+            if (modeStart >= 0 && modeEnd > modeStart)
+                currentAnalysisModeText = summary.substring(modeStart + 6, modeEnd);
+            else
+                currentAnalysisModeText = "Modern ATS";
+        }
+        else
+        {
+            int p = 0, f = 0;
+            bool hasRes = false;
+            currentAnalysisModeText = processor.getModelFootprint(p, f, hasRes) ? "Classic ATS" : juce::String();
+        }
+    }
+
+    lifecycleLines.clear();
+    std::vector<AtsAudioProcessor::ModernLifecycleMarker> markers;
+    if (processor.getModernLifecycleMarkers(markers))
+    {
+        for (const auto& m : markers)
+        {
+            juce::Colour col;
+            switch (m.kind)
+            {
+                case ats::ModernAtsLifecycleKind::Birth:
+                    col = juce::Colour(0x9900cc44); // green, semi-transparent
+                    break;
+                case ats::ModernAtsLifecycleKind::Death:
+                    col = juce::Colour(0x99cc3300); // red, semi-transparent
+                    break;
+                case ats::ModernAtsLifecycleKind::GapFill:
+                    col = juce::Colour(0x66ccaa00); // amber, more transparent
+                    break;
+                default:
+                    continue;
+            }
+            lifecycleLines.push_back({ m.normalizedTime, col });
+        }
+    }
+
     repaint();
 }
 
@@ -82,9 +131,20 @@ void SpectrogramPanel::paint(juce::Graphics& g)
         g.drawText("No model", plot, juce::Justification::centred);
     }
 
+    // Overlay track lifecycle markers from the modern model.
+    for (const auto& [normTime, col] : lifecycleLines)
+    {
+        const int x = plot.getX() + juce::roundToInt(normTime * static_cast<float>(plot.getWidth() - 1));
+        g.setColour(col);
+        g.drawVerticalLine(x, static_cast<float>(plot.getY()), static_cast<float>(plot.getBottom()));
+    }
+
     g.setColour(juce::Colour(0xffb0b0c0));
     g.setFont(juce::Font(12.0f));
-    g.drawText("Read-only spectrogram (downsampled)", plot.removeFromBottom(16), juce::Justification::centredLeft);
+    auto footer = plot.removeFromBottom(16);
+    g.drawText("Read-only spectrogram (downsampled)", footer, juce::Justification::centredLeft);
+    if (currentAnalysisModeText.isNotEmpty())
+        g.drawText(currentAnalysisModeText, footer, juce::Justification::centredRight);
 }
 
 void SpectrogramPanel::resized()

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "scope": "modern-atsh-phase-7-external",
+  "description": "External first-party audio acceptance fixtures for side-by-side comparison with original ATSA/Qatsh.",
+  "license_policy": "All committed audio fixtures must be first-party project samples or carry a redistribution-compatible license.",
+  "reference_dir": "reference",
+  "audio_dir": "audio",
+  "fixtures": [
+    {
+      "id": "external_plucked_guitar",
+      "description": "Short picked electric-guitar pluck — Modern candidate reconstruction compared with ATSA reference.",
+      "category": "plucked_percussive",
+      "input_audio": "audio/plucked_guitar.wav",
+      "provenance": {
+        "description": "First-party project fixture derived from Casey Wescott's sample 91V_CC_electric_guitar_picky_pluck_C.wav; downmixed to mono PCM16 for deterministic tests.",
+        "license": "First-party sample created by Casey Wescott for ATS-PLUGIN testing; permitted for repository tests and redistribution with the project.",
+        "source_url": "first-party:91V_CC_electric_guitar_picky_pluck_C.wav"
+      },
+      "expected_sample_rate": 44100,
+      "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
+      "enabled_gates": [
+        "classic_parity",
+        "residual_energy_preservation",
+        "transient_preservation",
+        "decay_envelope_preservation",
+        "timing_phase_stability"
+      ],
+      "threshold_overrides": {
+        "max_spectral_distance_db_delta": 0.8,
+        "max_source_normalized_rms_error": 0.085,
+        "max_source_spectral_distance_db": 0.05
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_plucked_guitar_atsa_metadata.json",
+        "summary_metrics": "reference/external_plucked_guitar_summary.json"
+      }
+    },
+    {
+      "id": "external_crotale_hit",
+      "description": "Resonant crotale percussion one-shot — Modern candidate reconstruction compared with ATSA reference.",
+      "category": "percussive_hit",
+      "input_audio": "audio/crotale_hit.wav",
+      "provenance": {
+        "description": "First-party project fixture derived from Casey Wescott's sample RT_Daniel_Sadownick_Degraw_Creative_Percussion_Crotale_One_Shots_2.wav; downmixed to mono PCM16 for deterministic tests.",
+        "license": "First-party sample created by Casey Wescott for ATS-PLUGIN testing; permitted for repository tests and redistribution with the project.",
+        "source_url": "first-party:RT_Daniel_Sadownick_Degraw_Creative_Percussion_Crotale_One_Shots_2.wav"
+      },
+      "expected_sample_rate": 44100,
+      "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
+      "enabled_gates": [
+        "classic_parity",
+        "residual_energy_preservation",
+        "transient_preservation",
+        "decay_envelope_preservation",
+        "timing_phase_stability"
+      ],
+      "threshold_overrides": {
+        "max_spectral_distance_db_delta": 0.5,
+        "max_source_normalized_rms_error": 0.13,
+        "max_source_spectral_distance_db": 0.05
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_crotale_hit_atsa_metadata.json",
+        "summary_metrics": "reference/external_crotale_hit_summary.json"
+      }
+    },
+    {
+      "id": "external_vocal_chop",
+      "description": "Short male ah vocal chop — Modern candidate reconstruction compared with ATSA reference.",
+      "category": "noisy_voice_flute",
+      "input_audio": "audio/vocal_chop.wav",
+      "provenance": {
+        "description": "First-party project fixture derived from Casey Wescott's sample RU_VA_vocal_male_ah_chop_slight_F.wav; downmixed to mono PCM16 for deterministic tests.",
+        "license": "First-party sample created by Casey Wescott for ATS-PLUGIN testing; permitted for repository tests and redistribution with the project.",
+        "source_url": "first-party:RU_VA_vocal_male_ah_chop_slight_F.wav"
+      },
+      "expected_sample_rate": 44100,
+      "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
+      "enabled_gates": [
+        "classic_parity",
+        "residual_energy_preservation",
+        "transient_preservation",
+        "decay_envelope_preservation",
+        "timing_phase_stability"
+      ],
+      "threshold_overrides": {
+        "max_source_normalized_rms_error": 0.001,
+        "max_source_spectral_distance_db": 0.05
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_vocal_chop_atsa_metadata.json",
+        "summary_metrics": "reference/external_vocal_chop_summary.json"
+      }
+    },
+    {
+      "id": "external_vowel_phrase",
+      "description": "Longer vowel phrase — Modern candidate reconstruction compared with ATSA reference.",
+      "category": "noisy_voice_flute",
+      "input_audio": "audio/vowel_phrase.wav",
+      "provenance": {
+        "description": "First-party project fixture derived from Casey Wescott's sample Soundiron_VOGB_Phrase_Vowel_100BPM_A#_43.wav; converted to mono PCM16 for deterministic tests.",
+        "license": "First-party sample created by Casey Wescott for ATS-PLUGIN testing; permitted for repository tests and redistribution with the project.",
+        "source_url": "first-party:Soundiron_VOGB_Phrase_Vowel_100BPM_A#_43.wav"
+      },
+      "expected_sample_rate": 48000,
+      "expected_channels": 1,
+      "candidate_analysis_mode": "modern_ats",
+      "enabled_gates": [
+        "classic_parity",
+        "tracker_continuity",
+        "residual_energy_preservation",
+        "transient_preservation",
+        "decay_envelope_preservation",
+        "timing_phase_stability"
+      ],
+      "threshold_overrides": {
+        "max_continuity_regression": 0.0,
+        "max_identity_error_increase": 0,
+        "max_source_normalized_rms_error": 0.14,
+        "max_source_spectral_distance_db": 0.15
+      },
+      "atsa_reference": {
+        "metadata": "reference/external_vowel_phrase_atsa_metadata.json",
+        "summary_metrics": "reference/external_vowel_phrase_summary.json"
+      }
+    }
+  ]
+}

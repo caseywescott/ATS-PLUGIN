@@ -12,6 +12,7 @@ class SessionTabPanel : public juce::Component
 {
 public:
     explicit SessionTabPanel(AtsAudioProcessor&);
+    void paint(juce::Graphics&) override;
     void resized() override;
 
     void refreshFromProcessor();
@@ -23,6 +24,7 @@ private:
     void rebuildPresetList();
     void onPresetComboChanged();
     void saveUserPreset();
+    void setPresetMetadataText(const juce::String& text);
 
     AtsAudioProcessor& audioProcessor;
 
@@ -38,6 +40,9 @@ private:
     juce::Label presetLabel;
     juce::Label statusLabel;
     juce::Label errorLabel;
+    juce::Label modeWarningLabel;
+    juce::Label presetMetadataLabel;
+    juce::Label diagnosticsLabel;
     juce::Label cpuWarningLabel;
     double displayProgress = 0.0;
     juce::ProgressBar progressBar { displayProgress };
@@ -50,6 +55,11 @@ private:
     std::unique_ptr<juce::FileChooser> atsExportChooser;
 
     juce::Array<juce::File> userPresetFiles;
+    juce::String rawPresetMetadataText;
+    juce::String rawErrorText;
+    juce::String rawModeWarningText;
+    juce::String rawDiagnosticsText;
+    juce::String rawCpuWarningText;
 
     juce::Label partGainLabel;
     juce::Label resGainLabel;
@@ -58,10 +68,21 @@ private:
     juce::Slider partGainSlider;
     juce::Slider resGainSlider;
     juce::Slider outputTrimSlider;
+    juce::Rectangle<int> analysisModeCardBounds;
+    juce::Colour analysisModeAccentColour { 0xff8bb8ff };
+    juce::Label analysisModeHeaderLabel;
+    juce::Label analysisModeSummaryLabel;
+    juce::Label analysisModeDetailLabel;
+    juce::Label analysisModeLabel;
+    juce::ComboBox analysisModeCombo;
+    juce::Label trackerModeLabel;
+    juce::ComboBox trackerModeCombo;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> partGainAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> resGainAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> analysisModeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> trackerModeAttach;
 
     static constexpr int kUserPresetComboIdBase = 1000;
 

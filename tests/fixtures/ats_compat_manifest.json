@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "scope": "modern-atsh-phase-0",
+  "default_analysis_mode": "classic_ats",
+  "default_tracker_mode": "classic_recursive_frequency_smr",
+  "license_policy": "Generated fixtures are redistributed under the project license. Any future recorded fixture must name its source URL or recording session, copyright holder, and a redistribution-compatible license before it is committed.",
+  "expected_metrics": {
+    "reconstruction_error": {
+      "unit": "rms_or_peak_error",
+      "description": "Difference between input/reference audio and classic resynthesis."
+    },
+    "spectral_distance": {
+      "unit": "db",
+      "description": "Framewise spectral distance or log-magnitude error."
+    },
+    "track_continuity": {
+      "unit": "events_per_second",
+      "description": "Track births, deaths, short gaps, and identity continuity."
+    },
+    "transient_flux": {
+      "unit": "ratio",
+      "description": "Onset sharpness preservation using spectral-flux or attack-energy ratios."
+    },
+    "residual_energy_preservation": {
+      "unit": "db_or_ratio",
+      "description": "Critical-band residual energy retained after sinusoidal extraction."
+    }
+  },
+  "fixtures": [
+    {
+      "id": "sustained_sine_440",
+      "category": "sustained",
+      "purpose": "Stable monophonic reconstruction and a low-noise classic tracker baseline.",
+      "provenance": "Deterministically generated from a 440 Hz sine equation by repository test tooling.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:math.sin",
+        "sample_rate": 48000,
+        "duration_seconds": 0.75
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity"]
+    },
+    {
+      "id": "vibrato_sine_440",
+      "category": "vibrato",
+      "purpose": "Frequency-continuity stress for classic and future assignment trackers.",
+      "provenance": "Deterministically generated from a sinusoid with low-rate frequency modulation.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:sinusoidal_frequency_modulation",
+        "sample_rate": 48000,
+        "duration_seconds": 1.5
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity"]
+    },
+    {
+      "id": "crossing_partials_pair",
+      "category": "close_crossing_partials",
+      "purpose": "Close and crossing partial identity regression coverage.",
+      "provenance": "Deterministically generated from two linear chirps that cross near the midpoint.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:two_crossing_chirps",
+        "sample_rate": 48000,
+        "duration_seconds": 1.25
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity"]
+    },
+    {
+      "id": "plucked_decay_karplus_like",
+      "category": "plucked_percussive",
+      "purpose": "Attack preservation and short-decay tracking coverage.",
+      "provenance": "Deterministically generated from a seeded burst, harmonic bank, and exponential decay.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:seeded_noise_plus_decay_harmonics",
+        "sample_rate": 48000,
+        "duration_seconds": 1.0,
+        "seed": 1729
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity", "transient_flux"]
+    },
+    {
+      "id": "breathy_noisy_flute_like",
+      "category": "noisy_voice_flute",
+      "purpose": "Residual-band preservation for breathy pitched material.",
+      "provenance": "Deterministically generated from harmonic partials plus seeded filtered noise.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:harmonics_plus_seeded_filtered_noise",
+        "sample_rate": 48000,
+        "duration_seconds": 1.25,
+        "seed": 440
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity", "residual_energy_preservation"]
+    },
+    {
+      "id": "dense_polyphony_chord",
+      "category": "dense_polyphony",
+      "purpose": "Partial-count, masking, and continuity stress for dense harmonic material.",
+      "provenance": "Deterministically generated from several detuned harmonic stacks.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:detuned_harmonic_chord",
+        "sample_rate": 48000,
+        "duration_seconds": 1.5
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "track_continuity", "residual_energy_preservation"]
+    },
+    {
+      "id": "broadband_percussive_hit",
+      "category": "percussive_hit",
+      "purpose": "Transient flux and orphan residual energy coverage for broadband attacks.",
+      "provenance": "Deterministically generated from a seeded broadband burst and resonant decays.",
+      "license": "Generated fixture; redistributed under the project license.",
+      "source": {
+        "kind": "generated",
+        "generator": "python:seeded_burst_plus_resonant_decays",
+        "sample_rate": 48000,
+        "duration_seconds": 0.75,
+        "seed": 909
+      },
+      "metrics": ["reconstruction_error", "spectral_distance", "transient_flux", "residual_energy_preservation"]
+    }
+  ]
+}

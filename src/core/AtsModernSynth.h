@@ -1,0 +1,77 @@
+#pragma once
+
+#include "AtsModernModel.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace ats
+{
+
+struct ModernAtsSynthConfig
+{
+    int outputSampleRate = 48000;
+    /** Optional analysis-hop override in model sample-rate samples. Scaled to outputSampleRate at render prepare. */
+    int hopSizeSamples = 0;
+    double partialGain = 1.0;
+    double orphanResidualGain = 1.0;
+    double transientGain = 1.0;
+    bool useStoredPhase = true;
+    std::uint32_t deterministicNoiseSeed = 1;
+    int transientCrossfadeSamples = 64;
+    double denormalClamp = 1.0e-20;
+    /** Final render safety ceiling. Set <= 0.0 to disable limiting. */
+    double outputCeiling = 1.0;
+    /** Samples below this absolute level pass through unchanged before limiting. */
+    double outputSoftKneeStart = 0.9;
+    /** Scales output duration: >1 stretches time, <1 compresses. Default 1.0 (no change). */
+    double timeFactor = 1.0;
+    /** Scales all partial frequencies: >1 raises pitch, <1 lowers. Default 1.0 (no change). */
+    double frequencyFactor = 1.0;
+};
+
+struct ModernAtsRenderPlan
+{
+    const ModernAtsModel* model = nullptr;
+    ModernAtsSynthConfig config;
+    int outputSampleRate = 0;
+    int hopSizeSamples = 0;
+    int totalSamples = 0;
+};
+
+struct ModernAtsRealtimeSafetyReport
+{
+    bool renderIntoCallerOwnedBuffer = true;
+    bool allocatesDuringRender = false;
+    bool locksDuringRender = false;
+    bool performsFileIoDuringRender = false;
+    bool performsAnalysisDuringRender = false;
+    std::string summary;
+};
+
+struct ModernAtsRenderStats
+{
+    int totalSamples = 0;
+    std::size_t modelStateBytes = 0;
+    std::size_t outputBytes = 0;
+    double renderSeconds = 0.0;
+    double cpuRatioAtRealtime = 0.0;
+    float peakAbs = 0.0f;
+};
+
+bool prepareModernAtsRenderPlan(const ModernAtsModel& model,
+                                const ModernAtsSynthConfig& config,
+                                ModernAtsRenderPlan& plan,
+                                std::string& errorMessage);
+
+bool renderModernAtsPlanIntoBuffer(const ModernAtsRenderPlan& plan, float* output, int numSamples);
+std::vector<float> renderModernAtsModel(const ModernAtsModel& model,
+                                        const ModernAtsSynthConfig& config,
+                                        ModernAtsRenderStats* stats = nullptr);
+
+ModernAtsRealtimeSafetyReport checkModernAtsRealtimeSafety(const ModernAtsRenderPlan& plan);
+bool hasDenormalOrNonFiniteSamples(const float* samples, int numSamples, float denormalThreshold = 1.0e-20f);
+
+} // namespace ats

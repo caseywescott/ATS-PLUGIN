@@ -11,6 +11,66 @@ int scaledUi(int px)
         return juce::roundToInt((float) px * disp->scale);
     return px;
 }
+
+juce::String wrapTextToWidth(const juce::String& text, const juce::Font& font, int maxWidth)
+{
+    if (text.isEmpty() || maxWidth <= 16)
+        return text;
+
+    juce::StringArray words;
+    words.addTokens(text, " ", {});
+    words.removeEmptyStrings();
+    if (words.isEmpty())
+        return text;
+
+    juce::String wrapped;
+    juce::String line;
+    for (const auto& word : words)
+    {
+        const juce::String candidate = line.isEmpty() ? word : (line + " " + word);
+        if (!line.isEmpty() && font.getStringWidth(candidate) > maxWidth)
+        {
+            if (wrapped.isNotEmpty())
+                wrapped << "\n";
+            wrapped << line;
+            line = word;
+        }
+        else
+        {
+            line = candidate;
+        }
+    }
+
+    if (line.isNotEmpty())
+    {
+        if (wrapped.isNotEmpty())
+            wrapped << "\n";
+        wrapped << line;
+    }
+    return wrapped;
+}
+
+int countWrappedLines(const juce::String& text)
+{
+    if (text.isEmpty())
+        return 1;
+    int lines = 1;
+    for (int i = 0; i < text.length(); ++i)
+    {
+        if (text[i] == '\n')
+            ++lines;
+    }
+    return lines;
+}
+
+bool setRawTextIfChanged(juce::String& current, const juce::String& next)
+{
+    if (current == next)
+        return false;
+
+    current = next;
+    return true;
+}
 } // namespace
 
 SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
@@ -20,7 +80,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     loadButton.setExplicitFocusOrder(1);
     loadButton.setHelpText("Choose a mono or stereo WAV file to analyze.");
     analyzeButton.setExplicitFocusOrder(2);
-    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread).");
+    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread). Synthesis and diagnostics follow the selected Classic, Modern, or Experimental analysis path.");
     cancelButton.setExplicitFocusOrder(3);
     cancelButton.setHelpText("Stop the current analysis or resynthesis job.");
     presetCombo.setExplicitFocusOrder(4);
@@ -66,6 +126,16 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     errorLabel.setExplicitFocusOrder(7);
     errorLabel.setHelpText("Most recent error from analysis, resynthesis, or file I/O.");
     addAndMakeVisible(errorLabel);
+    modeWarningLabel.setJustificationType(juce::Justification::topLeft);
+    modeWarningLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffd180));
+    addAndMakeVisible(modeWarningLabel);
+    presetMetadataLabel.setJustificationType(juce::Justification::topLeft);
+    presetMetadataLabel.setFont(juce::Font(12.0f));
+    presetMetadataLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc5e1ff));
+    addAndMakeVisible(presetMetadataLabel);
+    diagnosticsLabel.setJustificationType(juce::Justification::topLeft);
+    diagnosticsLabel.setColour(juce::Label::textColourId, juce::Colour(0xff9dd7ff));
+    addAndMakeVisible(diagnosticsLabel);
 
     cpuWarningLabel.setJustificationType(juce::Justification::centredLeft);
     cpuWarningLabel.setFont(juce::Font(12.0f, juce::Font::italic));
@@ -138,6 +208,42 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
+    analysisModeHeaderLabel.setText("Analysis engine for next Analyze", juce::dontSendNotification);
+    analysisModeHeaderLabel.setJustificationType(juce::Justification::centredLeft);
+    analysisModeHeaderLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    analysisModeHeaderLabel.setColour(juce::Label::textColourId, juce::Colour(0xffdce8ff));
+    addAndMakeVisible(analysisModeHeaderLabel);
+
+    analysisModeSummaryLabel.setText("CLASSIC ATS", juce::dontSendNotification);
+    analysisModeSummaryLabel.setJustificationType(juce::Justification::centredLeft);
+    analysisModeSummaryLabel.setFont(juce::Font(20.0f, juce::Font::bold));
+    analysisModeSummaryLabel.setColour(juce::Label::textColourId, analysisModeAccentColour);
+    addAndMakeVisible(analysisModeSummaryLabel);
+
+    analysisModeDetailLabel.setJustificationType(juce::Justification::topLeft);
+    analysisModeDetailLabel.setFont(juce::Font(12.0f));
+    analysisModeDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+    addAndMakeVisible(analysisModeDetailLabel);
+
+    analysisModeLabel.setText("Engine", juce::dontSendNotification);
+    trackerModeLabel.setText("Tracker", juce::dontSendNotification);
+    analysisModeCombo.addItemList(
+        juce::StringArray { "Classic ATS - legacy compatibility",
+                            "Modern ATS - source/transient analysis",
+                            "Experimental - reassigned/DDM prototype" },
+        1);
+    analysisModeCombo.setHelpText(
+        "This chooses the analysis and preview engine used next time you press Analyze.");
+    trackerModeCombo.addItemList(juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" }, 1);
+    trackerModeCombo.setHelpText("Only Modern ATS and Experimental analyses use this tracker selector.");
+    addAndMakeVisible(analysisModeLabel);
+    addAndMakeVisible(analysisModeCombo);
+    addAndMakeVisible(trackerModeLabel);
+    addAndMakeVisible(trackerModeCombo);
+    analysisModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "analysisMode", analysisModeCombo);
+    trackerModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, "trackerMode", trackerModeCombo);
 
     spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
@@ -177,12 +283,14 @@ void SessionTabPanel::rebuildPresetList()
 void SessionTabPanel::onPresetComboChanged()
 {
     const int id = presetCombo.getSelectedId();
+    setPresetMetadataText({});
     if (id <= 0)
         return;
 
     const int nFactory = ats_preset::factoryPresetNames().size();
     if (id <= nFactory)
     {
+        setPresetMetadataText(ats_preset::factoryPresetMetadata(id - 1));
         audioProcessor.setCurrentProgram(id - 1);
         return;
     }
@@ -191,7 +299,10 @@ void SessionTabPanel::onPresetComboChanged()
     {
         const int idx = id - kUserPresetComboIdBase;
         if (juce::isPositiveAndBelow(idx, userPresetFiles.size()))
+        {
+            setPresetMetadataText("User full-state preset (.atspreset): restores analysis/tracker mode and model snapshot.");
             audioProcessor.loadFullStatePreset(userPresetFiles.getReference(idx));
+        }
     }
 }
 
@@ -226,6 +337,23 @@ void SessionTabPanel::saveUserPreset()
     });
 }
 
+void SessionTabPanel::paint(juce::Graphics& g)
+{
+    if (analysisModeCardBounds.isEmpty())
+        return;
+
+    const auto card = analysisModeCardBounds.toFloat();
+    g.setColour(juce::Colour(0xff181a24));
+    g.fillRoundedRectangle(card, 10.0f);
+    g.setColour(analysisModeAccentColour.withAlpha(0.34f));
+    g.drawRoundedRectangle(card.reduced(0.5f), 10.0f, 1.6f);
+
+    auto accentBounds = analysisModeCardBounds;
+    auto accent = accentBounds.removeFromLeft(5).toFloat();
+    g.setColour(analysisModeAccentColour.withAlpha(0.88f));
+    g.fillRoundedRectangle(accent, 4.0f);
+}
+
 void SessionTabPanel::resized()
 {
     const auto sc = [](int px) { return scaledUi(px); };
@@ -256,15 +384,64 @@ void SessionTabPanel::resized()
     ioRow.removeFromLeft(sc(8));
     previewStopButton.setBounds(ioRow.removeFromLeft(sc(90)));
 
-    r.removeFromTop(sc(10));
+    r.removeFromTop(sc(6));
     statusLabel.setBounds(r.removeFromTop(sc(22)));
-    r.removeFromTop(sc(6));
-    errorLabel.setBounds(r.removeFromTop(sc(40)));
-    r.removeFromTop(sc(6));
-    cpuWarningLabel.setBounds(r.removeFromTop(sc(20)));
-    r.removeFromTop(sc(8));
+
+    auto placeDynamicLabel = [&](juce::Label& label,
+                                 const juce::String& rawText,
+                                 int minHeight,
+                                 int maxHeight,
+                                 int lineHeight)
+    {
+        if (rawText.isEmpty())
+        {
+            label.setText({}, juce::dontSendNotification);
+            label.setBounds({});
+            return;
+        }
+
+        r.removeFromTop(sc(3));
+        const auto wrapped = wrapTextToWidth(rawText, label.getFont(), juce::jmax(sc(100), r.getWidth()));
+        const int lines = countWrappedLines(wrapped);
+        const int height = juce::jlimit(sc(minHeight), sc(maxHeight), lines * sc(lineHeight) + sc(4));
+        label.setText(wrapped, juce::dontSendNotification);
+        label.setBounds(r.removeFromTop(height));
+    };
+
+    placeDynamicLabel(errorLabel, rawErrorText, 20, 54, 14);
+    placeDynamicLabel(modeWarningLabel, rawModeWarningText, 18, 56, 14);
+    placeDynamicLabel(presetMetadataLabel, rawPresetMetadataText, 14, 60, 14);
+    placeDynamicLabel(diagnosticsLabel, rawDiagnosticsText, 20, 66, 14);
+    placeDynamicLabel(cpuWarningLabel, rawCpuWarningText, 18, 56, 14);
+
+    r.removeFromTop(sc(4));
     progressBar.setBounds(r.removeFromTop(sc(14)));
-    r.removeFromTop(sc(12));
+    r.removeFromTop(sc(6));
+
+    auto takeLeft = [](juce::Rectangle<int>& area, int width) {
+        return area.removeFromLeft(juce::jlimit(0, area.getWidth(), width));
+    };
+
+    analysisModeCardBounds = r.removeFromTop(juce::jmin(sc(112), r.getHeight()));
+    auto modeCard = analysisModeCardBounds.reduced(sc(14), sc(9));
+    analysisModeHeaderLabel.setBounds(modeCard.removeFromTop(sc(18)));
+    modeCard.removeFromTop(sc(3));
+    auto infoRow = modeCard.removeFromTop(sc(34));
+    analysisModeSummaryLabel.setBounds(takeLeft(infoRow, sc(270)));
+    takeLeft(infoRow, sc(10));
+    analysisModeDetailLabel.setBounds(infoRow);
+    modeCard.removeFromTop(sc(5));
+    auto controls = modeCard.removeFromTop(sc(28));
+    analysisModeLabel.setBounds(takeLeft(controls, sc(58)));
+    const int engineWidth =
+        juce::jlimit(0,
+                     controls.getWidth(),
+                     juce::jmin(sc(330), juce::jmax(sc(190), controls.getWidth() / 2)));
+    analysisModeCombo.setBounds(takeLeft(controls, engineWidth));
+    takeLeft(controls, sc(12));
+    trackerModeLabel.setBounds(takeLeft(controls, sc(60)));
+    trackerModeCombo.setBounds(takeLeft(controls, sc(250)));
+    r.removeFromTop(sc(8));
 
     auto body = r;
     const int specW = juce::jmax(sc(280), body.getWidth() / 3);
@@ -321,34 +498,110 @@ void SessionTabPanel::refreshFromProcessor()
         break;
     }
 
+    bool layoutNeedsRefresh = false;
+
     const auto err = audioProcessor.getLastError();
-    errorLabel.setText(err.isEmpty() ? juce::String() : ("Last error: " + err),
-                       juce::dontSendNotification);
+    const juce::String nextError = err.isEmpty() ? juce::String() : ("Last error: " + err);
+    layoutNeedsRefresh |= setRawTextIfChanged(rawErrorText, nextError);
+
+    juce::String nextDiagnostics;
+    juce::String nextWarnings;
+    if (!audioProcessor.getModernDiagnosticsSummary(nextDiagnostics, nextWarnings))
+    {
+        // Classic ATS mode: show basic model info when a model is available.
+        int classicPartials = 0, classicFrames = 0;
+        bool classicHasRes = false;
+        if (audioProcessor.getModelFootprint(classicPartials, classicFrames, classicHasRes))
+        {
+            nextDiagnostics = "Classic ATS - partials: " + juce::String(classicPartials)
+                              + ", frames: " + juce::String(classicFrames)
+                              + ", residual bands: "
+                              + (classicHasRes ? juce::String("yes") : juce::String("no"));
+        }
+    }
+
+    const int selectedAnalysisId = analysisModeCombo.getSelectedId() > 0 ? analysisModeCombo.getSelectedId() : 1;
+    const int selectedTrackerId = trackerModeCombo.getSelectedId() > 0 ? trackerModeCombo.getSelectedId() : 1;
+    const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
+
+    juce::String modeSummary = "CLASSIC ATS";
+    juce::String modeDetails =
+        "Compatibility path: Qatsh/ATSA analysis and classic preview/export.\n"
+        "Modern transient and orphan-residual lanes are off.";
+    juce::String modeNote =
+        "Classic ATS selected: use this for old ATS compatibility and parity-sensitive checks.";
+    juce::Colour nextAccent(0xff8bb8ff);
+
+    if (selectedAnalysisId == 2)
+    {
+        modeSummary = "MODERN ATS";
+        modeDetails =
+            selectedTrackerId == 2
+                ? "Direct source analysis with protected attacks and orphan residuals.\nTracker: modern assignment."
+                : "Direct source analysis with protected attacks and orphan residuals.\nTracker: classic-compatible.";
+        modeNote =
+            "Modern ATS selected: preview uses the modern snapshot path; ATS export still keeps a classic ATS model for interchange.";
+        nextAccent = juce::Colour(0xff6fe7bc);
+    }
+    else if (selectedAnalysisId == 3)
+    {
+        modeSummary = "EXPERIMENTAL";
+        modeDetails =
+            "Prototype reassigned/DDM peak estimation.\nModern snapshot preview is used; not a compatibility target.";
+        modeNote =
+            "Experimental selected: useful for research only; do not use it when you need reproducible Classic or Modern ATS baselines.";
+        nextAccent = juce::Colour(0xffffbd66);
+    }
+
+    analysisModeSummaryLabel.setText(modeSummary, juce::dontSendNotification);
+    analysisModeDetailLabel.setText(modeDetails, juce::dontSendNotification);
+    analysisModeSummaryLabel.setColour(juce::Label::textColourId, nextAccent);
+    analysisModeCombo.setColour(juce::ComboBox::outlineColourId, nextAccent.withAlpha(0.9f));
+    trackerModeCombo.setColour(juce::ComboBox::outlineColourId,
+                               trackerSelectable ? nextAccent.withAlpha(0.76f) : juce::Colour(0xff4a4a62));
+    if (analysisModeAccentColour != nextAccent)
+    {
+        analysisModeAccentColour = nextAccent;
+        repaint();
+    }
+
+    trackerModeLabel.setEnabled(trackerSelectable);
+    trackerModeCombo.setEnabled(trackerSelectable);
+    trackerModeCombo.setHelpText(trackerSelectable
+                                     ? "Select the tracker used by the next Modern/Experimental analysis."
+                                     : "Disabled in Classic ATS mode because Classic always uses recursive freq/SMR tracking.");
+    if (!trackerSelectable)
+    {
+        modeNote << "\nTracker selector is disabled because Classic ATS always uses classic recursive freq/SMR tracking.";
+    }
+    if (nextWarnings.isEmpty())
+        nextWarnings = modeNote;
+    else
+        nextWarnings = modeNote + "\n" + nextWarnings;
+
+    layoutNeedsRefresh |= setRawTextIfChanged(rawDiagnosticsText, nextDiagnostics);
+    layoutNeedsRefresh |= setRawTextIfChanged(rawModeWarningText, nextWarnings);
 
     int partials = 0;
     int frames = 0;
     bool hasRes = false;
+    juce::String nextCpuWarning;
     if (audioProcessor.getModelFootprint(partials, frames, hasRes))
     {
         const int64_t prod = (int64_t) partials * (int64_t) frames;
         if (prod > ats_editor::kModelSizeSoftCap)
         {
-            cpuWarningLabel.setText(
-                "Large model: " + juce::String(partials) + " partials x " + juce::String(frames)
-                    + " frames (product " + juce::String(prod) + " exceeds soft limit "
-                    + juce::String(ats_editor::kModelSizeSoftCap)
-                    + "; analysis and resynth may be slow or memory-heavy).",
-                juce::dontSendNotification);
-        }
-        else
-        {
-            cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
+            nextCpuWarning = "Large model: " + juce::String(partials) + " partials x "
+                             + juce::String(frames) + " frames (product " + juce::String(prod)
+                             + " exceeds soft limit " + juce::String(ats_editor::kModelSizeSoftCap)
+                             + "; analysis and resynth may be slow or memory-heavy).";
         }
     }
-    else
-    {
-        cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
-    }
+
+    layoutNeedsRefresh |= setRawTextIfChanged(rawCpuWarningText, nextCpuWarning);
+
+    if (layoutNeedsRefresh)
+        resized();
 }
 
 void SessionTabPanel::pickImportAts()
@@ -391,4 +644,13 @@ void SessionTabPanel::pickFile()
         if (f.existsAsFile())
             audioProcessor.loadSourceFile(f);
     });
+}
+
+void SessionTabPanel::setPresetMetadataText(const juce::String& text)
+{
+    if (rawPresetMetadataText == text)
+        return;
+
+    rawPresetMetadataText = text;
+    resized();
 }

@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <time.h>
 
 #include <sndfile.h>
 
@@ -14,12 +16,341 @@
 
 #define BUFFER_LEN 1024
 
+/* Qatsh residual synthesis seeds rand() from time(0).  The offline reference
+ * CLI needs reproducible WAV-derived metrics, so keep time deterministic here
+ * without changing the embedded ATSA sources or plugin builds. */
+time_t time(time_t *timer)
+{
+  const time_t fixed_time = 1;
+  if (timer)
+    *timer = fixed_time;
+  return fixed_time;
+}
+
 static void usage(const char *prog)
 {
   fprintf(stderr,
-          "Usage: %s [--type <1-4>] <input.wav> <output.wav>\n"
+          "Usage: %s [--type <1-4>] [--analysis-mode classic_ats] [--metadata <analysis.json>] <input.wav> <output.wav>\n"
           "  Analysis type matches ATSA/Qatsh (default %d).\n",
           prog, ATSA_TYPE);
+}
+
+static void fnv1a64_update(uint64_t *hash, const unsigned char *data, size_t n)
+{
+  size_t i;
+  for (i = 0; i < n; ++i) {
+    *hash ^= (uint64_t)data[i];
+    *hash *= 1099511628211ULL;
+  }
+}
+
+static void fnv1a64_to_hex(uint64_t hash, char out_hex[17])
+{
+  snprintf(out_hex, 17, "%016llx", (unsigned long long)hash);
+}
+
+static int fnv1a64_file(const char *path, char out_hex[17])
+{
+  FILE *f = fopen(path, "rb");
+  unsigned char buf[4096];
+  uint64_t hash = 1469598103934665603ULL;
+  size_t n;
+
+  if (!f) {
+    fprintf(stderr, "Could not hash '%s'.\n", path);
+    return -1;
+  }
+
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+    fnv1a64_update(&hash, buf, n);
+  }
+
+  if (ferror(f)) {
+    fclose(f);
+    fprintf(stderr, "Could not read '%s' while hashing.\n", path);
+    return -1;
+  }
+
+  fclose(f);
+  fnv1a64_to_hex(hash, out_hex);
+  return 0;
+}
+
+static void parameter_hash_fnv1a64(const ANARGS *a, char out_hex[17])
+{
+  char buf[1024];
+  uint64_t hash = 1469598103934665603ULL;
+  int n = snprintf(buf,
+                   sizeof(buf),
+                   "%.17g|%.17g|%.17g|%.17g|%.17g|%d|%d|%d|%.17g|%.17g|%d|%d|%d|%.17g|%.17g|%.17g|%.17g|%d|%d|%d|%d",
+                   a->start,
+                   a->duration,
+                   a->lowest_freq,
+                   a->highest_freq,
+                   a->freq_dev,
+                   a->win_cycles,
+                   a->win_type,
+                   a->win_size,
+                   a->hop_size,
+                   a->lowest_mag,
+                   a->track_len,
+                   a->min_seg_len,
+                   a->min_gap_len,
+                   a->SMR_thres,
+                   a->min_seg_SMR,
+                   a->last_peak_cont,
+                   a->SMR_cont,
+                   a->type,
+                   a->hop_smp,
+                   a->fft_size,
+                   a->frames);
+  if (n < 0)
+    n = 0;
+  if (n >= (int)sizeof(buf))
+    n = (int)sizeof(buf) - 1;
+  fnv1a64_update(&hash, (const unsigned char *)buf, (size_t)n);
+  fnv1a64_to_hex(hash, out_hex);
+}
+
+typedef struct {
+  int expected_frames;
+  int active_frames;
+  int lifecycle_breaks;
+  double continuity_score;
+  int identity_errors;
+  double partial_noise_energy;
+  double orphan_residual_energy;
+  double total_residual_energy;
+  double orphan_residual_ratio;
+  double attack_sharpness;
+  double max_buffer_step;
+  double residual_highpass_ratio;
+} OFFLINE_METADATA_METRICS;
+
+static double finite_positive(double value)
+{
+  return isfinite(value) && value > 0.0 ? value : 0.0;
+}
+
+static int active_cell(const ATS_SOUND *sound, int partial, int frame)
+{
+  if (!sound || !sound->amp || !sound->frq || partial < 0 || frame < 0 ||
+      partial >= sound->partials || frame >= sound->frames || !sound->amp[partial] ||
+      !sound->frq[partial]) {
+    return 0;
+  }
+  return isfinite(sound->amp[partial][frame]) && isfinite(sound->frq[partial][frame]) &&
+         sound->amp[partial][frame] > 0.0 && sound->frq[partial][frame] > 0.0;
+}
+
+static int identity_discontinuity(double previous_frequency_hz, double next_frequency_hz)
+{
+  double octave_jump;
+  double hz_jump;
+  if (previous_frequency_hz <= 0.0 || next_frequency_hz <= 0.0 ||
+      !isfinite(previous_frequency_hz) || !isfinite(next_frequency_hz)) {
+    return 0;
+  }
+
+  octave_jump = fabs(log(next_frequency_hz / previous_frequency_hz) / log(2.0));
+  hz_jump = fabs(next_frequency_hz - previous_frequency_hz);
+  return octave_jump > 0.5 && hz_jump > 80.0;
+}
+
+static void compute_sound_model_metrics(const ATS_SOUND *sound, OFFLINE_METADATA_METRICS *metrics)
+{
+  int partial;
+  int frame;
+  int transition_count = 0;
+  int continuity_error_count = 0;
+  double band_energy = 0.0;
+
+  memset(metrics, 0, sizeof(*metrics));
+  if (!sound || sound->partials <= 0 || sound->frames <= 0) {
+    return;
+  }
+
+  metrics->expected_frames = sound->partials * sound->frames;
+  for (partial = 0; partial < sound->partials; ++partial) {
+    int saw_active = 0;
+    int in_gap = 0;
+    int has_previous_active = 0;
+    double previous_frequency_hz = 0.0;
+
+    for (frame = 0; frame < sound->frames; ++frame) {
+      if (active_cell(sound, partial, frame)) {
+        ++metrics->active_frames;
+        if (has_previous_active) {
+          ++transition_count;
+          if (in_gap || identity_discontinuity(previous_frequency_hz, sound->frq[partial][frame])) {
+            ++continuity_error_count;
+          }
+        }
+        if (saw_active && in_gap) {
+          ++metrics->lifecycle_breaks;
+        }
+        if (has_previous_active &&
+            identity_discontinuity(previous_frequency_hz, sound->frq[partial][frame])) {
+          ++metrics->identity_errors;
+        }
+        previous_frequency_hz = sound->frq[partial][frame];
+        has_previous_active = 1;
+        saw_active = 1;
+        in_gap = 0;
+      } else if (saw_active) {
+        in_gap = 1;
+      }
+
+      if (sound->res && sound->res[partial]) {
+        metrics->partial_noise_energy += finite_positive(sound->res[partial][frame]);
+      }
+    }
+  }
+
+  if (sound->band_energy) {
+    int band;
+    for (band = 0; band < ATSA_CRITICAL_BANDS; ++band) {
+      if (!sound->band_energy[band]) {
+        continue;
+      }
+      for (frame = 0; frame < sound->frames; ++frame) {
+        band_energy += finite_positive(sound->band_energy[band][frame]);
+      }
+    }
+  }
+
+  metrics->total_residual_energy = band_energy > 0.0 ? band_energy : metrics->partial_noise_energy;
+  metrics->orphan_residual_energy =
+      metrics->total_residual_energy > metrics->partial_noise_energy
+          ? metrics->total_residual_energy - metrics->partial_noise_energy
+          : 0.0;
+  metrics->orphan_residual_ratio =
+      metrics->total_residual_energy > 0.0
+          ? metrics->orphan_residual_energy / metrics->total_residual_energy
+          : 0.0;
+
+  metrics->continuity_score =
+      transition_count > 0
+          ? 1.0 - (double)(continuity_error_count < transition_count ? continuity_error_count : transition_count) /
+                (double)transition_count
+          : (metrics->active_frames > 0 ? 1.0 : 0.0);
+}
+
+static void compute_rendered_audio_metrics(const double *samples,
+                                           int sample_count,
+                                           OFFLINE_METADATA_METRICS *metrics)
+{
+  int i;
+  int n = sample_count < 4096 ? sample_count : 4096;
+  double peak = 0.0;
+  double energy = 0.0;
+  double diff_energy = 0.0;
+  double previous = 0.0;
+
+  if (!samples || sample_count <= 0 || !metrics) {
+    return;
+  }
+
+  for (i = 0; i < n; ++i) {
+    double sample = isfinite(samples[i]) ? samples[i] : 0.0;
+    double abs_sample = fabs(sample);
+    peak = peak > abs_sample ? peak : abs_sample;
+    energy += sample * sample;
+    if (i > 0) {
+      double step = sample - previous;
+      double abs_step = fabs(step);
+      diff_energy += step * step;
+      metrics->max_buffer_step =
+          metrics->max_buffer_step > abs_step ? metrics->max_buffer_step : abs_step;
+    }
+    previous = sample;
+  }
+
+  if (n > 0 && energy > 0.0) {
+    double rms = sqrt(energy / (double)n);
+    metrics->attack_sharpness = rms > 0.0 ? peak / rms : 0.0;
+    metrics->residual_highpass_ratio = diff_energy / (diff_energy + energy);
+  }
+}
+
+static int write_metadata_json(const char *path,
+                               const ANARGS *a,
+                               const ATS_SOUND *sound,
+                               const char *analysis_mode,
+                               const char *source_hash,
+                               sf_count_t input_frames,
+                               int input_sr,
+                               const double *rendered_samples,
+                               int rendered_frames)
+{
+  char parameter_hash[17];
+  OFFLINE_METADATA_METRICS metrics;
+  parameter_hash_fnv1a64(a, parameter_hash);
+  compute_sound_model_metrics(sound, &metrics);
+  compute_rendered_audio_metrics(rendered_samples, rendered_frames, &metrics);
+
+  FILE *f = fopen(path, "w");
+  if (!f) {
+    fprintf(stderr, "Could not open metadata path '%s'.\n", path);
+    return -1;
+  }
+
+  fprintf(f, "{\n");
+  fprintf(f, "  \"schema_version\": 1,\n");
+  fprintf(f, "  \"analysis_mode\": \"%s\",\n", analysis_mode);
+  fprintf(f, "  \"tracker_mode\": \"classic_recursive_frequency_smr\",\n");
+  fprintf(f, "  \"source_hash_fnv1a64\": \"%s\",\n", source_hash);
+  fprintf(f, "  \"parameter_hash_fnv1a64\": \"%s\",\n", parameter_hash);
+  fprintf(f, "  \"input_sample_rate\": %d,\n", input_sr);
+  fprintf(f, "  \"input_frames\": %lld,\n", (long long)input_frames);
+  fprintf(f, "  \"rendered_frames\": %d,\n", rendered_frames);
+  fprintf(f, "  \"continuity_score\": %.17g,\n", metrics.continuity_score);
+  fprintf(f, "  \"identity_errors\": %d,\n", metrics.identity_errors);
+  fprintf(f, "  \"partial_noise_energy\": %.17g,\n", metrics.partial_noise_energy);
+  fprintf(f, "  \"orphan_residual_energy\": %.17g,\n", metrics.orphan_residual_energy);
+  fprintf(f, "  \"total_residual_energy\": %.17g,\n", metrics.total_residual_energy);
+  fprintf(f, "  \"orphan_residual_ratio\": %.17g,\n", metrics.orphan_residual_ratio);
+  fprintf(f, "  \"residual_highpass_ratio\": %.17g,\n", metrics.residual_highpass_ratio);
+  fprintf(f, "  \"attack_sharpness\": %.17g,\n", metrics.attack_sharpness);
+  fprintf(f, "  \"max_buffer_step\": %.17g,\n", metrics.max_buffer_step);
+  fprintf(f, "  \"model\": {\n");
+  fprintf(f, "    \"sample_rate\": %d,\n", sound->srate);
+  fprintf(f, "    \"frame_size\": %d,\n", sound->frame_size);
+  fprintf(f, "    \"window_size\": %d,\n", sound->window_size);
+  fprintf(f, "    \"partials\": %d,\n", sound->partials);
+  fprintf(f, "    \"frames\": %d,\n", sound->frames);
+  fprintf(f, "    \"duration_seconds\": %.17g\n", sound->dur);
+  fprintf(f, "  },\n");
+  fprintf(f, "  \"analysis_params\": {\n");
+  fprintf(f, "    \"start\": %.17g,\n", a->start);
+  fprintf(f, "    \"duration\": %.17g,\n", a->duration);
+  fprintf(f, "    \"lowest_freq\": %.17g,\n", a->lowest_freq);
+  fprintf(f, "    \"highest_freq\": %.17g,\n", a->highest_freq);
+  fprintf(f, "    \"freq_dev\": %.17g,\n", a->freq_dev);
+  fprintf(f, "    \"win_cycles\": %d,\n", a->win_cycles);
+  fprintf(f, "    \"win_type\": %d,\n", a->win_type);
+  fprintf(f, "    \"win_size\": %d,\n", a->win_size);
+  fprintf(f, "    \"hop_size\": %.17g,\n", a->hop_size);
+  fprintf(f, "    \"lowest_mag\": %.17g,\n", a->lowest_mag);
+  fprintf(f, "    \"track_len\": %d,\n", a->track_len);
+  fprintf(f, "    \"min_seg_len\": %d,\n", a->min_seg_len);
+  fprintf(f, "    \"min_gap_len\": %d,\n", a->min_gap_len);
+  fprintf(f, "    \"SMR_thres\": %.17g,\n", a->SMR_thres);
+  fprintf(f, "    \"min_seg_SMR\": %.17g,\n", a->min_seg_SMR);
+  fprintf(f, "    \"last_peak_cont\": %.17g,\n", a->last_peak_cont);
+  fprintf(f, "    \"SMR_cont\": %.17g,\n", a->SMR_cont);
+  fprintf(f, "    \"type\": %d,\n", a->type);
+  fprintf(f, "    \"computed_hop_smp\": %d,\n", a->hop_smp);
+  fprintf(f, "    \"computed_fft_size\": %d,\n", a->fft_size);
+  fprintf(f, "    \"computed_frames\": %d\n", a->frames);
+  fprintf(f, "  }\n");
+  fprintf(f, "}\n");
+
+  if (fclose(f) != 0) {
+    fprintf(stderr, "Could not finish writing metadata path '%s'.\n", path);
+    return -1;
+  }
+  return 0;
 }
 
 static int load_mono_wav(const char *path, double **out_samples, sf_count_t *out_frames, int *out_sr)
@@ -153,6 +484,8 @@ int main(int argc, char **argv)
 {
   const char *in_path = NULL;
   const char *out_path = NULL;
+  const char *metadata_path = NULL;
+  const char *analysis_mode = "classic_ats";
   int analysis_type = ATSA_TYPE;
   int i = 1;
 
@@ -163,6 +496,29 @@ int main(int argc, char **argv)
         return 1;
       }
       analysis_type = atoi(argv[i + 1]);
+      i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--metadata") == 0) {
+      if (i + 1 >= argc) {
+        usage(argv[0]);
+        return 1;
+      }
+      metadata_path = argv[i + 1];
+      i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--analysis-mode") == 0) {
+      if (i + 1 >= argc) {
+        usage(argv[0]);
+        return 1;
+      }
+      if (strcmp(argv[i + 1], "classic") == 0 || strcmp(argv[i + 1], "classic_ats") == 0) {
+        analysis_mode = "classic_ats";
+      } else {
+        fprintf(stderr, "Only analysis mode 'classic_ats' is supported by ats_offline in Phase 2.\n");
+        return 1;
+      }
       i += 2;
       continue;
     }
@@ -184,6 +540,15 @@ int main(int argc, char **argv)
     usage(argv[0]);
     return 1;
   }
+
+  if (analysis_type < 1 || analysis_type > 4) {
+    usage(argv[0]);
+    return 1;
+  }
+
+  char source_hash[17] = "0000000000000000";
+  if (metadata_path && fnv1a64_file(in_path, source_hash) != 0)
+    return 1;
 
   double *samples = NULL;
   sf_count_t frames = 0;
@@ -217,17 +582,21 @@ int main(int argc, char **argv)
   do_synthesis(sound, &sp, &timenv, NULL, &out, &n_out);
   curve_free(&timenv);
 
-  free_sound(sound);
-  free(sound);
-
   if (!out || n_out <= 0) {
     fprintf(stderr, "Synthesis produced no samples.\n");
     if (out)
       free(out);
+    free_sound(sound);
+    free(sound);
     return 1;
   }
 
   int wr = write_mono_wav(out_path, out, n_out, sr);
+  if (wr == 0 && metadata_path)
+    wr = write_metadata_json(metadata_path, &anargs, sound, analysis_mode, source_hash, frames, sr, out, n_out);
+
   free(out);
+  free_sound(sound);
+  free(sound);
   return wr != 0 ? 1 : 0;
 }
