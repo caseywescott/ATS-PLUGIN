@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "scope": "morph-to-ats-phase-0",
+  "description": "Placeholder fixture contract for morph-to-ATS analysis tests. Audio/model assets are intentionally deferred; this file fixes the fixture categories, metadata fields, and source A/source B pairings that later metric tests will consume.",
+  "default_sample_rate": 48000,
+  "default_channels": 1,
+  "default_expected_analysis_mode": "classic_ats",
+  "license_policy": "Generated fixtures are redistributed under the project license. Any recorded or third-party fixture must name its source URL or recording session, copyright holder, and redistribution-compatible license before it is committed.",
+  "fixtures": [
+    {
+      "id": "morph_sustained_harmonic_a",
+      "category": "sustained_harmonic",
+      "asset_status": "placeholder",
+      "purpose": "Stable harmonic source for endpoint fidelity, Bark-band energy bookkeeping, and frequency-rank correspondence baselines.",
+      "provenance": {
+        "description": "Planned deterministic generated harmonic stack with steady partial amplitudes.",
+        "source_url": "generated:steady_harmonic_stack",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.5,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_optional"]
+    },
+    {
+      "id": "morph_vibrato_b",
+      "category": "vibrato",
+      "asset_status": "placeholder",
+      "purpose": "Slow pitch modulation for correspondence churn and trajectory smoothness checks.",
+      "provenance": {
+        "description": "Planned deterministic generated sinusoid or harmonic stack with low-rate frequency modulation.",
+        "source_url": "generated:vibrato_harmonic_stack",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.5,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_optional"]
+    },
+    {
+      "id": "morph_voice_vowel_a",
+      "category": "voice_vowel",
+      "asset_status": "placeholder",
+      "purpose": "Formant-like harmonic material for vocal-to-instrument morph pairings and spectral envelope stability.",
+      "provenance": {
+        "description": "Planned deterministic generated vowel-like harmonic source with broad formant amplitude shaping.",
+        "source_url": "generated:vowel_formant_harmonic_stack",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.5,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_optional"]
+    },
+    {
+      "id": "morph_inharmonic_metallic_b",
+      "category": "inharmonic_metallic",
+      "asset_status": "placeholder",
+      "purpose": "Bell-like inharmonic partial spacing for ambiguous within-band correspondence and count mismatch coverage.",
+      "provenance": {
+        "description": "Planned deterministic generated inharmonic modal bank with metallic decay.",
+        "source_url": "generated:inharmonic_modal_bank",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 2.0,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_optional"]
+    },
+    {
+      "id": "morph_plucked_percussive_a",
+      "category": "plucked_percussive",
+      "asset_status": "placeholder",
+      "purpose": "Sharp attack and fast decay source for transient protection and birth/death fade checks.",
+      "provenance": {
+        "description": "Planned deterministic generated pluck using a seeded burst, harmonic bank, and exponential decay.",
+        "source_url": "generated:seeded_plucked_decay",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.25,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "transient_markers_optional", "residual_optional"]
+    },
+    {
+      "id": "morph_noisy_breathy_b",
+      "category": "noisy_breathy",
+      "asset_status": "placeholder",
+      "purpose": "Pitched noisy source for residual/noise lane preservation and orphan residual bookkeeping.",
+      "provenance": {
+        "description": "Planned deterministic generated harmonic source with seeded filtered noise.",
+        "source_url": "generated:harmonics_plus_seeded_breath_noise",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.5,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_expected"]
+    },
+    {
+      "id": "morph_dense_polyphonic_b",
+      "category": "dense_polyphonic",
+      "asset_status": "placeholder",
+      "purpose": "Dense multi-source stress fixture for local band matching, power conservation, and CPU scaling checks.",
+      "provenance": {
+        "description": "Planned deterministic generated cluster of detuned harmonic stacks.",
+        "source_url": "generated:detuned_polyphonic_harmonic_cluster",
+        "copyright_holder": "ATS-PLUGIN project"
+      },
+      "license": "Generated fixture; redistributed under the project license.",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration_seconds": 1.5,
+      "expected_analysis_mode": "classic_ats",
+      "expected_analysis_outputs": ["partials", "phase_if_available", "residual_optional"]
+    }
+  ],
+  "source_pairings": [
+    {
+      "id": "harmonic_to_vibrato",
+      "status": "placeholder",
+      "source_a_fixture_id": "morph_sustained_harmonic_a",
+      "source_b_fixture_id": "morph_vibrato_b",
+      "purpose": "Endpoint fidelity plus smooth frequency trajectory morphing from stable to modulated harmonic material.",
+      "primary_assertions": ["endpoint_fidelity", "trajectory_smoothness", "correspondence_churn"]
+    },
+    {
+      "id": "vowel_to_harmonic",
+      "status": "placeholder",
+      "source_a_fixture_id": "morph_voice_vowel_a",
+      "source_b_fixture_id": "morph_sustained_harmonic_a",
+      "purpose": "Vowel/formant energy shape into a stable harmonic target without hollowing band energy.",
+      "primary_assertions": ["endpoint_fidelity", "per_band_power_delta", "spectral_envelope_stability"]
+    },
+    {
+      "id": "metallic_to_plucked",
+      "status": "placeholder",
+      "source_a_fixture_id": "morph_inharmonic_metallic_b",
+      "source_b_fixture_id": "morph_plucked_percussive_a",
+      "purpose": "Count mismatch, inharmonic correspondence, and transient-sensitive morph behavior.",
+      "primary_assertions": ["unmatched_partial_accounting", "per_band_power_delta", "transient_protection"]
+    },
+    {
+      "id": "breathy_to_dense",
+      "status": "placeholder",
+      "source_a_fixture_id": "morph_noisy_breathy_b",
+      "source_b_fixture_id": "morph_dense_polyphonic_b",
+      "purpose": "Residual/noise lane preservation while morphing into dense polyphonic sinusoidal content.",
+      "primary_assertions": ["residual_energy_preservation", "per_band_power_delta", "cpu_scaling"]
+    }
+  ]
+}

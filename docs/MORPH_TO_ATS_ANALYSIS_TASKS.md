@@ -22,9 +22,11 @@ Implementation note: Added the morph-to-ATS PRD and coherent commit task list. T
 
 **PRD:** section 8.1
 
-- [ ] Define fixture categories: sustained harmonic, vibrato, voice/vowel, inharmonic metallic, plucked/percussive, noisy/breathy, dense/polyphonic.
-- [ ] Document fixture provenance, license, sample rate, and expected analysis mode.
-- [ ] Add placeholders for source A/source B fixture pairings.
+- [x] Define fixture categories: sustained harmonic, vibrato, voice/vowel, inharmonic metallic, plucked/percussive, noisy/breathy, dense/polyphonic.
+- [x] Document fixture provenance, license, sample rate, and expected analysis mode.
+- [x] Add placeholders for source A/source B fixture pairings.
+
+Implementation note: Added `tests/fixtures/morph_fixture_manifest.json` with seven placeholder fixture categories and four source A/source B pairing placeholders. Added `tests/morph_fixture_manifest_check.py` to validate category coverage, provenance/license/sample-rate/analysis-mode metadata, and pairing references without requiring audio assets yet.
 
 ### Commit 3 - `test: add morph metric harness`
 
