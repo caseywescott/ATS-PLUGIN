@@ -39,19 +39,16 @@ target_sources(
           PluginProcessor.cpp
           PluginEditor.cpp
           SessionTabPanel.cpp
+          AnalysisTabPanel.cpp
           SynthTabPanel.cpp
           PartialEditPanel.cpp
           MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
-          ../core/AtsAnalysisPipeline.cpp
-          ../core/AtsModernAcceptance.cpp
+          ../core/AtsFrequencyShape.cpp
           ../core/AtsModel.cpp
-          ../core/AtsModernMorph.cpp
-          ../core/AtsModernModel.cpp
-          ../core/AtsModernSynth.cpp
+          ../core/AtsMorphRecipe.cpp
           ../core/AtsParams.cpp
-          ../core/AtsResidualBandNoise.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

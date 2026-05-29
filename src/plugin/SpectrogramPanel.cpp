@@ -1,153 +1,3073 @@
 #include "SpectrogramPanel.h"
 
-#include "PluginProcessor.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <functional>
 
-#include "AtsModernModel.h"
+#include "AtsFrequencyShape.h"
 
 namespace
 {
-constexpr int kTexW = 256;
-constexpr int kTexH = 160;
+constexpr int kMaxVisiblePartials = 900;
+constexpr int kMaxPointsPerPartial = 720;
+constexpr int kResidualColumns = 220;
+constexpr float kMinZoom = 1.0f;
+constexpr float kMaxZoom = 32.0f;
+constexpr float kZoomBarWidth = 204.0f;
+
+float zoomFromSlider(double sliderValue)
+{
+    return kMinZoom * std::pow(kMaxZoom / kMinZoom, (float) juce::jlimit(0.0, 1.0, sliderValue));
+}
+
+double sliderFromZoom(float zoom)
+{
+    const float clamped = juce::jlimit(kMinZoom, kMaxZoom, zoom);
+    return std::log(clamped / kMinZoom) / std::log(kMaxZoom / kMinZoom);
+}
+
+bool isResidualDisplayMode(SpectrogramPanel::Mode mode)
+{
+    return mode == SpectrogramPanel::Mode::Residual || mode == SpectrogramPanel::Mode::IsometricResidual;
+}
+
+bool isIsometricDisplayMode(SpectrogramPanel::Mode mode)
+{
+    return mode == SpectrogramPanel::Mode::Isometric || mode == SpectrogramPanel::Mode::IsometricResidual;
+}
+} // namespace
+
+class SpectrogramPanel::TraceZoomBar : public juce::Component
+{
+public:
+    std::function<void()> onChange;
+
+    TraceZoomBar()
+    {
+        for (auto* slider : { &verticalSlider, &horizontalSlider })
+        {
+            slider->setSliderStyle(juce::Slider::LinearHorizontal);
+            slider->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+            slider->setRange(0.0, 1.0, 0.001);
+            slider->setDoubleClickReturnValue(true, 0.0);
+            slider->setScrollWheelEnabled(false);
+            slider->onValueChange = [this] {
+                if (!suppressCallbacks && onChange)
+                    onChange();
+            };
+            addAndMakeVisible(*slider);
+        }
+
+        verticalSlider.setTooltip("Vertical zoom (frequency axis)");
+        horizontalSlider.setTooltip("Horizontal zoom (time axis)");
+    }
+
+    void setVerticalZoom(float zoom, juce::NotificationType notification = juce::dontSendNotification)
+    {
+        verticalSlider.setValue(sliderFromZoom(zoom), notification);
+    }
+
+    void setHorizontalZoom(float zoom, juce::NotificationType notification = juce::dontSendNotification)
+    {
+        horizontalSlider.setValue(sliderFromZoom(zoom), notification);
+    }
+
+    [[nodiscard]] float getVerticalZoom() const { return zoomFromSlider(verticalSlider.getValue()); }
+    [[nodiscard]] float getHorizontalZoom() const { return zoomFromSlider(horizontalSlider.getValue()); }
+
+    void setCallbacksSuppressed(bool suppressed) { suppressCallbacks = suppressed; }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        g.setColour(juce::Colour(0xff1a1f1c));
+        g.fillRoundedRectangle(bounds, 8.0f);
+        g.setColour(juce::Colour(0xff303833));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
+
+        const float midX = bounds.getCentreX();
+        g.setColour(juce::Colour(0xff2a302c));
+        g.fillRect(midX - 0.5f, bounds.getY() + 4.0f, 1.0f, bounds.getHeight() - 8.0f);
+
+        g.setColour(juce::Colour(0xffb8c4bc));
+        paintVerticalAxisIcon(g, verticalIconArea);
+        paintHorizontalAxisIcon(g, horizontalIconArea);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(4, 5);
+        const int halfW = bounds.getWidth() / 2;
+        auto leftSection = bounds.removeFromLeft(halfW);
+        bounds.removeFromLeft(1);
+        auto rightSection = bounds;
+
+        verticalIconArea = leftSection.removeFromLeft(16).toFloat().reduced(0.0f, 1.0f);
+        leftSection.removeFromLeft(2);
+        verticalSlider.setBounds(leftSection);
+
+        horizontalIconArea = rightSection.removeFromLeft(16).toFloat().reduced(0.0f, 1.0f);
+        rightSection.removeFromLeft(2);
+        horizontalSlider.setBounds(rightSection);
+    }
+
+    void lookAndFeelChanged() override
+    {
+        for (auto* slider : { &verticalSlider, &horizontalSlider })
+        {
+            slider->setColour(juce::Slider::backgroundColourId, juce::Colour(0xff0f1310));
+            slider->setColour(juce::Slider::trackColourId, juce::Colour(0xff0f1310));
+            slider->setColour(juce::Slider::thumbColourId, juce::Colour(0xffb8c4bc));
+        }
+    }
+
+private:
+    static void paintBidirectionalArrow(juce::Graphics& g,
+                                          juce::Rectangle<float> area,
+                                          bool horizontal)
+    {
+        if (area.getWidth() < 4.0f || area.getHeight() < 4.0f)
+            return;
+
+        const float pad = 1.0f;
+        const float strokeW = 1.2f;
+        const juce::PathStrokeType stroke(strokeW,
+                                          juce::PathStrokeType::curved,
+                                          juce::PathStrokeType::butt);
+
+        juce::Path icon;
+
+        if (horizontal)
+        {
+            const float cy = std::floor(area.getCentreY()) + 0.5f;
+            const float x0 = std::floor(area.getX() + pad) + 0.5f;
+            const float x1 = std::floor(area.getRight() - pad) - 0.5f;
+            const float span = x1 - x0;
+            const float headLen = juce::jlimit(2.2f, 3.2f, span * 0.26f);
+            const float headHalfH = juce::jlimit(1.6f, 2.4f, area.getHeight() * 0.28f);
+
+            icon.startNewSubPath(x0 + headLen, cy);
+            icon.lineTo(x1 - headLen, cy);
+
+            icon.startNewSubPath(x0 + headLen, cy - headHalfH);
+            icon.lineTo(x0, cy);
+            icon.lineTo(x0 + headLen, cy + headHalfH);
+
+            icon.startNewSubPath(x1 - headLen, cy - headHalfH);
+            icon.lineTo(x1, cy);
+            icon.lineTo(x1 - headLen, cy + headHalfH);
+        }
+        else
+        {
+            const float cx = std::floor(area.getCentreX()) + 0.5f;
+            const float y0 = std::floor(area.getY() + pad) + 0.5f;
+            const float y1 = std::floor(area.getBottom() - pad) - 0.5f;
+            const float span = y1 - y0;
+            const float headLen = juce::jlimit(2.2f, 3.2f, span * 0.26f);
+            const float headHalfW = juce::jlimit(1.6f, 2.4f, area.getWidth() * 0.28f);
+
+            icon.startNewSubPath(cx, y0 + headLen);
+            icon.lineTo(cx, y1 - headLen);
+
+            icon.startNewSubPath(cx - headHalfW, y0 + headLen);
+            icon.lineTo(cx, y0);
+            icon.lineTo(cx + headHalfW, y0 + headLen);
+
+            icon.startNewSubPath(cx - headHalfW, y1 - headLen);
+            icon.lineTo(cx, y1);
+            icon.lineTo(cx + headHalfW, y1 - headLen);
+        }
+
+        g.strokePath(icon, stroke);
+    }
+
+    static void paintVerticalAxisIcon(juce::Graphics& g, juce::Rectangle<float> area)
+    {
+        paintBidirectionalArrow(g, area, false);
+    }
+
+    static void paintHorizontalAxisIcon(juce::Graphics& g, juce::Rectangle<float> area)
+    {
+        paintBidirectionalArrow(g, area, true);
+    }
+
+    juce::Slider verticalSlider;
+    juce::Slider horizontalSlider;
+    juce::Rectangle<float> verticalIconArea;
+    juce::Rectangle<float> horizontalIconArea;
+    bool suppressCallbacks = false;
+};
+
+class SpectrogramPanel::PlayheadOverlay : public juce::Component,
+                                          private juce::Timer
+{
+public:
+    explicit PlayheadOverlay(SpectrogramPanel& panel) : owner(panel)
+    {
+        setInterceptsMouseClicks(false, false);
+        setPaintingIsUnclipped(true);
+        startTimerHz(60);
+    }
+
+    ~PlayheadOverlay() override
+    {
+        stopTimer();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const float playheadNorm = owner.animatedPlayheadNorm;
+        if (playheadNorm < 0.0f)
+            return;
+
+        g.saveState();
+        g.reduceClipRegion(getLocalBounds());
+        owner.paintPlaybackPlayhead(g, getLocalBounds().toFloat());
+        g.restoreState();
+    }
+
+private:
+    void timerCallback() override
+    {
+        const auto oldBounds = lastPaintBounds;
+        const bool wasActive = owner.animatedPlayheadNorm >= 0.0f;
+        const bool active = owner.updatePlayheadAnimation();
+
+        juce::Rectangle<int> nextBounds;
+        if (active)
+            nextBounds = owner.playheadPaintBounds(getLocalBounds().toFloat(), owner.animatedPlayheadNorm);
+
+        lastPaintBounds = nextBounds;
+
+        auto dirty = oldBounds.getUnion(nextBounds).expanded(10).getIntersection(getLocalBounds());
+        if (dirty.isEmpty() && wasActive)
+            dirty = getLocalBounds();
+
+        if (!dirty.isEmpty())
+            repaint(dirty);
+    }
+
+    SpectrogramPanel& owner;
+    juce::Rectangle<int> lastPaintBounds;
+};
+
+namespace
+{
+
+juce::Rectangle<float> normalisedRect(juce::Point<float> a, juce::Point<float> b)
+{
+    return { std::min(a.x, b.x),
+             std::min(a.y, b.y),
+             std::abs(a.x - b.x),
+             std::abs(a.y - b.y) };
+}
+
+juce::Colour traceColour(float ampNorm)
+{
+    const auto green = juce::Colour(0xff10ff77);
+    const auto cyan = juce::Colour(0xff6ffff0);
+    return green.interpolatedWith(cyan, juce::jlimit(0.0f, 1.0f, ampNorm * 0.85f));
+}
 } // namespace
 
 SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     : processor(p)
 {
-    setTitle("Model spectrogram");
-    setName("Model spectrogram");
-    setHelpText("Read-only spectrogram of the analyzed ATS model.");
+    setTitle("Spectral trace display");
+    setName("Spectral trace display");
+    setHelpText("Selectable ATS partial/residual traces. Scroll wheel zooms; bottom/right "
+                "scrollbars pan time/frequency when zoomed; Alt-drag pans; 0 or Home fits full source.");
+    setWantsKeyboardFocus(true);
 
-    modeBox.addItem("Partials (amp)", 1);
-    modeBox.addItem("Residual (bands)", 2);
-    modeBox.setSelectedId(1, juce::dontSendNotification);
-    modeBox.setName("Spectrogram mode");
-    modeBox.setHelpText("Choose partial amplitudes or residual critical-band energy.");
-    modeBox.onChange = [this] {
-        setMode(modeBox.getSelectedId() == 2 ? Mode::Residual : Mode::Partials);
+    styleTraceScrollBars();
+    timeScrollBar.addListener(this);
+    freqScrollBar.addListener(this);
+    timeScrollBar.setAutoHide(false);
+    freqScrollBar.setAutoHide(false);
+    addAndMakeVisible(timeScrollBar);
+    addAndMakeVisible(freqScrollBar);
+
+    viewMenuButton.setName("Spectral view source and mode");
+    viewMenuButton.setHelpText("Choose Current, Source A, or Source B, then choose trace/residual display mode.");
+    viewMenuButton.onClick = [this] { showViewMenu(); };
+    addAndMakeVisible(viewMenuButton);
+    updateViewMenuButton();
+
+    deleteButton.setTooltip("Mute selected partial traces or residual-band energy.");
+    deleteButton.onClick = [this] { deleteSelection(); };
+    addAndMakeVisible(deleteButton);
+
+    residualDrawButton.setClickingTogglesState(true);
+    residualDrawButton.setTooltip("Draw a per-band noise envelope by dragging on a band row.");
+    residualDrawButton.setHelpText("Paint residual energy (dB) along time on one Bark band.");
+    addChildComponent(residualDrawButton);
+
+    residualTiltSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    residualTiltSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 18);
+    residualTiltSlider.setRange(-12.0, 12.0, 0.1);
+    residualTiltSlider.setValue(0.0, juce::dontSendNotification);
+    residualTiltSlider.setTooltip("Tilt amount in dB per band step across the selection.");
+    addChildComponent(residualTiltSlider);
+
+    residualTiltButton.setTooltip("Apply spectral tilt across selected bands using the tilt slider.");
+    residualTiltButton.onClick = [this] { runTiltOnSelection(); };
+    addChildComponent(residualTiltButton);
+
+    residualSmoothButton.setTooltip("Box-smooth residual energy over the selected bands and frame range.");
+    residualSmoothButton.onClick = [this] { runSmoothOnSelection(); };
+    addChildComponent(residualSmoothButton);
+
+    residualCopyButton.setTooltip("Copy selected band/frame residual energy to clipboard (Cmd+C).");
+    residualCopyButton.onClick = [this] { runCopyBand(); };
+    addChildComponent(residualCopyButton);
+
+    residualPasteButton.setTooltip("Paste clipboard residual energy into the selected band/frame range.");
+    residualPasteButton.onClick = [this] { runPasteBand(); };
+    addChildComponent(residualPasteButton);
+
+    residualSwapButton.setTooltip("Swap residual energy between two selected bands over the frame range.");
+    residualSwapButton.onClick = [this] { runSwapBands(); };
+    addChildComponent(residualSwapButton);
+
+    residualDbLabel.setText("Cell dB", juce::dontSendNotification);
+    residualDbLabel.setJustificationType(juce::Justification::centredRight);
+    residualDbLabel.setFont(juce::Font(11.0f));
+    addChildComponent(residualDbLabel);
+
+    residualDbEditor.setInputRestrictions(0, "0123456789.-");
+    residualDbEditor.setTooltip("Hovered band/frame level in dB. Double-click the plot or press Enter to apply.");
+    residualDbEditor.setFont(juce::Font(11.0f));
+    residualDbEditor.onReturnKey = [this] { applyResidualDbFromEditor(); };
+    residualDbEditor.onFocusLost = [this] {
+        if (residualDbEditorActive)
+            applyResidualDbFromEditor();
     };
-    addAndMakeVisible(modeBox);
+    addChildComponent(residualDbEditor);
 
-    startTimerHz(8);
+    selectionLabel.setJustificationType(juce::Justification::centredLeft);
+    selectionLabel.setFont(juce::Font(12.0f, juce::Font::plain));
+    selectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc7ffe6));
+    addAndMakeVisible(selectionLabel);
+    updateSelectionLabel();
+
+    zoomBar = std::make_unique<TraceZoomBar>();
+    zoomBar->onChange = [this] { syncViewportFromZoomControls(); };
+    zoomBar->lookAndFeelChanged();
+    zoomBar->setVerticalZoom(freqZoom);
+    zoomBar->setHorizontalZoom(timeZoom);
+    addAndMakeVisible(*zoomBar);
+
+    playheadOverlay = std::make_unique<PlayheadOverlay>(*this);
+    addAndMakeVisible(*playheadOverlay);
+
+    updateResidualToolbarVisibility();
+    startTimerHz(10);
 }
 
-SpectrogramPanel::~SpectrogramPanel() { stopTimer(); }
+SpectrogramPanel::~SpectrogramPanel()
+{
+    stopTimer();
+    timeScrollBar.removeListener(this);
+    freqScrollBar.removeListener(this);
+}
 
 void SpectrogramPanel::setMode(Mode m)
 {
     if (mode == m)
         return;
-    mode = m;
-    lastModelRevision = -1;
-    rebuildPending = true;
+    setView(traceSource, m);
+}
+
+void SpectrogramPanel::setView(AtsTraceSource source, Mode nextMode)
+{
+    const bool sourceChanged = traceSource != source;
+    const bool changed = sourceChanged || mode != nextMode;
+    traceSource = source;
+    mode = nextMode;
+    if (isResidualDisplayMode(mode))
+    {
+        selectedPartials.clear();
+        hoveredPartial = -1;
+    }
+    else
+    {
+        selectedResidualBands.clear();
+        selectedResidualFirstFrame = -1;
+        selectedResidualLastFrame = -1;
+        hoveredResidualBand = -1;
+        hoveredResidualFrame = -1;
+    }
+    scalingSelection = false;
+    draggingLasso = false;
+    if (sourceChanged)
+    {
+        resetViewport();
+        resetDisplayReference();
+        resetPlayheadAnimation();
+    }
+    updateViewMenuButton();
+    updateSelectionLabel();
+    updateResidualToolbarVisibility();
+    if (changed)
+        rebuildTraceSnapshot();
+    resized();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::showViewMenu()
+{
+    auto modeName = [](Mode m) {
+        switch (m)
+        {
+            case Mode::Combined: return juce::String("Trace + Residual");
+            case Mode::Partials: return juce::String("Partials");
+            case Mode::Residual: return juce::String("Residual");
+            case Mode::Isometric: return juce::String("Iso 3D");
+            case Mode::IsometricResidual: return juce::String("Iso 3D Residual");
+        }
+        return juce::String("Trace + Residual");
+    };
+
+    auto addSourceMenu = [&](juce::PopupMenu& root,
+                             AtsTraceSource source,
+                             const juce::String& label,
+                             bool enabled,
+                             int baseId) {
+        juce::PopupMenu sub;
+        sub.addItem(baseId + 1, modeName(Mode::Combined), enabled,
+                    traceSource == source && mode == Mode::Combined);
+        sub.addItem(baseId + 2, modeName(Mode::Partials), enabled,
+                    traceSource == source && mode == Mode::Partials);
+        sub.addItem(baseId + 3, modeName(Mode::Residual), enabled,
+                    traceSource == source && mode == Mode::Residual);
+        sub.addItem(baseId + 4, modeName(Mode::Isometric), enabled,
+                    traceSource == source && mode == Mode::Isometric);
+        sub.addItem(baseId + 5, modeName(Mode::IsometricResidual), enabled,
+                    traceSource == source && mode == Mode::IsometricResidual);
+        root.addSubMenu(label, sub, enabled);
+    };
+
+    int partials = 0;
+    int frames = 0;
+    bool hasResidual = false;
+    const bool hasCurrent = processor.getModelFootprint(partials, frames, hasResidual);
+    AtsMorphSourceSlotInfo sourceA;
+    AtsMorphSourceSlotInfo sourceB;
+    processor.getMorphSourceSlotInfo(0, sourceA);
+    processor.getMorphSourceSlotInfo(1, sourceB);
+
+    juce::PopupMenu menu;
+    addSourceMenu(menu, AtsTraceSource::Current, "Current", hasCurrent, 100);
+    addSourceMenu(menu, AtsTraceSource::SourceA, "Source A", sourceA.hasModel, 200);
+    addSourceMenu(menu, AtsTraceSource::SourceB, "Source B", sourceB.hasModel, 300);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&viewMenuButton),
+                       [this](int result) {
+                           if (result == 0)
+                               return;
+
+                           AtsTraceSource nextSource = AtsTraceSource::Current;
+                           int modeOffset = result - 100;
+                           if (result >= 200 && result < 300)
+                           {
+                               nextSource = AtsTraceSource::SourceA;
+                               modeOffset = result - 200;
+                           }
+                           else if (result >= 300)
+                           {
+                               nextSource = AtsTraceSource::SourceB;
+                               modeOffset = result - 300;
+                           }
+
+                           Mode nextMode = Mode::Combined;
+                           if (modeOffset == 2)
+                               nextMode = Mode::Partials;
+                           else if (modeOffset == 3)
+                               nextMode = Mode::Residual;
+                           else if (modeOffset == 4)
+                               nextMode = Mode::Isometric;
+                           else if (modeOffset == 5)
+                               nextMode = Mode::IsometricResidual;
+                           setView(nextSource, nextMode);
+                       });
+}
+
+void SpectrogramPanel::updateViewMenuButton()
+{
+    juce::String sourceName = "Current";
+    if (traceSource == AtsTraceSource::SourceA)
+        sourceName = "Source A";
+    else if (traceSource == AtsTraceSource::SourceB)
+        sourceName = "Source B";
+
+    juce::String modeName = "Trace + Residual";
+    if (mode == Mode::Partials)
+        modeName = "Partials";
+    else if (mode == Mode::Residual)
+        modeName = "Residual";
+    else if (mode == Mode::Isometric)
+        modeName = "Iso 3D";
+    else if (mode == Mode::IsometricResidual)
+        modeName = "Iso 3D Residual";
+
+    viewMenuButton.setButtonText(sourceName + " / " + modeName);
 }
 
 void SpectrogramPanel::timerCallback()
 {
     const int rev = processor.getModelRevision();
+    const uint64_t shapeRev = processor.getDisplayShapeRevision();
     if (rev != lastModelRevision)
     {
         lastModelRevision = rev;
-        rebuildPending = true;
+        lastDisplayShapeRevision = shapeRev;
+        rebuildTraceSnapshot();
+        repaintDisplay();
     }
-
-    if (rebuildPending)
+    else if (shapeRev != lastDisplayShapeRevision)
     {
-        rebuildPending = false;
-        rebuildImageAsync();
+        lastDisplayShapeRevision = shapeRev;
+        rebuildTraceSnapshot(true);
+        repaintDisplay();
     }
 }
 
-void SpectrogramPanel::rebuildImageAsync()
+bool SpectrogramPanel::updatePlayheadAnimation()
 {
-    juce::Image img(juce::Image::ARGB, kTexW, kTexH, true);
-    img.clear(juce::Rectangle<int>(kTexW, kTexH), juce::Colours::black);
-    processor.buildSpectrogramTexture(mode == Mode::Partials, kTexW, kTexH, img);
-    spectroImage = img;
-
-    // Update the mode label: Modern/Experimental when a modern model is valid, Classic otherwise.
+    const float target = processor.getPreviewPlayheadNormForTraceSource(traceSource);
+    if (target < 0.0f)
     {
-        juce::String summary, warnings;
-        if (processor.getModernDiagnosticsSummary(summary, warnings))
-        {
-            // Extract just the mode name from the diagnostics summary.
-            const int modeStart = summary.indexOf("mode: ");
-            const int modeEnd = summary.indexOf(", tracker:");
-            if (modeStart >= 0 && modeEnd > modeStart)
-                currentAnalysisModeText = summary.substring(modeStart + 6, modeEnd);
-            else
-                currentAnalysisModeText = "Modern ATS";
-        }
-        else
-        {
-            int p = 0, f = 0;
-            bool hasRes = false;
-            currentAnalysisModeText = processor.getModelFootprint(p, f, hasRes) ? "Classic ATS" : juce::String();
-        }
+        resetPlayheadAnimation();
+        return false;
     }
 
-    lifecycleLines.clear();
-    std::vector<AtsAudioProcessor::ModernLifecycleMarker> markers;
-    if (processor.getModernLifecycleMarkers(markers))
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    if (animatedPlayheadNorm < 0.0f || lastPlayheadAnimationMs <= 0.0
+        || target < animatedPlayheadNorm - 0.02f
+        || std::abs(target - animatedPlayheadNorm) > 0.25f)
     {
-        for (const auto& m : markers)
-        {
-            juce::Colour col;
-            switch (m.kind)
-            {
-                case ats::ModernAtsLifecycleKind::Birth:
-                    col = juce::Colour(0x9900cc44); // green, semi-transparent
-                    break;
-                case ats::ModernAtsLifecycleKind::Death:
-                    col = juce::Colour(0x99cc3300); // red, semi-transparent
-                    break;
-                case ats::ModernAtsLifecycleKind::GapFill:
-                    col = juce::Colour(0x66ccaa00); // amber, more transparent
-                    break;
-                default:
-                    continue;
-            }
-            lifecycleLines.push_back({ m.normalizedTime, col });
-        }
+        animatedPlayheadNorm = target;
+        lastPlayheadAnimationMs = nowMs;
+        return true;
     }
 
+    const double deltaSeconds = juce::jlimit(0.0, 0.08, (nowMs - lastPlayheadAnimationMs) * 0.001);
+    lastPlayheadAnimationMs = nowMs;
+
+    constexpr double followRateHz = 34.0;
+    const float alpha = (float) (1.0 - std::exp(-followRateHz * deltaSeconds));
+    animatedPlayheadNorm += (target - animatedPlayheadNorm) * juce::jlimit(0.0f, 1.0f, alpha);
+    animatedPlayheadNorm = juce::jlimit(0.0f, 1.0f, animatedPlayheadNorm);
+    return true;
+}
+
+void SpectrogramPanel::resetPlayheadAnimation()
+{
+    animatedPlayheadNorm = -1.0f;
+    lastPlayheadAnimationMs = 0.0;
+}
+
+void SpectrogramPanel::invalidateDisplayCache()
+{
+    displayCacheDirty = true;
+}
+
+void SpectrogramPanel::repaintDisplay()
+{
+    invalidateDisplayCache();
     repaint();
+    if (playheadOverlay != nullptr)
+        playheadOverlay->repaint();
+}
+
+void SpectrogramPanel::resetDisplayReference()
+{
+    ampDisplayReferencePeak = 0.0;
+    residualDisplayReferencePeak = 0.0;
+}
+
+void SpectrogramPanel::rebuildTraceSnapshot()
+{
+    rebuildTraceSnapshot(false);
+}
+
+void SpectrogramPanel::rebuildTraceSnapshot(bool preserveDisplayReference)
+{
+    if (!preserveDisplayReference)
+        resetDisplayReference();
+
+    AtsSpectralTraceDisplayReference displayReference;
+    if (preserveDisplayReference)
+    {
+        displayReference.ampPeak = ampDisplayReferencePeak;
+        displayReference.residualPeak = residualDisplayReferencePeak;
+    }
+
+    AtsSpectralTraceSnapshot next;
+    processor.buildSpectralTraceSnapshot(traceSource,
+                                         next,
+                                         kMaxVisiblePartials,
+                                         kMaxPointsPerPartial,
+                                         kResidualColumns,
+                                         displayReference);
+    traceSnapshot = std::move(next);
+    lastDisplayShapeRevision = traceSnapshot.displayShapeRevision;
+
+    if (ampDisplayReferencePeak <= 0.0)
+        ampDisplayReferencePeak = traceSnapshot.ampDisplayReferencePeak;
+    if (residualDisplayReferencePeak <= 0.0)
+        residualDisplayReferencePeak = traceSnapshot.residualDisplayReferencePeak;
+
+    selectedPartials.erase(std::remove_if(selectedPartials.begin(),
+                                          selectedPartials.end(),
+                                          [this](int partialIndex) {
+                                              return std::none_of(traceSnapshot.partials.begin(),
+                                                                  traceSnapshot.partials.end(),
+                                                                  [partialIndex](const auto& trace) {
+                                                                      return trace.partialIndex == partialIndex;
+                                                                  });
+                                          }),
+                           selectedPartials.end());
+
+    selectedResidualBands.erase(std::remove_if(selectedResidualBands.begin(),
+                                               selectedResidualBands.end(),
+                                               [this](int bandIndex) {
+                                                   return std::none_of(traceSnapshot.residualBands.begin(),
+                                                                       traceSnapshot.residualBands.end(),
+                                                                       [bandIndex](const auto& band) {
+                                                                           return band.bandIndex == bandIndex;
+                                                                       });
+                                               }),
+                                selectedResidualBands.end());
+    if (traceSnapshot.frameCount <= 0 || selectedResidualBands.empty())
+    {
+        selectedResidualBands.clear();
+        selectedResidualFirstFrame = -1;
+        selectedResidualLastFrame = -1;
+    }
+    else
+    {
+        selectedResidualFirstFrame = juce::jlimit(0, traceSnapshot.frameCount - 1, selectedResidualFirstFrame);
+        selectedResidualLastFrame = juce::jlimit(0, traceSnapshot.frameCount - 1, selectedResidualLastFrame);
+    }
+
+    hoveredPartial = -1;
+    hoveredResidualBand = -1;
+    hoveredResidualFrame = -1;
+    updateSelectionLabel();
+    repaintDisplay();
 }
 
 void SpectrogramPanel::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff121218));
+    const auto bounds = getLocalBounds();
+    if (bounds.isEmpty())
+        return;
 
-    auto area = getLocalBounds().reduced(4);
-    const int header = 28;
-    auto plot = area.removeFromBottom(area.getHeight() - header);
-    modeBox.setBounds(area.removeFromTop(header));
+    if (displayCache.isNull()
+        || displayCache.getWidth() != bounds.getWidth()
+        || displayCache.getHeight() != bounds.getHeight()
+        || displayCacheDirty)
+    {
+        displayCache = juce::Image(juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+        juce::Graphics cacheGraphics(displayCache);
+        cacheGraphics.fillAll(juce::Colour(0xff070a08));
+        paintScreen(cacheGraphics, getScreenBounds());
+        displayCacheDirty = false;
+    }
 
-    if (spectroImage.isValid())
-        g.drawImageWithin(spectroImage, plot.getX(), plot.getY(), plot.getWidth(), plot.getHeight(),
-                          juce::RectanglePlacement::fillDestination);
+    g.drawImageAt(displayCache, 0, 0);
+}
+
+void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> screen)
+{
+    g.setColour(juce::Colour(0xff050705));
+    g.fillRoundedRectangle(screen, 5.0f);
+    g.setColour(juce::Colour(0xff0d3f32));
+    g.drawRoundedRectangle(screen.reduced(0.5f), 5.0f, 1.0f);
+    g.setColour(juce::Colour(0x443fffc0));
+    g.drawRoundedRectangle(screen.reduced(3.0f), 4.0f, 1.0f);
+
+    auto plot = getPlotBounds();
+    g.saveState();
+    g.reduceClipRegion(plot.toNearestInt());
+
+    g.setColour(juce::Colour(0xff020302));
+    g.fillRect(plot);
+
+    if (isIsometricDisplayMode(mode))
+    {
+        paintIsometricGrid(g, plot);
+    }
     else
     {
-        g.setColour(juce::Colours::grey);
-        g.drawText("No model", plot, juce::Justification::centred);
+        g.setColour(juce::Colour(0x183cffb3));
+        for (int i = 0; i <= 8; ++i)
+        {
+            const float x = plot.getX() + plot.getWidth() * (float) i / 8.0f;
+            g.drawVerticalLine(juce::roundToInt(x), plot.getY(), plot.getBottom());
+        }
+        for (int i = 0; i <= 6; ++i)
+        {
+            const float y = plot.getY() + plot.getHeight() * (float) i / 6.0f;
+            g.drawHorizontalLine(juce::roundToInt(y), plot.getX(), plot.getRight());
+        }
     }
 
-    // Overlay track lifecycle markers from the modern model.
-    for (const auto& [normTime, col] : lifecycleLines)
+    g.setFont(juce::Font(12.0f, juce::Font::plain));
+    g.setColour(juce::Colour(0xff8dffd8));
+    g.drawText("ATS TRACE DISPLAY",
+               screen.withTrimmedLeft(14.0f).withTrimmedTop(6.0f).withHeight(15.0f),
+               juce::Justification::centredLeft,
+               false);
+
+    if (traceSnapshot.frameCount <= 0)
     {
-        const int x = plot.getX() + juce::roundToInt(normTime * static_cast<float>(plot.getWidth() - 1));
-        g.setColour(col);
-        g.drawVerticalLine(x, static_cast<float>(plot.getY()), static_cast<float>(plot.getBottom()));
+        g.setFont(juce::Font(15.0f, juce::Font::plain));
+        g.setColour(juce::Colour(0xff5bffbb));
+        g.drawText("NO ATS MODEL", plot.toNearestInt(), juce::Justification::centred);
+    }
+    else
+    {
+        if (mode == Mode::Combined)
+            paintResidualBackdrop(g, plot, false);
+        else if (mode == Mode::Residual)
+            paintResidualBackdrop(g, plot, true);
+
+        if (mode == Mode::Isometric)
+            paintIsometricPartials(g, plot);
+        else if (mode == Mode::IsometricResidual)
+            paintIsometricResidual(g, plot);
+        else if (mode != Mode::Residual)
+            paintPartialTraces(g, plot);
+
+        paintSelectionOverlay(g, screen, plot);
     }
 
-    g.setColour(juce::Colour(0xffb0b0c0));
-    g.setFont(juce::Font(12.0f));
-    auto footer = plot.removeFromBottom(16);
-    g.drawText("Read-only spectrogram (downsampled)", footer, juce::Justification::centredLeft);
-    if (currentAnalysisModeText.isNotEmpty())
-        g.drawText(currentAnalysisModeText, footer, juce::Justification::centredRight);
+    g.restoreState();
+
+    if (showsBandLabelGutter())
+        paintBandLabelGutter(g, getBandLabelGutterBounds(), plot);
+
+    g.setColour(juce::Colour(0x25000000));
+    for (int y = juce::roundToInt(screen.getY()) + 2; y < juce::roundToInt(screen.getBottom()); y += 3)
+        g.drawHorizontalLine(y, screen.getX() + 2.0f, screen.getRight() - 2.0f);
+}
+
+void SpectrogramPanel::paintResidualBackdrop(juce::Graphics& g, juce::Rectangle<float> plot, bool foreground)
+{
+    if (traceSnapshot.residualBands.empty())
+        return;
+
+    if (foreground)
+    {
+        g.setColour(juce::Colour(0x2210ff77));
+        for (const auto& band : traceSnapshot.residualBands)
+        {
+            const auto yRange = yRangeForBand(band, plot);
+            const float centreY = yRange.getStart() + yRange.getLength() * 0.5f;
+            g.drawHorizontalLine(juce::roundToInt(centreY), plot.getX(), plot.getRight());
+        }
+    }
+
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const auto yRange = yRangeForBand(band, plot);
+        const float y = yRange.getStart();
+        const float h = juce::jmax(1.0f, yRange.getLength());
+        const int columns = (int) band.energyNorm.size();
+        if (columns <= 0)
+            continue;
+
+        const float columnW = plot.getWidth() / (float) columns;
+        if (foreground)
+        {
+            const float centreY = y + h * 0.5f;
+            juce::Path ridge;
+            juce::Path fill;
+            fill.startNewSubPath(plot.getX(), centreY);
+            bool started = false;
+            for (int column = 0; column < columns; ++column)
+            {
+                const float e = band.energyNorm[(size_t) column];
+                const float columnTimeNorm = ((float) column + 0.5f) / (float) columns;
+                const float x = plot.getX() + plot.getWidth()
+                                * ((columnTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
+                const float ridgeY = centreY - e * h * 0.46f;
+                if (!started)
+                {
+                    ridge.startNewSubPath(x, ridgeY);
+                    started = true;
+                }
+                else
+                {
+                    ridge.lineTo(x, ridgeY);
+                }
+                fill.lineTo(x, ridgeY);
+            }
+            fill.lineTo(plot.getRight(), centreY);
+            fill.closeSubPath();
+
+            g.setColour(juce::Colour(0xff12ff88).withAlpha(0.055f));
+            g.fillPath(fill);
+            g.setColour(juce::Colour(0xff77fff1).withAlpha(0.28f));
+            g.strokePath(ridge, juce::PathStrokeType(3.2f));
+            g.setColour(juce::Colour(0xff16ff80).withAlpha(0.82f));
+            g.strokePath(ridge, juce::PathStrokeType(1.15f));
+        }
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const float e = band.energyNorm[(size_t) column];
+            if (e <= 0.01f)
+                continue;
+
+            const float columnTimeNorm = ((float) column + 0.5f) / (float) columns;
+            const float x = plot.getX() + plot.getWidth()
+                          * ((columnTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
+            if (x + columnW < plot.getX() || x > plot.getRight())
+                continue;
+
+            const float alpha = foreground ? (0.035f + e * 0.18f) : (0.025f + e * 0.19f);
+            const auto colour = juce::Colour(0xff36ffbf).interpolatedWith(juce::Colour(0xffbaff6a), e * 0.55f)
+                                    .withAlpha(alpha);
+            g.setColour(colour);
+            if (foreground)
+            {
+                const float centreY = y + h * 0.5f;
+                const float barH = juce::jmax(1.0f, e * h * 0.88f);
+                g.fillRect(juce::Rectangle<float>(x - columnW * 0.5f,
+                                                  centreY - barH * 0.5f,
+                                                  juce::jmax(1.0f, columnW + 0.5f),
+                                                  barH));
+            }
+            else
+            {
+                g.fillRect(juce::Rectangle<float>(x - columnW * 0.5f,
+                                                  y,
+                                                  juce::jmax(1.0f, columnW + 0.5f),
+                                                  h));
+            }
+        }
+    }
+}
+
+void SpectrogramPanel::paintPartialTraces(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    auto drawPass = [&](bool selectedPass) {
+        for (const auto& trace : traceSnapshot.partials)
+        {
+            const bool selected = isPartialSelected(trace.partialIndex);
+            const bool hovered = trace.partialIndex == hoveredPartial;
+            if (selected != selectedPass)
+                continue;
+
+            for (size_t i = 1; i < trace.points.size(); ++i)
+            {
+                const auto& prev = trace.points[i - 1];
+                const auto& cur = trace.points[i];
+                if (!prev.active || !cur.active)
+                    continue;
+
+                const auto a = positionForPoint(prev, plot);
+                const auto b = positionForPoint(cur, plot);
+                if (std::max(a.x, b.x) < plot.getX() || std::min(a.x, b.x) > plot.getRight()
+                    || std::max(a.y, b.y) < plot.getY() || std::min(a.y, b.y) > plot.getBottom())
+                    continue;
+
+                const float amp = juce::jlimit(0.0f, 2.0f, (prev.ampNorm + cur.ampNorm) * 0.5f);
+                const float ampVis = juce::jmin(1.0f, amp);
+                const auto line = juce::Line<float>(a, b);
+
+                if (selected || hovered)
+                {
+                    g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffcffff6)).withAlpha(0.18f));
+                    g.drawLine(line, selected ? 6.0f : 4.0f);
+                }
+
+                auto colour = selected ? juce::Colour(0xfffff3a0) : traceColour(ampVis);
+                if (hovered && !selected)
+                    colour = juce::Colour(0xffe9fff7);
+                g.setColour(colour.withAlpha(selected ? juce::jmin(1.0f, 0.72f + amp * 0.2f)
+                                                     : (0.15f + ampVis * 0.62f)));
+                g.drawLine(line, (selected ? 1.8f : 0.55f) + amp * (selected ? 1.6f : 1.35f));
+            }
+        }
+    };
+
+    drawPass(false);
+    drawPass(true);
+}
+
+void SpectrogramPanel::paintIsometricGrid(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    auto makePoint = [&](float timeNorm, float freqNorm, float ampNorm = 0.0f) {
+        AtsPartialTracePoint p;
+        p.timeNorm = visibleTimeRange().getStart() + visibleTimeRange().getLength() * timeNorm;
+        p.freqNorm = visibleFreqRange().getStart() + visibleFreqRange().getLength() * freqNorm;
+        p.ampNorm = ampNorm;
+        p.active = true;
+        return positionForIsoPoint(p, plot);
+    };
+
+    auto drawIsoLine = [&](juce::Point<float> a,
+                           juce::Point<float> b,
+                           juce::Colour colour,
+                           float thickness) {
+        g.setColour(colour.withAlpha(colour.getFloatAlpha() * 0.45f));
+        g.drawLine({ a, b }, thickness + 2.2f);
+        g.setColour(colour);
+        g.drawLine({ a, b }, thickness);
+    };
+
+    const auto frontLeft = makePoint(0.0f, 0.0f);
+    const auto frontRight = makePoint(0.0f, 1.0f);
+    const auto backLeft = makePoint(1.0f, 0.0f);
+    const auto backRight = makePoint(1.0f, 1.0f);
+
+    g.setColour(juce::Colour(0x1217ff9e));
+    for (int i = 1; i < 8; ++i)
+    {
+        const float f = (float) i / 8.0f;
+        g.drawLine({ makePoint(0.0f, f), makePoint(1.0f, f) }, 0.7f);
+    }
+    for (int i = 1; i < 10; ++i)
+    {
+        const float t = (float) i / 10.0f;
+        g.drawLine({ makePoint(t, 0.0f), makePoint(t, 1.0f) }, 0.65f);
+    }
+
+    drawIsoLine(frontLeft, frontRight, juce::Colour(0xff25f7c4).withAlpha(0.48f), 1.15f);
+    drawIsoLine(frontLeft, backLeft, juce::Colour(0xff16dba8).withAlpha(0.40f), 1.0f);
+    drawIsoLine(frontRight, backRight, juce::Colour(0xff16dba8).withAlpha(0.25f), 0.8f);
+    drawIsoLine(backLeft, backRight, juce::Colour(0xff16dba8).withAlpha(0.23f), 0.8f);
+
+    for (const auto base : { frontLeft, backLeft, frontRight })
+    {
+        const auto top = juce::Point<float>(base.x, base.y - plot.getHeight() * 0.28f);
+        drawIsoLine(base, top, juce::Colour(0xff25f7c4).withAlpha(0.18f), 0.65f);
+    }
+}
+
+void SpectrogramPanel::paintIsometricPartials(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    if (traceSnapshot.partials.empty())
+        return;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const float timePad = timeRange.getLength() * 0.025f;
+    const float freqPad = freqRange.getLength() * 0.04f;
+    auto pointIsVisible = [&](const AtsPartialTracePoint& point) {
+        return point.active
+               && point.timeNorm >= timeRange.getStart() - timePad
+               && point.timeNorm <= timeRange.getEnd() + timePad
+               && point.freqNorm >= freqRange.getStart() - freqPad
+               && point.freqNorm <= freqRange.getEnd() + freqPad;
+    };
+
+    auto drawTracePass = [&](bool selectedPass) {
+        for (const auto& trace : traceSnapshot.partials)
+        {
+            const bool selected = isPartialSelected(trace.partialIndex);
+            const bool hovered = trace.partialIndex == hoveredPartial;
+            if (selected != selectedPass)
+                continue;
+
+            for (size_t i = 1; i < trace.points.size(); ++i)
+            {
+                const auto& prev = trace.points[i - 1];
+                const auto& cur = trace.points[i];
+                if (!pointIsVisible(prev) || !pointIsVisible(cur))
+                    continue;
+
+                const auto a = positionForIsoPoint(prev, plot);
+                const auto b = positionForIsoPoint(cur, plot);
+                if (std::max(a.x, b.x) < plot.getX() || std::min(a.x, b.x) > plot.getRight()
+                    || std::max(a.y, b.y) < plot.getY() || std::min(a.y, b.y) > plot.getBottom())
+                    continue;
+
+                const float amp = juce::jlimit(0.0f, 2.0f, (prev.ampNorm + cur.ampNorm) * 0.5f);
+                const float ampVis = juce::jmin(1.0f, amp);
+                const auto line = juce::Line<float>(a, b);
+
+                if (selected || hovered)
+                {
+                    g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffd9fff8)).withAlpha(0.22f));
+                    g.drawLine(line, selected ? 6.4f : 4.5f);
+                }
+
+                auto colour = selected ? juce::Colour(0xfffff3a0)
+                                       : juce::Colour(0xff2ffff0).interpolatedWith(juce::Colour(0xff6aff8d), ampVis * 0.55f);
+                if (hovered && !selected)
+                    colour = juce::Colour(0xffeffffb);
+
+                g.setColour(colour.withAlpha(selected ? juce::jmin(1.0f, 0.78f + amp * 0.16f)
+                                                     : (0.18f + ampVis * 0.58f)));
+                g.drawLine(line, (selected ? 1.75f : 0.65f) + amp * (selected ? 1.45f : 1.1f));
+            }
+        }
+    };
+
+    drawTracePass(false);
+    drawTracePass(true);
+}
+
+void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    if (traceSnapshot.residualBands.empty())
+        return;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+    const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+    const double logRange = std::log(maxHz / minHz);
+    auto normForHz = [&](double hz) {
+        const double clamped = juce::jlimit(minHz, maxHz, juce::jmax(1.0, hz));
+        return (float) juce::jlimit(0.0, 1.0, std::log(clamped / minHz) / logRange);
+    };
+
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const float lowNorm = normForHz(band.lowHz);
+        const float highNorm = normForHz(band.highHz);
+        const float freqNorm = juce::jlimit(0.0f, 1.0f, 0.5f * (lowNorm + highNorm));
+        if (freqNorm < freqRange.getStart() - freqRange.getLength() * 0.05f
+            || freqNorm > freqRange.getEnd() + freqRange.getLength() * 0.05f)
+            continue;
+
+        const bool selected = std::find(selectedResidualBands.begin(),
+                                        selectedResidualBands.end(),
+                                        band.bandIndex) != selectedResidualBands.end();
+        const bool hovered = band.bandIndex == hoveredResidualBand;
+        const int columns = (int) band.energyNorm.size();
+        if (columns <= 1)
+            continue;
+
+        juce::Path baseLine;
+        juce::Path ridgeLine;
+        bool started = false;
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const float timeNorm = (float) column / (float) (columns - 1);
+            if (timeNorm < timeRange.getStart() - timeRange.getLength() * 0.03f
+                || timeNorm > timeRange.getEnd() + timeRange.getLength() * 0.03f)
+                continue;
+
+            AtsPartialTracePoint basePoint;
+            basePoint.timeNorm = timeNorm;
+            basePoint.freqNorm = freqNorm;
+            basePoint.ampNorm = 0.0f;
+            basePoint.active = true;
+
+            AtsPartialTracePoint ridgePoint = basePoint;
+            ridgePoint.ampNorm = juce::jlimit(0.0f, 1.15f, band.energyNorm[(size_t) column] * 1.15f);
+
+            const auto p0 = positionForIsoPoint(basePoint, plot);
+            const auto p1 = positionForIsoPoint(ridgePoint, plot);
+
+            if (!started)
+            {
+                baseLine.startNewSubPath(p0);
+                ridgeLine.startNewSubPath(p1);
+                started = true;
+            }
+            else
+            {
+                baseLine.lineTo(p0);
+                ridgeLine.lineTo(p1);
+            }
+        }
+
+        if (!started)
+            continue;
+
+        if (hovered || selected)
+        {
+            g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffd9fff8)).withAlpha(0.24f));
+            g.strokePath(ridgeLine, juce::PathStrokeType(selected ? 7.0f : 5.0f));
+        }
+
+        g.setColour(juce::Colour(0xff22dba7).withAlpha(hovered ? 0.58f : (selected ? 0.44f : 0.20f)));
+        g.strokePath(baseLine, juce::PathStrokeType(hovered ? 2.2f : (selected ? 1.7f : 1.0f)));
+
+        g.setColour((selected ? juce::Colour(0xfffff3a0) : juce::Colour(0xff74fff0))
+                        .withAlpha(hovered ? 1.0f : (selected ? 0.82f : 0.62f)));
+        g.strokePath(ridgeLine, juce::PathStrokeType(hovered ? 3.2f : (selected ? 2.6f : 1.75f)));
+    }
+}
+
+void SpectrogramPanel::paintSelectionOverlay(juce::Graphics& g,
+                                             juce::Rectangle<float> screen,
+                                             juce::Rectangle<float> plot)
+{
+    g.setFont(juce::Font(11.0f, juce::Font::plain));
+    g.setColour(juce::Colour(0xff70ffd4));
+    const auto leftFooter = isResidualDisplayMode(mode)
+                                ? (juce::String((int) traceSnapshot.residualBands.size()) + " residual bands")
+                                : (juce::String(traceSnapshot.visiblePartialCount) + "/"
+                                   + juce::String(traceSnapshot.partialCount) + " partials");
+    g.drawText(leftFooter,
+               juce::Rectangle<float>(screen.getX() + 14.0f,
+                                      screen.getBottom() - 18.0f,
+                                      160.0f,
+                                      14.0f)
+                   .toNearestInt(),
+               juce::Justification::centredLeft);
+    g.drawText(juce::String(traceSnapshot.minFrequencyHz, 0) + " - "
+                   + juce::String(traceSnapshot.maxFrequencyHz, 0) + " Hz",
+               juce::Rectangle<float>(screen.getRight() - 170.0f,
+                                      screen.getBottom() - 18.0f,
+                                      156.0f,
+                                      14.0f)
+                   .toNearestInt(),
+               juce::Justification::centredRight);
+
+    ats::FrequencyShapeSettings displayShape;
+    displayShape.mode = traceSnapshot.frequencyShapeMode;
+    displayShape.amount = traceSnapshot.frequencyShapeAmount;
+    displayShape.pivotHz = traceSnapshot.frequencyShapePivotHz;
+    displayShape.resolvedPivotHz = traceSnapshot.resolvedFrequencyShapePivotHz;
+    const bool showShapeOverlay = !isResidualDisplayMode(mode)
+                                  && ats::isFrequencyShapeModeEnabled(displayShape);
+    if (showShapeOverlay && traceSnapshot.resolvedFrequencyShapePivotHz > 0.0
+        && traceSnapshot.maxFrequencyHz > traceSnapshot.minFrequencyHz)
+    {
+        const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+        const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+        const double logRange = std::log(maxHz / minHz);
+        const double clampedPivot = juce::jlimit(minHz, maxHz, traceSnapshot.resolvedFrequencyShapePivotHz);
+        const float pivotNorm = (float) juce::jlimit(0.0,
+                                                     1.0,
+                                                     std::log(clampedPivot / minHz) / logRange);
+        const auto accent = juce::Colour(0xffbaffea);
+        g.setColour(accent.withAlpha(0.72f));
+
+        auto drawDashedLine = [&](juce::Line<float> line) {
+            constexpr int dashCount = 36;
+            for (int i = 0; i < dashCount; i += 2)
+            {
+                const float t0 = (float) i / (float) dashCount;
+                const float t1 = (float) (i + 1) / (float) dashCount;
+                g.drawLine({ line.getPointAlongLineProportionally(t0),
+                             line.getPointAlongLineProportionally(t1) },
+                           1.1f);
+            }
+        };
+
+        if (isIsometricDisplayMode(mode))
+        {
+            const auto t = visibleTimeRange();
+            drawDashedLine({ positionForIsoCoords(t.getStart(), pivotNorm, 0.0f, plot),
+                             positionForIsoCoords(t.getEnd(), pivotNorm, 0.0f, plot) });
+        }
+        else
+        {
+            const auto f = visibleFreqRange();
+            const float yNorm = (pivotNorm - f.getStart()) / juce::jmax(1.0e-6f, f.getLength());
+            if (yNorm >= -0.05f && yNorm <= 1.05f)
+            {
+                const float y = plot.getBottom() - plot.getHeight() * yNorm;
+                drawDashedLine({ { plot.getX(), y }, { plot.getRight(), y } });
+            }
+        }
+
+        juce::String pivotText = traceSnapshot.frequencyShapePivotHz <= 0.0
+                                     ? ("Auto -> " + juce::String(traceSnapshot.resolvedFrequencyShapePivotHz, 0) + " Hz")
+                                     : (juce::String(traceSnapshot.resolvedFrequencyShapePivotHz, 0) + " Hz");
+        juce::String badge = juce::String(ats::frequencyShapeModeName(traceSnapshot.frequencyShapeMode))
+                             + " " + juce::String(traceSnapshot.frequencyShapeAmount, 2)
+                             + " @ " + pivotText;
+        auto badgeBounds = juce::Rectangle<float>(plot.getX() + 7.0f,
+                                                  plot.getY() + 6.0f,
+                                                  juce::jmin(280.0f, plot.getWidth() - 14.0f),
+                                                  18.0f);
+        g.setColour(juce::Colour(0xcc07110f));
+        g.fillRoundedRectangle(badgeBounds, 4.0f);
+        g.setColour(accent.withAlpha(0.9f));
+        g.drawRoundedRectangle(badgeBounds.reduced(0.5f), 4.0f, 0.8f);
+        g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText(badge,
+                   badgeBounds.reduced(6.0f, 1.0f).toNearestInt(),
+                   juce::Justification::centredLeft,
+                   true);
+        g.setFont(juce::Font(11.0f, juce::Font::plain));
+    }
+
+    const float hoverReadoutY = plot.getY() + (showShapeOverlay ? 29.0f : 7.0f);
+
+    if (isResidualDisplayMode(mode) && hoveredResidualBand >= 0)
+    {
+        const auto band = std::find_if(traceSnapshot.residualBands.begin(),
+                                       traceSnapshot.residualBands.end(),
+                                       [this](const auto& b) { return b.bandIndex == hoveredResidualBand; });
+        if (band != traceSnapshot.residualBands.end())
+        {
+            juce::String hoverText = "B" + juce::String(hoveredResidualBand) + "  "
+                                     + juce::String(band->lowHz, 0) + "-"
+                                     + juce::String(band->highHz, 0) + " Hz";
+            if (hoveredResidualFrame >= 0)
+            {
+                double db = -120.0;
+                if (processor.readResidualBandEnergyDb(traceSource, hoveredResidualBand, hoveredResidualFrame, db))
+                    hoverText << " | f" << hoveredResidualFrame << " " << juce::String(db, 1) << " dB";
+            }
+
+            g.setColour(juce::Colour(0xffbaffea));
+            g.drawText(hoverText,
+                       juce::Rectangle<float>(plot.getX() + 8.0f,
+                                              hoverReadoutY,
+                                              260.0f,
+                                              14.0f)
+                           .toNearestInt(),
+                       juce::Justification::centredLeft);
+        }
+    }
+    else if (hoveredPartial >= 0)
+    {
+        const auto trace = std::find_if(traceSnapshot.partials.begin(),
+                                        traceSnapshot.partials.end(),
+                                        [this](const auto& t) { return t.partialIndex == hoveredPartial; });
+        if (trace != traceSnapshot.partials.end())
+        {
+            g.setColour(juce::Colour(0xffbaffea));
+            juce::String hoverText = "P" + juce::String(hoveredPartial) + "  ";
+            if (showShapeOverlay && std::abs(trace->meanFrequencyHz - trace->sourceMeanFrequencyHz) > 0.05)
+            {
+                hoverText << juce::String(trace->sourceMeanFrequencyHz, 1)
+                          << " -> " << juce::String(trace->meanFrequencyHz, 1)
+                          << " Hz (" << ats::frequencyShapeModeName(traceSnapshot.frequencyShapeMode)
+                          << " " << juce::String(traceSnapshot.frequencyShapeAmount, 2) << ")";
+            }
+            else
+            {
+                hoverText << juce::String(trace->meanFrequencyHz, 1) << " Hz";
+            }
+            g.drawText(hoverText,
+                       juce::Rectangle<float>(plot.getX() + 8.0f,
+                                              hoverReadoutY,
+                                              330.0f,
+                                              14.0f)
+                           .toNearestInt(),
+                       juce::Justification::centredLeft);
+        }
+    }
+
+    if (isResidualDisplayMode(mode) && !isIsometricDisplayMode(mode) && hasResidualSelection())
+    {
+        const auto selection = residualSelectionRect(plot);
+        g.setColour(juce::Colour(0x283ffff0));
+        g.fillRect(selection);
+        g.setColour(juce::Colour(0xfffff3a0));
+        g.drawRect(selection, 1.4f);
+    }
+
+    if (draggingLasso && lassoRect.getWidth() > 2.0f && lassoRect.getHeight() > 2.0f)
+    {
+        g.setColour(juce::Colour(0x223ffff0));
+        g.fillRect(lassoRect);
+        g.setColour(juce::Colour(0xffbaffea));
+        g.drawRect(lassoRect, 1.0f);
+    }
+
+    if (drawingResidualEnvelope && envelopeDrawBand >= 0 && envelopeDrawPoints.size() >= 2)
+    {
+        const auto band = std::find_if(traceSnapshot.residualBands.begin(),
+                                       traceSnapshot.residualBands.end(),
+                                       [this](const auto& b) { return b.bandIndex == envelopeDrawBand; });
+        if (band != traceSnapshot.residualBands.end())
+        {
+            const auto yRange = yRangeForBand(*band, plot);
+            juce::Path stroke;
+            bool started = false;
+            for (const auto& point : envelopeDrawPoints)
+            {
+                const float timeNorm = traceSnapshot.frameCount <= 1
+                                           ? 0.0f
+                                           : (float) point.first / (float) (traceSnapshot.frameCount - 1);
+                const float x = plot.getX()
+                                + plot.getWidth()
+                                      * ((timeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
+                const float dbNorm = (float) juce::jlimit(-72.0, 0.0, point.second) / -72.0f;
+                const float y = yRange.getEnd() - yRange.getLength() * dbNorm;
+                if (!started)
+                {
+                    stroke.startNewSubPath(x, y);
+                    started = true;
+                }
+                else
+                {
+                    stroke.lineTo(x, y);
+                }
+            }
+            g.setColour(juce::Colour(0xfffff3a0).withAlpha(0.85f));
+            g.strokePath(stroke, juce::PathStrokeType(2.0f));
+        }
+    }
+}
+
+void SpectrogramPanel::paintPlaybackPlayhead(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    const float playheadNorm = animatedPlayheadNorm;
+    if (playheadNorm < 0.0f)
+        return;
+
+    if (isIsometricDisplayMode(mode))
+        paintIsometricPlaybackPlayhead(g, plot, playheadNorm);
+    else
+        paintPlanarPlaybackPlayhead(g, plot, playheadNorm);
+}
+
+void SpectrogramPanel::paintPlanarPlaybackPlayhead(juce::Graphics& g,
+                                                   juce::Rectangle<float> plot,
+                                                   float playheadNorm)
+{
+    const auto timeRange = visibleTimeRange();
+    const float timeSpan = juce::jmax(1.0e-6f, timeRange.getLength());
+    const float xNorm = (playheadNorm - timeRange.getStart()) / timeSpan;
+    if (xNorm < -0.01f || xNorm > 1.01f)
+        return;
+
+    const float x = plot.getX() + plot.getWidth() * xNorm;
+    const float y0 = plot.getY();
+    const float y1 = plot.getBottom();
+
+    const auto line = juce::Line<float>({ x, y0 }, { x, y1 });
+    g.setColour(juce::Colour(0x28cffff6));
+    g.drawLine(line, 6.0f);
+    g.setColour(juce::Colour(0x74cffff6));
+    g.drawLine(line, 2.6f);
+    g.setColour(juce::Colour(0xfff3ffb2));
+    g.drawLine(line, 1.15f);
+
+    const float headW = 7.0f;
+    juce::Path head;
+    head.startNewSubPath(x - headW * 0.5f, y0 + 1.0f);
+    head.lineTo(x + headW * 0.5f, y0 + 1.0f);
+    head.lineTo(x, y0 + 8.5f);
+    head.closeSubPath();
+    g.setColour(juce::Colour(0xfff3ffb2).withAlpha(0.88f));
+    g.fillPath(head);
+}
+
+void SpectrogramPanel::paintIsometricPlaybackPlayhead(juce::Graphics& g,
+                                                      juce::Rectangle<float> plot,
+                                                      float playheadNorm)
+{
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    if (playheadNorm < timeRange.getStart() - timeRange.getLength() * 0.025f
+        || playheadNorm > timeRange.getEnd() + timeRange.getLength() * 0.025f)
+    {
+        return;
+    }
+
+    constexpr float topAmp = 1.12f;
+    const float frontFreq = freqRange.getStart();
+    const float backFreq = freqRange.getEnd();
+    const float halfDepth = timeRange.getLength() * 0.04f;
+    const float t0 = juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth);
+    const float t1 = juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth);
+
+    const auto frontCentreBase = positionForIsoCoords(playheadNorm, frontFreq, 0.0f, plot);
+    const auto frontCentreTop = positionForIsoCoords(playheadNorm, frontFreq, topAmp, plot);
+    const auto backCentreBase = positionForIsoCoords(playheadNorm, backFreq, 0.0f, plot);
+    const auto backCentreTop = positionForIsoCoords(playheadNorm, backFreq, topAmp, plot);
+    const auto frontCentreMid = positionForIsoCoords(playheadNorm, frontFreq, topAmp * 0.52f, plot);
+    const auto backCentreMid = positionForIsoCoords(playheadNorm, backFreq, topAmp * 0.52f, plot);
+
+    juce::Path scanPlane;
+    scanPlane.startNewSubPath(frontCentreBase);
+    scanPlane.lineTo(backCentreBase);
+    scanPlane.lineTo(backCentreTop);
+    scanPlane.lineTo(frontCentreTop);
+    scanPlane.closeSubPath();
+
+    g.setColour(juce::Colour(0x12f3ffb2));
+    g.fillPath(scanPlane);
+
+    auto drawGlow = [&g](juce::Point<float> a, juce::Point<float> b, float coreAlpha) {
+        const auto line = juce::Line<float>(a, b);
+        g.setColour(juce::Colour(0x36cffff6));
+        g.drawLine(line, 7.0f);
+        g.setColour(juce::Colour(0x88cffff6));
+        g.drawLine(line, 3.0f);
+        g.setColour(juce::Colour(0xfff3ffb2).withAlpha(coreAlpha));
+        g.drawLine(line, 1.25f);
+    };
+
+    auto drawDepthMarker = [&](float freqNorm, float alphaScale) {
+        const auto baseStart = positionForIsoCoords(t0, freqNorm, 0.0f, plot);
+        const auto baseEnd = positionForIsoCoords(t1, freqNorm, 0.0f, plot);
+        const auto topStart = positionForIsoCoords(t0, freqNorm, topAmp, plot);
+        const auto topEnd = positionForIsoCoords(t1, freqNorm, topAmp, plot);
+        const auto centreBase = positionForIsoCoords(playheadNorm, freqNorm, 0.0f, plot);
+        const auto centreTop = positionForIsoCoords(playheadNorm, freqNorm, topAmp, plot);
+
+        juce::Path depthRibbon;
+        depthRibbon.startNewSubPath(baseStart);
+        depthRibbon.lineTo(baseEnd);
+        depthRibbon.lineTo(topEnd);
+        depthRibbon.lineTo(topStart);
+        depthRibbon.closeSubPath();
+
+        g.setColour(juce::Colour(0x18f3ffb2).withMultipliedAlpha(alphaScale));
+        g.fillPath(depthRibbon);
+
+        drawGlow(baseStart, baseEnd, 0.95f * alphaScale);
+        drawGlow(topStart, topEnd, 0.68f * alphaScale);
+        drawGlow(centreBase, centreTop, 0.94f * alphaScale);
+
+        juce::Path head;
+        const auto headBack = positionForIsoCoords(juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth * 0.42f),
+                                                   freqNorm,
+                                                   topAmp,
+                                                   plot);
+        const auto headFront = positionForIsoCoords(juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth * 0.42f),
+                                                    freqNorm,
+                                                    topAmp,
+                                                    plot);
+        const auto headTip = positionForIsoCoords(playheadNorm, freqNorm, topAmp + 0.16f, plot);
+        head.startNewSubPath(headBack);
+        head.lineTo(headFront);
+        head.lineTo(headTip);
+        head.closeSubPath();
+        g.setColour(juce::Colour(0xfff3ffb2).withAlpha(0.78f * alphaScale));
+        g.fillPath(head);
+    };
+
+    drawDepthMarker(backFreq, 0.82f);
+    drawDepthMarker(frontFreq, 1.0f);
+
+    drawGlow(frontCentreBase, backCentreBase, 0.82f);
+    drawGlow(frontCentreTop, backCentreTop, 0.56f);
+
+    const auto throughLine = juce::Line<float>(frontCentreMid, backCentreMid);
+    g.setColour(juce::Colour(0x99f3ffb2));
+    g.drawLine(throughLine, 6.0f);
+    g.setColour(juce::Colour(0xfffff3b2));
+    g.drawLine(throughLine, 2.2f);
+}
+
+juce::Rectangle<int> SpectrogramPanel::playheadPaintBounds(juce::Rectangle<float> plot,
+                                                           float playheadNorm) const
+{
+    if (playheadNorm < 0.0f)
+        return {};
+
+    if (!isIsometricDisplayMode(mode))
+    {
+        const auto timeRange = visibleTimeRange();
+        const float timeSpan = juce::jmax(1.0e-6f, timeRange.getLength());
+        const float xNorm = (playheadNorm - timeRange.getStart()) / timeSpan;
+        if (xNorm < -0.05f || xNorm > 1.05f)
+            return {};
+
+        const float x = plot.getX() + plot.getWidth() * xNorm;
+        return juce::Rectangle<float>(x - 14.0f,
+                                      plot.getY() - 14.0f,
+                                      28.0f,
+                                      plot.getHeight() + 28.0f)
+            .getSmallestIntegerContainer();
+    }
+
+    const auto timeRange = visibleTimeRange();
+    if (playheadNorm < timeRange.getStart() - timeRange.getLength() * 0.05f
+        || playheadNorm > timeRange.getEnd() + timeRange.getLength() * 0.05f)
+    {
+        return {};
+    }
+
+    const auto freqRange = visibleFreqRange();
+    constexpr float topAmp = 1.30f;
+    const float frontFreq = freqRange.getStart();
+    const float backFreq = freqRange.getEnd();
+    const float halfDepth = timeRange.getLength() * 0.055f;
+    const float t0 = juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth);
+    const float t1 = juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth);
+
+    std::array<juce::Point<float>, 12> points {
+        positionForIsoCoords(t0, frontFreq, 0.0f, plot),
+        positionForIsoCoords(t1, frontFreq, 0.0f, plot),
+        positionForIsoCoords(t0, frontFreq, topAmp, plot),
+        positionForIsoCoords(t1, frontFreq, topAmp, plot),
+        positionForIsoCoords(playheadNorm, frontFreq, topAmp + 0.16f, plot),
+        positionForIsoCoords(playheadNorm, frontFreq, topAmp * 0.52f, plot),
+        positionForIsoCoords(t0, backFreq, 0.0f, plot),
+        positionForIsoCoords(t1, backFreq, 0.0f, plot),
+        positionForIsoCoords(t0, backFreq, topAmp, plot),
+        positionForIsoCoords(t1, backFreq, topAmp, plot),
+        positionForIsoCoords(playheadNorm, backFreq, topAmp + 0.16f, plot),
+        positionForIsoCoords(playheadNorm, backFreq, topAmp * 0.52f, plot),
+    };
+
+    juce::Rectangle<float> bounds(points.front().x, points.front().y, 1.0f, 1.0f);
+    for (const auto& point : points)
+        bounds = bounds.getUnion(juce::Rectangle<float>(point.x, point.y, 1.0f, 1.0f));
+
+    return bounds.expanded(18.0f).getSmallestIntegerContainer();
 }
 
 void SpectrogramPanel::resized()
 {
-    rebuildPending = true;
+    auto r = getLocalBounds().reduced(5);
+    const bool residualUi = isResidualDisplayMode(mode);
+    auto header = r.removeFromTop(residualUi ? 50 : 26);
+    auto headerRow1 = header.removeFromTop(26);
+
+    if (zoomBar != nullptr)
+    {
+        zoomBar->setBounds(headerRow1.removeFromRight((int) kZoomBarWidth));
+        headerRow1.removeFromRight(6);
+    }
+    viewMenuButton.setBounds(headerRow1.removeFromLeft(182));
+    headerRow1.removeFromLeft(6);
+    deleteButton.setBounds(headerRow1.removeFromLeft(72));
+    headerRow1.removeFromLeft(8);
+    selectionLabel.setBounds(headerRow1);
+
+    if (residualUi)
+    {
+        auto toolRow = header;
+        residualDrawButton.setBounds(toolRow.removeFromLeft(52));
+        toolRow.removeFromLeft(4);
+        residualSmoothButton.setBounds(toolRow.removeFromLeft(62));
+        toolRow.removeFromLeft(4);
+        residualCopyButton.setBounds(toolRow.removeFromLeft(52));
+        toolRow.removeFromLeft(4);
+        residualPasteButton.setBounds(toolRow.removeFromLeft(56));
+        toolRow.removeFromLeft(4);
+        residualSwapButton.setBounds(toolRow.removeFromLeft(56));
+        toolRow.removeFromLeft(8);
+        residualTiltSlider.setBounds(toolRow.removeFromLeft(juce::jmax(72, toolRow.getWidth() / 4)));
+        toolRow.removeFromLeft(4);
+        residualTiltButton.setBounds(toolRow.removeFromLeft(44));
+        toolRow.removeFromLeft(8);
+        residualDbLabel.setBounds(toolRow.removeFromLeft(44));
+        residualDbEditor.setBounds(toolRow.removeFromLeft(juce::jmax(72, toolRow.getWidth())));
+    }
+
+    layoutTraceViewChrome();
+    if (playheadOverlay != nullptr)
+        playheadOverlay->setBounds(getPlotBounds().toNearestInt());
+    repaintDisplay();
+}
+
+void SpectrogramPanel::styleTraceScrollBars()
+{
+    for (auto* bar : { &timeScrollBar, &freqScrollBar })
+    {
+        bar->setColour(juce::ScrollBar::backgroundColourId, juce::Colour(0xff0a0d0b));
+        bar->setColour(juce::ScrollBar::trackColourId, juce::Colour(0xff151a17));
+        bar->setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff8a9a92));
+    }
+}
+
+void SpectrogramPanel::layoutTraceViewChrome()
+{
+    auto area = getScreenBounds().toNearestInt().reduced(14, 12);
+    area.removeFromTop(18);
+    area.removeFromBottom(18);
+
+    const auto vBarArea = area.removeFromRight(traceScrollBarThickness);
+    const auto hBarArea = area.removeFromBottom(traceScrollBarThickness);
+
+    freqScrollBar.setBounds(vBarArea.reduced(0, 1));
+    timeScrollBar.setBounds(hBarArea.reduced(1, 0));
+    updateScrollBarsFromViewport();
+}
+
+void SpectrogramPanel::updateScrollBarsFromViewport()
+{
+    if (syncingScrollBars)
+        return;
+
+    syncingScrollBars = true;
+
+    const float timeSpan = 1.0f / juce::jmax(1.0f, timeZoom);
+    const float freqSpan = 1.0f / juce::jmax(1.0f, freqZoom);
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+
+    bool canPanTime = timeZoom > 1.001f;
+    bool canPanFreq = freqZoom > 1.001f;
+    float hStart = timeRange.getStart();
+    float hSpan = timeSpan;
+    float vStart = 1.0f - freqRange.getEnd();
+    float vSpan = freqSpan;
+
+    if (isIsometricDisplayMode(mode))
+    {
+        // In iso mode, map horizontal scrollbar to frequency (dominant screen X axis),
+        // and vertical scrollbar to time (dominant screen Y axis).
+        hStart = freqRange.getStart();
+        hSpan = freqSpan;
+        canPanTime = freqZoom > 1.001f;
+
+        vStart = 1.0f - timeRange.getEnd();
+        vSpan = timeSpan;
+        canPanFreq = timeZoom > 1.001f;
+    }
+
+    timeScrollBar.setEnabled(canPanTime);
+    freqScrollBar.setEnabled(canPanFreq);
+    timeScrollBar.setAlpha(canPanTime ? 1.0f : 0.35f);
+    freqScrollBar.setAlpha(canPanFreq ? 1.0f : 0.35f);
+
+    // Range limits = full normalized source extent; current range size = visible window.
+    timeScrollBar.setRangeLimits(0.0, 1.0, juce::dontSendNotification);
+    freqScrollBar.setRangeLimits(0.0, 1.0, juce::dontSendNotification);
+
+    if (canPanTime)
+    {
+        timeScrollBar.setCurrentRange((double) hStart,
+                                      (double) hSpan,
+                                      juce::dontSendNotification);
+    }
+    else
+    {
+        timeScrollBar.setCurrentRange(0.0, 1.0, juce::dontSendNotification);
+    }
+
+    if (canPanFreq)
+    {
+        freqScrollBar.setCurrentRange((double) vStart, (double) vSpan, juce::dontSendNotification);
+    }
+    else
+    {
+        freqScrollBar.setCurrentRange(0.0, 1.0, juce::dontSendNotification);
+    }
+
+    syncingScrollBars = false;
+}
+
+void SpectrogramPanel::scrollBarMoved(juce::ScrollBar* scrollBarThatHasMoved, double newRangeStart)
+{
+    if (syncingScrollBars || scrollBarThatHasMoved == nullptr)
+        return;
+
+    if (scrollBarThatHasMoved == &timeScrollBar)
+    {
+        if (isIsometricDisplayMode(mode))
+        {
+            // Iso mode: horizontal scrollbar drives frequency viewport.
+            const float span = 1.0f / juce::jmax(1.0f, freqZoom);
+            const float visibleStart = juce::jlimit(0.0f, 1.0f - span, (float) newRangeStart);
+            freqCenter = visibleStart + span * 0.5f;
+        }
+        else
+        {
+            const float span = 1.0f / juce::jmax(1.0f, timeZoom);
+            const float visibleStart = juce::jlimit(0.0f, 1.0f - span, (float) newRangeStart);
+            timeCenter = visibleStart + span * 0.5f;
+        }
+    }
+    else if (scrollBarThatHasMoved == &freqScrollBar)
+    {
+        if (isIsometricDisplayMode(mode))
+        {
+            // Iso mode: vertical scrollbar drives time viewport (inverted top->later).
+            const float span = 1.0f / juce::jmax(1.0f, timeZoom);
+            const float visibleStart = juce::jlimit(0.0f, 1.0f - span, 1.0f - (float) newRangeStart - span);
+            timeCenter = visibleStart + span * 0.5f;
+        }
+        else
+        {
+            const float span = 1.0f / juce::jmax(1.0f, freqZoom);
+            const float visibleStart = juce::jlimit(0.0f, 1.0f - span, 1.0f - (float) newRangeStart - span);
+            freqCenter = visibleStart + span * 0.5f;
+        }
+    }
+
+    clampViewport();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
+{
+    grabKeyboardFocus();
+    dragStart = e.position;
+    draggingLasso = false;
+    lassoRect = {};
+
+    const auto plot = getPlotBounds();
+    const bool panGesture = e.mods.isMiddleButtonDown() || e.mods.isAltDown();
+    if (panGesture && plot.contains(e.position))
+    {
+        panningView = true;
+        panDragStart = e.position;
+        panTimeCenterStart = timeCenter;
+        panFreqCenterStart = freqCenter;
+        return;
+    }
+
+    if (isResidualDisplayMode(mode))
+    {
+        selectedPartials.clear();
+        envelopeDrawPoints.clear();
+        drawingResidualEnvelope = false;
+
+        if (residualDrawButton.getToggleState())
+        {
+            const int band = residualBandForPoint(e.position, plot);
+            if (band >= 0)
+            {
+                envelopeDrawBand = band;
+                drawingResidualEnvelope = true;
+                selectedResidualBands = { band };
+                const int frame = frameForX(e.position.x, plot);
+                selectedResidualFirstFrame = frame;
+                selectedResidualLastFrame = frame;
+                envelopeDrawPoints.clear();
+                envelopeDrawPoints.push_back({ frame, dbFromPlotYInBand(band, e.position.y, plot) });
+                updateSelectionLabel();
+                refreshHoveredDbReadout();
+                repaintDisplay();
+                return;
+            }
+        }
+
+        if (hasResidualSelection() && residualSelectionRect(plot).expanded(3.0f).contains(e.position)
+            && !e.mods.isShiftDown() && !e.mods.isCommandDown() && !residualDrawButton.getToggleState())
+        {
+            scalingSelection = true;
+            lastScaleDragY = e.position.y;
+            return;
+        }
+
+        const int band = residualBandForPoint(e.position, plot);
+        if (band >= 0)
+        {
+            if (!e.mods.isShiftDown() && !e.mods.isCommandDown())
+                selectedResidualBands.clear();
+
+            if (std::find(selectedResidualBands.begin(), selectedResidualBands.end(), band)
+                == selectedResidualBands.end())
+            {
+                selectedResidualBands.push_back(band);
+            }
+            const int frame = frameForX(e.position.x, plot);
+            selectedResidualFirstFrame = frame;
+            selectedResidualLastFrame = frame;
+        }
+        else if (!e.mods.isShiftDown() && !e.mods.isCommandDown())
+        {
+            selectedResidualBands.clear();
+            selectedResidualFirstFrame = -1;
+            selectedResidualLastFrame = -1;
+        }
+
+        updateSelectionLabel();
+        refreshHoveredDbReadout();
+        repaintDisplay();
+        return;
+    }
+
+    selectedResidualBands.clear();
+    selectedResidualFirstFrame = -1;
+    selectedResidualLastFrame = -1;
+
+    const int nearest = findNearestPartial(e.position, 8.0f);
+    if (nearest >= 0)
+    {
+        const bool additive = e.mods.isShiftDown() || e.mods.isCommandDown();
+        if (!additive && isPartialSelected(nearest))
+        {
+            scalingSelection = true;
+            lastScaleDragY = e.position.y;
+            return;
+        }
+
+        if (!additive)
+            selectedPartials.clear();
+
+        auto it = std::find(selectedPartials.begin(), selectedPartials.end(), nearest);
+        if (additive && it != selectedPartials.end())
+            selectedPartials.erase(it);
+        else if (it == selectedPartials.end())
+            selectedPartials.push_back(nearest);
+    }
+    else if (!e.mods.isShiftDown() && !e.mods.isCommandDown())
+    {
+        selectedPartials.clear();
+    }
+
+    updateSelectionLabel();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
+{
+    if (panningView)
+    {
+        const auto plot = getPlotBounds();
+        if (plot.getWidth() > 1.0f && plot.getHeight() > 1.0f)
+        {
+            const float deltaX = e.position.x - panDragStart.x;
+            const float deltaY = e.position.y - panDragStart.y;
+            const auto timeRange = visibleTimeRange();
+            const auto freqRange = visibleFreqRange();
+            timeCenter = panTimeCenterStart - deltaX / plot.getWidth() * timeRange.getLength();
+            freqCenter = panFreqCenterStart + deltaY / plot.getHeight() * freqRange.getLength();
+            clampViewport();
+            syncZoomControlsFromViewport();
+            repaintDisplay();
+        }
+        return;
+    }
+
+    if (drawingResidualEnvelope && envelopeDrawBand >= 0)
+    {
+        const auto plot = getPlotBounds();
+        const int frame = frameForX(e.position.x, plot);
+        const double db = dbFromPlotYInBand(envelopeDrawBand, e.position.y, plot);
+        if (envelopeDrawPoints.empty() || envelopeDrawPoints.back().first != frame)
+            envelopeDrawPoints.push_back({ frame, db });
+        else
+            envelopeDrawPoints.back().second = db;
+
+        selectedResidualFirstFrame = envelopeDrawPoints.front().first;
+        selectedResidualLastFrame = envelopeDrawPoints.back().first;
+        updateSelectionLabel();
+        refreshHoveredDbReadout();
+        repaintDisplay();
+        return;
+    }
+
+    if (scalingSelection)
+    {
+        scaleSelectedData(e.position.y - lastScaleDragY);
+        lastScaleDragY = e.position.y;
+        return;
+    }
+
+    if (dragStart.getDistanceFrom(e.position) < 5.0f)
+        return;
+
+    draggingLasso = true;
+    lassoRect = normalisedRect(dragStart, e.position).getIntersection(getPlotBounds());
+    repaintDisplay();
+}
+
+void SpectrogramPanel::mouseUp(const juce::MouseEvent& e)
+{
+    if (drawingResidualEnvelope)
+    {
+        commitEnvelopeDraw();
+        drawingResidualEnvelope = false;
+        envelopeDrawBand = -1;
+        envelopeDrawPoints.clear();
+        scalingSelection = false;
+        panningView = false;
+        draggingLasso = false;
+        lassoRect = {};
+        updateSelectionLabel();
+        refreshHoveredDbReadout();
+        repaintDisplay();
+        return;
+    }
+
+    if (draggingLasso)
+    {
+        if (isResidualDisplayMode(mode))
+        {
+            const auto plot = getPlotBounds();
+            auto residualSelection = residualBandsForRect(lassoRect, plot);
+            const int firstFrame = frameForX(lassoRect.getX(), plot);
+            const int lastFrame = frameForX(lassoRect.getRight(), plot);
+            if (e.mods.isShiftDown() || e.mods.isCommandDown())
+            {
+                for (const int bandIndex : residualSelection)
+                {
+                    if (std::find(selectedResidualBands.begin(), selectedResidualBands.end(), bandIndex)
+                        == selectedResidualBands.end())
+                    {
+                        selectedResidualBands.push_back(bandIndex);
+                    }
+                }
+                if (selectedResidualFirstFrame < 0)
+                {
+                    selectedResidualFirstFrame = std::min(firstFrame, lastFrame);
+                    selectedResidualLastFrame = std::max(firstFrame, lastFrame);
+                }
+                else
+                {
+                    selectedResidualFirstFrame = std::min(selectedResidualFirstFrame, std::min(firstFrame, lastFrame));
+                    selectedResidualLastFrame = std::max(selectedResidualLastFrame, std::max(firstFrame, lastFrame));
+                }
+            }
+            else
+            {
+                selectedResidualBands = std::move(residualSelection);
+                selectedResidualFirstFrame = std::min(firstFrame, lastFrame);
+                selectedResidualLastFrame = std::max(firstFrame, lastFrame);
+            }
+        }
+        else
+        {
+            std::vector<int> lassoSelection;
+            for (const auto& trace : traceSnapshot.partials)
+            {
+                if (traceIntersectsLasso(trace, lassoRect))
+                    lassoSelection.push_back(trace.partialIndex);
+            }
+
+            if (e.mods.isShiftDown() || e.mods.isCommandDown())
+            {
+                for (const int partialIndex : lassoSelection)
+                {
+                    if (!isPartialSelected(partialIndex))
+                        selectedPartials.push_back(partialIndex);
+                }
+            }
+            else
+            {
+                selectedPartials = std::move(lassoSelection);
+            }
+        }
+    }
+
+    draggingLasso = false;
+    scalingSelection = false;
+    panningView = false;
+    lassoRect = {};
+    updateSelectionLabel();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::mouseMove(const juce::MouseEvent& e)
+{
+    if (isResidualDisplayMode(mode))
+    {
+        const auto plot = getPlotBounds();
+        const int nextBand = residualBandForPoint(e.position, plot);
+        const int nextFrame = plot.contains(e.position) ? frameForX(e.position.x, plot) : -1;
+        if (nextBand != hoveredResidualBand || nextFrame != hoveredResidualFrame)
+        {
+            hoveredResidualBand = nextBand;
+            hoveredResidualFrame = nextFrame;
+            hoveredPartial = -1;
+            setMouseCursor(hoveredResidualBand >= 0 ? juce::MouseCursor::PointingHandCursor
+                                                     : juce::MouseCursor::NormalCursor);
+            refreshHoveredDbReadout();
+            repaintDisplay();
+        }
+        return;
+    }
+
+    const int nextHover = findNearestPartial(e.position, 7.0f);
+    if (nextHover != hoveredPartial)
+    {
+        hoveredPartial = nextHover;
+        setMouseCursor(hoveredPartial >= 0 ? juce::MouseCursor::PointingHandCursor
+                                           : juce::MouseCursor::NormalCursor);
+        repaintDisplay();
+    }
+}
+
+void SpectrogramPanel::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (!isResidualDisplayMode(mode))
+        return;
+
+    const auto plot = getPlotBounds();
+    if (!plot.contains(e.position))
+        return;
+
+    const int band = residualBandForPoint(e.position, plot);
+    const int frame = frameForX(e.position.x, plot);
+    if (band < 0 || frame < 0)
+        return;
+
+    hoveredResidualBand = band;
+    hoveredResidualFrame = frame;
+    if (std::find(selectedResidualBands.begin(), selectedResidualBands.end(), band) == selectedResidualBands.end())
+        selectedResidualBands = { band };
+    selectedResidualFirstFrame = frame;
+    selectedResidualLastFrame = frame;
+
+    residualDbEditorActive = true;
+    refreshHoveredDbReadout();
+    residualDbEditor.setEnabled(true);
+    residualDbEditor.grabKeyboardFocus();
+    residualDbEditor.selectAll();
+    updateSelectionLabel();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::mouseExit(const juce::MouseEvent&)
+{
+    hoveredResidualBand = -1;
+    hoveredResidualFrame = -1;
+    if (hoveredPartial >= 0)
+    {
+        hoveredPartial = -1;
+        repaintDisplay();
+    }
+}
+
+void SpectrogramPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (traceSnapshot.frameCount <= 0)
+        return;
+
+    const auto plot = getPlotBounds();
+    if (! plot.contains(e.position))
+        return;
+
+    if (wheel.deltaY != 0.0f)
+    {
+        const float factor = std::pow(1.12f, wheel.deltaY);
+        if (e.mods.isShiftDown())
+            applyZoomAtScreenPoint(e.position, factor, 1.0f);
+        else if (e.mods.isAltDown())
+            applyZoomAtScreenPoint(e.position, 1.0f, factor);
+        else
+            applyZoomAtScreenPoint(e.position, factor, factor);
+        return;
+    }
+
+    if (wheel.deltaX != 0.0f && timeZoom > 1.0f)
+        panView(-wheel.deltaX * 0.04f / timeZoom, 0.0f);
+}
+
+void SpectrogramPanel::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
+{
+    if (traceSnapshot.frameCount <= 0 || scaleFactor <= 0.0f)
+        return;
+
+    const auto plot = getPlotBounds();
+    if (! plot.contains(e.position))
+        return;
+
+    applyZoomAtScreenPoint(e.position, scaleFactor, scaleFactor);
+}
+
+bool SpectrogramPanel::keyPressed(const juce::KeyPress& key)
+{
+    if (key.getKeyCode() == juce::KeyPress::deleteKey || key.getKeyCode() == juce::KeyPress::backspaceKey)
+    {
+        deleteSelection();
+        return true;
+    }
+
+    if (key.getKeyCode() == juce::KeyPress::escapeKey)
+    {
+        selectedPartials.clear();
+        selectedResidualBands.clear();
+        selectedResidualFirstFrame = -1;
+        selectedResidualLastFrame = -1;
+        updateSelectionLabel();
+        repaintDisplay();
+        return true;
+    }
+
+    if (key.getKeyCode() == juce::KeyPress::homeKey
+        || key.getTextCharacter() == '0')
+    {
+        resetViewport();
+        repaintDisplay();
+        return true;
+    }
+
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+        && key.getTextCharacter() == '0')
+    {
+        resetViewport();
+        repaintDisplay();
+        return true;
+    }
+
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+        && (key.getTextCharacter() == 'a' || key.getTextCharacter() == 'A'))
+    {
+        if (isResidualDisplayMode(mode))
+        {
+            selectedResidualBands.clear();
+            selectedResidualBands.reserve(traceSnapshot.residualBands.size());
+            for (const auto& band : traceSnapshot.residualBands)
+                selectedResidualBands.push_back(band.bandIndex);
+            selectedResidualFirstFrame = 0;
+            selectedResidualLastFrame = juce::jmax(0, traceSnapshot.frameCount - 1);
+        }
+        else
+        {
+            selectedPartials.clear();
+            selectedPartials.reserve(traceSnapshot.partials.size());
+            for (const auto& trace : traceSnapshot.partials)
+                selectedPartials.push_back(trace.partialIndex);
+        }
+        updateSelectionLabel();
+        repaintDisplay();
+        return true;
+    }
+
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+        && isResidualDisplayMode(mode))
+    {
+        if (key.getTextCharacter() == 'c' || key.getTextCharacter() == 'C')
+        {
+            runCopyBand();
+            return true;
+        }
+        if (key.getTextCharacter() == 'v' || key.getTextCharacter() == 'V')
+        {
+            runPasteBand();
+            return true;
+        }
+        if (key.getTextCharacter() == 'x' || key.getTextCharacter() == 'X')
+        {
+            runSwapBands();
+            return true;
+        }
+    }
+
+    if (isResidualDisplayMode(mode)
+        && residualDbEditor.hasKeyboardFocus(true)
+        && key.getKeyCode() == juce::KeyPress::returnKey)
+    {
+        applyResidualDbFromEditor();
+        return true;
+    }
+
+    return false;
+}
+
+void SpectrogramPanel::updateSelectionLabel()
+{
+    deleteButton.setEnabled(!selectedPartials.empty() || hasResidualSelection());
+
+    if (traceSnapshot.frameCount <= 0)
+    {
+        selectionLabel.setText("No model", juce::dontSendNotification);
+        return;
+    }
+
+    if (hasResidualSelection())
+    {
+        std::sort(selectedResidualBands.begin(), selectedResidualBands.end());
+        const int firstBand = selectedResidualBands.front();
+        const int lastBand = selectedResidualBands.back();
+        juce::String text = "Residual B" + juce::String(firstBand)
+                            + (firstBand == lastBand ? juce::String()
+                                                     : ("-B" + juce::String(lastBand)))
+                            + " | frames "
+                            + juce::String(getSelectionFirstFrame())
+                            + "-"
+                            + juce::String(getSelectionLastFrame());
+
+        if (firstBand == lastBand)
+        {
+            const auto band = std::find_if(traceSnapshot.residualBands.begin(),
+                                           traceSnapshot.residualBands.end(),
+                                           [firstBand](const auto& b) { return b.bandIndex == firstBand; });
+            if (band != traceSnapshot.residualBands.end())
+                text << " | " << juce::String(band->lowHz, 0) << "-" << juce::String(band->highHz, 0) << " Hz";
+        }
+
+        selectionLabel.setText(text, juce::dontSendNotification);
+        return;
+    }
+
+    if (selectedPartials.empty())
+    {
+        selectionLabel.setText("No selection", juce::dontSendNotification);
+        return;
+    }
+
+    if (selectedPartials.size() == 1)
+    {
+        const int partialIndex = selectedPartials.front();
+        const auto trace = std::find_if(traceSnapshot.partials.begin(),
+                                        traceSnapshot.partials.end(),
+                                        [partialIndex](const auto& t) { return t.partialIndex == partialIndex; });
+        if (trace != traceSnapshot.partials.end())
+        {
+            selectionLabel.setText("P" + juce::String(partialIndex) + " | "
+                                       + juce::String(trace->meanFrequencyHz, 1) + " Hz",
+                                   juce::dontSendNotification);
+            return;
+        }
+    }
+
+    selectionLabel.setText(juce::String((int) selectedPartials.size()) + " partials selected",
+                           juce::dontSendNotification);
+}
+
+void SpectrogramPanel::deleteSelection()
+{
+    if (isResidualDisplayMode(mode) && hasResidualSelection())
+    {
+        deleteSelectedResidual();
+        return;
+    }
+
+    deleteSelectedPartials();
+}
+
+void SpectrogramPanel::deleteSelectedPartials()
+{
+    if (selectedPartials.empty())
+        return;
+
+    juce::String error;
+    if (!processor.mutePartials(traceSource, selectedPartials, error))
+    {
+        if (error.isNotEmpty())
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete partials", error);
+        return;
+    }
+
+    selectedPartials.clear();
+    rebuildTraceSnapshot();
+}
+
+void SpectrogramPanel::deleteSelectedResidual()
+{
+    if (!hasResidualSelection())
+        return;
+
+    juce::String error;
+    if (!processor.muteResidualBands(traceSource,
+                                     selectedResidualBands,
+                                     selectedResidualFirstFrame,
+                                     selectedResidualLastFrame,
+                                     error))
+    {
+        if (error.isNotEmpty())
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete residual", error);
+        return;
+    }
+
+    selectedResidualBands.clear();
+    selectedResidualFirstFrame = -1;
+    selectedResidualLastFrame = -1;
+    rebuildTraceSnapshot();
+}
+
+void SpectrogramPanel::scaleSelectedData(float deltaY)
+{
+    if (std::abs(deltaY) < 0.25f)
+        return;
+
+    const double scale = std::pow(2.0, (double) -deltaY / 30.0);
+    juce::String error;
+    bool ok = false;
+    if (isResidualDisplayMode(mode) && hasResidualSelection())
+    {
+        ok = processor.scaleResidualBands(traceSource,
+                                          selectedResidualBands,
+                                          selectedResidualFirstFrame,
+                                          selectedResidualLastFrame,
+                                          scale,
+                                          error);
+    }
+    else if (!selectedPartials.empty())
+    {
+        ok = processor.scalePartials(traceSource, selectedPartials, scale, error);
+    }
+
+    if (ok)
+    {
+        rebuildTraceSnapshot(true);
+        lastModelRevision = processor.getModelRevision();
+        updateSelectionLabel();
+        repaintDisplay();
+    }
+}
+
+void SpectrogramPanel::applyZoomAtScreenPoint(juce::Point<float> anchor,
+                                              float timeFactor,
+                                              float freqFactor)
+{
+    const auto plot = getPlotBounds();
+    if (plot.getWidth() <= 1.0f || plot.getHeight() <= 1.0f)
+        return;
+
+    const float anchorTime = timeNormFromScreenX(anchor.x, plot);
+    const float anchorFreq = freqNormFromScreenY(anchor.y, plot);
+    const float anchorScreenX = (anchor.x - plot.getX()) / plot.getWidth();
+    const float anchorScreenY = (plot.getBottom() - anchor.y) / plot.getHeight();
+
+    timeZoom = juce::jlimit(kMinZoom, kMaxZoom, timeZoom * timeFactor);
+    freqZoom = juce::jlimit(kMinZoom, kMaxZoom, freqZoom * freqFactor);
+
+    const float timeHalfSpan = 0.5f / timeZoom;
+    const float freqHalfSpan = 0.5f / freqZoom;
+    timeCenter = anchorTime + timeHalfSpan * (1.0f - 2.0f * anchorScreenX);
+    freqCenter = anchorFreq + freqHalfSpan * (1.0f - 2.0f * anchorScreenY);
+    clampViewport();
+    syncZoomControlsFromViewport();
+    updateScrollBarsFromViewport();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::panView(float deltaTimeNorm, float deltaFreqNorm)
+{
+    if (deltaTimeNorm == 0.0f && deltaFreqNorm == 0.0f)
+        return;
+
+    timeCenter += deltaTimeNorm;
+    freqCenter += deltaFreqNorm;
+    clampViewport();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::clampViewport()
+{
+    const float timeHalfSpan = 0.5f / timeZoom;
+    const float freqHalfSpan = 0.5f / freqZoom;
+
+    if (timeHalfSpan >= 0.5f)
+        timeCenter = 0.5f;
+    else
+        timeCenter = juce::jlimit(timeHalfSpan, 1.0f - timeHalfSpan, timeCenter);
+
+    if (freqHalfSpan >= 0.5f)
+        freqCenter = 0.5f;
+    else
+        freqCenter = juce::jlimit(freqHalfSpan, 1.0f - freqHalfSpan, freqCenter);
+
+    updateScrollBarsFromViewport();
+}
+
+void SpectrogramPanel::syncZoomControlsFromViewport()
+{
+    if (zoomBar == nullptr || syncingZoomControls)
+        return;
+
+    syncingZoomControls = true;
+    zoomBar->setCallbacksSuppressed(true);
+    zoomBar->setVerticalZoom(freqZoom);
+    zoomBar->setHorizontalZoom(timeZoom);
+    zoomBar->setCallbacksSuppressed(false);
+    syncingZoomControls = false;
+}
+
+void SpectrogramPanel::syncViewportFromZoomControls()
+{
+    if (zoomBar == nullptr || syncingZoomControls)
+        return;
+
+    const auto plot = getPlotBounds();
+    const float anchorTime = timeCenter;
+    const float anchorFreq = freqCenter;
+
+    timeZoom = zoomBar->getHorizontalZoom();
+    freqZoom = zoomBar->getVerticalZoom();
+    timeCenter = anchorTime;
+    freqCenter = anchorFreq;
+    clampViewport();
+    syncZoomControlsFromViewport();
+    updateScrollBarsFromViewport();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::resetViewport()
+{
+    timeZoom = 1.0f;
+    freqZoom = 1.0f;
+    timeCenter = 0.5f;
+    freqCenter = 0.5f;
+    panningView = false;
+    syncZoomControlsFromViewport();
+    updateScrollBarsFromViewport();
+}
+
+juce::Rectangle<float> SpectrogramPanel::getScreenBounds() const
+{
+    auto r = getLocalBounds().toFloat().reduced(5.0f);
+    r.removeFromTop(isResidualDisplayMode(mode) ? 50.0f : 30.0f);
+    return r;
+}
+
+bool SpectrogramPanel::showsBandLabelGutter() const
+{
+    return isResidualDisplayMode(mode) && traceSnapshot.frameCount > 0 && !traceSnapshot.residualBands.empty();
+}
+
+juce::Rectangle<float> SpectrogramPanel::getBandLabelGutterBounds() const
+{
+    auto content = getTraceContentBounds();
+    if (!showsBandLabelGutter())
+        return {};
+
+    auto gutter = content.removeFromLeft((float) kBandLabelGutterWidth);
+    gutter.removeFromTop(18.0f);
+    gutter.removeFromBottom(18.0f);
+    return gutter;
+}
+
+juce::Rectangle<float> SpectrogramPanel::getTraceContentBounds() const
+{
+    auto content = getScreenBounds().reduced(14.0f, 12.0f);
+    content.removeFromTop(18.0f);
+    content.removeFromBottom(18.0f + (float) traceScrollBarThickness);
+    content.removeFromRight((float) traceScrollBarThickness);
+    return content;
+}
+
+juce::Rectangle<float> SpectrogramPanel::getPlotBounds() const
+{
+    auto plot = getTraceContentBounds();
+    if (showsBandLabelGutter())
+        plot.removeFromLeft((float) kBandLabelGutterWidth);
+    plot.removeFromRight(10.0f);
+    return plot;
+}
+
+juce::Range<float> SpectrogramPanel::visibleTimeRange() const
+{
+    const float halfSpan = 0.5f / juce::jmax(1.0f, timeZoom);
+    return { timeCenter - halfSpan, timeCenter + halfSpan };
+}
+
+juce::Range<float> SpectrogramPanel::visibleFreqRange() const
+{
+    const float halfSpan = 0.5f / juce::jmax(1.0f, freqZoom);
+    return { freqCenter - halfSpan, freqCenter + halfSpan };
+}
+
+juce::Point<float> SpectrogramPanel::positionForPoint(const AtsPartialTracePoint& point,
+                                                      juce::Rectangle<float> plot) const
+{
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const float timeSpan = juce::jmax(1.0e-6f, timeRange.getLength());
+    const float freqSpan = juce::jmax(1.0e-6f, freqRange.getLength());
+    const float xNorm = (point.timeNorm - timeRange.getStart()) / timeSpan;
+    const float yNorm = (point.freqNorm - freqRange.getStart()) / freqSpan;
+    return { plot.getX() + plot.getWidth() * xNorm,
+             plot.getBottom() - plot.getHeight() * yNorm };
+}
+
+juce::Point<float> SpectrogramPanel::positionForIsoPoint(const AtsPartialTracePoint& point,
+                                                         juce::Rectangle<float> plot) const
+{
+    return positionForIsoCoords(point.timeNorm, point.freqNorm, point.ampNorm, plot);
+}
+
+juce::Point<float> SpectrogramPanel::positionForIsoCoords(float pointTimeNorm,
+                                                          float pointFreqNorm,
+                                                          float pointAmpNorm,
+                                                          juce::Rectangle<float> plot) const
+{
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const float timeSpan = juce::jmax(1.0e-6f, timeRange.getLength());
+    const float freqSpan = juce::jmax(1.0e-6f, freqRange.getLength());
+    const float timeNorm = (pointTimeNorm - timeRange.getStart()) / timeSpan;
+    const float freqNorm = (pointFreqNorm - freqRange.getStart()) / freqSpan;
+    const float ampNorm = juce::jlimit(0.0f, 1.25f, pointAmpNorm);
+
+    const auto origin = juce::Point<float>(plot.getX() + plot.getWidth() * 0.075f,
+                                           plot.getBottom() - plot.getHeight() * 0.085f);
+    const auto freqAxis = juce::Point<float>(plot.getWidth() * 0.66f,
+                                             -plot.getHeight() * 0.055f);
+    const auto timeAxis = juce::Point<float>(plot.getWidth() * 0.255f,
+                                             -plot.getHeight() * 0.49f);
+    const auto ampAxis = juce::Point<float>(0.0f,
+                                            -plot.getHeight() * 0.28f);
+
+    return { origin.x + freqAxis.x * freqNorm + timeAxis.x * timeNorm + ampAxis.x * ampNorm,
+             origin.y + freqAxis.y * freqNorm + timeAxis.y * timeNorm + ampAxis.y * ampNorm };
+}
+
+float SpectrogramPanel::timeNormFromScreenX(float x, juce::Rectangle<float> plot) const
+{
+    const auto timeRange = visibleTimeRange();
+    const float t = juce::jlimit(0.0f, 1.0f, (x - plot.getX()) / juce::jmax(1.0f, plot.getWidth()));
+    return timeRange.getStart() + t * timeRange.getLength();
+}
+
+float SpectrogramPanel::freqNormFromScreenY(float y, juce::Rectangle<float> plot) const
+{
+    const auto freqRange = visibleFreqRange();
+    const float t = juce::jlimit(0.0f, 1.0f, (plot.getBottom() - y) / juce::jmax(1.0f, plot.getHeight()));
+    return freqRange.getStart() + t * freqRange.getLength();
+}
+
+juce::Range<float> SpectrogramPanel::yRangeForBand(const AtsResidualBandTrace& band,
+                                                   juce::Rectangle<float> plot) const
+{
+    const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+    const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+    const double logRange = std::log(maxHz / minHz);
+    auto normForHz = [&](double hz) {
+        const double clamped = juce::jlimit(minHz, maxHz, juce::jmax(1.0, hz));
+        return (float) juce::jlimit(0.0, 1.0, std::log(clamped / minHz) / logRange);
+    };
+
+    const auto freqRange = visibleFreqRange();
+    const float freqSpan = juce::jmax(1.0e-6f, freqRange.getLength());
+    auto screenYForNorm = [&](float norm) {
+        const float yNorm = (norm - freqRange.getStart()) / freqSpan;
+        return plot.getBottom() - plot.getHeight() * yNorm;
+    };
+
+    const float yHigh = screenYForNorm(normForHz(band.highHz));
+    const float yLow = screenYForNorm(normForHz(band.lowHz));
+    return { std::min(yHigh, yLow), std::max(yHigh, yLow) };
+}
+
+juce::Rectangle<float> SpectrogramPanel::residualSelectionRect(juce::Rectangle<float> plot) const
+{
+    if (!hasResidualSelection() || traceSnapshot.frameCount <= 0)
+        return {};
+
+    float top = plot.getBottom();
+    float bottom = plot.getY();
+    for (const int bandIndex : selectedResidualBands)
+    {
+        const auto band = std::find_if(traceSnapshot.residualBands.begin(),
+                                       traceSnapshot.residualBands.end(),
+                                       [bandIndex](const auto& b) { return b.bandIndex == bandIndex; });
+        if (band == traceSnapshot.residualBands.end())
+            continue;
+
+        const auto yRange = yRangeForBand(*band, plot);
+        top = std::min(top, yRange.getStart());
+        bottom = std::max(bottom, yRange.getEnd());
+    }
+
+    const int firstFrame = std::min(selectedResidualFirstFrame, selectedResidualLastFrame);
+    const int lastFrame = std::max(selectedResidualFirstFrame, selectedResidualLastFrame);
+    const float firstTimeNorm = traceSnapshot.frameCount <= 1
+                                    ? 0.0f
+                                    : (float) firstFrame / (float) (traceSnapshot.frameCount - 1);
+    const float lastTimeNorm = traceSnapshot.frameCount <= 1
+                                   ? 0.0f
+                                   : (float) lastFrame / (float) (traceSnapshot.frameCount - 1);
+    const float x1 = plot.getX()
+                     + plot.getWidth()
+                           * ((firstTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
+    const float x2 = plot.getX()
+                     + plot.getWidth()
+                           * ((lastTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
+    return juce::Rectangle<float>::leftTopRightBottom(std::min(x1, x2),
+                                                      top,
+                                                      std::max(x1, x2) + 1.0f,
+                                                      bottom);
+}
+
+int SpectrogramPanel::frameForX(float x, juce::Rectangle<float> plot) const
+{
+    if (traceSnapshot.frameCount <= 1 || plot.getWidth() <= 1.0f)
+        return 0;
+
+    const float timeNorm = timeNormFromScreenX(x, plot);
+    return juce::jlimit(0,
+                        traceSnapshot.frameCount - 1,
+                        juce::roundToInt(timeNorm * (float) (traceSnapshot.frameCount - 1)));
+}
+
+int SpectrogramPanel::residualBandForY(float y, juce::Rectangle<float> plot) const
+{
+    int bestBand = -1;
+    float bestDistance = 8.0f;
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const auto yRange = yRangeForBand(band, plot).expanded(1.5f);
+        if (yRange.contains(y))
+            return band.bandIndex;
+
+        const float centreY = (yRange.getStart() + yRange.getEnd()) * 0.5f;
+        const float distance = std::abs(y - centreY);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestBand = band.bandIndex;
+        }
+    }
+    return bestBand;
+}
+
+int SpectrogramPanel::residualBandForPoint(juce::Point<float> pos, juce::Rectangle<float> plot) const
+{
+    if (!isIsometricDisplayMode(mode))
+        return residualBandForY(pos.y, plot);
+
+    if (!plot.expanded(2.0f).contains(pos))
+        return -1;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+    const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+    const double logRange = std::log(maxHz / minHz);
+    auto normForHz = [&](double hz) {
+        const double clamped = juce::jlimit(minHz, maxHz, juce::jmax(1.0, hz));
+        return (float) juce::jlimit(0.0, 1.0, std::log(clamped / minHz) / logRange);
+    };
+
+    const float maxHitDistance = mode == Mode::IsometricResidual ? 16.0f : 12.0f;
+    int bestBand = -1;
+    float bestDistance = maxHitDistance;
+
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const float lowNorm = normForHz(band.lowHz);
+        const float highNorm = normForHz(band.highHz);
+        const float freqNorm = juce::jlimit(0.0f, 1.0f, 0.5f * (lowNorm + highNorm));
+        if (freqNorm < freqRange.getStart() - freqRange.getLength() * 0.05f
+            || freqNorm > freqRange.getEnd() + freqRange.getLength() * 0.05f)
+            continue;
+
+        const int columns = (int) band.energyNorm.size();
+        if (columns <= 1)
+            continue;
+
+        juce::Point<float> prevBase;
+        juce::Point<float> prevRidge;
+        bool hasPrev = false;
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const float timeNorm = (float) column / (float) (columns - 1);
+            if (timeNorm < timeRange.getStart() - timeRange.getLength() * 0.03f
+                || timeNorm > timeRange.getEnd() + timeRange.getLength() * 0.03f)
+                continue;
+
+            AtsPartialTracePoint basePoint;
+            basePoint.timeNorm = timeNorm;
+            basePoint.freqNorm = freqNorm;
+            basePoint.ampNorm = 0.0f;
+            basePoint.active = true;
+
+            AtsPartialTracePoint ridgePoint = basePoint;
+            ridgePoint.ampNorm = juce::jlimit(0.0f, 1.15f, band.energyNorm[(size_t) column] * 1.15f);
+
+            const auto basePos = positionForIsoPoint(basePoint, plot);
+            const auto ridgePos = positionForIsoPoint(ridgePoint, plot);
+
+            if (hasPrev)
+            {
+                const float ridgeDist = distanceToSegment(pos, prevRidge, ridgePos);
+                const float baseDist = distanceToSegment(pos, prevBase, basePos);
+                const float distance = juce::jmin(ridgeDist, baseDist);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestBand = band.bandIndex;
+                }
+            }
+
+            prevBase = basePos;
+            prevRidge = ridgePos;
+            hasPrev = true;
+        }
+    }
+
+    return bestBand;
+}
+
+std::vector<int> SpectrogramPanel::residualBandsForRect(juce::Rectangle<float> rect,
+                                                        juce::Rectangle<float> plot) const
+{
+    std::vector<int> bands;
+    if (rect.isEmpty())
+        return bands;
+
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const auto yRange = yRangeForBand(band, plot);
+        const auto bandRect = juce::Rectangle<float>::leftTopRightBottom(plot.getX(),
+                                                                         yRange.getStart(),
+                                                                         plot.getRight(),
+                                                                         yRange.getEnd());
+        if (rect.intersects(bandRect))
+            bands.push_back(band.bandIndex);
+    }
+    return bands;
+}
+
+int SpectrogramPanel::findNearestPartial(juce::Point<float> pos, float maxDistancePx) const
+{
+    if (!getPlotBounds().expanded(maxDistancePx).contains(pos))
+        return -1;
+
+    float bestDistance = maxDistancePx;
+    int bestPartial = -1;
+    const auto plot = getPlotBounds();
+    for (const auto& trace : traceSnapshot.partials)
+    {
+        for (size_t i = 1; i < trace.points.size(); ++i)
+        {
+            const auto& prev = trace.points[i - 1];
+            const auto& cur = trace.points[i];
+            if (!prev.active || !cur.active)
+                continue;
+
+            const auto prevPos = isIsometricDisplayMode(mode) ? positionForIsoPoint(prev, plot) : positionForPoint(prev, plot);
+            const auto curPos = isIsometricDisplayMode(mode) ? positionForIsoPoint(cur, plot) : positionForPoint(cur, plot);
+            const float distance = distanceToSegment(pos, prevPos, curPos);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestPartial = trace.partialIndex;
+            }
+        }
+    }
+    return bestPartial;
+}
+
+bool SpectrogramPanel::isPartialSelected(int partialIndex) const
+{
+    return std::find(selectedPartials.begin(), selectedPartials.end(), partialIndex) != selectedPartials.end();
+}
+
+bool SpectrogramPanel::hasResidualSelection() const
+{
+    return !selectedResidualBands.empty()
+           && selectedResidualFirstFrame >= 0
+           && selectedResidualLastFrame >= 0
+           && traceSnapshot.frameCount > 0;
+}
+
+bool SpectrogramPanel::traceIntersectsLasso(const AtsPartialTrace& trace, juce::Rectangle<float> lasso) const
+{
+    if (lasso.isEmpty())
+        return false;
+
+    const auto plot = getPlotBounds();
+    for (const auto& point : trace.points)
+    {
+        if (point.active && lasso.contains(isIsometricDisplayMode(mode) ? positionForIsoPoint(point, plot)
+                                                                        : positionForPoint(point, plot)))
+            return true;
+    }
+    return false;
+}
+
+float SpectrogramPanel::distanceToSegment(juce::Point<float> p,
+                                          juce::Point<float> a,
+                                          juce::Point<float> b)
+{
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    const float len2 = dx * dx + dy * dy;
+    if (len2 <= 1.0e-6f)
+        return p.getDistanceFrom(a);
+
+    const float t = juce::jlimit(0.0f, 1.0f, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2);
+    return p.getDistanceFrom({ a.x + dx * t, a.y + dy * t });
+}
+
+void SpectrogramPanel::updateResidualToolbarVisibility()
+{
+    const bool show = isResidualDisplayMode(mode);
+    for (auto* c : { static_cast<juce::Component*>(&residualDrawButton),
+                     static_cast<juce::Component*>(&residualSmoothButton),
+                     static_cast<juce::Component*>(&residualTiltSlider),
+                     static_cast<juce::Component*>(&residualTiltButton),
+                     static_cast<juce::Component*>(&residualCopyButton),
+                     static_cast<juce::Component*>(&residualPasteButton),
+                     static_cast<juce::Component*>(&residualSwapButton),
+                     static_cast<juce::Component*>(&residualDbLabel),
+                     static_cast<juce::Component*>(&residualDbEditor) })
+    {
+        c->setVisible(show);
+    }
+
+    if (show)
+    {
+        residualPasteButton.setEnabled(processor.hasResidualBandClipboard());
+        residualDbEditor.setReadOnly(!residualDbEditorActive);
+        refreshHoveredDbReadout();
+    }
+    else
+    {
+        residualDrawButton.setToggleState(false, juce::dontSendNotification);
+        residualDbEditorActive = false;
+        drawingResidualEnvelope = false;
+        envelopeDrawPoints.clear();
+    }
+}
+
+int SpectrogramPanel::getSelectionFirstFrame() const
+{
+    return juce::jlimit(0, juce::jmax(0, traceSnapshot.frameCount - 1),
+                        std::min(selectedResidualFirstFrame, selectedResidualLastFrame));
+}
+
+int SpectrogramPanel::getSelectionLastFrame() const
+{
+    return juce::jlimit(0, juce::jmax(0, traceSnapshot.frameCount - 1),
+                        std::max(selectedResidualFirstFrame, selectedResidualLastFrame));
+}
+
+void SpectrogramPanel::showResidualEditError(const juce::String& error)
+{
+    if (error.isNotEmpty())
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Residual band edit", error);
+}
+
+double SpectrogramPanel::dbFromPlotYInBand(int bandIndex, float y, juce::Rectangle<float> plot) const
+{
+    const auto band = std::find_if(traceSnapshot.residualBands.begin(),
+                                   traceSnapshot.residualBands.end(),
+                                   [bandIndex](const auto& b) { return b.bandIndex == bandIndex; });
+    if (band == traceSnapshot.residualBands.end())
+        return -72.0;
+
+    const auto yRange = yRangeForBand(*band, plot);
+    const float t = juce::jlimit(0.0f, 1.0f, (yRange.getEnd() - y) / juce::jmax(1.0f, yRange.getLength()));
+    return juce::jlimit(-120.0, 0.0, -72.0 + (double) t * 72.0);
+}
+
+void SpectrogramPanel::refreshHoveredDbReadout()
+{
+    if (!isResidualDisplayMode(mode))
+        return;
+
+    if (hoveredResidualBand < 0 || hoveredResidualFrame < 0)
+    {
+        if (!residualDbEditorActive)
+            residualDbEditor.setText({}, false);
+        return;
+    }
+
+    double db = -120.0;
+    if (processor.readResidualBandEnergyDb(traceSource, hoveredResidualBand, hoveredResidualFrame, db))
+    {
+        if (!residualDbEditorActive || !residualDbEditor.hasKeyboardFocus(true))
+            residualDbEditor.setText(juce::String(db, 1), false);
+    }
+}
+
+void SpectrogramPanel::applyResidualDbFromEditor()
+{
+    if (!isResidualDisplayMode(mode) || hoveredResidualBand < 0 || hoveredResidualFrame < 0)
+        return;
+
+    const double db = residualDbEditor.getText().getDoubleValue();
+    juce::String error;
+    if (!processor.writeResidualBandEnergyDb(traceSource, hoveredResidualBand, hoveredResidualFrame, db, error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    residualDbEditorActive = false;
+    residualDbEditor.setReadOnly(true);
+    residualDbEditor.giveAwayKeyboardFocus();
+    rebuildTraceSnapshot(true);
+    refreshHoveredDbReadout();
+    updateSelectionLabel();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::commitEnvelopeDraw()
+{
+    if (envelopeDrawBand < 0 || envelopeDrawPoints.empty())
+        return;
+
+    std::sort(envelopeDrawPoints.begin(),
+              envelopeDrawPoints.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    const int firstFrame = envelopeDrawPoints.front().first;
+    const int lastFrame = envelopeDrawPoints.back().first;
+    std::vector<std::pair<int, double>> painted;
+    painted.reserve((size_t) (lastFrame - firstFrame + 1));
+
+    size_t segment = 0;
+    for (int frame = firstFrame; frame <= lastFrame; ++frame)
+    {
+        while (segment + 1 < envelopeDrawPoints.size() && envelopeDrawPoints[segment + 1].first <= frame)
+            ++segment;
+
+        const auto& a = envelopeDrawPoints[segment];
+        if (segment + 1 >= envelopeDrawPoints.size())
+        {
+            painted.push_back({ frame, a.second });
+            continue;
+        }
+
+        const auto& b = envelopeDrawPoints[segment + 1];
+        if (b.first == a.first)
+        {
+            painted.push_back({ frame, a.second });
+            continue;
+        }
+
+        const double t = (double) (frame - a.first) / (double) (b.first - a.first);
+        painted.push_back({ frame, a.second + t * (b.second - a.second) });
+    }
+
+    juce::String error;
+    if (!processor.paintResidualBandEnvelope(traceSource,
+                                             envelopeDrawBand,
+                                             firstFrame,
+                                             lastFrame,
+                                             painted,
+                                             error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+}
+
+void SpectrogramPanel::runSmoothOnSelection()
+{
+    if (!hasResidualSelection())
+    {
+        showResidualEditError("Select one or more residual bands and a frame range.");
+        return;
+    }
+
+    juce::String error;
+    if (!processor.smoothResidualBands(traceSource,
+                                       selectedResidualBands,
+                                       getSelectionFirstFrame(),
+                                       getSelectionLastFrame(),
+                                       3,
+                                       error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runTiltOnSelection()
+{
+    if (!hasResidualSelection())
+    {
+        showResidualEditError("Select two or more bands for tilt, or one band with zero tilt.");
+        return;
+    }
+
+    const double tilt = residualTiltSlider.getValue();
+    if (std::abs(tilt) < 1.0e-6)
+        return;
+
+    juce::String error;
+    if (!processor.tiltResidualBands(traceSource,
+                                     selectedResidualBands,
+                                     getSelectionFirstFrame(),
+                                     getSelectionLastFrame(),
+                                     tilt,
+                                     error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runCopyBand()
+{
+    if (!hasResidualSelection() || selectedResidualBands.size() != 1)
+    {
+        showResidualEditError("Select exactly one band and frame range to copy.");
+        return;
+    }
+
+    juce::String error;
+    if (!processor.copyResidualBandToClipboard(traceSource,
+                                               selectedResidualBands.front(),
+                                               getSelectionFirstFrame(),
+                                               getSelectionLastFrame(),
+                                               error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    residualPasteButton.setEnabled(true);
+    updateSelectionLabel();
+}
+
+void SpectrogramPanel::runPasteBand()
+{
+    if (!hasResidualSelection() || selectedResidualBands.size() != 1)
+    {
+        showResidualEditError("Select exactly one target band and frame range to paste.");
+        return;
+    }
+
+    juce::String error;
+    if (!processor.pasteResidualBandFromClipboard(traceSource,
+                                                  selectedResidualBands.front(),
+                                                  getSelectionFirstFrame(),
+                                                  getSelectionLastFrame(),
+                                                  error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runSwapBands()
+{
+    if (!hasResidualSelection() || selectedResidualBands.size() != 2)
+    {
+        showResidualEditError("Select exactly two bands (Shift/Cmd-click) over a frame range to swap.");
+        return;
+    }
+
+    std::vector<int> bands = selectedResidualBands;
+    std::sort(bands.begin(), bands.end());
+    juce::String error;
+    if (!processor.swapResidualBands(traceSource,
+                                     bands[0],
+                                     bands[1],
+                                     getSelectionFirstFrame(),
+                                     getSelectionLastFrame(),
+                                     error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::paintBandLabelGutter(juce::Graphics& g,
+                                            juce::Rectangle<float> gutter,
+                                            juce::Rectangle<float> plot)
+{
+    if (gutter.isEmpty() || traceSnapshot.residualBands.empty())
+        return;
+
+    g.setColour(juce::Colour(0xff0a1210));
+    g.fillRect(gutter);
+    g.setColour(juce::Colour(0xff2b4a3d));
+    g.drawVerticalLine(juce::roundToInt(gutter.getRight()), gutter.getY(), gutter.getBottom());
+
+    g.setFont(juce::Font(9.0f));
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const auto yRange = yRangeForBand(band, plot);
+        if (yRange.getEnd() < plot.getY() - 2.0f || yRange.getStart() > plot.getBottom() + 2.0f)
+            continue;
+
+        const float centreY = (yRange.getStart() + yRange.getEnd()) * 0.5f;
+        const bool hot = band.bandIndex == hoveredResidualBand
+                         || std::find(selectedResidualBands.begin(),
+                                      selectedResidualBands.end(),
+                                      band.bandIndex) != selectedResidualBands.end();
+        g.setColour(hot ? juce::Colour(0xffd8fff0) : juce::Colour(0xff7aa896));
+        g.drawText("B" + juce::String(band.bandIndex),
+                   juce::Rectangle<float>(gutter.getX() + 2.0f, centreY - 8.0f, 18.0f, 10.0f).toNearestInt(),
+                   juce::Justification::centredLeft);
+        g.drawText(juce::String(band.lowHz, 0),
+                   juce::Rectangle<float>(gutter.getX() + 2.0f, centreY + 1.0f, gutter.getWidth() - 4.0f, 10.0f)
+                       .toNearestInt(),
+                   juce::Justification::centredLeft);
+    }
 }

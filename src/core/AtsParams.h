@@ -9,6 +9,22 @@ extern "C" {
 namespace ats
 {
 
+enum class FrequencyShapeMode
+{
+    Linear = 0,
+    Stretch,
+    Compress,
+    Harmonic
+};
+
+struct FrequencyShapeSettings
+{
+    FrequencyShapeMode mode = FrequencyShapeMode::Linear;
+    double amount = 1.0;
+    double pivotHz = 0.0;
+    double resolvedPivotHz = 0.0;
+};
+
 /** Mirrors Qatsh / ATSA ANARGS defaults (see tools/ats_offline.c). */
 struct AnalysisParams
 {
@@ -47,6 +63,7 @@ struct SynthParams
     double frequencyFactor = 1.0;
     double timeFactor = 1.0;
     double sampleRate = 44100.0;
+    FrequencyShapeSettings frequencyShape;
 
     void toSparams(SPARAMS& out, double soundDurationSec) const;
     static SynthParams fromSparams(const SPARAMS& s, double soundDurationSec, bool useAll, bool usePhase);

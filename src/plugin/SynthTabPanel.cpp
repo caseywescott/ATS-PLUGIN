@@ -1,12 +1,14 @@
 #include "SynthTabPanel.h"
 
+#include "AtsFrequencyShape.h"
 #include "PluginProcessor.h"
 
 SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     : audioProcessor(p)
 {
     hint.setText("These parameters mirror SPARAMS-style global synthesis (transpose, time window, phase). "
-                 "Choose the analysis family on the Session tab; analysis type here is read the next time you press Analyze.",
+                 "Frequency shaping warps partial spacing at playback time; the trace display updates immediately. "
+                 "Use the Analysis tab to tune the next analyze pass.",
                  juce::dontSendNotification);
     hint.setJustificationType(juce::Justification::topLeft);
     hint.setFont(juce::Font(13.0f));
@@ -16,21 +18,37 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centred);
         l.setFont(juce::Font(11.0f, juce::Font::bold));
+        l.setMinimumHorizontalScale(0.65f);
     };
     setupLab(freqLabel, "freq - Frequency factor");
     setupLab(timeStretchLabel, "timeStretch - Time factor");
     setupLab(synStartLabel, "synStart - Synth start (s)");
     setupLab(synDurLabel, "synDur - Duration (s, 0=full)");
+    setupLab(freqShapeSectionLabel, "Frequency shaping");
+    setupLab(freqShapeModeLabel, "Mode");
+    setupLab(freqShapeAmountLabel, "Amount");
+    setupLab(freqShapePivotLabel, "Pivot (Hz)");
+    setupLab(classicPreviewModeLabel, "Both playback");
     addAndMakeVisible(freqLabel);
     addAndMakeVisible(timeStretchLabel);
     addAndMakeVisible(synStartLabel);
     addAndMakeVisible(synDurLabel);
+    addAndMakeVisible(freqShapeSectionLabel);
+    addAndMakeVisible(freqShapeModeLabel);
+    addAndMakeVisible(freqShapeAmountLabel);
+    addAndMakeVisible(freqShapePivotLabel);
+    addAndMakeVisible(classicPreviewModeLabel);
 
     const juce::Colour knobLabCol(0xfff0f0f5);
     freqLabel.setColour(juce::Label::textColourId, knobLabCol);
     timeStretchLabel.setColour(juce::Label::textColourId, knobLabCol);
     synStartLabel.setColour(juce::Label::textColourId, knobLabCol);
     synDurLabel.setColour(juce::Label::textColourId, knobLabCol);
+    freqShapeSectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xffbaffea));
+    freqShapeModeLabel.setColour(juce::Label::textColourId, knobLabCol);
+    freqShapeAmountLabel.setColour(juce::Label::textColourId, knobLabCol);
+    freqShapePivotLabel.setColour(juce::Label::textColourId, knobLabCol);
+    classicPreviewModeLabel.setColour(juce::Label::textColourId, knobLabCol);
 
     auto setup = [](juce::Slider& s, const juce::String& name) {
         s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
@@ -41,15 +59,34 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     setup(timeStretchSlider, "timeStretch");
     setup(synStartSlider, "synStart");
     setup(synDurSlider, "synDur");
+    setup(freqShapeAmountSlider, "Frequency shaping amount");
+    setup(freqShapePivotSlider, "Frequency shaping pivot");
     freqSlider.setHelpText("Frequency factor (SPARAMS frec), before MIDI transpose.");
     timeStretchSlider.setHelpText("Time stretch factor (SPARAMS max_stretch).");
     synStartSlider.setHelpText("Synthesis window start in seconds (SPARAMS beg).");
     synDurSlider.setHelpText("Synthesis duration in seconds, 0 = full sound (SPARAMS end).");
+    freqShapePivotSlider.setHelpText("Frequency in Hz about which warping is applied. 0 = auto.");
+    freqShapePivotSlider.setTextValueSuffix(" Hz");
+    freqShapePivotSlider.textFromValueFunction = [](double value) {
+        return value <= 0.005 ? juce::String("Auto") : juce::String(value, 0) + " Hz";
+    };
+    freqShapePivotSlider.valueFromTextFunction = [](const juce::String& text) {
+        return text.trim().startsWithIgnoreCase("auto") ? 0.0 : text.getDoubleValue();
+    };
 
     addAndMakeVisible(freqSlider);
     addAndMakeVisible(timeStretchSlider);
     addAndMakeVisible(synStartSlider);
     addAndMakeVisible(synDurSlider);
+    addAndMakeVisible(freqShapeAmountSlider);
+    addAndMakeVisible(freqShapePivotSlider);
+
+    freqShapeModeBox.addItemList(juce::StringArray { "Linear", "Stretch", "Compress", "Harmonic" }, 1);
+    freqShapeModeBox.setHelpText("Choose the frequency shaping model applied before the main freq transpose.");
+    freqShapeModeBox.onChange = [this] { updateFrequencyShapeUi(); };
+    freqShapeAmountSlider.onValueChange = [this] { updateFrequencyShapeUi(); };
+    freqShapePivotSlider.onValueChange = [this] { updateFrequencyShapeUi(); };
+    addAndMakeVisible(freqShapeModeBox);
 
     usePhaseButton.setButtonText("Use partial phases");
     useAllPartialsButton.setButtonText("Use all partials");
@@ -60,42 +97,22 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(useAllPartialsButton);
     addAndMakeVisible(residualOnlyButton);
 
-    analysisTypeLabel.setText("Analysis type (next Analyze)", juce::dontSendNotification);
-    analysisTypeLabel.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(analysisTypeLabel);
+    classicPreviewModeBox.addItemList(juce::StringArray { "Classic combined", "Layer mix" }, 1);
+    classicPreviewModeBox.setHelpText("Classic combined uses ATSA's direct partial+noise path for Both playback. "
+                                      "Layer mix sums the separate partial and residual previews so the gain sliders remain independent.");
+    classicPreviewModeBox.setTooltip("Classic combined uses ATSA's direct partial+noise path for Both playback. "
+                                     "Layer mix sums separate partial and residual layers with independent gains.");
+    addAndMakeVisible(classicPreviewModeBox);
 
-    analysisTypeBox.addItemList(juce::StringArray { "1 amp+freq", "2 +phase", "3 +noise", "4 full" }, 1);
-    addAndMakeVisible(analysisTypeBox);
-    morphHeaderLabel.setText("A/B Morph workspace", juce::dontSendNotification);
-    addAndMakeVisible(morphHeaderLabel);
-    morphSourceALabel.setText("Source A", juce::dontSendNotification);
-    morphSourceBLabel.setText("Source B", juce::dontSendNotification);
-    morphRecipeLabel.setText("Recipe", juce::dontSendNotification);
-    morphSourceABox.addItemList(juce::StringArray { "Current modern model", "Previous modern model", "Disabled" }, 1);
-    morphSourceBBox.addItemList(juce::StringArray { "Current modern model", "Previous modern model", "Disabled" }, 1);
-    morphRecipeBox.addItemList(juce::StringArray { "Linear blend", "Harmonic lock", "Percussive protect", "Texture drift" }, 1);
-    addAndMakeVisible(morphSourceALabel);
-    addAndMakeVisible(morphSourceBLabel);
-    addAndMakeVisible(morphRecipeLabel);
-    addAndMakeVisible(morphSourceABox);
-    addAndMakeVisible(morphSourceBBox);
-    addAndMakeVisible(morphRecipeBox);
-
-    auto setupMorph = [](juce::Slider& s, const juce::String& nm) {
-        s.setSliderStyle(juce::Slider::LinearHorizontal);
-        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 18);
-        s.setName(nm);
-    };
-    setupMorph(morphFreqSlider, "Morph frequency envelope");
-    setupMorph(morphAmpSlider, "Morph amplitude envelope");
-    setupMorph(morphNoiseSlider, "Morph partial-noise envelope");
-    setupMorph(morphOrphanSlider, "Morph orphan-residual envelope");
-    setupMorph(morphTimeSlider, "Morph time envelope");
-    addAndMakeVisible(morphFreqSlider);
-    addAndMakeVisible(morphAmpSlider);
-    addAndMakeVisible(morphNoiseSlider);
-    addAndMakeVisible(morphOrphanSlider);
-    addAndMakeVisible(morphTimeSlider);
+    classicPreviewModeHint.setText("Classic combined bypasses Partials/Residual gain for Both playback; Layer mix keeps those gains active.",
+                                   juce::dontSendNotification);
+    classicPreviewModeHint.setJustificationType(juce::Justification::centredLeft);
+    classicPreviewModeHint.setMinimumHorizontalScale(0.7f);
+    classicPreviewModeHint.setFont(juce::Font(11.0f));
+    classicPreviewModeHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    classicPreviewModeHint.setHelpText(classicPreviewModeHint.getText());
+    classicPreviewModeHint.setTooltip(classicPreviewModeHint.getText());
+    addAndMakeVisible(classicPreviewModeHint);
 
     freqAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "freq", freqSlider);
@@ -111,24 +128,17 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "useAllPartials", useAllPartialsButton);
     residualOnlyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.apvts, "residualOnly", residualOnlyButton);
-    analysisAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "analysisType", analysisTypeBox);
-    morphSourceAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "morphSourceA", morphSourceABox);
-    morphSourceBAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "morphSourceB", morphSourceBBox);
-    morphRecipeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "morphRecipe", morphRecipeBox);
-    morphFreqAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "morphFreqEnv", morphFreqSlider);
-    morphAmpAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "morphAmpEnv", morphAmpSlider);
-    morphNoiseAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "morphNoiseEnv", morphNoiseSlider);
-    morphOrphanAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "morphOrphanEnv", morphOrphanSlider);
-    morphTimeAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "morphTimeEnv", morphTimeSlider);
+    classicPreviewModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kClassicPreviewMode, classicPreviewModeBox);
+    freqShapeModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kFreqShapeMode, freqShapeModeBox);
+    freqShapeAmountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kFreqShapeAmount, freqShapeAmountSlider);
+    freqShapePivotAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kFreqShapePivotHz, freqShapePivotSlider);
+
+    updateFrequencyShapeUi();
+    startTimerHz(4);
 }
 
 void SynthTabPanel::resized()
@@ -153,30 +163,94 @@ void SynthTabPanel::resized()
     placeKnobColumn(synDurLabel, synDurSlider);
 
     r.removeFromTop(10);
-    auto row2 = r.removeFromTop(28);
-    usePhaseButton.setBounds(row2.removeFromLeft(180));
-    row2.removeFromLeft(12);
-    useAllPartialsButton.setBounds(row2.removeFromLeft(200));
-    row2.removeFromLeft(12);
-    residualOnlyButton.setBounds(row2.removeFromLeft(240));
-    row2.removeFromLeft(16);
-    analysisTypeLabel.setBounds(row2.removeFromLeft(200));
-    analysisTypeBox.setBounds(row2.removeFromLeft(180));
-    r.removeFromTop(12);
-    morphHeaderLabel.setBounds(r.removeFromTop(24));
-    auto srcRow = r.removeFromTop(24);
-    morphSourceALabel.setBounds(srcRow.removeFromLeft(64));
-    morphSourceABox.setBounds(srcRow.removeFromLeft(180));
-    srcRow.removeFromLeft(10);
-    morphSourceBLabel.setBounds(srcRow.removeFromLeft(64));
-    morphSourceBBox.setBounds(srcRow.removeFromLeft(180));
-    srcRow.removeFromLeft(10);
-    morphRecipeLabel.setBounds(srcRow.removeFromLeft(56));
-    morphRecipeBox.setBounds(srcRow.removeFromLeft(180));
-    r.removeFromTop(8);
-    morphFreqSlider.setBounds(r.removeFromTop(24));
-    morphAmpSlider.setBounds(r.removeFromTop(24));
-    morphNoiseSlider.setBounds(r.removeFromTop(24));
-    morphOrphanSlider.setBounds(r.removeFromTop(24));
-    morphTimeSlider.setBounds(r.removeFromTop(24));
+    auto shapeRow = r.removeFromTop(110);
+    freqShapeSectionLabel.setBounds(shapeRow.removeFromTop(20));
+    auto shapeControls = shapeRow;
+    auto modeCol = shapeControls.removeFromLeft(180).reduced(4);
+    freqShapeModeLabel.setBounds(modeCol.removeFromTop(28));
+    freqShapeModeBox.setBounds(modeCol.removeFromTop(28));
+    shapeControls.removeFromLeft(10);
+
+    auto amountCol = shapeControls.removeFromLeft(120).reduced(4);
+    freqShapeAmountLabel.setBounds(amountCol.removeFromTop(28));
+    freqShapeAmountSlider.setBounds(amountCol);
+    shapeControls.removeFromLeft(10);
+
+    auto pivotCol = shapeControls.removeFromLeft(128).reduced(4);
+    freqShapePivotLabel.setBounds(pivotCol.removeFromTop(28));
+    freqShapePivotSlider.setBounds(pivotCol);
+
+    r.removeFromTop(10);
+    auto row3 = r.removeFromTop(28);
+    usePhaseButton.setBounds(row3.removeFromLeft(180));
+    row3.removeFromLeft(12);
+    useAllPartialsButton.setBounds(row3.removeFromLeft(200));
+    row3.removeFromLeft(12);
+    residualOnlyButton.setBounds(row3.removeFromLeft(240));
+
+    r.removeFromTop(10);
+    auto row4 = r.removeFromTop(30);
+    classicPreviewModeLabel.setBounds(row4.removeFromLeft(128));
+    row4.removeFromLeft(8);
+    classicPreviewModeBox.setBounds(row4.removeFromLeft(260));
+    row4.removeFromLeft(10);
+    classicPreviewModeHint.setBounds(row4);
+}
+
+void SynthTabPanel::timerCallback()
+{
+    updateFrequencyShapeUi();
+}
+
+void SynthTabPanel::updateFrequencyShapeUi()
+{
+    const auto shape = audioProcessor.getCurrentFrequencyShapeSettings();
+    const bool linear = shape.mode == ats::FrequencyShapeMode::Linear;
+
+    juce::String amountLabel = "Amount";
+    juce::String amountHelp;
+    switch (shape.mode)
+    {
+        case ats::FrequencyShapeMode::Stretch:
+            amountLabel = "Spacing expand";
+            amountHelp = "1 = no warp; >1 spreads partials in log space around pivot.";
+            break;
+        case ats::FrequencyShapeMode::Compress:
+            amountLabel = "Spacing tighten";
+            amountHelp = "<1 pulls partials together in log space around pivot.";
+            break;
+        case ats::FrequencyShapeMode::Harmonic:
+            amountLabel = "Harmonic ratio";
+            amountHelp = "1 = no warp; >1 exaggerates harmonic spacing; <1 collapses.";
+            break;
+        case ats::FrequencyShapeMode::Linear:
+        default:
+            amountHelp = "Linear mode uses only the freq factor; shaping amount is ignored.";
+            break;
+    }
+
+    freqShapeAmountLabel.setText(amountLabel, juce::dontSendNotification);
+    freqShapeAmountSlider.setHelpText(amountHelp);
+    freqShapeAmountSlider.setTooltip(amountHelp);
+
+    juce::String pivotLabel = shape.mode == ats::FrequencyShapeMode::Harmonic ? "F0 (Hz)" : "Pivot (Hz)";
+    if (!linear && shape.pivotHz <= 0.0 && shape.resolvedPivotHz > 0.0)
+        pivotLabel << " Auto -> " << juce::String(shape.resolvedPivotHz, 0) << " Hz";
+    freqShapePivotLabel.setText(pivotLabel, juce::dontSendNotification);
+
+    const juce::String pivotHelp = "Frequency in Hz about which warping is applied. 0 = auto.";
+    freqShapePivotSlider.setHelpText(pivotHelp);
+    freqShapePivotSlider.setTooltip(pivotHelp);
+
+    freqShapeAmountSlider.setEnabled(!linear);
+    freqShapePivotSlider.setEnabled(!linear);
+    freqShapeAmountLabel.setAlpha(linear ? 0.45f : 1.0f);
+    freqShapePivotLabel.setAlpha(linear ? 0.45f : 1.0f);
+    freqShapeAmountSlider.setAlpha(linear ? 0.45f : 1.0f);
+    freqShapePivotSlider.setAlpha(linear ? 0.45f : 1.0f);
+
+    const juce::String modeHelp = "Frequency shaping mode: Linear leaves partial spacing unchanged; "
+                                  "Stretch and Compress use a log-pivot warp; Harmonic uses approximate partial rank.";
+    freqShapeModeBox.setHelpText(modeHelp);
+    freqShapeModeBox.setTooltip(modeHelp);
 }

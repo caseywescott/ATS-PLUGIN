@@ -5,13 +5,17 @@
 class AtsAudioProcessor;
 
 /** Global synthesis / time–frequency factors (APVTS, host-automatable). */
-class SynthTabPanel : public juce::Component
+class SynthTabPanel : public juce::Component,
+                      private juce::Timer
 {
 public:
     explicit SynthTabPanel(AtsAudioProcessor&);
     void resized() override;
 
 private:
+    void timerCallback() override;
+    void updateFrequencyShapeUi();
+
     AtsAudioProcessor& audioProcessor;
 
     juce::Label hint;
@@ -20,6 +24,12 @@ private:
     juce::Label timeStretchLabel;
     juce::Label synStartLabel;
     juce::Label synDurLabel;
+    juce::Label freqShapeSectionLabel;
+    juce::Label freqShapeModeLabel;
+    juce::Label freqShapeAmountLabel;
+    juce::Label freqShapePivotLabel;
+    juce::Label classicPreviewModeLabel;
+    juce::Label classicPreviewModeHint;
 
     juce::Slider freqSlider;
     juce::Slider timeStretchSlider;
@@ -28,20 +38,10 @@ private:
     juce::ToggleButton usePhaseButton;
     juce::ToggleButton useAllPartialsButton;
     juce::ToggleButton residualOnlyButton;
-    juce::Label analysisTypeLabel;
-    juce::ComboBox analysisTypeBox;
-    juce::Label morphHeaderLabel;
-    juce::Label morphSourceALabel;
-    juce::ComboBox morphSourceABox;
-    juce::Label morphSourceBLabel;
-    juce::ComboBox morphSourceBBox;
-    juce::Label morphRecipeLabel;
-    juce::ComboBox morphRecipeBox;
-    juce::Slider morphFreqSlider;
-    juce::Slider morphAmpSlider;
-    juce::Slider morphNoiseSlider;
-    juce::Slider morphOrphanSlider;
-    juce::Slider morphTimeSlider;
+    juce::ComboBox classicPreviewModeBox;
+    juce::ComboBox freqShapeModeBox;
+    juce::Slider freqShapeAmountSlider;
+    juce::Slider freqShapePivotSlider;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timeAttach;
@@ -50,15 +50,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> usePhaseAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> useAllAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> residualOnlyAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> analysisAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphSourceAAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphSourceBAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphRecipeAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphFreqAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphAmpAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphNoiseAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphOrphanAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphTimeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> classicPreviewModeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> freqShapeModeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqShapeAmountAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqShapePivotAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthTabPanel)
 };
