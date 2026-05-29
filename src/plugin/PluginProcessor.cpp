@@ -200,7 +200,7 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
 
     ats::AtsSoundPtr shapedSound;
     const ATS_SOUND* renderSound = sound;
-    if (ats::isFrequencyShapeModeEnabled(core.frequencyShape))
+    if (ats::isFrequencyShapeActive(ats::resolveFrequencyShapeSettingsForSound(sound, core.frequencyShape)))
     {
         if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(sound)))
         {
@@ -287,6 +287,27 @@ juce::AudioBuffer<float> renderClassicSourcePlaybackBuffer(const ATS_SOUND* soun
                                                            double renderSampleRate)
 {
     return makePlaybackBufferFromClassicLayers(renderClassicLayers(sound, core), renderSampleRate);
+}
+
+const ATS_SOUND* makeFrequencyShapedRenderSound(const ATS_SOUND* sound,
+                                                const ats::FrequencyShapeSettings& frequencyShape,
+                                                ats::AtsSoundPtr& shapedSound)
+{
+    shapedSound.reset();
+    if (sound == nullptr)
+        return nullptr;
+
+    if (!ats::isFrequencyShapeActive(ats::resolveFrequencyShapeSettingsForSound(sound, frequencyShape)))
+        return sound;
+
+    if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(sound)))
+    {
+        shapedSound.reset(copy);
+        ats::applyFrequencyShapeToSound(shapedSound.get(), frequencyShape);
+        return shapedSound.get();
+    }
+
+    return sound;
 }
 
 ats::MorphSourceMetadata makeMorphSourceMetadata(const ATS_SOUND* sound,
@@ -1457,11 +1478,13 @@ ats::SynthParams AtsAudioProcessor::readCoreSynthParamsFromApvts() const
 ats::FrequencyShapeSettings AtsAudioProcessor::readFrequencyShapeFromApvts() const
 {
     ats::FrequencyShapeSettings shape;
-    const int mode = juce::jlimit(0,
-                                  3,
-                                  juce::roundToInt(getRawParamValue(apvts,
-                                                                    ats_param::kFreqShapeMode,
-                                                                    0.0f)));
+    int mode = juce::jlimit(0,
+                            3,
+                            juce::roundToInt(getRawParamValue(apvts,
+                                                              ats_param::kFreqShapeMode,
+                                                              0.0f)));
+    if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(apvts.getParameter(ats_param::kFreqShapeMode)))
+        mode = juce::jlimit(0, 3, choice->getIndex());
     shape.mode = (ats::FrequencyShapeMode) mode;
     shape.amount = getRawParamValue(apvts, ats_param::kFreqShapeAmount, 1.0f);
     shape.pivotHz = getRawParamValue(apvts, ats_param::kFreqShapePivotHz, 0.0f);
@@ -2678,11 +2701,16 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
     const double morphAmount = (double) getRawParamValue(apvts, ats_param::kMorphAmount, 0.0f);
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds, recipe.sourceB.durationSeconds));
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : 44100.0;
+    const auto frequencyShape = readFrequencyShapeFromApvts();
 
     if (sA != nullptr && sB != nullptr)
     {
         // Frame-by-frame oscillator bank synthesis through actual ATS per-frame data.
-        auto rendered = renderMorphTrajectoryBuffer(sA, sB, recipe, {}, morphAmount, renderSampleRate, duration);
+        ats::AtsSoundPtr shapedA;
+        ats::AtsSoundPtr shapedB;
+        const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, frequencyShape, shapedA);
+        const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
+        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, {}, morphAmount, renderSampleRate, duration);
         const int totalSamples = rendered.getNumSamples();
         if (totalSamples <= 0)
         {
@@ -2788,7 +2816,6 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juc
     joinWorkers();
 
     ats::SynthParams core = readCoreSynthParamsFromApvts();
-    core.frequencyShape = {};
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : 44100.0;
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds,
                                                         recipe.sourceB.durationSeconds));
@@ -2815,7 +2842,11 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juc
             {
                 // Frame-by-frame oscillator bank synthesis: animates through actual ATS per-frame
                 // data so the morph sounds like the real sources at 0% and 100%.
-                timelineBuffer = renderMorphTrajectoryBuffer(sA, sB, recipe, timelinePoints,
+                ats::AtsSoundPtr shapedA;
+                ats::AtsSoundPtr shapedB;
+                const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
+                const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
+                timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
                                                             0.5, renderSampleRate, duration);
             }
             else
@@ -2997,7 +3028,6 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
     options.targetResidualNoiseBands = residualBands[1];
 
     ats::SynthParams core = readCoreSynthParamsFromApvts();
-    core.frequencyShape = {};
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : 44100.0;
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds,
                                                         recipe.sourceB.durationSeconds));
@@ -3013,7 +3043,11 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
     }
     else if (sA != nullptr && sB != nullptr)
     {
-        timelineBuffer = renderMorphTrajectoryBuffer(sA, sB, recipe, timelinePoints,
+        ats::AtsSoundPtr shapedA;
+        ats::AtsSoundPtr shapedB;
+        const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
+        const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
+        timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
                                                      0.5, renderSampleRate, duration);
     }
     else
@@ -3447,14 +3481,11 @@ bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMo
     }
 
     const int bufferIndex = slotIndex == 0 ? kSourceAPlaybackBufferIndex : kSourceBPlaybackBufferIndex;
-    if (!hasMorphSourcePreviewAudio(slotIndex))
+    if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error))
     {
-        if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error))
-        {
-            if (error.isEmpty())
-                error = "No rendered source preview is available. Analyze this source again.";
-            return false;
-        }
+        if (error.isEmpty())
+            error = "No rendered source preview is available. Analyze this source again.";
+        return false;
     }
 
     activePlaybackBufferIndex.store(bufferIndex, std::memory_order_release);

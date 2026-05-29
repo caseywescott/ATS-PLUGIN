@@ -1,6 +1,6 @@
 # Frequency Shaping — Product & Implementation Spec
 
-**Status:** Implemented (May 2026)  
+**Status:** Implemented; playback wiring follow-up patched (May 29, 2026)  
 **Covers matrix features:** Frequency Stretching, Frequency Compression, Harmonic Scaling  
 **Primary surface:** Synthesis tab + spectrogram live display  
 **Related code:** `SynthTabPanel`, `PluginProcessor`, `AtsParams::SynthParams`, `SpectrogramPanel`, `buildSpectralTraceSnapshotForSound`
@@ -31,7 +31,7 @@ Users must **see and hear** shaping immediately:
 
 ### Out of scope (v1)
 
-- Morph timeline / morph snapshot baking of warp
+- Morph snapshot baking of warp when raw source frame data is unavailable
 - Per-partial warp curves or drawn warp maps
 - Analysis-tab (ANARGS) parameters
 - Residual Bark-band frequency warping
@@ -266,8 +266,8 @@ Include shape fields in `previewLayerCacheCore` equality check (`samePreviewLaye
 ### 7.4 Morph / source slots
 
 - **Current model preview:** full shape support.  
-- **Source A/B listen:** shape applies to slot resynth (same APVTS globals).  
-- **Morph timeline bounce:** v1 **excludes** shape (document); morph uses analyzed models only.
+- **Source A/B listen:** shape applies to slot resynth (same APVTS globals); listen buttons rebuild the slot buffer on play so cached audio cannot mask shape changes.  
+- **Morph preview / timeline / bounce:** shape applies to raw source frame data by rendering from shaped copies of the ATS sources. Frozen snapshot fallback remains unwarped when raw source sounds are unavailable.
 
 ---
 
@@ -348,6 +348,14 @@ struct FrequencyShapeSettings {
 - [x] `build/tests/frequency_shape_test`
 - [x] `ctest --test-dir build -R frequency_shape_test --output-on-failure`
 - [x] `cmake --build build --target AtsResynth`
+- [x] `cmake --build build --target AtsResynth_All`
+
+### May 29 follow-up verification
+
+- [x] Source A/B listen rebuilds preview buffers after shape changes instead of reusing stale cached audio.
+- [x] Morph preview, morph timeline preview, and timeline bounce apply frequency shaping when raw source frame data is available.
+- [x] Frequency shape mode is read from the `AudioParameterChoice` index for playback/display consistency.
+- [x] Installed VST3/AU/Standalone artifacts refreshed after the playback wiring fix.
 
 ---
 
