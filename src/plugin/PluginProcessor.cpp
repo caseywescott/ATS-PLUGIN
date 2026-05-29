@@ -1729,3 +1729,169 @@ juce::String AtsAudioProcessor::getEnvelopeTransferTargetId() const
     const juce::SpinLock::ScopedLockType sl(envelopeTransferIdLock);
     return envelopeTransferTargetId;
 }
+
+bool AtsAudioProcessor::buildAllFrameEnvelopes(int gridSize,
+                                               int maxFrames,
+                                               std::vector<ats::EnvelopeOverlayCurve>& sourceFrames,
+                                               std::vector<ats::EnvelopeOverlayCurve>& targetFrames,
+                                               juce::String& status)
+{
+    sourceFrames.clear();
+    targetFrames.clear();
+    status.clear();
+
+    if (gridSize <= 1 || maxFrames <= 0)
+    {
+        status = "Invalid parameters";
+        return false;
+    }
+
+    struct FrameInputRecord
+    {
+        ats::EnvelopeFrameInput input;
+    };
+
+    std::vector<FrameInputRecord> frameInputs;
+    ats::EnvelopeAxisSpec axis;
+    int totalFrames = 0;
+
+    {
+        const juce::ScopedLock ml(modelLock);
+        auto* s = analyzedModel.get();
+        if (s == nullptr || s->frames <= 0 || s->partials <= 0 || s->amp == nullptr || s->frq == nullptr)
+        {
+            status = "No model";
+            return false;
+        }
+
+        totalFrames = s->frames;
+        const int framesToCompute = std::min(maxFrames, totalFrames);
+        const double sampleRate = s->srate > 0 ? static_cast<double>(s->srate) : hostSampleRate;
+        const double nyquist = sampleRate > 0.0 ? sampleRate * 0.5 : 22050.0;
+
+        double maxFreq = 0.0;
+        for (int f = 0; f < totalFrames; ++f)
+            for (int p = 0; p < s->partials; ++p)
+            {
+                const double freq = s->frq[p][f];
+                if (std::isfinite(freq) && freq > 0.0)
+                    maxFreq = std::max(maxFreq, freq);
+            }
+
+        axis.type = ats::EnvelopeFrequencyAxis::LinearHz;
+        axis.minFrequencyHz = 20.0;
+        axis.maxFrequencyHz = juce::jlimit(200.0, nyquist, std::max(1000.0, maxFreq * 1.05));
+        axis.sampleRate = sampleRate;
+
+        frameInputs.resize(static_cast<std::size_t>(framesToCompute));
+        for (int i = 0; i < framesToCompute; ++i)
+        {
+            const int frameIdx = framesToCompute > 1
+                ? juce::jlimit(0, totalFrames - 1,
+                               static_cast<int>(static_cast<int64_t>(i) * (totalFrames - 1) / (framesToCompute - 1)))
+                : 0;
+
+            auto& rec = frameInputs[static_cast<std::size_t>(i)];
+            rec.input.sourceModelId = "active-model";
+            rec.input.frameIndex = static_cast<std::uint64_t>(frameIdx);
+            rec.input.sampleRate = sampleRate;
+
+            for (int p = 0; p < s->partials; ++p)
+            {
+                const double amp = s->amp[p][frameIdx];
+                const double freq = s->frq[p][frameIdx];
+                if (!std::isfinite(amp) || !std::isfinite(freq) || amp <= 0.0 || freq <= 0.0)
+                    continue;
+                ats::EnvelopePartialPoint pt;
+                pt.frequencyHz = freq;
+                pt.amplitude = amp;
+                pt.smr = 20.0;
+                pt.confidence = 1.0;
+                pt.selected = true;
+                rec.input.partials.push_back(pt);
+            }
+
+            if (s->band_energy != nullptr)
+            {
+                for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+                {
+                    const double energy = s->band_energy[band][frameIdx];
+                    const double freqHz = residualBandCenterFrequency(band, sampleRate);
+                    if (!std::isfinite(energy) || energy <= 0.0 || freqHz <= 0.0)
+                        continue;
+                    ats::EnvelopeResidualBandPoint rb;
+                    rb.frequencyHz = freqHz;
+                    rb.energy = energy;
+                    rb.confidence = 1.0;
+                    rec.input.residualBands.push_back(rb);
+                }
+            }
+        }
+    }
+
+    if (frameInputs.empty())
+    {
+        status = "No frames collected";
+        return false;
+    }
+
+    const int presetId = juce::jlimit(1, 6, getEnvelopeOverlayEstimatorPreset());
+    auto plan = makeOverlayEstimatorPlan(presetId, axis);
+
+    ats::EnvelopeEstimatorContext context;
+    context.sampleRate = axis.sampleRate;
+    context.frequencyAxis = plan.axis;
+    context.maxOrder = plan.maxOrder;
+
+    std::string error;
+    if (!plan.estimator || !plan.estimator->prepare(context, &error))
+    {
+        status = juce::String(error.c_str());
+        return false;
+    }
+
+    ats::EnvelopeEvaluationOptions evalOpts;
+    evalOpts.mapping = ats::EnvelopeFrequencyMapping::DirectHz;
+    evalOpts.extrapolation = ats::EnvelopeExtrapolationPolicy::Clamp;
+    evalOpts.sourceAxis = axis;
+    evalOpts.targetAxis = axis;
+
+    const int n = static_cast<int>(frameInputs.size());
+    const int splitAt = n / 2;
+
+    for (int i = 0; i < n; ++i)
+    {
+        auto& rec = frameInputs[static_cast<std::size_t>(i)];
+        ats::EnvelopeOverlayCurve curve;
+        curve.label = "f" + std::to_string(rec.input.frameIndex);
+
+        if (rec.input.partials.size() >= 2)
+        {
+            ats::FrameEnvelope env;
+            if (plan.estimator->estimate(rec.input, env, &error))
+            {
+                curve.samples = ats::evaluateEnvelopeOnGrid(env, gridSize, evalOpts);
+                curve.diagnostics = env.diagnostics;
+                curve.reliable = true;
+            }
+            else
+            {
+                curve.reliable = false;
+                curve.status = error;
+            }
+        }
+        else
+        {
+            curve.reliable = false;
+            curve.status = "sparse";
+        }
+
+        if (i < splitAt)
+            sourceFrames.push_back(std::move(curve));
+        else
+            targetFrames.push_back(std::move(curve));
+    }
+
+    status = juce::String(n) + " frames (" + juce::String(totalFrames) + " total)";
+    return !sourceFrames.empty() || !targetFrames.empty();
+}

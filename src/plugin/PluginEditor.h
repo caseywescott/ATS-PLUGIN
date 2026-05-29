@@ -6,6 +6,7 @@
 #include "MathExprPanel.h"
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
+#include "SpectralEnvelope3DPanel.h"
 #include "SpectralEnvelopeWorkspacePanel.h"
 #include "SynthTabPanel.h"
 
@@ -33,6 +34,7 @@ private:
     SynthTabPanel synthTab;
     PartialEditPanel partialTab;
     EnvelopeOverlayPanel envelopeTab;
+    SpectralEnvelope3DPanel envelope3DTab;
     SpectralEnvelopeWorkspacePanel transferTab;
     MathExprPanel mathTab;
 

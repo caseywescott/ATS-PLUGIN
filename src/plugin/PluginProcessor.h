@@ -80,6 +80,11 @@ public:
     /** Fills `out` with a partial-density heatmap (count of active partials per cell). */
     bool buildPartialDensityTexture(int width, int height, juce::Image& out);
     bool buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOverlayData& out, juce::String& status);
+    bool buildAllFrameEnvelopes(int gridSize,
+                                int maxFrames,
+                                std::vector<ats::EnvelopeOverlayCurve>& sourceFrames,
+                                std::vector<ats::EnvelopeOverlayCurve>& targetFrames,
+                                juce::String& status);
 
     bool isWorkerBusy() const;
 
