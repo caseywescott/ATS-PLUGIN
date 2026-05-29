@@ -43,7 +43,6 @@ target_sources(
           PartialEditPanel.cpp
           MathExprPanel.cpp
           EnvelopeOverlayPanel.cpp
-          SpectralEnvelope3DPanel.cpp
           SpectralEnvelopeWorkspacePanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
