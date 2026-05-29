@@ -31,7 +31,8 @@ public:
         Partials,
         Residual,
         Isometric,
-        IsometricResidual
+        IsometricResidual,
+        IsometricEnvelope
     };
 
     void setMode(Mode m);
@@ -58,6 +59,12 @@ private:
     void paintIsometricGrid(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricPartials(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricResidual(juce::Graphics&, juce::Rectangle<float> plot);
+    void paintIsometricEnvelope(juce::Graphics&, juce::Rectangle<float> plot);
+    void paintEnvelopeSurface(juce::Graphics& g,
+                              juce::Rectangle<float> plot,
+                              const AtsSpectralTraceSnapshot& snap,
+                              juce::Colour colour,
+                              float alphaScale) const;
     void paintPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot);
     void paintPlanarPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot, float playheadNorm);
     void paintIsometricPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot, float playheadNorm);
@@ -111,6 +118,9 @@ private:
     [[nodiscard]] juce::Rectangle<float> residualSelectionRect(juce::Rectangle<float> plot) const;
     [[nodiscard]] int frameForX(float x, juce::Rectangle<float> plot) const;
     [[nodiscard]] int residualBandForY(float y, juce::Rectangle<float> plot) const;
+    [[nodiscard]] int residualBandForGutterPoint(juce::Point<float> pos,
+                                                 juce::Rectangle<float> gutter,
+                                                 juce::Rectangle<float> plot) const;
     [[nodiscard]] int residualBandForPoint(juce::Point<float> pos, juce::Rectangle<float> plot) const;
     [[nodiscard]] std::vector<int> residualBandsForRect(juce::Rectangle<float> rect,
                                                         juce::Rectangle<float> plot) const;
@@ -124,6 +134,9 @@ private:
     AtsTraceSource traceSource = AtsTraceSource::Current;
     Mode mode = Mode::Combined;
     AtsSpectralTraceSnapshot traceSnapshot;
+    AtsSpectralTraceSnapshot secondarySnapshot;  // second source for envelope overlay
+    juce::ToggleButton envSourceABtn { "Source A" };
+    juce::ToggleButton envSourceBBtn { "Source B" };
     int lastModelRevision = -1;
     uint64_t lastDisplayShapeRevision = 0;
     double ampDisplayReferencePeak = 0.0;

@@ -34,7 +34,9 @@ bool isResidualDisplayMode(SpectrogramPanel::Mode mode)
 
 bool isIsometricDisplayMode(SpectrogramPanel::Mode mode)
 {
-    return mode == SpectrogramPanel::Mode::Isometric || mode == SpectrogramPanel::Mode::IsometricResidual;
+    return mode == SpectrogramPanel::Mode::Isometric
+        || mode == SpectrogramPanel::Mode::IsometricResidual
+        || mode == SpectrogramPanel::Mode::IsometricEnvelope;
 }
 } // namespace
 
@@ -361,6 +363,16 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     playheadOverlay = std::make_unique<PlayheadOverlay>(*this);
     addAndMakeVisible(*playheadOverlay);
 
+    // Envelope overlay toggles
+    envSourceABtn.setToggleState(true, juce::dontSendNotification);
+    envSourceBBtn.setToggleState(true, juce::dontSendNotification);
+    envSourceABtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff4090d0));
+    envSourceBBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd08030));
+    envSourceABtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope) repaint(); };
+    envSourceBBtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope) repaint(); };
+    addChildComponent(envSourceABtn);
+    addChildComponent(envSourceBBtn);
+
     updateResidualToolbarVisibility();
     startTimerHz(10);
 }
@@ -425,6 +437,7 @@ void SpectrogramPanel::showViewMenu()
             case Mode::Residual: return juce::String("Residual");
             case Mode::Isometric: return juce::String("Iso 3D");
             case Mode::IsometricResidual: return juce::String("Iso 3D Residual");
+            case Mode::IsometricEnvelope: return juce::String("Iso 3D Envelope");
         }
         return juce::String("Trace + Residual");
     };
@@ -445,6 +458,8 @@ void SpectrogramPanel::showViewMenu()
                     traceSource == source && mode == Mode::Isometric);
         sub.addItem(baseId + 5, modeName(Mode::IsometricResidual), enabled,
                     traceSource == source && mode == Mode::IsometricResidual);
+        sub.addItem(baseId + 6, modeName(Mode::IsometricEnvelope), enabled,
+                    traceSource == source && mode == Mode::IsometricEnvelope);
         root.addSubMenu(label, sub, enabled);
     };
 
@@ -489,6 +504,8 @@ void SpectrogramPanel::showViewMenu()
                                nextMode = Mode::Isometric;
                            else if (modeOffset == 5)
                                nextMode = Mode::IsometricResidual;
+                           else if (modeOffset == 6)
+                               nextMode = Mode::IsometricEnvelope;
                            setView(nextSource, nextMode);
                        });
 }
@@ -510,12 +527,18 @@ void SpectrogramPanel::updateViewMenuButton()
         modeName = "Iso 3D";
     else if (mode == Mode::IsometricResidual)
         modeName = "Iso 3D Residual";
+    else if (mode == Mode::IsometricEnvelope)
+        modeName = "Iso 3D Envelope";
 
     viewMenuButton.setButtonText(sourceName + " / " + modeName);
 }
 
 void SpectrogramPanel::timerCallback()
 {
+    // Don't compete with the resynth worker — the snapshot would be stale anyway.
+    if (processor.isWorkerBusy())
+        return;
+
     const int rev = processor.getModelRevision();
     const uint64_t shapeRev = processor.getDisplayShapeRevision();
     if (rev != lastModelRevision)
@@ -656,6 +679,26 @@ void SpectrogramPanel::rebuildTraceSnapshot(bool preserveDisplayReference)
     hoveredResidualBand = -1;
     hoveredResidualFrame = -1;
     updateSelectionLabel();
+
+    // Build the complementary source snapshot for the envelope overlay.
+    if (mode == Mode::IsometricEnvelope)
+    {
+        AtsTraceSource altSource = AtsTraceSource::SourceA;
+        if (traceSource == AtsTraceSource::SourceA)
+            altSource = AtsTraceSource::SourceB;
+        else if (traceSource == AtsTraceSource::Current)
+            altSource = AtsTraceSource::SourceA;
+        AtsSpectralTraceSnapshot alt;
+        processor.buildSpectralTraceSnapshot(altSource, alt,
+                                             kMaxVisiblePartials, kMaxPointsPerPartial,
+                                             kResidualColumns, {});
+        secondarySnapshot = std::move(alt);
+    }
+    else
+    {
+        secondarySnapshot = {};
+    }
+
     repaintDisplay();
 }
 
@@ -739,6 +782,8 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
             paintIsometricPartials(g, plot);
         else if (mode == Mode::IsometricResidual)
             paintIsometricResidual(g, plot);
+        else if (mode == Mode::IsometricEnvelope)
+            paintIsometricEnvelope(g, plot);
         else if (mode != Mode::Residual)
             paintPartialTraces(g, plot);
 
@@ -1100,6 +1145,117 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
     }
 }
 
+// ---------------------------------------------------------------------------
+// Envelope surface helper — draws a smoothed spectral envelope waterfall from
+// the partial amplitudes in `snap`.  Each time slice is sampled at N columns,
+// the amplitudes are sorted by frequency and run-max-smoothed, then rendered
+// as a filled ribbon at its iso depth position.
+void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
+                                            juce::Rectangle<float> plot,
+                                            const AtsSpectralTraceSnapshot& snap,
+                                            juce::Colour colour,
+                                            float alphaScale) const
+{
+    if (snap.partials.empty())
+        return;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    constexpr int kSlices = 40;   // time columns
+    constexpr int kFreqBins = 64; // freq resolution per slice
+
+    // For each time slice, collect the peak amplitude in each freq bin.
+    for (int si = 0; si < kSlices; ++si)
+    {
+        const float timeNorm = timeRange.getStart() + timeRange.getLength() * (float) si / (float) (kSlices - 1);
+
+        // Fill freq-bin array by sampling each partial trace at this timeNorm.
+        std::vector<float> bins(static_cast<std::size_t>(kFreqBins), 0.0f);
+        for (const auto& trace : snap.partials)
+        {
+            // Interpolate ampNorm at timeNorm.
+            float ampAtTime = 0.0f;
+            for (std::size_t pi = 1; pi < trace.points.size(); ++pi)
+            {
+                const auto& prev = trace.points[pi - 1];
+                const auto& cur  = trace.points[pi];
+                if (cur.timeNorm < timeNorm)
+                    continue;
+                if (prev.timeNorm > timeNorm)
+                    break;
+                if (!prev.active || !cur.active)
+                    continue;
+                const float span = cur.timeNorm - prev.timeNorm;
+                const float alpha = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
+                ampAtTime = prev.ampNorm + alpha * (cur.ampNorm - prev.ampNorm);
+                break;
+            }
+            if (ampAtTime <= 0.0f)
+                continue;
+
+            // Place into frequency bin.
+            const float fNorm = trace.points.empty() ? 0.5f : trace.points.front().freqNorm;
+            const float fVis = (fNorm - freqRange.getStart()) / juce::jmax(1.0e-6f, freqRange.getLength());
+            const int bin = juce::jlimit(0, kFreqBins - 1, (int) (fVis * kFreqBins));
+            bins[static_cast<std::size_t>(bin)] = juce::jmax(bins[static_cast<std::size_t>(bin)], ampAtTime);
+        }
+
+        // Apply a small running-max smoothing window (width = 3 bins).
+        std::vector<float> smoothed(static_cast<std::size_t>(kFreqBins), 0.0f);
+        for (int b = 0; b < kFreqBins; ++b)
+        {
+            float peak = 0.0f;
+            for (int w = juce::jmax(0, b - 2); w <= juce::jmin(kFreqBins - 1, b + 2); ++w)
+                peak = juce::jmax(peak, bins[static_cast<std::size_t>(w)]);
+            smoothed[static_cast<std::size_t>(b)] = peak;
+        }
+
+        // Build the envelope curve + floor ribbon for this time slice.
+        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
+        const juce::Colour lineCol = colour.withAlpha(depthAlpha * alphaScale);
+        const juce::Colour fillCol = colour.withAlpha(depthAlpha * alphaScale * 0.18f);
+
+        juce::Path topPath;
+        bool started = false;
+        for (int b = 0; b < kFreqBins; ++b)
+        {
+            const float freqN = freqRange.getStart() + freqRange.getLength() * (float) b / (float) (kFreqBins - 1);
+            const float ampN  = smoothed[static_cast<std::size_t>(b)];
+            const auto pt = positionForIsoCoords(timeNorm, freqN, ampN, plot);
+            if (!started) { topPath.startNewSubPath(pt); started = true; }
+            else          { topPath.lineTo(pt); }
+        }
+        if (!started)
+            continue;
+
+        // Filled ribbon: top path + floor back.
+        juce::Path ribbon = topPath;
+        for (int b = kFreqBins - 1; b >= 0; --b)
+        {
+            const float freqN = freqRange.getStart() + freqRange.getLength() * (float) b / (float) (kFreqBins - 1);
+            ribbon.lineTo(positionForIsoCoords(timeNorm, freqN, 0.0f, plot));
+        }
+        ribbon.closeSubPath();
+
+        g.setColour(fillCol);
+        g.fillPath(ribbon);
+
+        g.setColour(lineCol);
+        g.strokePath(topPath, juce::PathStrokeType(1.4f));
+    }
+}
+
+void SpectrogramPanel::paintIsometricEnvelope(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    // Draw secondary source first (behind primary).
+    if (envSourceBBtn.getToggleState() && !secondarySnapshot.partials.empty())
+        paintEnvelopeSurface(g, plot, secondarySnapshot, juce::Colour(0xffd08030), 0.85f);
+
+    if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
+        paintEnvelopeSurface(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+}
+
+// ---------------------------------------------------------------------------
 void SpectrogramPanel::paintSelectionOverlay(juce::Graphics& g,
                                              juce::Rectangle<float> screen,
                                              juce::Rectangle<float> plot)
@@ -1515,6 +1671,7 @@ void SpectrogramPanel::resized()
 {
     auto r = getLocalBounds().reduced(5);
     const bool residualUi = isResidualDisplayMode(mode);
+    const bool envelopeUi = (mode == Mode::IsometricEnvelope);
     auto header = r.removeFromTop(residualUi ? 50 : 26);
     auto headerRow1 = header.removeFromTop(26);
 
@@ -1527,6 +1684,13 @@ void SpectrogramPanel::resized()
     headerRow1.removeFromLeft(6);
     deleteButton.setBounds(headerRow1.removeFromLeft(72));
     headerRow1.removeFromLeft(8);
+    if (envelopeUi)
+    {
+        envSourceABtn.setBounds(headerRow1.removeFromLeft(76));
+        headerRow1.removeFromLeft(4);
+        envSourceBBtn.setBounds(headerRow1.removeFromLeft(76));
+        headerRow1.removeFromLeft(4);
+    }
     selectionLabel.setBounds(headerRow1);
 
     if (residualUi)
@@ -2585,8 +2749,49 @@ int SpectrogramPanel::residualBandForY(float y, juce::Rectangle<float> plot) con
     return bestBand;
 }
 
+int SpectrogramPanel::residualBandForGutterPoint(juce::Point<float> pos,
+                                                 juce::Rectangle<float> gutter,
+                                                 juce::Rectangle<float> plot) const
+{
+    if (gutter.isEmpty() || traceSnapshot.residualBands.empty())
+        return -1;
+
+    int bestBand = -1;
+    float bestDistance = 14.0f;
+    for (const auto& band : traceSnapshot.residualBands)
+    {
+        const auto yRange = yRangeForBand(band, plot);
+        if (yRange.getEnd() < gutter.getY() - 2.0f || yRange.getStart() > gutter.getBottom() + 2.0f)
+            continue;
+
+        const float centreY = (yRange.getStart() + yRange.getEnd()) * 0.5f;
+        const auto labelRect = juce::Rectangle<float>(gutter.getX() + 1.0f,
+                                                      centreY - 9.0f,
+                                                      gutter.getWidth() - 2.0f,
+                                                      20.0f);
+        if (labelRect.contains(pos))
+            return band.bandIndex;
+
+        const float distance = std::abs(pos.y - centreY);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestBand = band.bandIndex;
+        }
+    }
+    return bestBand;
+}
+
 int SpectrogramPanel::residualBandForPoint(juce::Point<float> pos, juce::Rectangle<float> plot) const
 {
+    const auto gutter = getBandLabelGutterBounds();
+    if (!gutter.isEmpty() && gutter.contains(pos))
+    {
+        const int gutterBand = residualBandForGutterPoint(pos, gutter, plot);
+        if (gutterBand >= 0)
+            return gutterBand;
+    }
+
     if (!isIsometricDisplayMode(mode))
         return residualBandForY(pos.y, plot);
 
@@ -2785,6 +2990,10 @@ void SpectrogramPanel::updateResidualToolbarVisibility()
         drawingResidualEnvelope = false;
         envelopeDrawPoints.clear();
     }
+
+    const bool envMode = (mode == Mode::IsometricEnvelope);
+    envSourceABtn.setVisible(envMode);
+    envSourceBBtn.setVisible(envMode);
 }
 
 int SpectrogramPanel::getSelectionFirstFrame() const
