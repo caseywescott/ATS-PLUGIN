@@ -3,6 +3,10 @@
 #include "PluginProcessor.h"
 #include "PresetLibrary.h"
 
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
 namespace
 {
 int scaledUi(int px)
@@ -12,66 +16,469 @@ int scaledUi(int px)
     return px;
 }
 
-juce::String wrapTextToWidth(const juce::String& text, const juce::Font& font, int maxWidth)
+float getPlainParameter(AtsAudioProcessor& processor, const juce::String& parameterID, float fallback)
 {
-    if (text.isEmpty() || maxWidth <= 16)
-        return text;
+    if (auto* value = processor.apvts.getRawParameterValue(parameterID))
+        return value->load();
+    return fallback;
+}
 
-    juce::StringArray words;
-    words.addTokens(text, " ", {});
-    words.removeEmptyStrings();
-    if (words.isEmpty())
-        return text;
+void setPlainParameter(AtsAudioProcessor& processor, const juce::String& parameterID, float value)
+{
+    if (auto* p = processor.apvts.getParameter(parameterID))
+        p->setValueNotifyingHost(processor.apvts.getParameterRange(parameterID).convertTo0to1(value));
+}
 
-    juce::String wrapped;
-    juce::String line;
-    for (const auto& word : words)
+void setBoolParameter(AtsAudioProcessor& processor, const juce::String& parameterID, bool value)
+{
+    if (auto* p = processor.apvts.getParameter(parameterID))
+        p->setValueNotifyingHost(value ? 1.0f : 0.0f);
+}
+
+juce::String compactHash(juce::String hash)
+{
+    hash = hash.trim();
+    if (hash.length() <= 38)
+        return hash;
+    return hash.substring(0, 35) + "...";
+}
+
+juce::String formatSourceMeta(const AtsMorphSourceSlotInfo& info)
+{
+    if (!info.hasModel)
+        return "Empty";
+
+    const auto name = info.sourceName.isNotEmpty() ? info.sourceName : info.slotName;
+    juce::String text = name;
+    text << "\n" << juce::String(info.durationSeconds, 2) << "s | "
+         << juce::String(info.sampleRate, 0) << " Hz | "
+         << juce::String(info.partialCount) << " partials";
+    text << "\n" << (info.hasResidual ? "Residual yes" : "Residual no")
+         << " | gain " << juce::String(info.sourceGain, 2)
+         << " | offset " << juce::String(info.timeOffsetSeconds, 2) << "s";
+    if (info.sourceHash.isNotEmpty())
+        text << "\n" << compactHash(info.sourceHash);
+    return text;
+}
+
+juce::String formatSourceOverview(const AtsMorphSourceSlotInfo& info)
+{
+    if (!info.hasModel)
+        return "Overview empty";
+
+    return "Tracks " + juce::String(info.partialCount)
+           + " | frames " + juce::String(info.frameCount)
+           + " | markers " + juce::String(info.hasTransientMarkers ? "yes" : "none");
+}
+
+juce::Colour snapshotStateColour(AtsMorphSnapshotUiState state)
+{
+    switch (state)
     {
-        const juce::String candidate = line.isEmpty() ? word : (line + " " + word);
-        if (!line.isEmpty() && font.getStringWidth(candidate) > maxWidth)
+        case AtsMorphSnapshotUiState::Ready: return juce::Colour(0xff8fd6a4);
+        case AtsMorphSnapshotUiState::Stale: return juce::Colour(0xfff0c06a);
+        case AtsMorphSnapshotUiState::Rebuilding: return juce::Colour(0xff9fd0ff);
+        case AtsMorphSnapshotUiState::Warning:
+        default: return juce::Colour(0xffff8a7a);
+    }
+}
+
+juce::String analysisTypeName(int index)
+{
+    switch (juce::jlimit(0, 3, index))
+    {
+        case 0: return "1 amp+freq";
+        case 1: return "2 +phase";
+        case 2: return "3 +noise";
+        case 3:
+        default: return "4 full";
+    }
+}
+
+juce::String formatAnalysisSummary(AtsAudioProcessor& processor)
+{
+    const int typeIndex = juce::roundToInt(getPlainParameter(processor,
+                                                            ats_param::kAnalysisType,
+                                                            (float) (ATSA_TYPE - 1)));
+    const auto peak = getPlainParameter(processor, ats_param::kAnalysisLowestMag, (float) ATSA_LMAG);
+    const auto hop = getPlainParameter(processor, ats_param::kAnalysisHopSize, (float) ATSA_HSIZE);
+    const auto cycles = getPlainParameter(processor, ats_param::kAnalysisWinCycles, (float) ATSA_WCYCLES);
+
+    return "Analysis: " + analysisTypeName(typeIndex)
+           + " | Peak " + juce::String(peak, 0) + " dB"
+           + " | Hop " + juce::String(hop, 2)
+           + " | Win " + juce::String(cycles, 1) + " cyc";
+}
+} // namespace
+
+void MorphBandStrip::setBands(std::vector<BandView> nextBands, int selectedBand)
+{
+    bands = std::move(nextBands);
+    selectedBandIndex = selectedBand;
+    repaint();
+}
+
+void MorphBandStrip::paint(juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat().reduced(1.0f);
+    g.setColour(juce::Colour(0xff111923));
+    g.fillRoundedRectangle(area, 4.0f);
+    g.setColour(juce::Colour(0xff2b3b4d));
+    g.drawRoundedRectangle(area, 4.0f, 1.0f);
+
+    if (bands.empty() || area.getWidth() <= 2.0f)
+    {
+        g.setFont(10.0f);
+        g.setColour(juce::Colour(0xffb8c7d9));
+        g.drawText("No bands", getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    double maxPower = 1.0e-12;
+    for (const auto& band : bands)
+        maxPower = std::max(maxPower, std::max(band.sourcePower, std::max(band.targetPower, band.outputPower)));
+
+    const float bandW = area.getWidth() / (float) bands.size();
+    for (size_t i = 0; i < bands.size(); ++i)
+    {
+        const auto& band = bands[i];
+        auto cell = juce::Rectangle<float>(area.getX() + bandW * (float) i,
+                                           area.getY(),
+                                           juce::jmax(1.0f, bandW - 1.0f),
+                                           area.getHeight());
+        const float sourceH = (float) juce::jlimit(0.0, 1.0, band.sourcePower / maxPower);
+        const float targetH = (float) juce::jlimit(0.0, 1.0, band.targetPower / maxPower);
+        const float outputH = (float) juce::jlimit(0.0, 1.0, band.outputPower / maxPower);
+
+        g.setColour(band.warning ? juce::Colour(0xff5a3028) : juce::Colour(0xff1b2634));
+        g.fillRect(cell);
+        g.setColour(juce::Colour(0xff6a9cff));
+        g.fillRect(cell.removeFromBottom(area.getHeight() * sourceH * 0.33f));
+        g.setColour(juce::Colour(0xffa8d66d));
+        g.fillRect(juce::Rectangle<float>(cell.getX(), area.getBottom() - area.getHeight() * targetH * 0.66f,
+                                          cell.getWidth(), area.getHeight() * targetH * 0.33f));
+        g.setColour(juce::Colour(0xffffcc66));
+        g.fillRect(juce::Rectangle<float>(cell.getX(), area.getBottom() - area.getHeight() * outputH,
+                                          cell.getWidth(), area.getHeight() * outputH * 0.25f));
+
+        if (band.unmatchedCount > 0)
         {
-            if (wrapped.isNotEmpty())
-                wrapped << "\n";
-            wrapped << line;
-            line = word;
+            g.setColour(juce::Colour(0xffff8a80));
+            g.fillRect(juce::Rectangle<float>(area.getX() + bandW * (float) i,
+                                              area.getY(),
+                                              juce::jmax(1.0f, bandW - 1.0f),
+                                              2.0f));
+        }
+
+        if (band.bandIndex == selectedBandIndex)
+        {
+            g.setColour(juce::Colour(0xfff0f0f5));
+            g.drawRect(juce::Rectangle<float>(area.getX() + bandW * (float) i,
+                                              area.getY(),
+                                              juce::jmax(1.0f, bandW - 1.0f),
+                                              area.getHeight()),
+                       1.5f);
+        }
+    }
+}
+
+void MorphBandStrip::mouseDown(const juce::MouseEvent& e)
+{
+    if (bands.empty())
+        return;
+
+    const auto area = getLocalBounds().toFloat().reduced(1.0f);
+    const int index = juce::jlimit(0,
+                                   (int) bands.size() - 1,
+                                   (int) ((e.position.x - area.getX()) * (float) bands.size()
+                                          / juce::jmax(1.0f, area.getWidth())));
+    selectedBandIndex = bands[(size_t) index].bandIndex;
+    if (onBandSelected)
+        onBandSelected(selectedBandIndex);
+    repaint();
+}
+
+MorphTimelineEditor::MorphTimelineEditor()
+{
+    morphModeBtn.setRadioGroupId(101);
+    hybridModeBtn.setRadioGroupId(101);
+    morphModeBtn.setToggleState(true, juce::dontSendNotification);
+
+    morphModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffb8d4ff));
+    hybridModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd08030));
+
+    morphModeBtn.onStateChange = [this] {
+        if (morphModeBtn.getToggleState())
+            newPointKind = MorphTimelinePointKind::Morph;
+    };
+    hybridModeBtn.onStateChange = [this] {
+        if (hybridModeBtn.getToggleState())
+            newPointKind = MorphTimelinePointKind::Hybrid;
+    };
+
+    addAndMakeVisible(morphModeBtn);
+    addAndMakeVisible(hybridModeBtn);
+}
+
+void MorphTimelineEditor::resized()
+{
+    auto header = getLocalBounds().removeFromTop(kHeaderH).reduced(4, 2);
+    // "Add:" label occupies the left ~28px implicitly in paint; buttons go right of it.
+    header.removeFromLeft(28);
+    morphModeBtn.setBounds(header.removeFromLeft(54));
+    hybridModeBtn.setBounds(header.removeFromLeft(58));
+}
+
+juce::Rectangle<float> MorphTimelineEditor::getPlotArea() const
+{
+    auto area = getLocalBounds().toFloat().reduced(1.5f);
+    area.removeFromTop((float) kHeaderH);
+    return area.reduced(8.0f, 7.0f);
+}
+
+void MorphTimelineEditor::setPoints(std::vector<AtsMorphTimelinePoint> nextPoints)
+{
+    points = std::move(nextPoints);
+    if (points.empty())
+        points = { { 0.0, 0.0 }, { 1.0, 1.0 } };
+
+    std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) {
+        return a.timeNorm < b.timeNorm;
+    });
+    for (auto& point : points)
+    {
+        point.timeNorm = juce::jlimit(0.0, 1.0, point.timeNorm);
+        point.morphAmount = juce::jlimit(0.0, 1.0, point.morphAmount);
+    }
+    points.front().timeNorm = 0.0;
+    points.back().timeNorm = 1.0;
+    selectedPoint = juce::jlimit(-1, (int) points.size() - 1, selectedPoint);
+    repaint();
+}
+
+void MorphTimelineEditor::paint(juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat().reduced(1.5f);
+    g.setColour(juce::Colour(0xff111923));
+    g.fillRoundedRectangle(area, 5.0f);
+    g.setColour(juce::Colour(0xff2b3b4d));
+    g.drawRoundedRectangle(area, 5.0f, 1.0f);
+
+    // Header strip label
+    g.setFont(juce::Font(10.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff8899aa));
+    g.drawText("Add:", getLocalBounds().removeFromTop(kHeaderH).withTrimmedLeft(6),
+               juce::Justification::centredLeft);
+
+    auto plot = getPlotArea();
+    if (plot.getWidth() <= 2.0f || plot.getHeight() <= 2.0f)
+        return;
+
+    g.setColour(juce::Colour(0x445f7895));
+    for (int i = 1; i < 4; ++i)
+    {
+        const float x = plot.getX() + plot.getWidth() * (float) i / 4.0f;
+        g.drawVerticalLine(juce::roundToInt(x), plot.getY(), plot.getBottom());
+    }
+    g.drawHorizontalLine(juce::roundToInt(plot.getCentreY()), plot.getX(), plot.getRight());
+
+    g.setFont(10.0f);
+    g.setColour(juce::Colour(0xffb8c7d9));
+    g.drawText("A",
+               juce::roundToInt(plot.getX()),
+               juce::roundToInt(plot.getBottom() - 13.0f),
+               16,
+               13,
+               juce::Justification::centredLeft);
+    g.drawText("B",
+               juce::roundToInt(plot.getX()),
+               juce::roundToInt(plot.getY()),
+               16,
+               13,
+               juce::Justification::centredLeft);
+
+    if (points.empty())
+        return;
+
+    juce::Path path;
+    auto first = positionForPoint(points.front());
+    path.startNewSubPath(first);
+    for (size_t i = 1; i < points.size(); ++i)
+        path.lineTo(positionForPoint(points[i]));
+
+    g.setColour(juce::Colour(0xff75a7ff));
+    g.strokePath(path, juce::PathStrokeType(2.0f));
+
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        const auto p = positionForPoint(points[i]);
+        const bool selected = (int) i == selectedPoint;
+        const bool isHybrid = points[i].kind == MorphTimelinePointKind::Hybrid;
+
+        if (isHybrid)
+        {
+            // Diamond shape for hybrid breakpoints
+            constexpr float r = 5.5f;
+            juce::Path diamond;
+            diamond.startNewSubPath(p.x,     p.y - r);
+            diamond.lineTo(p.x + r, p.y);
+            diamond.lineTo(p.x,     p.y + r);
+            diamond.lineTo(p.x - r, p.y);
+            diamond.closeSubPath();
+            g.setColour(selected ? juce::Colour(0xfffffb70) : juce::Colour(0xffd08030));
+            g.fillPath(diamond);
+            g.setColour(juce::Colour(0xff12121a));
+            g.strokePath(diamond, juce::PathStrokeType(1.0f));
         }
         else
         {
-            line = candidate;
+            g.setColour(selected ? juce::Colour(0xffffd27a) : juce::Colour(0xffb8d4ff));
+            g.fillEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
+            g.setColour(juce::Colour(0xff12121a));
+            g.drawEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f, 1.0f);
         }
     }
-
-    if (line.isNotEmpty())
-    {
-        if (wrapped.isNotEmpty())
-            wrapped << "\n";
-        wrapped << line;
-    }
-    return wrapped;
 }
 
-int countWrappedLines(const juce::String& text)
+void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
 {
-    if (text.isEmpty())
-        return 1;
-    int lines = 1;
-    for (int i = 0; i < text.length(); ++i)
+    // Ignore clicks in the header strip — those are handled by the child buttons.
+    if (e.position.y < (float) kHeaderH)
+        return;
+
+    if (points.empty())
+        setPoints({});
+
+    const int nearest = findNearestPoint(e.position);
+    if (e.mods.isPopupMenu() && nearest >= 0)
     {
-        if (text[i] == '\n')
-            ++lines;
+        const bool isHybrid = points[(size_t) nearest].kind == MorphTimelinePointKind::Hybrid;
+        const bool isInner  = nearest > 0 && nearest < (int) points.size() - 1;
+
+        juce::PopupMenu menu;
+        menu.addItem(1, isHybrid ? "Make Morph"  : "Make Hybrid",  true, false);
+        if (isInner)
+            menu.addItem(2, "Remove point", true, false);
+
+        menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this),
+            [this, nearest, isHybrid](int result)
+            {
+                if (result == 1 && juce::isPositiveAndBelow(nearest, (int) points.size()))
+                {
+                    points[(size_t) nearest].kind = isHybrid ? MorphTimelinePointKind::Morph
+                                                             : MorphTimelinePointKind::Hybrid;
+                    notifyChange();
+                    repaint();
+                }
+                else if (result == 2 && nearest > 0 && nearest < (int) points.size() - 1)
+                {
+                    points.erase(points.begin() + nearest);
+                    selectedPoint = -1;
+                    notifyChange();
+                    repaint();
+                }
+            });
+        return;
     }
-    return lines;
+
+    selectedPoint = nearest;
+    if (selectedPoint < 0)
+    {
+        points.push_back(pointFromPosition(e.position));
+        std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) {
+            return a.timeNorm < b.timeNorm;
+        });
+        selectedPoint = findNearestPoint(e.position);
+    }
+
+    editing = true;
+    updatePointFromMouse(e);
 }
 
-bool setRawTextIfChanged(juce::String& current, const juce::String& next)
+void MorphTimelineEditor::mouseDrag(const juce::MouseEvent& e)
 {
-    if (current == next)
-        return false;
-
-    current = next;
-    return true;
+    updatePointFromMouse(e);
 }
-} // namespace
+
+void MorphTimelineEditor::mouseUp(const juce::MouseEvent&)
+{
+    editing = false;
+}
+
+void MorphTimelineEditor::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    const int nearest = findNearestPoint(e.position);
+    if (nearest > 0 && nearest < (int) points.size() - 1)
+    {
+        points.erase(points.begin() + nearest);
+        selectedPoint = -1;
+        notifyChange();
+        repaint();
+    }
+}
+
+int MorphTimelineEditor::findNearestPoint(juce::Point<float> pos) const
+{
+    int nearest = -1;
+    float nearestDistance = 10.0f;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        const auto p = positionForPoint(points[i]);
+        const float distance = p.getDistanceFrom(pos);
+        if (distance <= nearestDistance)
+        {
+            nearest = (int) i;
+            nearestDistance = distance;
+        }
+    }
+    return nearest;
+}
+
+AtsMorphTimelinePoint MorphTimelineEditor::pointFromPosition(juce::Point<float> pos) const
+{
+    const auto plot = getPlotArea();
+    AtsMorphTimelinePoint point;
+    point.timeNorm   = juce::jlimit(0.0, 1.0, (double) ((pos.x - plot.getX()) / juce::jmax(1.0f, plot.getWidth())));
+    point.morphAmount = juce::jlimit(0.0, 1.0, (double) ((plot.getBottom() - pos.y) / juce::jmax(1.0f, plot.getHeight())));
+    point.kind = newPointKind;
+    return point;
+}
+
+juce::Point<float> MorphTimelineEditor::positionForPoint(const AtsMorphTimelinePoint& point) const
+{
+    const auto plot = getPlotArea();
+    return { plot.getX() + plot.getWidth()  * (float) juce::jlimit(0.0, 1.0, point.timeNorm),
+             plot.getBottom() - plot.getHeight() * (float) juce::jlimit(0.0, 1.0, point.morphAmount) };
+}
+
+void MorphTimelineEditor::updatePointFromMouse(const juce::MouseEvent& e)
+{
+    if (!juce::isPositiveAndBelow(selectedPoint, (int) points.size()))
+        return;
+
+    auto point = pointFromPosition(e.position);
+    if (selectedPoint == 0)
+        point.timeNorm = 0.0;
+    else if (selectedPoint == (int) points.size() - 1)
+        point.timeNorm = 1.0;
+    else
+    {
+        const double minTime = points[(size_t) selectedPoint - 1].timeNorm + 0.005;
+        const double maxTime = points[(size_t) selectedPoint + 1].timeNorm - 0.005;
+        point.timeNorm = juce::jlimit(minTime, maxTime, point.timeNorm);
+    }
+
+    point.kind = points[(size_t) selectedPoint].kind; // preserve kind through drag
+    points[(size_t) selectedPoint] = point;
+    notifyChange();
+    repaint();
+}
+
+void MorphTimelineEditor::notifyChange()
+{
+    if (onPointsChanged)
+        onPointsChanged(points);
+}
 
 SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     : audioProcessor(p)
@@ -80,12 +487,14 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     loadButton.setExplicitFocusOrder(1);
     loadButton.setHelpText("Choose a mono or stereo WAV file to analyze.");
     analyzeButton.setExplicitFocusOrder(2);
-    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread). Synthesis and diagnostics follow the selected Classic, Modern, or Experimental analysis path.");
-    cancelButton.setExplicitFocusOrder(3);
+    analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread).");
+    currentPlayButton.setExplicitFocusOrder(3);
+    currentPlayButton.setHelpText("Render and play the current analyzed ATS model, including partial edits and deletes.");
+    cancelButton.setExplicitFocusOrder(4);
     cancelButton.setHelpText("Stop the current analysis or resynthesis job.");
-    presetCombo.setExplicitFocusOrder(4);
+    presetCombo.setExplicitFocusOrder(5);
     presetCombo.setHelpText("Factory parameter curves or full-state user presets from disk.");
-    savePresetButton.setExplicitFocusOrder(5);
+    savePresetButton.setExplicitFocusOrder(6);
     savePresetButton.setHelpText("Save parameters and embedded ATS model to a .atspreset file.");
 
     presetLabel.setText("Preset", juce::dontSendNotification);
@@ -105,18 +514,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     exportAtsButton.onClick = [this] { pickExportAts(); };
     addAndMakeVisible(exportAtsButton);
 
-    previewPlayButton.setHelpText("Start preview playback from the beginning of the current rendered model.");
-    previewPlayButton.setExplicitFocusOrder(9);
-    previewPlayButton.onClick = [this] { audioProcessor.startPreviewPlayback(); };
-    addAndMakeVisible(previewPlayButton);
-
-    previewStopButton.setHelpText("Stop preview playback and reset to the start.");
-    previewStopButton.setExplicitFocusOrder(10);
-    previewStopButton.onClick = [this] { audioProcessor.stopPreviewPlayback(); };
-    addAndMakeVisible(previewStopButton);
-
     statusLabel.setJustificationType(juce::Justification::centredLeft);
-    statusLabel.setFont(juce::Font(15.0f, juce::Font::bold));
+    statusLabel.setFont(juce::Font(13.5f, juce::Font::bold));
     statusLabel.setExplicitFocusOrder(6);
     statusLabel.setHelpText("Current high-level plugin state.");
     addAndMakeVisible(statusLabel);
@@ -126,19 +525,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     errorLabel.setExplicitFocusOrder(7);
     errorLabel.setHelpText("Most recent error from analysis, resynthesis, or file I/O.");
     addAndMakeVisible(errorLabel);
-    modeWarningLabel.setJustificationType(juce::Justification::topLeft);
-    modeWarningLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffd180));
-    addAndMakeVisible(modeWarningLabel);
-    presetMetadataLabel.setJustificationType(juce::Justification::topLeft);
-    presetMetadataLabel.setFont(juce::Font(12.0f));
-    presetMetadataLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc5e1ff));
-    addAndMakeVisible(presetMetadataLabel);
-    diagnosticsLabel.setJustificationType(juce::Justification::topLeft);
-    diagnosticsLabel.setColour(juce::Label::textColourId, juce::Colour(0xff9dd7ff));
-    addAndMakeVisible(diagnosticsLabel);
 
     cpuWarningLabel.setJustificationType(juce::Justification::centredLeft);
-    cpuWarningLabel.setFont(juce::Font(12.0f, juce::Font::italic));
+    cpuWarningLabel.setFont(juce::Font(11.0f, juce::Font::italic));
     cpuWarningLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffcc88));
     cpuWarningLabel.setExplicitFocusOrder(8);
     cpuWarningLabel.setHelpText("Shown when partial and frame counts exceed the documented soft limit.");
@@ -146,11 +535,37 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     addAndMakeVisible(progressBar);
 
+    analysisSummaryLabel.setJustificationType(juce::Justification::centredLeft);
+    analysisSummaryLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    analysisSummaryLabel.setMinimumHorizontalScale(0.64f);
+    analysisSummaryLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
+    analysisSummaryLabel.setHelpText("Current analysis settings used by Analyze, Analyze Source A, and Analyze Source B.");
+    addAndMakeVisible(analysisSummaryLabel);
+
     loadButton.onClick = [this] { pickFile(); };
     addAndMakeVisible(loadButton);
 
     analyzeButton.onClick = [this] { audioProcessor.startAnalysis(); };
     addAndMakeVisible(analyzeButton);
+
+    currentPlayButton.onClick = [this] {
+        if (audioProcessor.isPreviewPlaying()
+            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::MorphPreview)
+        {
+            audioProcessor.stopPreviewPlayback();
+            refreshFromProcessor();
+            return;
+        }
+
+        juce::String err;
+        if (!audioProcessor.playCurrentModelPreview(err))
+            juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon,
+                "Play current model",
+                err.isEmpty() ? juce::String("Could not play the current model.") : err);
+        refreshFromProcessor();
+    };
+    addAndMakeVisible(currentPlayButton);
 
     cancelButton.onClick = [this] {
         if (!audioProcessor.isWorkerBusy())
@@ -195,8 +610,15 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     setupSlider(partGainSlider, "partGain", 11);
     setupSlider(resGainSlider, "resGain", 12);
     setupSlider(outputTrimSlider, "outputTrim", 13);
-    partGainSlider.setHelpText("Partials path gain (SPARAMS amp). Applied in real time to the preview.");
-    resGainSlider.setHelpText("Residual / noise-band gain (SPARAMS ramp). Applied in real time to the preview.");
+    const juce::String layerGainHelp =
+        "Applied in real time to layer-mix, partial-only, and residual-only previews. "
+        "Classic combined Both playback bypasses separate layer gains.";
+    const juce::String partialGainHelp = "Partials path gain (SPARAMS amp). " + layerGainHelp;
+    const juce::String residualGainHelp = "Residual / noise-band gain (SPARAMS ramp). " + layerGainHelp;
+    partGainSlider.setHelpText(partialGainHelp);
+    partGainSlider.setTooltip(partialGainHelp);
+    resGainSlider.setHelpText(residualGainHelp);
+    resGainSlider.setTooltip(residualGainHelp);
     outputTrimSlider.setHelpText("Master output trim after partial + residual mix.");
     addAndMakeVisible(partGainSlider);
     addAndMakeVisible(resGainSlider);
@@ -208,42 +630,323 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
-    analysisModeHeaderLabel.setText("Analysis engine for next Analyze", juce::dontSendNotification);
-    analysisModeHeaderLabel.setJustificationType(juce::Justification::centredLeft);
-    analysisModeHeaderLabel.setFont(juce::Font(12.0f, juce::Font::bold));
-    analysisModeHeaderLabel.setColour(juce::Label::textColourId, juce::Colour(0xffdce8ff));
-    addAndMakeVisible(analysisModeHeaderLabel);
 
-    analysisModeSummaryLabel.setText("CLASSIC ATS", juce::dontSendNotification);
-    analysisModeSummaryLabel.setJustificationType(juce::Justification::centredLeft);
-    analysisModeSummaryLabel.setFont(juce::Font(20.0f, juce::Font::bold));
-    analysisModeSummaryLabel.setColour(juce::Label::textColourId, analysisModeAccentColour);
-    addAndMakeVisible(analysisModeSummaryLabel);
+    auto setupSlotLabel = [](juce::Label& l, const juce::String& text, bool heading) {
+        l.setText(text, juce::dontSendNotification);
+        l.setJustificationType(heading ? juce::Justification::centredLeft : juce::Justification::topLeft);
+        l.setFont(juce::Font(heading ? 12.5f : 10.5f, heading ? juce::Font::bold : juce::Font::plain));
+        l.setMinimumHorizontalScale(0.72f);
+    };
+    setupSlotLabel(sourceALabel, "Source A", true);
+    setupSlotLabel(sourceBLabel, "Source B", true);
+    setupSlotLabel(sourceAMetaLabel, "Empty", false);
+    setupSlotLabel(sourceBMetaLabel, "Empty", false);
+    setupSlotLabel(sourceAOverviewLabel, "Overview empty", false);
+    setupSlotLabel(sourceBOverviewLabel, "Overview empty", false);
+    sourceAOverviewLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    sourceBOverviewLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
 
-    analysisModeDetailLabel.setJustificationType(juce::Justification::topLeft);
-    analysisModeDetailLabel.setFont(juce::Font(12.0f));
-    analysisModeDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
-    addAndMakeVisible(analysisModeDetailLabel);
+    sourceAGroup.setText("Source A");
+    sourceAGroup.setTextLabelPosition(juce::Justification::centredLeft);
+    sourceBGroup.setText("Source B");
+    sourceBGroup.setTextLabelPosition(juce::Justification::centredLeft);
+    addAndMakeVisible(sourceAGroup);
+    addAndMakeVisible(sourceBGroup);
 
-    analysisModeLabel.setText("Engine", juce::dontSendNotification);
-    trackerModeLabel.setText("Tracker", juce::dontSendNotification);
-    analysisModeCombo.addItemList(
-        juce::StringArray { "Classic ATS - legacy compatibility",
-                            "Modern ATS - source/transient analysis",
-                            "Experimental - reassigned/DDM prototype" },
-        1);
-    analysisModeCombo.setHelpText(
-        "This chooses the analysis and preview engine used next time you press Analyze.");
-    trackerModeCombo.addItemList(juce::StringArray { "Classic recursive freq/SMR", "Modern assignment" }, 1);
-    trackerModeCombo.setHelpText("Only Modern ATS and Experimental analyses use this tracker selector.");
-    addAndMakeVisible(analysisModeLabel);
-    addAndMakeVisible(analysisModeCombo);
-    addAndMakeVisible(trackerModeLabel);
-    addAndMakeVisible(trackerModeCombo);
-    analysisModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "analysisMode", analysisModeCombo);
-    trackerModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.apvts, "trackerMode", trackerModeCombo);
+    addAndMakeVisible(sourceALabel);
+    addAndMakeVisible(sourceBLabel);
+    addAndMakeVisible(sourceAMetaLabel);
+    addAndMakeVisible(sourceBMetaLabel);
+    addAndMakeVisible(sourceAOverviewLabel);
+    addAndMakeVisible(sourceBOverviewLabel);
+
+    sourceALoadAnalyzeButton.setButtonText("Choose A");
+    sourceBLoadAnalyzeButton.setButtonText("Choose B");
+    sourceAUseCurrentButton.setButtonText("Re-analyze A");
+    sourceBUseCurrentButton.setButtonText("Re-analyze B");
+    sourceAListenButton.setButtonText("Play A");
+    sourceBListenButton.setButtonText("Play B");
+    exportSourceAButton.setButtonText("Export ATS");
+    exportSourceBButton.setButtonText("Export ATS");
+    sourceALoadAnalyzeButton.setHelpText("Choose a WAV or ATS file and assign it to Source A.");
+    sourceBLoadAnalyzeButton.setHelpText("Choose a WAV or ATS file and assign it to Source B.");
+    sourceAUseCurrentButton.setHelpText("Re-analyze Source A from its chosen WAV file.");
+    sourceBUseCurrentButton.setHelpText("Re-analyze Source B from its chosen WAV file.");
+    sourceAListenButton.setHelpText("Preview Source A with the current audition mode.");
+    sourceBListenButton.setHelpText("Preview Source B with the current audition mode.");
+    exportSourceAButton.setHelpText("Export Source A model to an ATS file.");
+    exportSourceBButton.setHelpText("Export Source B model to an ATS file.");
+
+    sourceALoadAnalyzeButton.onClick = [this] { pickMorphSourceFile(0); };
+    sourceBLoadAnalyzeButton.onClick = [this] { pickMorphSourceFile(1); };
+
+    sourceAUseCurrentButton.onClick = [this] {
+        juce::String err;
+        if (!audioProcessor.reanalyzeMorphSourceSlot(0, err))
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source A", err);
+        refreshFromProcessor();
+    };
+    sourceBUseCurrentButton.onClick = [this] {
+        juce::String err;
+        if (!audioProcessor.reanalyzeMorphSourceSlot(1, err))
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source B", err);
+        refreshFromProcessor();
+    };
+    sourceAListenButton.onClick = [this] {
+        if (audioProcessor.isPreviewPlaying()
+            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::SourceA)
+        {
+            audioProcessor.stopPreviewPlayback();
+            return;
+        }
+
+        juce::String err;
+        if (!audioProcessor.listenMorphSourceSlot(0, (AtsSourceAuditionMode) getSourceAuditionModeIndex(0), err))
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Listen A", err);
+    };
+    sourceBListenButton.onClick = [this] {
+        if (audioProcessor.isPreviewPlaying()
+            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::SourceB)
+        {
+            audioProcessor.stopPreviewPlayback();
+            return;
+        }
+
+        juce::String err;
+        if (!audioProcessor.listenMorphSourceSlot(1, (AtsSourceAuditionMode) getSourceAuditionModeIndex(1), err))
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Listen B", err);
+    };
+
+    exportSourceAButton.onClick = [this] { exportMorphSourceSlotAts(0); };
+    exportSourceBButton.onClick = [this] { exportMorphSourceSlotAts(1); };
+
+    addAndMakeVisible(sourceALoadAnalyzeButton);
+    addAndMakeVisible(sourceBLoadAnalyzeButton);
+    addAndMakeVisible(sourceAUseCurrentButton);
+    addAndMakeVisible(sourceBUseCurrentButton);
+    addAndMakeVisible(sourceAListenButton);
+    addAndMakeVisible(sourceBListenButton);
+    addAndMakeVisible(exportSourceAButton);
+    addAndMakeVisible(exportSourceBButton);
+
+    sourceAAuditionLabel.setText("Audition", juce::dontSendNotification);
+    sourceBAuditionLabel.setText("Audition", juce::dontSendNotification);
+    sourceAAuditionLabel.setJustificationType(juce::Justification::centredLeft);
+    sourceBAuditionLabel.setJustificationType(juce::Justification::centredLeft);
+    sourceAAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    sourceBAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    sourceAAuditionLabel.setMinimumHorizontalScale(0.7f);
+    sourceBAuditionLabel.setMinimumHorizontalScale(0.7f);
+    addAndMakeVisible(sourceAAuditionLabel);
+    addAndMakeVisible(sourceBAuditionLabel);
+
+    auto setupAuditionButtons = [](juce::ToggleButton& both,
+                                   juce::ToggleButton& partials,
+                                   juce::ToggleButton& residual,
+                                   int radioGroup) {
+        for (auto* button : { &both, &partials, &residual })
+        {
+            button->setRadioGroupId(radioGroup);
+            button->setClickingTogglesState(true);
+        }
+        both.setToggleState(true, juce::dontSendNotification);
+    };
+    setupAuditionButtons(sourceABothButton, sourceAPartialsButton, sourceAResidualButton, 5101);
+    setupAuditionButtons(sourceBBothButton, sourceBPartialsButton, sourceBResidualButton, 5102);
+    addAndMakeVisible(sourceABothButton);
+    addAndMakeVisible(sourceAPartialsButton);
+    addAndMakeVisible(sourceAResidualButton);
+    addAndMakeVisible(sourceBBothButton);
+    addAndMakeVisible(sourceBPartialsButton);
+    addAndMakeVisible(sourceBResidualButton);
+
+    morphSnapshotLabel.setText("Morph preview", juce::dontSendNotification);
+    morphSnapshotLabel.setJustificationType(juce::Justification::centredLeft);
+    morphSnapshotLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphSnapshotStatusLabel.setJustificationType(juce::Justification::centredLeft);
+    morphSnapshotStatusLabel.setFont(juce::Font(10.5f));
+    morphSnapshotStatusLabel.setMinimumHorizontalScale(0.7f);
+    morphSnapshotStatusLabel.setHelpText("Shows whether live morph controls match the last prepared snapshot.");
+    addAndMakeVisible(morphSnapshotLabel);
+    addAndMakeVisible(morphSnapshotStatusLabel);
+
+    for (size_t i = 0; i < morphVariationRecallButtons.size(); ++i)
+    {
+        const auto slotLabel = juce::String("V") + juce::String((int) i + 1);
+        morphVariationRecallButtons[i].setButtonText(slotLabel);
+        morphVariationRecallButtons[i].setHelpText("Recall this saved morph variation.");
+        morphVariationRecallButtons[i].onClick = [this, i] { recallMorphVariation(i); };
+        morphVariationSaveButtons[i].setButtonText("S" + juce::String((int) i + 1));
+        morphVariationSaveButtons[i].setHelpText("Save the current macro and lane state into this variation.");
+        morphVariationSaveButtons[i].onClick = [this, i] { saveMorphVariation(i); };
+    }
+
+    morphTimelineLabel.setText("Morph Timeline", juce::dontSendNotification);
+    morphTimelineLabel.setJustificationType(juce::Justification::centredLeft);
+    morphTimelineLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphTimelineHintLabel.setJustificationType(juce::Justification::centredLeft);
+    morphTimelineHintLabel.setFont(juce::Font(10.5f));
+    morphTimelineHintLabel.setMinimumHorizontalScale(0.7f);
+    morphTimelineHintLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    morphTimelineEditor.setHelpText(
+        "Morph breakpoints (circles): blend Source A toward B. "
+        "Hybrid breakpoints (diamonds): scale Source A amplitudes by Source B's Bark envelope — "
+        "Source A partials are preserved unchanged. "
+        "For a pure Hybrid effect, press Reset first so the morph stays at A, then add Hybrid breakpoints.");
+    morphTimelineEditor.onPointsChanged = [this](std::vector<AtsMorphTimelinePoint> points) {
+        audioProcessor.setMorphTimelinePoints(points);
+        refreshMorphSnapshotControls();
+    };
+    morphTimelinePlayButton.setHelpText("Render the drawn morph timeline and play it from the beginning.");
+    morphTimelinePlayButton.onClick = [this] {
+        if (audioProcessor.isPreviewPlaying()
+            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::MorphTimeline)
+        {
+            audioProcessor.stopPreviewPlayback();
+            refreshFromProcessor();
+            return;
+        }
+        playMorphTimeline();
+    };
+    morphTimelineBounceButton.setHelpText("Render the morph timeline to a WAV file and reveal it for import into your DAW.");
+    morphTimelineBounceButton.onClick = [this] { bounceMorphTimeline(); };
+    morphTimelineAuditionLabel.setText("Audition", juce::dontSendNotification);
+    morphTimelineAuditionLabel.setJustificationType(juce::Justification::centredLeft);
+    morphTimelineAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    morphTimelineAuditionLabel.setMinimumHorizontalScale(0.7f);
+    for (auto* button : { &morphTimelineBothButton, &morphTimelinePartialsButton, &morphTimelineResidualButton })
+    {
+        button->setRadioGroupId(5201);
+        button->setClickingTogglesState(true);
+        button->setHelpText("Choose which layer to audition for timeline playback.");
+    }
+    morphTimelineBothButton.setToggleState(true, juce::dontSendNotification);
+    morphTimelineResetButton.setHelpText("Reset to Source A (morph = 0). Recommended starting point before adding Hybrid breakpoints.");
+    morphTimelineResetButton.onClick = [this] {
+        setMorphTimelinePreset({ { 0.0, 0.0 }, { 1.0, 0.0 } });
+    };
+    addAndMakeVisible(morphTimelineLabel);
+    addAndMakeVisible(morphTimelineAuditionLabel);
+    addAndMakeVisible(morphTimelineBothButton);
+    addAndMakeVisible(morphTimelinePartialsButton);
+    addAndMakeVisible(morphTimelineResidualButton);
+    addAndMakeVisible(morphTimelineHintLabel);
+    addAndMakeVisible(morphTimelineEditor);
+    addAndMakeVisible(morphTimelinePlayButton);
+    addAndMakeVisible(morphTimelineBounceButton);
+    addAndMakeVisible(morphTimelineResetButton);
+
+    morphSmoothingLabel.setText("Smooth", juce::dontSendNotification);
+    morphSmoothingLabel.setJustificationType(juce::Justification::centredLeft);
+    morphSmoothingLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphSmoothingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    morphSmoothingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 54, 18);
+    morphSmoothingSlider.setName("Morph smoothing");
+    morphSmoothingSlider.setHelpText("Control smoothing time in milliseconds for live morph lanes.");
+    resetMorphLanesButton.setHelpText("Link every morph lane to the main morph control.");
+    resetMorphLanesButton.onClick = [this] { resetMorphLanesToLinked(); };
+    addAndMakeVisible(morphSmoothingLabel);
+    addAndMakeVisible(morphSmoothingSlider);
+    addAndMakeVisible(resetMorphLanesButton);
+    morphSmoothingAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kMorphSmoothingMs, morphSmoothingSlider);
+
+    for (size_t i = 0; i < morphLaneLabels.size(); ++i)
+    {
+        morphLaneLabels[i].setText(ats_param::kMorphLaneDisplayNames[i], juce::dontSendNotification);
+        morphLaneLabels[i].setJustificationType(juce::Justification::centredLeft);
+        morphLaneLabels[i].setFont(juce::Font(10.5f, juce::Font::bold));
+        morphLaneLabels[i].setMinimumHorizontalScale(0.72f);
+        morphLaneSliders[i].setSliderStyle(juce::Slider::LinearHorizontal);
+        morphLaneSliders[i].setTextBoxStyle(juce::Slider::TextBoxRight, false, 42, 16);
+        morphLaneSliders[i].setName(juce::String(ats_param::kMorphLaneDisplayNames[i]) + " lane");
+        morphLaneSliders[i].setHelpText("Independent morph amount for this lane when unlinked.");
+        morphLaneLinkedButtons[i].setButtonText("L");
+        morphLaneLinkedButtons[i].setHelpText("Link this lane to the main morph amount.");
+        addAndMakeVisible(morphLaneLabels[i]);
+        addAndMakeVisible(morphLaneSliders[i]);
+        addAndMakeVisible(morphLaneLinkedButtons[i]);
+        morphLaneAmountAttach[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            audioProcessor.apvts, ats_param::kMorphLaneAmountIds[i], morphLaneSliders[i]);
+        morphLaneLinkedAttach[i] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            audioProcessor.apvts, ats_param::kMorphLaneLinkedIds[i], morphLaneLinkedButtons[i]);
+    }
+
+    auto setupPolicyCombo = [this](juce::ComboBox& combo,
+                                   const juce::StringArray& items,
+                                   const juce::String& helpText) {
+        for (int i = 0; i < items.size(); ++i)
+            combo.addItem(items[i], i + 1);
+        combo.setTextWhenNothingSelected(items.isEmpty() ? juce::String() : items[0]);
+        combo.setHelpText(helpText);
+        addAndMakeVisible(combo);
+    };
+    morphPolicyLabel.setText("Policy", juce::dontSendNotification);
+    morphPolicyLabel.setJustificationType(juce::Justification::centredLeft);
+    morphPolicyLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    addAndMakeVisible(morphPolicyLabel);
+
+    setupPolicyCombo(morphGridTypeCombo, { "Bark", "Mel" }, "Perceptual frequency grid.");
+    setupPolicyCombo(morphCorrespondenceCombo,
+                     { "Freq rank", "Greedy", "Assign" },
+                     "Partial correspondence strategy.");
+    setupPolicyCombo(morphSourcePolicyCombo,
+                     { "Src fade", "Src in", "Src hold", "Src residual", "Src discard" },
+                     "Policy for source-only partials.");
+    setupPolicyCombo(morphTargetPolicyCombo,
+                     { "Tgt out", "Tgt fade", "Tgt hold", "Tgt residual", "Tgt discard" },
+                     "Policy for target-only partials.");
+    setupPolicyCombo(morphFrequencyDomainCombo,
+                     { "Log Hz", "Bark coord" },
+                     "Frequency interpolation domain.");
+    setupPolicyCombo(morphAmplitudeDomainCombo,
+                     { "Power", "dB" },
+                     "Amplitude interpolation domain.");
+    setupPolicyCombo(morphPhaseStrategyCombo,
+                     { "Osc", "A phase", "B phase", "Rel cluster", "Blend" },
+                     "Phase strategy.");
+    setupPolicyCombo(morphTransientPolicyCombo,
+                     { "A attack", "B attack", "Xfade atk", "Sustain" },
+                     "Transient handling policy.");
+    morphDiscardOptInButton.setButtonText("Discard");
+    morphDiscardOptInButton.setHelpText("Explicit opt-in required before discard policies are honored.");
+    addAndMakeVisible(morphDiscardOptInButton);
+
+    morphGridTypeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphGridType, morphGridTypeCombo);
+    morphCorrespondenceAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphCorrespondenceStrategy, morphCorrespondenceCombo);
+    morphSourcePolicyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphUnmatchedSourcePolicy, morphSourcePolicyCombo);
+    morphTargetPolicyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphUnmatchedTargetPolicy, morphTargetPolicyCombo);
+    morphFrequencyDomainAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphFrequencyInterpolationDomain, morphFrequencyDomainCombo);
+    morphAmplitudeDomainAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphAmplitudeInterpolationDomain, morphAmplitudeDomainCombo);
+    morphPhaseStrategyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphPhaseStrategy, morphPhaseStrategyCombo);
+    morphTransientPolicyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphTransientPolicy, morphTransientPolicyCombo);
+    morphDiscardOptInAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, ats_param::kMorphDiscardOptIn, morphDiscardOptInButton);
+
+    morphBandLabel.setText("Bands", juce::dontSendNotification);
+    morphBandLabel.setJustificationType(juce::Justification::centredLeft);
+    morphBandLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphBandInspectorLabel.setJustificationType(juce::Justification::topLeft);
+    morphBandInspectorLabel.setFont(juce::Font(10.5f));
+    morphBandInspectorLabel.setMinimumHorizontalScale(0.72f);
+    morphBandInspectorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
+    morphBandInspectorLabel.setHelpText("Selected band correspondence, energy, policy, and transient diagnostics.");
+    morphBandStrip.setHelpText("Perceptual band strip: blue source A, green source B, amber output, red warnings.");
+    morphBandStrip.onBandSelected = [this](int bandIndex) {
+        selectedMorphBandIndex = bandIndex;
+        refreshMorphBandDiagnostics();
+    };
+    addAndMakeVisible(morphBandLabel);
+    addAndMakeVisible(morphBandStrip);
+    addAndMakeVisible(morphBandInspectorLabel);
 
     spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
@@ -283,14 +986,12 @@ void SessionTabPanel::rebuildPresetList()
 void SessionTabPanel::onPresetComboChanged()
 {
     const int id = presetCombo.getSelectedId();
-    setPresetMetadataText({});
     if (id <= 0)
         return;
 
     const int nFactory = ats_preset::factoryPresetNames().size();
     if (id <= nFactory)
     {
-        setPresetMetadataText(ats_preset::factoryPresetMetadata(id - 1));
         audioProcessor.setCurrentProgram(id - 1);
         return;
     }
@@ -299,10 +1000,7 @@ void SessionTabPanel::onPresetComboChanged()
     {
         const int idx = id - kUserPresetComboIdBase;
         if (juce::isPositiveAndBelow(idx, userPresetFiles.size()))
-        {
-            setPresetMetadataText("User full-state preset (.atspreset): restores analysis/tracker mode and model snapshot.");
             audioProcessor.loadFullStatePreset(userPresetFiles.getReference(idx));
-        }
     }
 }
 
@@ -337,116 +1035,446 @@ void SessionTabPanel::saveUserPreset()
     });
 }
 
-void SessionTabPanel::paint(juce::Graphics& g)
+void SessionTabPanel::resetMorphLanesToLinked()
 {
-    if (analysisModeCardBounds.isEmpty())
+    const float morphAmount = getPlainParameter(audioProcessor, ats_param::kMorphAmount, 0.0f);
+    for (size_t i = 0; i < ats_param::kMorphLaneCount; ++i)
+    {
+        setPlainParameter(audioProcessor, ats_param::kMorphLaneAmountIds[i], morphAmount);
+        setBoolParameter(audioProcessor, ats_param::kMorphLaneLinkedIds[i], true);
+    }
+}
+
+void SessionTabPanel::saveMorphVariation(size_t index)
+{
+    juce::String err;
+    if (!audioProcessor.saveCurrentMorphVariation((int) index, err))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                    "Save variation",
+                                                    err);
+    }
+    refreshMorphSnapshotControls();
+}
+
+void SessionTabPanel::recallMorphVariation(size_t index)
+{
+    juce::String err;
+    if (!audioProcessor.recallMorphVariation((int) index, err))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                    "Recall variation",
+                                                    err);
+    }
+    refreshMorphSnapshotControls();
+}
+
+void SessionTabPanel::refreshMorphSnapshotControls()
+{
+    const auto snapshotState = audioProcessor.getMorphSnapshotUiState();
+    morphSnapshotStatusLabel.setText(audioProcessor.getMorphSnapshotStatusText(),
+                                     juce::dontSendNotification);
+    morphSnapshotStatusLabel.setColour(juce::Label::textColourId, snapshotStateColour(snapshotState));
+
+    for (size_t i = 0; i < morphVariationRecallButtons.size(); ++i)
+    {
+        AtsMorphSnapshotSlotInfo slot;
+        const bool hasSlot = audioProcessor.getMorphVariationSlotInfo((int) i, slot) && slot.hasSnapshot;
+        const auto label = slot.name.isNotEmpty() ? slot.name : ("V" + juce::String((int) i + 1));
+        morphVariationRecallButtons[i].setButtonText(hasSlot ? label : (label + "-"));
+        morphVariationRecallButtons[i].setEnabled(hasSlot);
+        morphVariationSaveButtons[i].setEnabled(true);
+    }
+}
+
+void SessionTabPanel::refreshMorphBandDiagnostics()
+{
+    morphBandDiagnostics = audioProcessor.buildMorphBandDiagnostics();
+    if (morphBandDiagnostics.empty())
+    {
+        selectedMorphBandIndex = -1;
+        morphBandStrip.setBands({}, selectedMorphBandIndex);
+        morphBandInspectorLabel.setText("No morph band diagnostics yet.", juce::dontSendNotification);
         return;
+    }
 
-    const auto card = analysisModeCardBounds.toFloat();
-    g.setColour(juce::Colour(0xff181a24));
-    g.fillRoundedRectangle(card, 10.0f);
-    g.setColour(analysisModeAccentColour.withAlpha(0.34f));
-    g.drawRoundedRectangle(card.reduced(0.5f), 10.0f, 1.6f);
+    bool foundSelection = false;
+    std::vector<MorphBandStrip::BandView> views;
+    views.reserve(morphBandDiagnostics.size());
+    for (const auto& diagnostic : morphBandDiagnostics)
+    {
+        foundSelection = foundSelection || diagnostic.bandIndex == selectedMorphBandIndex;
+        views.push_back({diagnostic.bandIndex,
+                         diagnostic.sourcePower,
+                         diagnostic.targetPower,
+                         diagnostic.outputPower,
+                         diagnostic.matchedCount,
+                         diagnostic.unmatchedSourceCount + diagnostic.unmatchedTargetCount,
+                         diagnostic.warning});
+    }
 
-    auto accentBounds = analysisModeCardBounds;
-    auto accent = accentBounds.removeFromLeft(5).toFloat();
-    g.setColour(analysisModeAccentColour.withAlpha(0.88f));
-    g.fillRoundedRectangle(accent, 4.0f);
+    if (!foundSelection)
+        selectedMorphBandIndex = morphBandDiagnostics.front().bandIndex;
+
+    morphBandStrip.setBands(std::move(views), selectedMorphBandIndex);
+
+    for (const auto& diagnostic : morphBandDiagnostics)
+    {
+        if (diagnostic.bandIndex == selectedMorphBandIndex)
+        {
+            morphBandInspectorLabel.setText(diagnostic.inspectorText, juce::dontSendNotification);
+            return;
+        }
+    }
+}
+
+void SessionTabPanel::refreshMorphTimeline()
+{
+    const auto points = audioProcessor.getMorphTimelinePoints();
+    if (!morphTimelineEditor.isEditing())
+        morphTimelineEditor.setPoints(points);
+
+    morphTimelineHintLabel.setText({}, juce::dontSendNotification);
+}
+
+void SessionTabPanel::setMorphTimelinePreset(std::vector<AtsMorphTimelinePoint> points)
+{
+    audioProcessor.setMorphTimelinePoints(points);
+    morphTimelineEditor.setPoints(audioProcessor.getMorphTimelinePoints());
+    refreshMorphSnapshotControls();
+    refreshMorphTimeline();
+}
+
+void SessionTabPanel::playMorphTimeline()
+{
+    juce::String err;
+    if (!audioProcessor.playMorphTimelinePreview((AtsSourceAuditionMode) getMorphTimelineAuditionModeIndex(), err))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "Play Morph Timeline",
+            err.isEmpty() ? juce::String("Could not play morph timeline.") : err);
+    }
+    refreshFromProcessor();
+}
+
+void SessionTabPanel::bounceMorphTimeline()
+{
+    timelineBounceChooser = std::make_unique<juce::FileChooser>("Bounce Morph Timeline",
+                                                                 juce::File{},
+                                                                 "*.wav");
+    constexpr auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+    timelineBounceChooser->launchAsync(flags, [this](const juce::FileChooser& fc) {
+        auto file = fc.getResult();
+        if (file.getFullPathName().isEmpty())
+            return;
+        if (!file.hasFileExtension(".wav"))
+            file = file.withFileExtension("wav");
+
+        juce::String err;
+        if (!audioProcessor.bounceMorphTimelineToFile(file,
+                                                      (AtsSourceAuditionMode) getMorphTimelineAuditionModeIndex(),
+                                                      err))
+        {
+            juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon,
+                "Bounce Timeline",
+                err.isEmpty() ? juce::String("Could not bounce morph timeline.") : err);
+            return;
+        }
+
+        // Best-effort UX for DAW workflows: reveal file for drag/drop/import.
+        file.revealToUser();
+    });
+}
+
+int SessionTabPanel::getSourceAuditionModeIndex(int slotIndex) const
+{
+    if (slotIndex == 0)
+    {
+        if (sourceAPartialsButton.getToggleState())
+            return (int) AtsSourceAuditionMode::PartialsOnly;
+        if (sourceAResidualButton.getToggleState())
+            return (int) AtsSourceAuditionMode::ResidualOnly;
+        return (int) AtsSourceAuditionMode::Both;
+    }
+
+    if (sourceBPartialsButton.getToggleState())
+        return (int) AtsSourceAuditionMode::PartialsOnly;
+    if (sourceBResidualButton.getToggleState())
+        return (int) AtsSourceAuditionMode::ResidualOnly;
+    return (int) AtsSourceAuditionMode::Both;
+}
+
+int SessionTabPanel::getMorphTimelineAuditionModeIndex() const
+{
+    if (morphTimelinePartialsButton.getToggleState())
+        return (int) AtsSourceAuditionMode::PartialsOnly;
+    if (morphTimelineResidualButton.getToggleState())
+        return (int) AtsSourceAuditionMode::ResidualOnly;
+    return (int) AtsSourceAuditionMode::Both;
+}
+
+void SessionTabPanel::exportMorphSourceSlotAts(int slotIndex)
+{
+    atsExportChooser = std::make_unique<juce::FileChooser>(slotIndex == 0 ? "Export Source A ATS"
+                                                                           : "Export Source B ATS",
+                                                            juce::File{},
+                                                            "*.ats");
+    constexpr auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+    atsExportChooser->launchAsync(flags, [this, slotIndex](const juce::FileChooser& fc) {
+        auto file = fc.getResult();
+        if (file.getFullPathName().isEmpty())
+            return;
+        if (!file.hasFileExtension(".ats"))
+            file = file.withFileExtension("ats");
+
+        juce::String err;
+        if (!audioProcessor.exportMorphSourceSlotAts(slotIndex, file, err))
+            juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon,
+                slotIndex == 0 ? "Export Source A" : "Export Source B",
+                err.isEmpty() ? juce::String("Could not export source ATS.") : err);
+    });
 }
 
 void SessionTabPanel::resized()
 {
     const auto sc = [](int px) { return scaledUi(px); };
 
-    auto r = getLocalBounds().reduced(sc(12));
+    auto r = getLocalBounds().reduced(sc(8));
+    loadButton.setBounds({});
+    analyzeButton.setBounds({});
+    currentPlayButton.setBounds({});
+    cancelButton.setBounds({});
+    presetLabel.setBounds({});
+    presetCombo.setBounds({});
+    savePresetButton.setBounds({});
+    importAtsButton.setBounds({});
+    exportAtsButton.setBounds({});
+    analysisSummaryLabel.setBounds({});
 
-    auto top = r.removeFromTop(sc(28));
-    loadButton.setBounds(top.removeFromLeft(sc(118)));
-    top.removeFromLeft(sc(8));
-    analyzeButton.setBounds(top.removeFromLeft(sc(92)));
-    top.removeFromLeft(sc(8));
-    cancelButton.setBounds(top.removeFromLeft(sc(92)));
-    top.removeFromLeft(sc(16));
+    statusLabel.setBounds(r.removeFromTop(sc(18)));
+    r.removeFromTop(sc(1));
 
-    auto presetLabelArea = top.removeFromLeft(sc(52));
-    presetLabel.setBounds(presetLabelArea);
-    presetCombo.setBounds(top.removeFromLeft(juce::jmax(sc(220), top.getWidth() / 3)));
-    top.removeFromLeft(sc(8));
-    savePresetButton.setBounds(top.removeFromLeft(sc(110)));
-
-    r.removeFromTop(sc(6));
-    auto ioRow = r.removeFromTop(sc(28));
-    importAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
-    ioRow.removeFromLeft(sc(8));
-    exportAtsButton.setBounds(ioRow.removeFromLeft(sc(130)));
-    ioRow.removeFromLeft(sc(16));
-    previewPlayButton.setBounds(ioRow.removeFromLeft(sc(90)));
-    ioRow.removeFromLeft(sc(8));
-    previewStopButton.setBounds(ioRow.removeFromLeft(sc(90)));
-
-    r.removeFromTop(sc(6));
-    statusLabel.setBounds(r.removeFromTop(sc(22)));
-
-    auto placeDynamicLabel = [&](juce::Label& label,
-                                 const juce::String& rawText,
-                                 int minHeight,
-                                 int maxHeight,
-                                 int lineHeight)
+    const bool hasErrorText = !errorLabel.getText().isEmpty();
+    const int errorHeight = hasErrorText ? sc(16) : sc(0);
+    if (errorHeight > 0)
     {
-        if (rawText.isEmpty())
-        {
-            label.setText({}, juce::dontSendNotification);
-            label.setBounds({});
-            return;
-        }
+        errorLabel.setBounds(r.removeFromTop(errorHeight));
+        r.removeFromTop(sc(1));
+    }
+    else
+    {
+        errorLabel.setBounds({});
+    }
 
-        r.removeFromTop(sc(3));
-        const auto wrapped = wrapTextToWidth(rawText, label.getFont(), juce::jmax(sc(100), r.getWidth()));
-        const int lines = countWrappedLines(wrapped);
-        const int height = juce::jlimit(sc(minHeight), sc(maxHeight), lines * sc(lineHeight) + sc(4));
-        label.setText(wrapped, juce::dontSendNotification);
-        label.setBounds(r.removeFromTop(height));
-    };
+    const bool hasCpuWarningText = !cpuWarningLabel.getText().isEmpty();
+    const int cpuWarningHeight = hasCpuWarningText ? sc(14) : sc(0);
+    if (cpuWarningHeight > 0)
+    {
+        cpuWarningLabel.setBounds(r.removeFromTop(cpuWarningHeight));
+        r.removeFromTop(sc(1));
+    }
+    else
+    {
+        cpuWarningLabel.setBounds({});
+    }
 
-    placeDynamicLabel(errorLabel, rawErrorText, 20, 54, 14);
-    placeDynamicLabel(modeWarningLabel, rawModeWarningText, 18, 56, 14);
-    placeDynamicLabel(presetMetadataLabel, rawPresetMetadataText, 14, 60, 14);
-    placeDynamicLabel(diagnosticsLabel, rawDiagnosticsText, 20, 66, 14);
-    placeDynamicLabel(cpuWarningLabel, rawCpuWarningText, 18, 56, 14);
-
-    r.removeFromTop(sc(4));
-    progressBar.setBounds(r.removeFromTop(sc(14)));
+    progressBar.setBounds(r.removeFromTop(sc(12)));
     r.removeFromTop(sc(6));
 
-    auto takeLeft = [](juce::Rectangle<int>& area, int width) {
-        return area.removeFromLeft(juce::jlimit(0, area.getWidth(), width));
-    };
-
-    analysisModeCardBounds = r.removeFromTop(juce::jmin(sc(112), r.getHeight()));
-    auto modeCard = analysisModeCardBounds.reduced(sc(14), sc(9));
-    analysisModeHeaderLabel.setBounds(modeCard.removeFromTop(sc(18)));
-    modeCard.removeFromTop(sc(3));
-    auto infoRow = modeCard.removeFromTop(sc(34));
-    analysisModeSummaryLabel.setBounds(takeLeft(infoRow, sc(270)));
-    takeLeft(infoRow, sc(10));
-    analysisModeDetailLabel.setBounds(infoRow);
-    modeCard.removeFromTop(sc(5));
-    auto controls = modeCard.removeFromTop(sc(28));
-    analysisModeLabel.setBounds(takeLeft(controls, sc(58)));
-    const int engineWidth =
-        juce::jlimit(0,
-                     controls.getWidth(),
-                     juce::jmin(sc(330), juce::jmax(sc(190), controls.getWidth() / 2)));
-    analysisModeCombo.setBounds(takeLeft(controls, engineWidth));
-    takeLeft(controls, sc(12));
-    trackerModeLabel.setBounds(takeLeft(controls, sc(60)));
-    trackerModeCombo.setBounds(takeLeft(controls, sc(250)));
-    r.removeFromTop(sc(8));
+    const bool narrowSourceCards = r.getWidth() < 680;
+    auto sourceCards = r.removeFromTop(narrowSourceCards ? 232 : 112);
+    r.removeFromTop(sc(6));
 
     auto body = r;
     const int specW = juce::jmax(sc(280), body.getWidth() / 3);
     auto specCol = body.removeFromRight(specW);
     spectroPanel.setBounds(specCol);
+
+    auto placeSourceSlot = [&](juce::Rectangle<int> area,
+                               juce::GroupComponent& group,
+                               juce::Label& heading,
+                               juce::Label& meta,
+                               juce::Label& overview,
+                               juce::TextButton& chooseButton,
+                               juce::TextButton& reanalyzeButton,
+                               juce::TextButton& playButton,
+                               juce::TextButton& exportButton,
+                               juce::Label& auditionLabel,
+                               juce::ToggleButton& bothButton,
+                               juce::ToggleButton& partialsButton,
+                               juce::ToggleButton& residualButton) {
+        group.setBounds(area);
+        auto inner = area.reduced(10, 14);
+        auto buttonCol = inner.removeFromRight(narrowSourceCards ? 132 : 192);
+        chooseButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
+        buttonCol.removeFromTop(4);
+        reanalyzeButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
+        buttonCol.removeFromTop(4);
+        playButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
+        buttonCol.removeFromTop(4);
+        exportButton.setBounds(buttonCol.removeFromTop(18).reduced(2));
+        inner.removeFromRight(6);
+        heading.setBounds({});
+        meta.setBounds(inner.removeFromTop(24));
+        overview.setBounds(inner.removeFromTop(24));
+        inner.removeFromTop(4);
+        auto auditionRow = inner.removeFromTop(24);
+        auditionLabel.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 54 : 62));
+        bothButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 54 : 62));
+        partialsButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 72 : 82));
+        residualButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 78 : 88));
+    };
+
+    if (narrowSourceCards)
+    {
+        placeSourceSlot(sourceCards.removeFromTop(112).reduced(0, 1),
+                        sourceAGroup,
+                        sourceALabel,
+                        sourceAMetaLabel,
+                        sourceAOverviewLabel,
+                        sourceALoadAnalyzeButton,
+                        sourceAUseCurrentButton,
+                        sourceAListenButton,
+                        exportSourceAButton,
+                        sourceAAuditionLabel,
+                        sourceABothButton,
+                        sourceAPartialsButton,
+                        sourceAResidualButton);
+        sourceCards.removeFromTop(4);
+        placeSourceSlot(sourceCards.removeFromTop(112).reduced(0, 1),
+                        sourceBGroup,
+                        sourceBLabel,
+                        sourceBMetaLabel,
+                        sourceBOverviewLabel,
+                        sourceBLoadAnalyzeButton,
+                        sourceBUseCurrentButton,
+                        sourceBListenButton,
+                        exportSourceBButton,
+                        sourceBAuditionLabel,
+                        sourceBBothButton,
+                        sourceBPartialsButton,
+                        sourceBResidualButton);
+    }
+    else
+    {
+        auto sourceA = sourceCards.removeFromLeft(sourceCards.getWidth() / 2).reduced(0, 1);
+        sourceCards.removeFromLeft(8);
+        auto sourceB = sourceCards.reduced(0, 1);
+        placeSourceSlot(sourceA,
+                        sourceAGroup,
+                        sourceALabel,
+                        sourceAMetaLabel,
+                        sourceAOverviewLabel,
+                        sourceALoadAnalyzeButton,
+                        sourceAUseCurrentButton,
+                        sourceAListenButton,
+                        exportSourceAButton,
+                        sourceAAuditionLabel,
+                        sourceABothButton,
+                        sourceAPartialsButton,
+                        sourceAResidualButton);
+        placeSourceSlot(sourceB,
+                        sourceBGroup,
+                        sourceBLabel,
+                        sourceBMetaLabel,
+                        sourceBOverviewLabel,
+                        sourceBLoadAnalyzeButton,
+                        sourceBUseCurrentButton,
+                        sourceBListenButton,
+                        exportSourceBButton,
+                        sourceBAuditionLabel,
+                        sourceBBothButton,
+                        sourceBPartialsButton,
+                        sourceBResidualButton);
+    }
+    body.removeFromTop(sc(4));
+
+    auto timelineArea = body.removeFromTop(juce::jmin(sc(92), juce::jmax(sc(72), body.getHeight() / 5)));
+    auto timelineHeader = timelineArea.removeFromTop(sc(22));
+    morphTimelineLabel.setBounds(timelineHeader.removeFromLeft(sc(102)));
+    morphTimelinePlayButton.setBounds(timelineHeader.removeFromLeft(sc(112)).reduced(sc(1)));
+    morphTimelineBounceButton.setBounds(timelineHeader.removeFromLeft(sc(128)).reduced(sc(1)));
+    timelineHeader.removeFromLeft(sc(4));
+    morphTimelineAuditionLabel.setBounds(timelineHeader.removeFromLeft(sc(46)));
+    morphTimelineBothButton.setBounds(timelineHeader.removeFromLeft(sc(44)));
+    morphTimelinePartialsButton.setBounds(timelineHeader.removeFromLeft(sc(58)));
+    morphTimelineResidualButton.setBounds(timelineHeader.removeFromLeft(sc(62)));
+    timelineHeader.removeFromLeft(sc(2));
+    morphTimelineResetButton.setBounds(timelineHeader.removeFromLeft(sc(52)).reduced(sc(1)));
+    morphTimelineHintLabel.setBounds({});
+    morphTimelineEditor.setBounds(timelineArea.reduced(sc(2)));
+    body.removeFromTop(sc(4));
+
+    auto snapshotHeader = body.removeFromTop(sc(18));
+    morphSnapshotLabel.setBounds(snapshotHeader.removeFromLeft(sc(84)));
+    morphSnapshotStatusLabel.setBounds(snapshotHeader);
+    for (auto& button : morphVariationRecallButtons)
+        button.setBounds({});
+    for (auto& button : morphVariationSaveButtons)
+        button.setBounds({});
+    body.removeFromTop(sc(4));
+
+    auto laneArea = body.removeFromTop(juce::jmin(sc(116), juce::jmax(sc(78), body.getHeight() / 2)));
+    auto laneHeader = laneArea.removeFromTop(sc(24));
+    morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
+    morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(160)));
+    laneHeader.removeFromLeft(sc(6));
+    resetMorphLanesButton.setBounds(laneHeader.removeFromLeft(sc(92)));
+    laneArea.removeFromTop(sc(2));
+
+    auto laneGrid = laneArea;
+    for (size_t row = 0; row < 2; ++row)
+    {
+        auto laneRow = laneGrid.removeFromTop(laneGrid.getHeight() / (int) (2 - row));
+        for (size_t col = 0; col < 3; ++col)
+        {
+            const size_t index = row * 3 + col;
+            auto cell = laneRow.removeFromLeft(laneRow.getWidth() / (int) (3 - col)).reduced(sc(3));
+            auto title = cell.removeFromTop(sc(18));
+            morphLaneLinkedButtons[index].setBounds(title.removeFromRight(sc(34)));
+            morphLaneLabels[index].setBounds(title);
+            morphLaneSliders[index].setBounds(cell.removeFromTop(sc(28)));
+        }
+    }
+    body.removeFromTop(sc(4));
+
+    auto policyArea = body.removeFromTop(juce::jmin(sc(96), juce::jmax(sc(64), body.getHeight() / 2)));
+    auto policyHeader = policyArea.removeFromTop(sc(20));
+    morphPolicyLabel.setBounds(policyHeader.removeFromLeft(sc(54)));
+    morphDiscardOptInButton.setBounds(policyHeader.removeFromLeft(sc(96)));
+    policyArea.removeFromTop(sc(2));
+
+    std::array<juce::ComboBox*, 8> policyCombos {
+        &morphGridTypeCombo,
+        &morphCorrespondenceCombo,
+        &morphSourcePolicyCombo,
+        &morphTargetPolicyCombo,
+        &morphFrequencyDomainCombo,
+        &morphAmplitudeDomainCombo,
+        &morphPhaseStrategyCombo,
+        &morphTransientPolicyCombo,
+    };
+    for (size_t row = 0; row < 2; ++row)
+    {
+        auto comboRow = policyArea.removeFromTop(sc(30));
+        for (size_t col = 0; col < 4; ++col)
+        {
+            const size_t index = row * 4 + col;
+            policyCombos[index]->setBounds(comboRow.removeFromLeft(comboRow.getWidth() / (int) (4 - col))
+                                               .reduced(sc(2)));
+        }
+    }
+    body.removeFromTop(sc(4));
+
+    auto bandArea = body.removeFromTop(juce::jmin(sc(112), juce::jmax(sc(64), body.getHeight() / 2)));
+    auto bandHeader = bandArea.removeFromTop(sc(18));
+    morphBandLabel.setBounds(bandHeader.removeFromLeft(sc(64)));
+    morphBandStrip.setBounds(bandArea.removeFromTop(sc(30)).reduced(sc(2)));
+    morphBandInspectorLabel.setBounds(bandArea.reduced(sc(2)));
+    body.removeFromTop(sc(4));
 
     const int labelH = sc(32);
     const int knobH = sc(104);
@@ -465,11 +1493,30 @@ void SessionTabPanel::resized()
 
 void SessionTabPanel::refreshFromProcessor()
 {
+    const auto prevErrorText = errorLabel.getText();
+    const auto prevCpuWarningText = cpuWarningLabel.getText();
+
     displayProgress = (double) audioProcessor.getAnalysisProgress();
-    const bool hasPreview = audioProcessor.hasPreviewAudio();
+    analysisSummaryLabel.setText(formatAnalysisSummary(audioProcessor), juce::dontSendNotification);
     const bool playing = audioProcessor.isPreviewPlaying();
-    previewPlayButton.setEnabled(hasPreview && !playing);
-    previewStopButton.setEnabled(hasPreview && playing);
+    const bool workerBusy = audioProcessor.isWorkerBusy();
+    const auto playbackKind = audioProcessor.getPreviewPlaybackKind();
+    const bool sourceAPlaying = playing && playbackKind == AtsPreviewPlaybackKind::SourceA;
+    const bool sourceBPlaying = playing && playbackKind == AtsPreviewPlaybackKind::SourceB;
+    const bool currentPreviewPlaying = playing && playbackKind == AtsPreviewPlaybackKind::MorphPreview;
+    const bool timelinePlaying = playing && playbackKind == AtsPreviewPlaybackKind::MorphTimeline;
+    morphTimelinePlayButton.setEnabled(timelinePlaying || (audioProcessor.canPlayMorphPreview() && !workerBusy));
+    currentPlayButton.setButtonText(currentPreviewPlaying ? "Stop" : (workerBusy ? "Wait" : "Play"));
+    sourceAListenButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::SourceA ? "Stop A"
+                                                                                                  : "Play A");
+    sourceBListenButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::SourceB ? "Stop B"
+                                                                                                  : "Play B");
+    morphTimelinePlayButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::MorphTimeline
+                                              ? "Stop Timeline"
+                                              : (workerBusy && audioProcessor.canPlayMorphPreview()
+                                                     ? "Preparing..."
+                                                     : "Play Timeline"));
+    morphTimelineBounceButton.setEnabled(!workerBusy && audioProcessor.canPlayMorphPreview());
 
     switch (audioProcessor.getUiState())
     {
@@ -480,8 +1527,16 @@ void SessionTabPanel::refreshFromProcessor()
         statusLabel.setText("State: Ready to analyze", juce::dontSendNotification);
         break;
     case AtsUiState::Analyzing:
-        statusLabel.setText("State: Analyzing (CPU heavy)", juce::dontSendNotification);
+    {
+        const int pendingSlot = audioProcessor.getPendingMorphSourceSlot();
+        if (pendingSlot == 0 || pendingSlot == 1)
+            statusLabel.setText("State: Analyzing source " + juce::String(pendingSlot == 0 ? "A" : "B")
+                                    + " (CPU heavy)",
+                                juce::dontSendNotification);
+        else
+            statusLabel.setText("State: Analyzing (CPU heavy)", juce::dontSendNotification);
         break;
+    }
     case AtsUiState::Analyzed:
         statusLabel.setText(playing ? "State: Analyzed / preview playing"
                                     : "State: Analyzed / preview ready",
@@ -498,109 +1553,113 @@ void SessionTabPanel::refreshFromProcessor()
         break;
     }
 
-    bool layoutNeedsRefresh = false;
-
     const auto err = audioProcessor.getLastError();
-    const juce::String nextError = err.isEmpty() ? juce::String() : ("Last error: " + err);
-    layoutNeedsRefresh |= setRawTextIfChanged(rawErrorText, nextError);
+    errorLabel.setText(err.isEmpty() ? juce::String() : ("Last error: " + err),
+                       juce::dontSendNotification);
 
-    juce::String nextDiagnostics;
-    juce::String nextWarnings;
-    if (!audioProcessor.getModernDiagnosticsSummary(nextDiagnostics, nextWarnings))
+    // Re-query lock-protected model data only when the revision changes.
+    const int curModelRev = audioProcessor.getModelRevision();
+    if (curModelRev != cachedModelRevision)
     {
-        // Classic ATS mode: show basic model info when a model is available.
-        int classicPartials = 0, classicFrames = 0;
-        bool classicHasRes = false;
-        if (audioProcessor.getModelFootprint(classicPartials, classicFrames, classicHasRes))
-        {
-            nextDiagnostics = "Classic ATS - partials: " + juce::String(classicPartials)
-                              + ", frames: " + juce::String(classicFrames)
-                              + ", residual bands: "
-                              + (classicHasRes ? juce::String("yes") : juce::String("no"));
-        }
+        cachedModelRevision = curModelRev;
+        audioProcessor.getModelFootprint(cachedModelPartials, cachedModelFrames, cachedModelHasResidual);
     }
-
-    const int selectedAnalysisId = analysisModeCombo.getSelectedId() > 0 ? analysisModeCombo.getSelectedId() : 1;
-    const int selectedTrackerId = trackerModeCombo.getSelectedId() > 0 ? trackerModeCombo.getSelectedId() : 1;
-    const bool trackerSelectable = selectedAnalysisId == 2 || selectedAnalysisId == 3;
-
-    juce::String modeSummary = "CLASSIC ATS";
-    juce::String modeDetails =
-        "Compatibility path: Qatsh/ATSA analysis and classic preview/export.\n"
-        "Modern transient and orphan-residual lanes are off.";
-    juce::String modeNote =
-        "Classic ATS selected: use this for old ATS compatibility and parity-sensitive checks.";
-    juce::Colour nextAccent(0xff8bb8ff);
-
-    if (selectedAnalysisId == 2)
-    {
-        modeSummary = "MODERN ATS";
-        modeDetails =
-            selectedTrackerId == 2
-                ? "Direct source analysis with protected attacks and orphan residuals.\nTracker: modern assignment."
-                : "Direct source analysis with protected attacks and orphan residuals.\nTracker: classic-compatible.";
-        modeNote =
-            "Modern ATS selected: preview uses the modern snapshot path; ATS export still keeps a classic ATS model for interchange.";
-        nextAccent = juce::Colour(0xff6fe7bc);
-    }
-    else if (selectedAnalysisId == 3)
-    {
-        modeSummary = "EXPERIMENTAL";
-        modeDetails =
-            "Prototype reassigned/DDM peak estimation.\nModern snapshot preview is used; not a compatibility target.";
-        modeNote =
-            "Experimental selected: useful for research only; do not use it when you need reproducible Classic or Modern ATS baselines.";
-        nextAccent = juce::Colour(0xffffbd66);
-    }
-
-    analysisModeSummaryLabel.setText(modeSummary, juce::dontSendNotification);
-    analysisModeDetailLabel.setText(modeDetails, juce::dontSendNotification);
-    analysisModeSummaryLabel.setColour(juce::Label::textColourId, nextAccent);
-    analysisModeCombo.setColour(juce::ComboBox::outlineColourId, nextAccent.withAlpha(0.9f));
-    trackerModeCombo.setColour(juce::ComboBox::outlineColourId,
-                               trackerSelectable ? nextAccent.withAlpha(0.76f) : juce::Colour(0xff4a4a62));
-    if (analysisModeAccentColour != nextAccent)
-    {
-        analysisModeAccentColour = nextAccent;
-        repaint();
-    }
-
-    trackerModeLabel.setEnabled(trackerSelectable);
-    trackerModeCombo.setEnabled(trackerSelectable);
-    trackerModeCombo.setHelpText(trackerSelectable
-                                     ? "Select the tracker used by the next Modern/Experimental analysis."
-                                     : "Disabled in Classic ATS mode because Classic always uses recursive freq/SMR tracking.");
-    if (!trackerSelectable)
-    {
-        modeNote << "\nTracker selector is disabled because Classic ATS always uses classic recursive freq/SMR tracking.";
-    }
-    if (nextWarnings.isEmpty())
-        nextWarnings = modeNote;
-    else
-        nextWarnings = modeNote + "\n" + nextWarnings;
-
-    layoutNeedsRefresh |= setRawTextIfChanged(rawDiagnosticsText, nextDiagnostics);
-    layoutNeedsRefresh |= setRawTextIfChanged(rawModeWarningText, nextWarnings);
-
-    int partials = 0;
-    int frames = 0;
-    bool hasRes = false;
-    juce::String nextCpuWarning;
-    if (audioProcessor.getModelFootprint(partials, frames, hasRes))
+    const int partials = cachedModelPartials;
+    const int frames   = cachedModelFrames;
+    const bool hasRes  = cachedModelHasResidual;
+    const bool hasCurrentModel = (partials > 0 || frames > 0);
+    if (hasCurrentModel)
     {
         const int64_t prod = (int64_t) partials * (int64_t) frames;
         if (prod > ats_editor::kModelSizeSoftCap)
         {
-            nextCpuWarning = "Large model: " + juce::String(partials) + " partials x "
-                             + juce::String(frames) + " frames (product " + juce::String(prod)
-                             + " exceeds soft limit " + juce::String(ats_editor::kModelSizeSoftCap)
-                             + "; analysis and resynth may be slow or memory-heavy).";
+            cpuWarningLabel.setText(
+                "Large model: " + juce::String(partials) + " partials x " + juce::String(frames)
+                    + " frames (product " + juce::String(prod) + " exceeds soft limit "
+                    + juce::String(ats_editor::kModelSizeSoftCap)
+                    + "; analysis and resynth may be slow or memory-heavy).",
+                juce::dontSendNotification);
+        }
+        else
+        {
+            cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
         }
     }
+    else
+    {
+        cpuWarningLabel.setText(juce::String(), juce::dontSendNotification);
+    }
 
-    layoutNeedsRefresh |= setRawTextIfChanged(rawCpuWarningText, nextCpuWarning);
+    const int curMorphRev = audioProcessor.getMorphRecipeRevision();
+    if (curMorphRev != cachedMorphRevision)
+    {
+        cachedMorphRevision = curMorphRev;
+        audioProcessor.getMorphSourceSlotInfo(0, cachedSourceA);
+        audioProcessor.getMorphSourceSlotInfo(1, cachedSourceB);
+    }
+    const AtsMorphSourceSlotInfo& sourceInfoA = cachedSourceA;
+    const AtsMorphSourceSlotInfo& sourceInfoB = cachedSourceB;
+    sourceAMetaLabel.setText(formatSourceMeta(sourceInfoA), juce::dontSendNotification);
+    sourceBMetaLabel.setText(formatSourceMeta(sourceInfoB), juce::dontSendNotification);
+    sourceAOverviewLabel.setText(formatSourceOverview(sourceInfoA), juce::dontSendNotification);
+    sourceBOverviewLabel.setText(formatSourceOverview(sourceInfoB), juce::dontSendNotification);
+    const int pendingMorphSlot = audioProcessor.getPendingMorphSourceSlot();
+    if (pendingMorphSlot == 0)
+        sourceAOverviewLabel.setText("Analyzing WAV into Source A...", juce::dontSendNotification);
+    else if (pendingMorphSlot == 1)
+        sourceBOverviewLabel.setText("Analyzing WAV into Source B...", juce::dontSendNotification);
 
-    if (layoutNeedsRefresh)
+    juce::File sourceAFile;
+    juce::File sourceBFile;
+    const bool hasSourceAPath = audioProcessor.getMorphSourceFile(0, sourceAFile);
+    const bool hasSourceBPath = audioProcessor.getMorphSourceFile(1, sourceBFile);
+    const bool hasSourceAWav = hasSourceAPath && sourceAFile.existsAsFile()
+                               && sourceAFile.hasFileExtension(".wav");
+    const bool hasSourceBWav = hasSourceBPath && sourceBFile.existsAsFile()
+                               && sourceBFile.hasFileExtension(".wav");
+
+    sourceALoadAnalyzeButton.setEnabled(!workerBusy);
+    sourceBLoadAnalyzeButton.setEnabled(!workerBusy);
+    exportSourceAButton.setEnabled(sourceInfoA.hasModel && !workerBusy);
+    exportSourceBButton.setEnabled(sourceInfoB.hasModel && !workerBusy);
+    currentPlayButton.setEnabled(currentPreviewPlaying || (hasCurrentModel && !workerBusy));
+    sourceAUseCurrentButton.setEnabled(hasSourceAWav && !workerBusy);
+    sourceBUseCurrentButton.setEnabled(hasSourceBWav && !workerBusy);
+    sourceAListenButton.setEnabled(sourceAPlaying || (sourceInfoA.hasModel && !workerBusy));
+    sourceBListenButton.setEnabled(sourceBPlaying || (sourceInfoB.hasModel && !workerBusy));
+    sourceAResidualButton.setEnabled(!sourceInfoA.hasModel || sourceInfoA.hasResidual);
+    sourceBResidualButton.setEnabled(!sourceInfoB.hasModel || sourceInfoB.hasResidual);
+    if (sourceInfoA.hasModel && !sourceInfoA.hasResidual && sourceAResidualButton.getToggleState())
+        sourceABothButton.setToggleState(true, juce::dontSendNotification);
+    if (sourceInfoB.hasModel && !sourceInfoB.hasResidual && sourceBResidualButton.getToggleState())
+        sourceBBothButton.setToggleState(true, juce::dontSendNotification);
+
+    refreshMorphSnapshotControls();
+    refreshMorphTimeline();
+
+    for (size_t i = 0; i < morphLaneSliders.size(); ++i)
+    {
+        const bool linked = getPlainParameter(audioProcessor, ats_param::kMorphLaneLinkedIds[i], 1.0f) > 0.5f;
+        morphLaneSliders[i].setEnabled(!linked);
+    }
+    const bool discardOptedIn = getPlainParameter(audioProcessor, ats_param::kMorphDiscardOptIn, 0.0f) > 0.5f;
+    morphSourcePolicyCombo.setItemEnabled(5, discardOptedIn);
+    morphTargetPolicyCombo.setItemEnabled(5, discardOptedIn);
+    if (!discardOptedIn)
+    {
+        if (juce::roundToInt(getPlainParameter(audioProcessor, ats_param::kMorphUnmatchedSourcePolicy, 0.0f)) == 4)
+            setPlainParameter(audioProcessor,
+                              ats_param::kMorphUnmatchedSourcePolicy,
+                              0.0f);
+        if (juce::roundToInt(getPlainParameter(audioProcessor, ats_param::kMorphUnmatchedTargetPolicy, 1.0f)) == 4)
+            setPlainParameter(audioProcessor,
+                              ats_param::kMorphUnmatchedTargetPolicy,
+                              1.0f);
+    }
+
+    refreshMorphBandDiagnostics();
+
+    if (prevErrorText != errorLabel.getText() || prevCpuWarningText != cpuWarningLabel.getText())
         resized();
 }
 
@@ -646,11 +1705,39 @@ void SessionTabPanel::pickFile()
     });
 }
 
-void SessionTabPanel::setPresetMetadataText(const juce::String& text)
+void SessionTabPanel::pickMorphSourceFile(int slotIndex)
 {
-    if (rawPresetMetadataText == text)
-        return;
+    const auto slotName = slotIndex == 0 ? juce::String("Source A") : juce::String("Source B");
+    fileChooser = std::make_unique<juce::FileChooser>("Choose WAV or ATS for " + slotName,
+                                                      juce::File{},
+                                                      "*.wav;*.ats");
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
-    rawPresetMetadataText = text;
-    resized();
+    fileChooser->launchAsync(flags, [this, slotIndex, slotName](const juce::FileChooser& fc) {
+        const auto f = fc.getResult();
+        if (!f.existsAsFile())
+            return;
+
+        juce::String err;
+        if (f.hasFileExtension(".ats"))
+        {
+            if (audioProcessor.importAtsFile(f, err) && audioProcessor.setCurrentModelAsMorphSourceSlot(slotIndex, err))
+            {
+                refreshFromProcessor();
+                return;
+            }
+
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                        slotName,
+                                                        err.isEmpty() ? juce::String("Could not load ATS source.") : err);
+            refreshFromProcessor();
+            return;
+        }
+
+        if (!audioProcessor.loadAndAnalyzeMorphSourceSlot(slotIndex, f, err))
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                        slotName,
+                                                        err.isEmpty() ? juce::String("Could not analyze morph source.") : err);
+        refreshFromProcessor();
+    });
 }

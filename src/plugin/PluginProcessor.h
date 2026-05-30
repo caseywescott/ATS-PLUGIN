@@ -178,10 +178,17 @@ struct AtsMorphSnapshotSlotInfo
     std::array<bool, ats_param::kMorphLaneCount> laneLinked {};
 };
 
+enum class MorphTimelinePointKind
+{
+    Morph  = 0, // standard A→B partial blend
+    Hybrid = 1  // apply Source B's Bark envelope to Source A amplitudes
+};
+
 struct AtsMorphTimelinePoint
 {
     double timeNorm = 0.0;
     double morphAmount = 0.0;
+    MorphTimelinePointKind kind = MorphTimelinePointKind::Morph;
 };
 
 enum class AtsTraceSource
@@ -306,6 +313,7 @@ public:
     float getAnalysisProgress() const { return analysisProgress.load(); }
 
     int getModelRevision() const { return modelRevision.load(); }
+    int getMorphRecipeRevision() const { return morphRecipeRevision.load(); }
     uint64_t getDisplayShapeRevision() const { return displayShapeRevision.load(std::memory_order_acquire); }
     ats::FrequencyShapeSettings getCurrentFrequencyShapeSettings() const;
 
@@ -565,7 +573,12 @@ private:
     double hostSampleRate = 44100.0;
 
     std::atomic<int> modelRevision { 0 };
+    std::atomic<int> morphRecipeRevision { 0 };
     std::atomic<uint64_t> displayShapeRevision { 0 };
+
+    // Debounce for freq-shape resynth: avoid spawning a thread on every drag tick.
+    std::atomic<bool> freqShapePendingResynth { false };
+    std::atomic<int64_t> freqShapeLastChangeMs { 0 };
 
     /** Semitones relative to middle C (note 60) applied on top of the Freq APVTS factor. */
     std::atomic<float> midiSemitoneOffset { 0.0f };
