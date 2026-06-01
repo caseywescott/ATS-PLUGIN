@@ -2747,9 +2747,13 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             ? juce::jmax(0.0, 1.0 - (fpB - (double)(framesB - 1)))
             : 1.0;
 
+        // Scale transfer amount by fadeA: as source A ends, the spectral gain exponent
+        // approaches 0 so boosted partials fade naturally instead of cutting abruptly.
+        const double effectiveEnvTransfer = envTransferAmount * fadeA;
+
         // Build Bark envelopes for hybrid breakpoint envelope transfer (once per chunk).
         ats::BarkSpectralEnvelope barkA, barkB;
-        if (envTransferAmount > 1.0e-9)
+        if (effectiveEnvTransfer > 1.0e-9)
         {
             barkA = buildBarkEnvelopeForFrame(soundA, fA0, fA1, fracA);
             barkB = buildBarkEnvelopeForFrame(soundB, fB0, fB1, fracB);
@@ -2839,9 +2843,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             }
 
             // Hybrid envelope transfer: de-color A by its envelope, then color it
-            // by B's envelope at A's partial frequency. The ratio is intentionally
-            // not dB-clamped; floor/gap handling lives in the shared envelope helper.
-            if (envTransferAmount > 1.0e-9 && freqA > 0.0 && ampA > 0.0
+            // by B's envelope at A's partial frequency.
+            if (effectiveEnvTransfer > 1.0e-9 && freqA > 0.0 && ampA > 0.0
                 && barkA.isValid() && barkB.isValid())
             {
                 const double envA = barkA.sampleAtHz(freqA);
@@ -2849,7 +2852,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 const auto transfer = ats::applySpectralEnvelopeTransfer(ampA,
                                                                          envA,
                                                                          envB,
-                                                                         envTransferAmount);
+                                                                         effectiveEnvTransfer);
                 if (transfer.ok)
                     ampA = transfer.outputAmplitude;
             }
@@ -2933,14 +2936,14 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     1175.0, 1375.0, 1600.0, 1860.0, 2160.0, 2510.0, 2925.0, 3425.0,
                     4050.0, 4850.0, 5850.0, 7050.0, 8600.0, 10750.0, 13750.0, 17750.0
                 };
-                if (envTransferAmount > 1.0e-9 && rmsA > 0.0
+                if (effectiveEnvTransfer > 1.0e-9 && rmsA > 0.0
                     && barkA.isValid() && barkB.isValid())
                 {
                     const double centerHz = kAtsBandCenterHz[band];
                     const double envA = barkA.sampleAtHz(centerHz);
                     const double envB = barkB.sampleAtHz(centerHz);
                     const auto xfr = ats::applySpectralEnvelopeTransfer(rmsA, envA, envB,
-                                                                        envTransferAmount);
+                                                                        effectiveEnvTransfer);
                     if (xfr.ok)
                         rmsA = xfr.outputAmplitude;
                 }
