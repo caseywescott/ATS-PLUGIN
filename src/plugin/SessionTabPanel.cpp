@@ -209,11 +209,19 @@ MorphTimelineEditor::MorphTimelineEditor()
 
     morphModeBtn.onStateChange = [this] {
         if (morphModeBtn.getToggleState())
+        {
             newPointKind = MorphTimelinePointKind::Morph;
+            selectedPoint = -1;
+            repaint();
+        }
     };
     hybridModeBtn.onStateChange = [this] {
         if (hybridModeBtn.getToggleState())
+        {
             newPointKind = MorphTimelinePointKind::Hybrid;
+            selectedPoint = -1;
+            repaint();
+        }
     };
 
     addAndMakeVisible(morphModeBtn);
@@ -243,15 +251,15 @@ void MorphTimelineEditor::setPoints(std::vector<AtsMorphTimelinePoint> nextPoint
         points = { { 0.0, 0.0 }, { 1.0, 1.0 } };
 
     std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) {
-        return a.timeNorm < b.timeNorm;
+        if (a.timeNorm != b.timeNorm)
+            return a.timeNorm < b.timeNorm;
+        return static_cast<int>(a.kind) < static_cast<int>(b.kind);
     });
     for (auto& point : points)
     {
         point.timeNorm = juce::jlimit(0.0, 1.0, point.timeNorm);
         point.morphAmount = juce::jlimit(0.0, 1.0, point.morphAmount);
     }
-    points.front().timeNorm = 0.0;
-    points.back().timeNorm = 1.0;
     selectedPoint = juce::jlimit(-1, (int) points.size() - 1, selectedPoint);
     repaint();
 }
@@ -300,64 +308,32 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
     if (points.empty())
         return;
 
-    juce::Path path;
-    auto first = positionForPoint(points.front());
-    path.startNewSubPath(first);
-    for (size_t i = 1; i < points.size(); ++i)
-        path.lineTo(positionForPoint(points[i]));
-
-    g.setColour(juce::Colour(0xff75a7ff));
-    g.strokePath(path, juce::PathStrokeType(2.0f));
-
-    for (size_t i = 0; i < points.size(); ++i)
-    {
-        const auto p = positionForPoint(points[i]);
-        const bool selected = (int) i == selectedPoint;
-        const bool isHybrid = points[i].kind == MorphTimelinePointKind::Hybrid;
-
-        if (isHybrid)
-        {
-            // Diamond shape for hybrid breakpoints
-            constexpr float r = 5.5f;
-            juce::Path diamond;
-            diamond.startNewSubPath(p.x,     p.y - r);
-            diamond.lineTo(p.x + r, p.y);
-            diamond.lineTo(p.x,     p.y + r);
-            diamond.lineTo(p.x - r, p.y);
-            diamond.closeSubPath();
-            g.setColour(selected ? juce::Colour(0xfffffb70) : juce::Colour(0xffd08030));
-            g.fillPath(diamond);
-            g.setColour(juce::Colour(0xff12121a));
-            g.strokePath(diamond, juce::PathStrokeType(1.0f));
-        }
-        else
-        {
-            g.setColour(selected ? juce::Colour(0xffffd27a) : juce::Colour(0xffb8d4ff));
-            g.fillEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
-            g.setColour(juce::Colour(0xff12121a));
-            g.drawEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f, 1.0f);
-        }
-    }
+    const bool editingHybrid = newPointKind == MorphTimelinePointKind::Hybrid;
+    paintLane(g, editingHybrid ? MorphTimelinePointKind::Morph : MorphTimelinePointKind::Hybrid, false);
+    paintLane(g, newPointKind, true);
 }
 
 void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
 {
-    // Ignore clicks in the header strip — those are handled by the child buttons.
+    // Ignore clicks in the header strip; those are handled by the child buttons.
     if (e.position.y < (float) kHeaderH)
         return;
 
     if (points.empty())
         setPoints({});
 
-    const int nearest = findNearestPoint(e.position);
+    const int nearest = findNearestPoint(e.position, e.mods.isPopupMenu() ? false : true);
     if (e.mods.isPopupMenu() && nearest >= 0)
     {
         const bool isHybrid = points[(size_t) nearest].kind == MorphTimelinePointKind::Hybrid;
-        const bool isInner  = nearest > 0 && nearest < (int) points.size() - 1;
+        const auto& nearestPoint = points[(size_t) nearest];
+        const bool canRemove = nearestPoint.kind == MorphTimelinePointKind::Hybrid
+                               || (nearestPoint.timeNorm > 1.0e-6
+                                   && nearestPoint.timeNorm < 1.0 - 1.0e-6);
 
         juce::PopupMenu menu;
         menu.addItem(1, isHybrid ? "Make Morph"  : "Make Hybrid",  true, false);
-        if (isInner)
+        if (canRemove)
             menu.addItem(2, "Remove point", true, false);
 
         menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this),
@@ -370,12 +346,19 @@ void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
                     notifyChange();
                     repaint();
                 }
-                else if (result == 2 && nearest > 0 && nearest < (int) points.size() - 1)
+                else if (result == 2 && juce::isPositiveAndBelow(nearest, (int) points.size()))
                 {
-                    points.erase(points.begin() + nearest);
-                    selectedPoint = -1;
-                    notifyChange();
-                    repaint();
+                    const auto& point = points[(size_t) nearest];
+                    const bool canRemovePoint = point.kind == MorphTimelinePointKind::Hybrid
+                                                || (point.timeNorm > 1.0e-6
+                                                    && point.timeNorm < 1.0 - 1.0e-6);
+                    if (canRemovePoint)
+                    {
+                        points.erase(points.begin() + nearest);
+                        selectedPoint = -1;
+                        notifyChange();
+                        repaint();
+                    }
                 }
             });
         return;
@@ -386,9 +369,11 @@ void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
     {
         points.push_back(pointFromPosition(e.position));
         std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) {
-            return a.timeNorm < b.timeNorm;
+            if (a.timeNorm != b.timeNorm)
+                return a.timeNorm < b.timeNorm;
+            return static_cast<int>(a.kind) < static_cast<int>(b.kind);
         });
-        selectedPoint = findNearestPoint(e.position);
+        selectedPoint = findNearestPoint(e.position, true);
     }
 
     editing = true;
@@ -407,22 +392,31 @@ void MorphTimelineEditor::mouseUp(const juce::MouseEvent&)
 
 void MorphTimelineEditor::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    const int nearest = findNearestPoint(e.position);
-    if (nearest > 0 && nearest < (int) points.size() - 1)
+    const int nearest = findNearestPoint(e.position, true);
+    if (nearest >= 0)
     {
-        points.erase(points.begin() + nearest);
-        selectedPoint = -1;
-        notifyChange();
-        repaint();
+        const auto& point = points[(size_t) nearest];
+        const bool canRemovePoint = point.kind == MorphTimelinePointKind::Hybrid
+                                    || (point.timeNorm > 1.0e-6 && point.timeNorm < 1.0 - 1.0e-6);
+        if (canRemovePoint)
+        {
+            points.erase(points.begin() + nearest);
+            selectedPoint = -1;
+            notifyChange();
+            repaint();
+        }
     }
 }
 
-int MorphTimelineEditor::findNearestPoint(juce::Point<float> pos) const
+int MorphTimelineEditor::findNearestPoint(juce::Point<float> pos, bool selectedLaneOnly) const
 {
     int nearest = -1;
     float nearestDistance = 10.0f;
     for (size_t i = 0; i < points.size(); ++i)
     {
+        if (selectedLaneOnly && points[i].kind != newPointKind)
+            continue;
+
         const auto p = positionForPoint(points[i]);
         const float distance = p.getDistanceFrom(pos);
         if (distance <= nearestDistance)
@@ -451,24 +445,106 @@ juce::Point<float> MorphTimelineEditor::positionForPoint(const AtsMorphTimelineP
              plot.getBottom() - plot.getHeight() * (float) juce::jlimit(0.0, 1.0, point.morphAmount) };
 }
 
+void MorphTimelineEditor::paintLane(juce::Graphics& g, MorphTimelinePointKind kind, bool selectedLane) const
+{
+    std::vector<std::pair<size_t, AtsMorphTimelinePoint>> lane;
+    lane.reserve(points.size());
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        if (points[i].kind == kind)
+            lane.push_back({ i, points[i] });
+    }
+
+    if (lane.empty())
+        return;
+
+    std::sort(lane.begin(), lane.end(), [](const auto& a, const auto& b) {
+        return a.second.timeNorm < b.second.timeNorm;
+    });
+
+    const bool isHybrid = kind == MorphTimelinePointKind::Hybrid;
+    const auto baseColour = isHybrid ? juce::Colour(0xffd08030) : juce::Colour(0xff75a7ff);
+    const float pathAlpha = selectedLane ? 0.95f : 0.22f;
+    const float pointAlpha = selectedLane ? 1.0f : 0.30f;
+
+    juce::Path path;
+    auto start = lane.front().second;
+    start.timeNorm = 0.0;
+    path.startNewSubPath(positionForPoint(start));
+    for (const auto& item : lane)
+        path.lineTo(positionForPoint(item.second));
+    auto end = lane.back().second;
+    end.timeNorm = 1.0;
+    path.lineTo(positionForPoint(end));
+
+    g.setColour(baseColour.withAlpha(pathAlpha));
+    g.strokePath(path, juce::PathStrokeType(selectedLane ? 2.2f : 1.2f));
+
+    for (const auto& item : lane)
+    {
+        const auto p = positionForPoint(item.second);
+        const bool selected = selectedLane && (int) item.first == selectedPoint;
+
+        if (isHybrid)
+        {
+            constexpr float r = 5.5f;
+            juce::Path diamond;
+            diamond.startNewSubPath(p.x,     p.y - r);
+            diamond.lineTo(p.x + r, p.y);
+            diamond.lineTo(p.x,     p.y + r);
+            diamond.lineTo(p.x - r, p.y);
+            diamond.closeSubPath();
+            g.setColour((selected ? juce::Colour(0xfffffb70) : juce::Colour(0xffd08030)).withAlpha(pointAlpha));
+            g.fillPath(diamond);
+            g.setColour(juce::Colour(0xff12121a).withAlpha(selectedLane ? 1.0f : 0.35f));
+            g.strokePath(diamond, juce::PathStrokeType(selectedLane ? 1.0f : 0.7f));
+        }
+        else
+        {
+            g.setColour((selected ? juce::Colour(0xffffd27a) : juce::Colour(0xffb8d4ff)).withAlpha(pointAlpha));
+            g.fillEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
+            g.setColour(juce::Colour(0xff12121a).withAlpha(selectedLane ? 1.0f : 0.35f));
+            g.drawEllipse(p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f, selectedLane ? 1.0f : 0.7f);
+        }
+    }
+}
+
 void MorphTimelineEditor::updatePointFromMouse(const juce::MouseEvent& e)
 {
     if (!juce::isPositiveAndBelow(selectedPoint, (int) points.size()))
         return;
 
     auto point = pointFromPosition(e.position);
-    if (selectedPoint == 0)
+    const auto selectedKind = points[(size_t) selectedPoint].kind;
+    const double currentTime = points[(size_t) selectedPoint].timeNorm;
+    if (currentTime <= 1.0e-6)
         point.timeNorm = 0.0;
-    else if (selectedPoint == (int) points.size() - 1)
+    else if (currentTime >= 1.0 - 1.0e-6)
         point.timeNorm = 1.0;
     else
     {
-        const double minTime = points[(size_t) selectedPoint - 1].timeNorm + 0.005;
-        const double maxTime = points[(size_t) selectedPoint + 1].timeNorm - 0.005;
+        double minTime = 0.0;
+        double maxTime = 1.0;
+        for (int i = selectedPoint - 1; i >= 0; --i)
+        {
+            if (points[(size_t) i].kind == selectedKind)
+            {
+                minTime = points[(size_t) i].timeNorm + 0.005;
+                break;
+            }
+        }
+        for (int i = selectedPoint + 1; i < (int) points.size(); ++i)
+        {
+            if (points[(size_t) i].kind == selectedKind)
+            {
+                maxTime = points[(size_t) i].timeNorm - 0.005;
+                break;
+            }
+        }
         point.timeNorm = juce::jlimit(minTime, maxTime, point.timeNorm);
     }
 
-    point.kind = points[(size_t) selectedPoint].kind; // preserve kind through drag
+    point.kind = selectedKind; // preserve kind through drag
     points[(size_t) selectedPoint] = point;
     notifyChange();
     repaint();
@@ -790,7 +866,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphTimelineHintLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
     morphTimelineEditor.setHelpText(
         "Morph breakpoints (circles): blend Source A toward B. "
-        "Hybrid breakpoints (diamonds): scale Source A amplitudes by Source B's Bark envelope — "
+        "Hybrid breakpoints (diamonds): scale Source A amplitudes by Source B's Bark envelope - "
         "Source A partials are preserved unchanged. "
         "For a pure Hybrid effect, press Reset first so the morph stays at A, then add Hybrid breakpoints.");
     morphTimelineEditor.onPointsChanged = [this](std::vector<AtsMorphTimelinePoint> points) {

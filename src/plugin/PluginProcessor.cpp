@@ -845,17 +845,30 @@ std::vector<AtsMorphTimelinePoint> sanitizeMorphTimelinePoints(std::vector<AtsMo
         point.morphAmount = juce::jlimit(0.0, 1.0, point.morphAmount);
     }
 
-    std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) {
-        return a.timeNorm < b.timeNorm;
-    });
+    auto pointSortLess = [](const auto& a, const auto& b) {
+        if (a.timeNorm != b.timeNorm)
+            return a.timeNorm < b.timeNorm;
+        return static_cast<int>(a.kind) < static_cast<int>(b.kind);
+    };
+    std::sort(points.begin(), points.end(), pointSortLess);
 
     std::vector<AtsMorphTimelinePoint> unique;
     unique.reserve(std::min(points.size(), kMaxTimelinePoints));
     for (const auto& point : points)
     {
-        if (!unique.empty() && std::abs(point.timeNorm - unique.back().timeNorm) <= kDuplicateTimeTolerance)
-            unique.back() = point;
-        else
+        bool replaced = false;
+        for (auto& existing : unique)
+        {
+            if (existing.kind == point.kind
+                && std::abs(point.timeNorm - existing.timeNorm) <= kDuplicateTimeTolerance)
+            {
+                existing = point;
+                replaced = true;
+                break;
+            }
+        }
+
+        if (!replaced)
             unique.push_back(point);
 
         if (unique.size() >= kMaxTimelinePoints)
@@ -865,15 +878,41 @@ std::vector<AtsMorphTimelinePoint> sanitizeMorphTimelinePoints(std::vector<AtsMo
     if (unique.empty())
         unique = defaultMorphTimelinePoints();
 
-    if (unique.front().timeNorm > kDuplicateTimeTolerance)
-        unique.insert(unique.begin(), { 0.0, 0.0 });
-    else
-        unique.front().timeNorm = 0.0;
+    bool hasMorphPoints = false;
+    bool hasMorphStart = false;
+    bool hasMorphEnd = false;
+    for (auto& point : unique)
+    {
+        if (point.kind != MorphTimelinePointKind::Morph)
+            continue;
 
-    if (unique.back().timeNorm < 1.0 - kDuplicateTimeTolerance)
-        unique.push_back({ 1.0, 1.0 });
+        hasMorphPoints = true;
+        if (point.timeNorm <= kDuplicateTimeTolerance)
+        {
+            point.timeNorm = 0.0;
+            hasMorphStart = true;
+        }
+        if (point.timeNorm >= 1.0 - kDuplicateTimeTolerance)
+        {
+            point.timeNorm = 1.0;
+            hasMorphEnd = true;
+        }
+    }
+
+    if (!hasMorphPoints)
+    {
+        unique.push_back({ 0.0, 0.0, MorphTimelinePointKind::Morph });
+        unique.push_back({ 1.0, 0.0, MorphTimelinePointKind::Morph });
+    }
     else
-        unique.back().timeNorm = 1.0;
+    {
+        if (!hasMorphStart)
+            unique.push_back({ 0.0, 0.0, MorphTimelinePointKind::Morph });
+        if (!hasMorphEnd)
+            unique.push_back({ 1.0, 1.0, MorphTimelinePointKind::Morph });
+    }
+
+    std::sort(unique.begin(), unique.end(), pointSortLess);
 
     if (unique.size() == 1)
         unique.push_back({ 1.0, unique.front().morphAmount });
@@ -921,7 +960,7 @@ double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, d
 {
     const auto safePoints = sanitizeMorphTimelinePoints(points);
     const double t = juce::jlimit(0.0, 1.0, timeNorm);
-    // Only Morph-kind breakpoints drive the A→B blend; Hybrid ones are excluded.
+    // Only Morph-kind breakpoints drive the A/B blend; Hybrid ones are excluded.
     const AtsMorphTimelinePoint* prev = nullptr;
     const AtsMorphTimelinePoint* next = nullptr;
     for (const auto& p : safePoints)
@@ -976,23 +1015,37 @@ bool getConstantMorphEndpointSourceIndex(const std::vector<AtsMorphTimelinePoint
     constexpr double kEndpointTolerance = 1.0e-6;
     const auto safePoints = sanitizeMorphTimelinePoints(points);
 
-    // Only Morph-kind breakpoints drive the A→B blend.
-    // Hybrid breakpoints must never trigger the "pure source" shortcut path —
+    // Only Morph-kind breakpoints drive the A/B blend.
+    // Hybrid breakpoints must never trigger the "pure source" shortcut path;
     // they exist to apply Bark envelope transfer, not to suppress rendering.
     bool hasMorphPoints = false;
+    bool hasHybridPoints = false;
     bool allSourceA = true;
     bool allSourceB = true;
     for (const auto& point : safePoints)
     {
+        if (point.kind == MorphTimelinePointKind::Hybrid)
+        {
+            hasHybridPoints = true;
+            continue;
+        }
+
         if (point.kind != MorphTimelinePointKind::Morph)
             continue;
+
         hasMorphPoints = true;
         allSourceA = allSourceA && point.morphAmount <= kEndpointTolerance;
         allSourceB = allSourceB && point.morphAmount >= 1.0 - kEndpointTolerance;
     }
 
-    // A timeline with only Hybrid points has no morph; treat as pure Source A
-    // so the frame-render path still runs and can apply envelope transfer.
+    if (hasHybridPoints)
+    {
+        sourceIndex = -1;
+        return false;
+    }
+
+    // Defensive fallback for malformed/future point kinds: render the trajectory
+    // path rather than taking a pure-source shortcut.
     if (!hasMorphPoints)
     {
         sourceIndex = -1;
@@ -2519,12 +2572,12 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const double twoPi = 2.0 * juce::MathConstants<double>::pi;
     const double invSr = 1.0 / sampleRate;
 
-    // Sanitize once — eliminates per-sample vector copy + sort inside evaluateMorphTimeline.
+    // Sanitize once; eliminates per-sample vector copy + sort inside evaluateMorphTimeline.
     const auto safePoints = sanitizeMorphTimelinePoints(timelinePoints);
     const bool useTimeline = !timelinePoints.empty();
 
-    // Only Morph-kind breakpoints drive the standard A→B partial blend.
-    // Hybrid breakpoints are intentionally excluded — they affect only the Bark
+    // Only Morph-kind breakpoints drive the standard A/B partial blend.
+    // Hybrid breakpoints are intentionally excluded; they affect only the Bark
     // envelope transfer path and must not cause partial/frequency blending.
     auto fastMorphAt = [&](double timeNorm) -> double
     {

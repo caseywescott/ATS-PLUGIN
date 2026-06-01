@@ -62,9 +62,10 @@ private:
 
     [[nodiscard]] juce::Rectangle<float> getPlotArea() const;
 
-    int findNearestPoint(juce::Point<float> pos) const;
+    int findNearestPoint(juce::Point<float> pos, bool selectedLaneOnly) const;
     AtsMorphTimelinePoint pointFromPosition(juce::Point<float> pos) const;
     juce::Point<float> positionForPoint(const AtsMorphTimelinePoint& point) const;
+    void paintLane(juce::Graphics& g, MorphTimelinePointKind kind, bool selectedLane) const;
     void updatePointFromMouse(const juce::MouseEvent&);
     void notifyChange();
 
