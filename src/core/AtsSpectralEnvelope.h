@@ -72,6 +72,8 @@ enum class HybridizedPartialKind
     double sourceAmplitude,
     double targetFrequencyHz,
     double targetAmplitude,
-    double morphAmount);
+    double morphAmount,
+    double nearestTargetHz = 0.0,
+    double nearestSourceHz = 0.0);
 
 } // namespace ats

@@ -930,7 +930,8 @@ std::string serializeMorphTimelinePoints(const std::vector<AtsMorphTimelinePoint
             text << ";";
         text << juce::String(safePoints[i].timeNorm, 6)
              << "," << juce::String(safePoints[i].morphAmount, 6)
-             << "," << (safePoints[i].kind == MorphTimelinePointKind::Hybrid ? "1" : "0");
+             << "," << (safePoints[i].kind == MorphTimelinePointKind::Hybrid ? "1" : "0")
+             << "," << static_cast<int>(safePoints[i].curve);
     }
     return text.toStdString();
 }
@@ -950,10 +951,27 @@ std::vector<AtsMorphTimelinePoint> deserializeMorphTimelinePoints(const std::str
         point.morphAmount = values[1].getDoubleValue();
         if (values.size() >= 3 && values[2].getIntValue() == 1)
             point.kind = MorphTimelinePointKind::Hybrid;
+        if (values.size() >= 4)
+        {
+            const int cv = values[3].getIntValue();
+            if (cv >= 0 && cv <= static_cast<int>(ats::MorphCurveShape::EaseInOut))
+                point.curve = static_cast<ats::MorphCurveShape>(cv);
+        }
         if (std::isfinite(point.timeNorm) && std::isfinite(point.morphAmount))
             points.push_back(point);
     }
     return sanitizeMorphTimelinePoints(points);
+}
+
+static double applyCurveShape(double t, ats::MorphCurveShape shape) noexcept
+{
+    switch (shape)
+    {
+        case ats::MorphCurveShape::EaseIn:    return t * t;
+        case ats::MorphCurveShape::EaseOut:   return t * (2.0 - t);
+        case ats::MorphCurveShape::EaseInOut: return t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
+        default:                              return t;
+    }
 }
 
 double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, double timeNorm)
@@ -977,7 +995,8 @@ double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, d
     if (next == nullptr) return prev->morphAmount;
     const double span = next->timeNorm - prev->timeNorm;
     if (span <= 1.0e-9) return next->morphAmount;
-    return prev->morphAmount + (t - prev->timeNorm) / span * (next->morphAmount - prev->morphAmount);
+    const double shaped = applyCurveShape((t - prev->timeNorm) / span, prev->curve);
+    return prev->morphAmount + shaped * (next->morphAmount - prev->morphAmount);
 }
 
 // Returns the envelope-transfer amount [0,1] at timeNorm, using only Hybrid-kind breakpoints.
@@ -1002,9 +1021,10 @@ static double evaluateEnvTransferTimeline(const std::vector<AtsMorphTimelinePoin
             const double span = hybrid[i]->timeNorm - hybrid[i - 1]->timeNorm;
             if (span <= 1.0e-9)
                 return hybrid[i]->morphAmount;
+            const double shaped = applyCurveShape((t - hybrid[i - 1]->timeNorm) / span,
+                                                  hybrid[i - 1]->curve);
             return hybrid[i - 1]->morphAmount
-                   + (t - hybrid[i - 1]->timeNorm) / span
-                         * (hybrid[i]->morphAmount - hybrid[i - 1]->morphAmount);
+                   + shaped * (hybrid[i]->morphAmount - hybrid[i - 1]->morphAmount);
         }
     }
     return hybrid.back()->morphAmount;
@@ -2520,8 +2540,34 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
         points.push_back({ fq, am });
     }
 
-    envelope.build(points);
+    // Wider sigma for sparse frames, narrower for dense — preserves formants when partials crowd.
+    const int validCount = std::max(1, static_cast<int>(points.size()));
+    const double adaptiveSigma = std::clamp(
+        ats::BarkSpectralEnvelope::kDefaultSigmaBins
+            * std::sqrt(32.0 / static_cast<double>(validCount)),
+        1.0,
+        8.0);
+    envelope.build(points, ats::BarkSpectralEnvelope::kDefaultBins, adaptiveSigma);
     return envelope;
+}
+
+// Returns the closest frequency from freqs to queryHz in log-frequency space, or 0 if none
+// is within kMaxGlideOctaves (to prevent chirp glides across large spectral distances).
+static double nearestFreqLog(const std::vector<double>& freqs, double queryHz) noexcept
+{
+    constexpr double kMaxGlideOctaves = 1.0; // suppress drift beyond one octave
+    if (freqs.empty() || !(queryHz > 0.0))
+        return 0.0;
+    double nearest = 0.0;
+    double minDist = std::numeric_limits<double>::max();
+    for (const double f : freqs)
+    {
+        if (!(f > 0.0))
+            continue;
+        const double d = std::abs(std::log2(f / queryHz));
+        if (d < minDist) { minDist = d; nearest = f; }
+    }
+    return minDist <= kMaxGlideOctaves ? nearest : 0.0;
 }
 
 ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind kind)
@@ -2709,6 +2755,51 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             barkB = buildBarkEnvelopeForFrame(soundB, fB0, fB1, fracB);
         }
 
+        // Precompute all active source/target frequencies for unmatched-partial drift.
+        std::vector<double> allTargetFreqs, allSourceFreqs;
+        allTargetFreqs.reserve(static_cast<size_t>(nRec));
+        allSourceFreqs.reserve(static_cast<size_t>(nRec));
+        for (int ri = 0; ri < nRec; ++ri)
+        {
+            const auto& rec = records[(size_t) ri];
+            if (rec.kind != ats::MorphCorrespondenceKind::UnmatchedSource)
+            {
+                const int pB = rec.targetPartialIndex;
+                if (pB >= 0 && pB < soundB->partials
+                    && soundB->frq != nullptr && soundB->frq[pB] != nullptr
+                    && soundB->amp != nullptr && soundB->amp[pB] != nullptr)
+                {
+                    const double fq0 = soundB->frq[pB][fB0], fq1 = soundB->frq[pB][fB1];
+                    const double am0 = soundB->amp[pB][fB0], am1 = soundB->amp[pB][fB1];
+                    if (std::isfinite(fq0) && std::isfinite(fq1) && std::isfinite(am0) && std::isfinite(am1))
+                    {
+                        const double fq = juce::jmax(0.0, fq0 + (fq1 - fq0) * fracB);
+                        const double am = juce::jmax(0.0, am0 + (am1 - am0) * fracB) * fadeB;
+                        if (fq > 0.0 && am > 1.0e-9) allTargetFreqs.push_back(fq);
+                    }
+                }
+            }
+            if (rec.kind != ats::MorphCorrespondenceKind::UnmatchedTarget)
+            {
+                const int pA = rec.sourcePartialIndex;
+                if (pA >= 0 && pA < soundA->partials
+                    && soundA->frq != nullptr && soundA->frq[pA] != nullptr
+                    && soundA->amp != nullptr && soundA->amp[pA] != nullptr)
+                {
+                    const double fq0 = soundA->frq[pA][fA0], fq1 = soundA->frq[pA][fA1];
+                    const double am0 = soundA->amp[pA][fA0], am1 = soundA->amp[pA][fA1];
+                    if (std::isfinite(fq0) && std::isfinite(fq1) && std::isfinite(am0) && std::isfinite(am1))
+                    {
+                        const double fq = juce::jmax(0.0, fq0 + (fq1 - fq0) * fracA);
+                        // Gate by live amplitude (including fadeA) — dead partials must not
+                        // anchor drift for unmatched target partials.
+                        const double am = juce::jmax(0.0, am0 + (am1 - am0) * fracA) * fadeA;
+                        if (fq > 0.0 && am > 1.0e-9) allSourceFreqs.push_back(fq);
+                    }
+                }
+            }
+        }
+
         // Per-chunk setup: compute freq/amp and the phasor rotation (cos/sin once per chunk).
         for (int ri = 0; ri < nRec; ++ri)
         {
@@ -2763,12 +2854,24 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     ampA = transfer.outputAmplitude;
             }
 
+            // Drift unmatched SOURCE partials toward the nearest live target partial.
+            // UnmatchedTarget drift is intentionally omitted: the source reference disappears
+            // abruptly when fadeA hits zero, causing a phasor phase discontinuity (chirp) at
+            // the moment the partial is most audible (high morphAmount). Source partials are
+            // safe because their amplitude is already going to zero before any snap occurs.
+            const double nearestTargetHz =
+                (rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource && freqA > 0.0)
+                    ? nearestFreqLog(allTargetFreqs, freqA)
+                    : 0.0;
+            const double nearestSourceHz = 0.0;
             const auto resolved = ats::resolveHybridizedPartialRender(toHybridizedPartialKind(rec.kind),
                                                                       freqA,
                                                                       ampA,
                                                                       freqB,
                                                                       ampB,
-                                                                      morphAmount);
+                                                                      morphAmount,
+                                                                      nearestTargetHz,
+                                                                      nearestSourceHz);
             const double freq = resolved.frequencyHz;
             const double amp = resolved.amplitude;
 
@@ -2822,6 +2925,24 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                         const double r1 = std::sqrt(juce::jmax(0.0, e1) / (wsB * kNoiseVar));
                         rmsB = (r0 + (r1 - r0) * fracB) * fadeB;
                     }
+                }
+                // Apply Bark envelope transfer to residual noise — same Hybrid lane
+                // that colors the deterministic partials, now extended to stochastic bands.
+                static constexpr double kAtsBandCenterHz[ATSA_CRITICAL_BANDS] = {
+                    50.0, 150.0, 250.0, 350.0, 455.0, 570.0, 700.0, 845.0, 1000.0,
+                    1175.0, 1375.0, 1600.0, 1860.0, 2160.0, 2510.0, 2925.0, 3425.0,
+                    4050.0, 4850.0, 5850.0, 7050.0, 8600.0, 10750.0, 13750.0, 17750.0
+                };
+                if (envTransferAmount > 1.0e-9 && rmsA > 0.0
+                    && barkA.isValid() && barkB.isValid())
+                {
+                    const double centerHz = kAtsBandCenterHz[band];
+                    const double envA = barkA.sampleAtHz(centerHz);
+                    const double envB = barkB.sampleAtHz(centerHz);
+                    const auto xfr = ats::applySpectralEnvelopeTransfer(rmsA, envA, envB,
+                                                                        envTransferAmount);
+                    if (xfr.ok)
+                        rmsA = xfr.outputAmplitude;
                 }
                 const double morphedRms    = rmsA + (rmsB - rmsA) * morphAmount;
                 rs[(size_t) band].amp    = morphedRms;
@@ -3584,6 +3705,7 @@ void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady()
     {
         ats::MorphAssignmentMatrixOptions options;
         options.advancedStrategyEnabled = true;
+        options.amplitudeRankWeight = 0.25;
         morphRecipe.correspondenceRecords =
             ats::buildAssignmentMatrixCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], options)
                 .records;

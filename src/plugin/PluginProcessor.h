@@ -189,6 +189,7 @@ struct AtsMorphTimelinePoint
     double timeNorm = 0.0;
     double morphAmount = 0.0;
     MorphTimelinePointKind kind = MorphTimelinePointKind::Morph;
+    ats::MorphCurveShape curve = ats::MorphCurveShape::Linear;
 };
 
 enum class AtsTraceSource

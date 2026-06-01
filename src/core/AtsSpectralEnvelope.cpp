@@ -180,10 +180,15 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
                                                              double sourceAmplitude,
                                                              double targetFrequencyHz,
                                                              double targetAmplitude,
-                                                             double morphAmount)
+                                                             double morphAmount,
+                                                             double nearestTargetHz,
+                                                             double nearestSourceHz)
 {
     HybridizedPartialRenderResult result;
     const double amount = clampUnit(morphAmount);
+
+    // -120 dB at full morph — linear fade in dB, not amplitude.
+    constexpr double kLogFadeRange = 13.8155; // log(1e6)
 
     switch (kind)
     {
@@ -193,18 +198,27 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
             break;
 
         case HybridizedPartialKind::UnmatchedSource:
-            result.frequencyHz = sourceFrequencyHz;
-            result.amplitude = sourceAmplitude * (1.0 - amount);
+            // Glide toward nearest target partial; fade out exponentially (dB-linear).
+            result.frequencyHz = (nearestTargetHz > 0.0)
+                                     ? sourceFrequencyHz + (nearestTargetHz - sourceFrequencyHz) * amount
+                                     : sourceFrequencyHz;
+            result.amplitude = sourceAmplitude * std::exp(-amount * kLogFadeRange);
             break;
 
         case HybridizedPartialKind::UnmatchedTarget:
-            result.frequencyHz = targetFrequencyHz;
-            result.amplitude = targetAmplitude * amount;
+            // Glide in from nearest source partial; fade in exponentially (dB-linear).
+            result.frequencyHz = (nearestSourceHz > 0.0)
+                                     ? nearestSourceHz + (targetFrequencyHz - nearestSourceHz) * amount
+                                     : targetFrequencyHz;
+            result.amplitude = targetAmplitude * std::exp(-(1.0 - amount) * kLogFadeRange);
             break;
     }
 
+    // Keep a meaningful floor so inaudible partials don't waste phasor cycles or
+    // anchor drift from a "running but silent" oscillator.
+    constexpr double kActiveAmplitudeFloor = 1.0e-6;
     result.active = std::isfinite(result.frequencyHz) && std::isfinite(result.amplitude)
-                    && result.frequencyHz > 0.0 && result.amplitude > 0.0;
+                    && result.frequencyHz > 0.0 && result.amplitude > kActiveAmplitudeFloor;
     if (!result.active)
     {
         result.frequencyHz = 0.0;
