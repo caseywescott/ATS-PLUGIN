@@ -49,6 +49,7 @@ target_sources(
           ../core/AtsModel.cpp
           ../core/AtsMorphRecipe.cpp
           ../core/AtsParams.cpp
+          ../core/AtsSpectralEnvelope.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

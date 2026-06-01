@@ -10,6 +10,12 @@ target_include_directories(frequency_shape_test PRIVATE
   "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(frequency_shape_test PRIVATE cxx_std_17)
 
+add_executable(spectral_envelope_transfer_test spectral_envelope_transfer_test.cpp
+  ../src/core/AtsSpectralEnvelope.cpp)
+target_include_directories(spectral_envelope_transfer_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(spectral_envelope_transfer_test PRIVATE cxx_std_17)
+
 add_executable(atsa_residual_test atsa_residual_test.c)
 target_link_libraries(atsa_residual_test PRIVATE atsa)
 if(UNIX AND NOT APPLE)
@@ -43,3 +49,4 @@ add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKI
 
 add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)
+add_test(NAME spectral_envelope_transfer_test COMMAND $<TARGET_FILE:spectral_envelope_transfer_test>)

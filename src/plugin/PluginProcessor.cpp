@@ -15,6 +15,7 @@
 #include "AtsFrequencyShape.h"
 #include "AtsMathExpr.h"
 #include "AtsMorphRecipe.h"
+#include "AtsSpectralEnvelope.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -2444,76 +2445,45 @@ static inline double morphTrajLcgDouble(std::uint64_t s) noexcept
     return static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53); // [0, 1)
 }
 
-// ---------------------------------------------------------------------------
-// Bark spectral envelope helper used by the Hybrid breakpoint render path.
-// Builds a smooth amplitude envelope over 64 Bark-scale frequency bins via
-// Gaussian kernel regression, then allows per-Hz sampling.
-struct BarkEnvelope
+ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
+                                                    int frame0,
+                                                    int frame1,
+                                                    double frac)
 {
-    static constexpr int    kBins     = 64;
-    static constexpr double kMaxBark  = 24.0;
-    static constexpr double kSigma    = 3.0; // sigma in bin units (~1.1 Bark)
+    ats::BarkSpectralEnvelope envelope;
+    if (!sound || sound->frq == nullptr || sound->amp == nullptr)
+        return envelope;
 
-    std::array<double, kBins> ampBins {};
-    bool valid = false;
-
-    static double hzToBark(double hz)
+    std::vector<ats::SpectralEnvelopePoint> points;
+    points.reserve(static_cast<size_t>(std::max(0, sound->partials)));
+    for (int p = 0; p < sound->partials; ++p)
     {
-        return 13.0 * std::atan(0.00076 * hz)
-               + 3.5 * std::atan((hz / 7500.0) * (hz / 7500.0));
+        if (!sound->frq[p] || !sound->amp[p])
+            continue;
+        const double fq = sound->frq[p][frame0]
+                          + (sound->frq[p][frame1] - sound->frq[p][frame0]) * frac;
+        const double am = sound->amp[p][frame0]
+                          + (sound->amp[p][frame1] - sound->amp[p][frame0]) * frac;
+        points.push_back({ fq, am });
     }
 
-    void build(const ATS_SOUND* sound, int frame0, int frame1, double frac)
+    envelope.build(points);
+    return envelope;
+}
+
+ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind kind)
+{
+    switch (kind)
     {
-        ampBins.fill(0.0);
-        valid = false;
-        if (!sound || sound->frq == nullptr || sound->amp == nullptr)
-            return;
-
-        std::array<double, kBins> sumW{}, sumWA{};
-        sumW.fill(0.0);
-        sumWA.fill(0.0);
-
-        for (int p = 0; p < sound->partials; ++p)
-        {
-            if (!sound->frq[p] || !sound->amp[p])
-                continue;
-            const double fq = sound->frq[p][frame0]
-                              + (sound->frq[p][frame1] - sound->frq[p][frame0]) * frac;
-            const double am = sound->amp[p][frame0]
-                              + (sound->amp[p][frame1] - sound->amp[p][frame0]) * frac;
-            if (fq <= 0.0 || am <= 0.0 || !std::isfinite(fq) || !std::isfinite(am))
-                continue;
-
-            const double binF = hzToBark(fq) / kMaxBark * (kBins - 1);
-            const int lo = std::max(0, (int)(binF - 4.0 * kSigma));
-            const int hi = std::min(kBins - 1, (int)(binF + 4.0 * kSigma) + 1);
-            for (int b = lo; b <= hi; ++b)
-            {
-                const double d = b - binF;
-                const double w = std::exp(-0.5 * d * d / (kSigma * kSigma));
-                sumW[(size_t) b]  += w;
-                sumWA[(size_t) b] += w * am;
-            }
-        }
-
-        for (int b = 0; b < kBins; ++b)
-            ampBins[(size_t) b] = sumW[(size_t) b] > 1.0e-12
-                                      ? sumWA[(size_t) b] / sumW[(size_t) b]
-                                      : 0.0;
-        valid = true;
+        case ats::MorphCorrespondenceKind::Matched:
+            return ats::HybridizedPartialKind::Matched;
+        case ats::MorphCorrespondenceKind::UnmatchedSource:
+            return ats::HybridizedPartialKind::UnmatchedSource;
+        case ats::MorphCorrespondenceKind::UnmatchedTarget:
+            return ats::HybridizedPartialKind::UnmatchedTarget;
     }
-
-    double sampleAtHz(double hz) const
-    {
-        if (!valid || hz <= 0.0)
-            return 0.0;
-        const double binF = hzToBark(hz) / kMaxBark * (kBins - 1);
-        const int b0 = std::max(0, std::min(kBins - 2, (int) binF));
-        const double t = binF - b0;
-        return ampBins[(size_t) b0] * (1.0 - t) + ampBins[(size_t)(b0 + 1)] * t;
-    }
-};
+    return ats::HybridizedPartialKind::Matched;
+}
 
 // Frame-by-frame oscillator-bank morph synthesis.
 //
@@ -2679,11 +2649,11 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             : 1.0;
 
         // Build Bark envelopes for hybrid breakpoint envelope transfer (once per chunk).
-        BarkEnvelope barkA, barkB;
+        ats::BarkSpectralEnvelope barkA, barkB;
         if (envTransferAmount > 1.0e-9)
         {
-            barkA.build(soundA, fA0, fA1, fracA);
-            barkB.build(soundB, fB0, fB1, fracB);
+            barkA = buildBarkEnvelopeForFrame(soundA, fA0, fA1, fracA);
+            barkB = buildBarkEnvelopeForFrame(soundB, fB0, fB1, fracB);
         }
 
         // Per-chunk setup: compute freq/amp and the phasor rotation (cos/sin once per chunk).
@@ -2724,32 +2694,30 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 }
             }
 
-            // Hybrid envelope transfer: scale ampA by (envB/envA)^envTransferAmount in log domain.
+            // Hybrid envelope transfer: de-color A by its envelope, then color it
+            // by B's envelope at A's partial frequency. The ratio is intentionally
+            // not dB-clamped; floor/gap handling lives in the shared envelope helper.
             if (envTransferAmount > 1.0e-9 && freqA > 0.0 && ampA > 0.0
-                && barkA.valid && barkB.valid)
+                && barkA.isValid() && barkB.isValid())
             {
                 const double envA = barkA.sampleAtHz(freqA);
                 const double envB = barkB.sampleAtHz(freqA);
-                if (envA > 1.0e-12 && envB > 0.0)
-                    ampA *= std::exp(std::log(envB / envA) * envTransferAmount);
+                const auto transfer = ats::applySpectralEnvelopeTransfer(ampA,
+                                                                         envA,
+                                                                         envB,
+                                                                         envTransferAmount);
+                if (transfer.ok)
+                    ampA = transfer.outputAmplitude;
             }
 
-            double freq, amp;
-            if (rec.kind == ats::MorphCorrespondenceKind::Matched)
-            {
-                freq = freqA + (freqB - freqA) * morphAmount;
-                amp  = ampA  + (ampB  - ampA)  * morphAmount;
-            }
-            else if (rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource)
-            {
-                freq = freqA;
-                amp  = ampA * (1.0 - morphAmount);
-            }
-            else
-            {
-                freq = freqB;
-                amp  = ampB * morphAmount;
-            }
+            const auto resolved = ats::resolveHybridizedPartialRender(toHybridizedPartialKind(rec.kind),
+                                                                      freqA,
+                                                                      ampA,
+                                                                      freqB,
+                                                                      ampB,
+                                                                      morphAmount);
+            const double freq = resolved.frequencyHz;
+            const double amp = resolved.amplitude;
 
             auto& p = ps[(size_t) ri];
             if (freq > 0.0 && amp > 0.0)
