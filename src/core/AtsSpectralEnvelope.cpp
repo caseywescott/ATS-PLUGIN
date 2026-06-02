@@ -187,9 +187,6 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
     HybridizedPartialRenderResult result;
     const double amount = clampUnit(morphAmount);
 
-    // -120 dB at full morph — linear fade in dB, not amplitude.
-    constexpr double kLogFadeRange = 13.8155; // log(1e6)
-
     switch (kind)
     {
         case HybridizedPartialKind::Matched:
@@ -198,27 +195,26 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
             break;
 
         case HybridizedPartialKind::UnmatchedSource:
-            // Glide toward nearest target partial; fade out exponentially (dB-linear).
+            // Glide toward nearest target partial (when one is supplied) while fading out.
+            // Amplitude fade is linear in morph amount; time-domain smoothing is handled by
+            // per-sample amplitude ramping in the renderer, not here.
             result.frequencyHz = (nearestTargetHz > 0.0)
                                      ? sourceFrequencyHz + (nearestTargetHz - sourceFrequencyHz) * amount
                                      : sourceFrequencyHz;
-            result.amplitude = sourceAmplitude * std::exp(-amount * kLogFadeRange);
+            result.amplitude = sourceAmplitude * (1.0 - amount);
             break;
 
         case HybridizedPartialKind::UnmatchedTarget:
-            // Glide in from nearest source partial; fade in exponentially (dB-linear).
+            // Glide in from nearest source partial (when one is supplied) while fading in.
             result.frequencyHz = (nearestSourceHz > 0.0)
                                      ? nearestSourceHz + (targetFrequencyHz - nearestSourceHz) * amount
                                      : targetFrequencyHz;
-            result.amplitude = targetAmplitude * std::exp(-(1.0 - amount) * kLogFadeRange);
+            result.amplitude = targetAmplitude * amount;
             break;
     }
 
-    // Keep a meaningful floor so inaudible partials don't waste phasor cycles or
-    // anchor drift from a "running but silent" oscillator.
-    constexpr double kActiveAmplitudeFloor = 1.0e-6;
     result.active = std::isfinite(result.frequencyHz) && std::isfinite(result.amplitude)
-                    && result.frequencyHz > 0.0 && result.amplitude > kActiveAmplitudeFloor;
+                    && result.frequencyHz > 0.0 && result.amplitude > 0.0;
     if (!result.active)
     {
         result.frequencyHz = 0.0;

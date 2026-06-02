@@ -2654,7 +2654,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
 
     // Phasor state per partial: complex unit vector {re, im} = {cos(phase), sin(phase)}.
     // Initialized to phase=0 → {1, 0}. Updated by complex multiplication each sample.
-    struct PartialState { double re = 1.0, im = 0.0, rotRe = 1.0, rotIm = 0.0, amp = 0.0; bool active = false; };
+    struct PartialState { double re = 1.0, im = 0.0, rotRe = 1.0, rotIm = 0.0, amp = 0.0, ampInc = 0.0; bool active = false; };
     std::vector<PartialState> ps(nRec);
 
     // Residual band noise: one phasor per (band × component) with fixed frequency and
@@ -2674,7 +2674,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         double randiA1 = 0.0, randiA2 = 0.0;                  // randi interpolation endpoints
         int randiCnt = 0, randiSize = 1;                       // randi counter / period
         std::uint64_t randSeed = 1;                            // LCG state for next randi value
-        double amp = 0.0;
+        double amp = 0.0, ampInc = 0.0;
         bool active = false;
     };
     std::vector<ResState> rs;
@@ -2714,9 +2714,17 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         }
     }
 
+    // Ceiling on hybrid envelope-transfer boost. The de-color/re-color ratio (barkB/barkA)
+    // grows without bound for partials sitting in a spectral valley of source A — and as a
+    // source decays toward its end its high partials shrink, so barkA shrinks and the boost
+    // runs away into a rising high-frequency whistle. +30 dB is generous for genuine timbre
+    // transfer while bounding the noise-floor runaway.
+    constexpr double kMaxEnvBoostLinear = 31.6227766; // +30 dB
+
     for (int s = 0; s < totalSamples; )
     {
         const int chunkEnd = juce::jmin(s + chunkSamples, totalSamples);
+        const int chunkLen = juce::jmax(1, chunkEnd - s);
         const double t = (double) s * invSr;
         const double timeNorm = totalSamples > 1 ? (double) s / (double) (totalSamples - 1) : 0.0;
 
@@ -2854,7 +2862,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                                                          envB,
                                                                          effectiveEnvTransfer);
                 if (transfer.ok)
-                    ampA = transfer.outputAmplitude;
+                    ampA = std::min(transfer.outputAmplitude, ampA * kMaxEnvBoostLinear);
             }
 
             // Drift unmatched SOURCE partials toward the nearest live target partial.
@@ -2879,18 +2887,23 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             const double amp = resolved.amplitude;
 
             auto& p = ps[(size_t) ri];
+            double targetAmp = 0.0;
             if (freq > 0.0 && amp > 0.0)
             {
                 const double omega = twoPi * freq * invSr;
                 p.rotRe = std::cos(omega); // only trig call — once per chunk per partial
                 p.rotIm = std::sin(omega);
-                p.amp   = amp;
-                p.active = true;
+                targetAmp = amp;
             }
-            else
-            {
-                p.active = false;
-            }
+            // When targetAmp == 0 (partial dying) the previous rotor is kept so the
+            // ramp-to-zero tail holds its last frequency — no pitch/phase discontinuity.
+
+            // Linearly ramp amplitude across the chunk toward the target. This turns every
+            // inter-chunk amplitude step — including the end-of-source fade to zero, which
+            // otherwise cliffs in a single sample at the chunk boundary — into a click-free
+            // glide. A partial stays active while it still has amplitude to ramp down.
+            p.ampInc  = (targetAmp - p.amp) / (double) chunkLen;
+            p.active  = (p.amp > 1.0e-7) || (targetAmp > 1.0e-7);
         }
 
         // Per-chunk residual setup: compute ENG_RMS per source via amplitude-space interpolation
@@ -2945,11 +2958,12 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     const auto xfr = ats::applySpectralEnvelopeTransfer(rmsA, envA, envB,
                                                                         effectiveEnvTransfer);
                     if (xfr.ok)
-                        rmsA = xfr.outputAmplitude;
+                        rmsA = std::min(xfr.outputAmplitude, rmsA * kMaxEnvBoostLinear);
                 }
-                const double morphedRms    = rmsA + (rmsB - rmsA) * morphAmount;
-                rs[(size_t) band].amp    = morphedRms;
-                rs[(size_t) band].active = morphedRms > 0.0;
+                const double morphedRms = rmsA + (rmsB - rmsA) * morphAmount;
+                auto& rState = rs[(size_t) band];
+                rState.ampInc = (morphedRms - rState.amp) / (double) chunkLen;
+                rState.active = (rState.amp > 1.0e-9) || (morphedRms > 1.0e-9);
             }
         }
 
@@ -2967,6 +2981,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 p.re = newRe;
                 p.im = newIm;
                 sample += (float) (newIm * p.amp);
+                p.amp += p.ampInc;
+                if (p.amp < 0.0) p.amp = 0.0;
             }
             out.setSample(0, si, sample);
 
@@ -3000,6 +3016,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
 
                     // sin(carrier) × noise × ENG_RMS — matches do_synthesis ioscilator × randi
                     resSample += (float) (newIm * noiseVal * r.amp);
+                    r.amp += r.ampInc;
+                    if (r.amp < 0.0) r.amp = 0.0;
                 }
                 out.setSample(1, si, resSample);
             }
