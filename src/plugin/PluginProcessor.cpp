@@ -2653,9 +2653,65 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const int chunkSamples = juce::jmax(1, (int) std::floor(smallerHop * sampleRate));
 
     // Phasor state per partial: complex unit vector {re, im} = {cos(phase), sin(phase)}.
-    // Initialized to phase=0 → {1, 0}. Updated by complex multiplication each sample.
+    // Seeded below from the analysis phase (fallback {1, 0}); updated by complex multiplication.
     struct PartialState { double re = 1.0, im = 0.0, rotRe = 1.0, rotIm = 0.0, amp = 0.0, ampInc = 0.0; bool active = false; };
     std::vector<PartialState> ps(nRec);
+
+    // Seed each partial's starting phase from the ATS analysis phase at the first frame, instead
+    // of leaving every partial aligned at phase 0. All-zero start phases make the partials peak
+    // simultaneously at t=0 — an unnatural in-phase impulse / buzzy attack — and discard the
+    // recorded inter-partial phase relationships. The phasor then free-runs; only the seed comes
+    // from analysis. For a matched partial the two sources' phases are blended on the unit circle
+    // by the initial morph amount; unmatched partials take their own source's phase.
+    {
+        const bool hasPhaseA = soundA->pha != nullptr;
+        const bool hasPhaseB = soundB->pha != nullptr;
+        if (hasPhaseA || hasPhaseB)
+        {
+            const double morphAmount0 = juce::jlimit(0.0, 1.0,
+                useTimeline ? fastMorphAt(0.0) : fixedMorphAmount);
+
+            auto addPhase = [](double& cx, double& cy, const ATS_SOUND* snd, int partial,
+                               bool has, double weight)
+            {
+                if (!has || weight <= 0.0 || partial < 0 || snd == nullptr || partial >= snd->partials
+                    || snd->pha == nullptr || snd->pha[partial] == nullptr)
+                    return;
+                const double ph = snd->pha[partial][0];
+                if (!std::isfinite(ph))
+                    return;
+                cx += weight * std::cos(ph);
+                cy += weight * std::sin(ph);
+            };
+
+            for (int ri = 0; ri < nRec; ++ri)
+            {
+                const auto& rec = records[(size_t) ri];
+                double cx = 0.0, cy = 0.0;
+
+                switch (rec.kind)
+                {
+                    case ats::MorphCorrespondenceKind::Matched:
+                        addPhase(cx, cy, soundA, rec.sourcePartialIndex, hasPhaseA, 1.0 - morphAmount0);
+                        addPhase(cx, cy, soundB, rec.targetPartialIndex, hasPhaseB, morphAmount0);
+                        break;
+                    case ats::MorphCorrespondenceKind::UnmatchedSource:
+                        addPhase(cx, cy, soundA, rec.sourcePartialIndex, hasPhaseA, 1.0);
+                        break;
+                    case ats::MorphCorrespondenceKind::UnmatchedTarget:
+                        addPhase(cx, cy, soundB, rec.targetPartialIndex, hasPhaseB, 1.0);
+                        break;
+                }
+
+                const double mag = std::sqrt(cx * cx + cy * cy);
+                if (mag > 1.0e-9)
+                {
+                    ps[(size_t) ri].re = cx / mag;
+                    ps[(size_t) ri].im = cy / mag;
+                }
+            }
+        }
+    }
 
     // Residual band noise: one phasor per (band × component) with fixed frequency and
     // time-varying amplitude driven by the morphed per-frame band_energy.
