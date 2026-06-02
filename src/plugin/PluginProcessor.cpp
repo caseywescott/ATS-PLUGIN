@@ -2590,8 +2590,8 @@ ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind 
 //   • Timeline points are sanitized ONCE before the loop (not per-sample).
 //   • cos/sin are computed once per ATS frame chunk per partial (every ~hopSecs samples),
 //     stored as a complex rotation. The hot loop only does 4 multiplies + 2 adds per partial.
-//   • Residual band energy is interpolated per-chunk; 5 sinusoidal carriers per band advance
-//     the same way as partials (no per-sample trig).
+//   • Residual band energy is interpolated per-chunk; several jittered carriers per band advance
+//     the same way as partials (no per-sample trig), spreading each band's noise across its range.
 //   • This is ~100–300x faster than a naive per-sample std::sin() approach.
 static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const ATS_SOUND* soundA,
@@ -2676,41 +2676,62 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         std::uint64_t randSeed = 1;                            // LCG state for next randi value
         double amp = 0.0, ampInc = 0.0;
         bool active = false;
+        bool usable = false;
     };
+
+    // Multiple carriers per critical band, each at a distinct (jittered) frequency inside the
+    // band and driven by independent band-limited noise. A single band-center carrier collapses
+    // each band's energy into a narrow tone, leaving spectral gaps that read as a watery/phasey
+    // texture on sustained residual (pads). Spreading carriers across the band fills it with
+    // smoother broadband noise. Mirrors the recipe's residual component layout.
+    constexpr int kResCarriers = 5;
     std::vector<ResState> rs;
+    std::vector<int> bandUsable;
     if (doResidual)
     {
-        rs.resize((size_t) kResBands);
+        rs.resize((size_t) (kResBands * kResCarriers));
+        bandUsable.assign((size_t) kResBands, 0);
         for (int band = 0; band < kResBands; ++band)
         {
-            auto& r = rs[(size_t) band];
             const double lo        = ATSA_CRITICAL_BAND_EDGES[band];
             const double hi        = ATSA_CRITICAL_BAND_EDGES[band + 1];
-            const double centerHz  = (lo + hi) * 0.5;
-            const double bandwidth = hi - lo;
-            if (centerHz <= 0.0 || centerHz >= sampleRate * 0.5)
-                continue;
+            const double bandwidth = juce::jmax(1.0, hi - lo);
+            // Each carrier owns ~one sub-band; its modulator bandwidth matches so neighbouring
+            // carriers overlap into continuous coverage rather than discrete tones.
+            const double subBw = bandwidth / (double) kResCarriers;
+            for (int c = 0; c < kResCarriers; ++c)
+            {
+                auto& r = rs[(size_t) (band * kResCarriers + c)];
 
-            const double omega = twoPi * centerHz * invSr;
-            r.rotRe = std::cos(omega);
-            r.rotIm = std::sin(omega);
+                const double slot   = ((double) c + 0.5) / (double) kResCarriers;
+                const double jitter = (morphTrajResidualUnitHash(band, c) - 0.5) / (double) kResCarriers;
+                const double amount = juce::jlimit(0.05, 0.95, slot + jitter);
+                const double freqHz = lo + amount * (hi - lo);
+                if (freqHz <= 0.0 || freqHz >= sampleRate * 0.5)
+                    continue;
 
-            const double phaseStart = morphTrajResidualUnitHash(band, 101) * twoPi;
-            r.re = std::cos(phaseStart);
-            r.im = std::sin(phaseStart);
+                const double omega = twoPi * freqHz * invSr;
+                r.rotRe = std::cos(omega);
+                r.rotIm = std::sin(omega);
 
-            // Randi period: new noise value at the band bandwidth rate, same as ATSA
-            r.randiSize = juce::jmax(1, (int) std::round(sampleRate / juce::jmax(1.0, bandwidth)));
+                const double phaseStart = morphTrajResidualUnitHash(band, c + 101) * twoPi;
+                r.re = std::cos(phaseStart);
+                r.im = std::sin(phaseStart);
 
-            // Deterministic per-band seed for reproducible playback
-            std::uint64_t seed = static_cast<std::uint64_t>(morphTrajResidualHash(band, 0))
-                                 * 2654435761ULL + 1234567891ULL;
-            r.randSeed = (seed == 0) ? 1 : seed;
-            r.randSeed  = morphTrajLcgNext(r.randSeed);
-            r.randiA1   = morphTrajLcgDouble(r.randSeed) * 2.0 - 1.0;
-            r.randSeed  = morphTrajLcgNext(r.randSeed);
-            r.randiA2   = morphTrajLcgDouble(r.randSeed) * 2.0 - 1.0;
-            r.randiCnt  = 0;
+                r.randiSize = juce::jmax(1, (int) std::round(sampleRate / juce::jmax(1.0, subBw)));
+
+                // Deterministic per-(band,carrier) seed for reproducible playback
+                std::uint64_t seed = static_cast<std::uint64_t>(morphTrajResidualHash(band, c))
+                                     * 2654435761ULL + 1234567891ULL;
+                r.randSeed = (seed == 0) ? 1 : seed;
+                r.randSeed  = morphTrajLcgNext(r.randSeed);
+                r.randiA1   = morphTrajLcgDouble(r.randSeed) * 2.0 - 1.0;
+                r.randSeed  = morphTrajLcgNext(r.randSeed);
+                r.randiA2   = morphTrajLcgDouble(r.randSeed) * 2.0 - 1.0;
+                r.randiCnt  = 0;
+                r.usable    = true;
+                ++bandUsable[(size_t) band];
+            }
         }
     }
 
@@ -2971,9 +2992,18 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                         rmsA = std::min(xfr.outputAmplitude, rmsA * kMaxEnvBoostLinear);
                 }
                 const double morphedRms = rmsA + (rmsB - rmsA) * morphAmount;
-                auto& rState = rs[(size_t) band];
-                rState.ampInc = (morphedRms - rState.amp) / (double) chunkLen;
-                rState.active = (rState.amp > 1.0e-9) || (morphedRms > 1.0e-9);
+                // Split the band's energy across its carriers: with N uncorrelated carriers the
+                // powers add, so amp/sqrt(N) per carrier preserves the band's total RMS.
+                const int nUsable = bandUsable[(size_t) band];
+                const double carrierTarget = nUsable > 0
+                    ? morphedRms / std::sqrt((double) nUsable) : 0.0;
+                for (int c = 0; c < kResCarriers; ++c)
+                {
+                    auto& rState = rs[(size_t) (band * kResCarriers + c)];
+                    if (!rState.usable) { rState.active = false; continue; }
+                    rState.ampInc = (carrierTarget - rState.amp) / (double) chunkLen;
+                    rState.active = (rState.amp > 1.0e-9) || (carrierTarget > 1.0e-9);
+                }
             }
         }
 
@@ -2999,9 +3029,9 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             if (doResidual)
             {
                 float resSample = 0.0f;
-                for (int band = 0; band < kResBands; ++band)
+                for (int idx = 0; idx < (int) rs.size(); ++idx)
                 {
-                    auto& r = rs[(size_t) band];
+                    auto& r = rs[(size_t) idx];
                     if (!r.active)
                         continue;
 
