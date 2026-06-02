@@ -47,6 +47,7 @@ void BarkSpectralEnvelope::build(const std::vector<SpectralEnvelopePoint>& point
     valid = false;
     maxBark = kDefaultMaxBark;
     amplitudeFloor = safeFloor(newAmplitudeFloor);
+    peakAmplitude = amplitudeFloor;
     binCount = std::max(2, binCount);
     sigmaBins = std::isfinite(sigmaBins) && sigmaBins > 0.0 ? sigmaBins : kDefaultSigmaBins;
 
@@ -118,6 +119,10 @@ void BarkSpectralEnvelope::build(const std::vector<SpectralEnvelopePoint>& point
     const int last = anchors.back();
     for (int b = last + 1; b < binCount; ++b)
         ampBins[static_cast<size_t>(b)] = ampBins[static_cast<size_t>(last)];
+
+    peakAmplitude = amplitudeFloor;
+    for (const double a : ampBins)
+        peakAmplitude = std::max(peakAmplitude, a);
 
     valid = true;
 }

@@ -2721,6 +2721,14 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     // transfer while bounding the noise-floor runaway.
     constexpr double kMaxEnvBoostLinear = 31.6227766; // +30 dB
 
+    // De-color divisor floor, relative to each source-A envelope's own peak. Where source A
+    // has no real spectral support (e.g. its high partials have died near the end of the
+    // sound), barkA edge-holds a tiny value and barkB/barkA runs away into a high-frequency
+    // whistle/chirp. Flooring envA at -48 dB below A's peak bounds the de-color gain to A's
+    // intrinsic dynamic range and keeps it stable frame-to-frame, so unsupported high bands
+    // are not synthesised out of the noise floor.
+    constexpr double kEnvDecolorRelFloor = 0.00398107; // -48 dB
+
     for (int s = 0; s < totalSamples; )
     {
         const int chunkEnd = juce::jmin(s + chunkSamples, totalSamples);
@@ -2855,7 +2863,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             if (effectiveEnvTransfer > 1.0e-9 && freqA > 0.0 && ampA > 0.0
                 && barkA.isValid() && barkB.isValid())
             {
-                const double envA = barkA.sampleAtHz(freqA);
+                const double relFloorA = barkA.getPeakAmplitude() * kEnvDecolorRelFloor;
+                const double envA = std::max(relFloorA, barkA.sampleAtHz(freqA));
                 const double envB = barkB.sampleAtHz(freqA);
                 const auto transfer = ats::applySpectralEnvelopeTransfer(ampA,
                                                                          envA,
@@ -2953,7 +2962,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     && barkA.isValid() && barkB.isValid())
                 {
                     const double centerHz = kAtsBandCenterHz[band];
-                    const double envA = barkA.sampleAtHz(centerHz);
+                    const double relFloorA = barkA.getPeakAmplitude() * kEnvDecolorRelFloor;
+                    const double envA = std::max(relFloorA, barkA.sampleAtHz(centerHz));
                     const double envB = barkB.sampleAtHz(centerHz);
                     const auto xfr = ats::applySpectralEnvelopeTransfer(rmsA, envA, envB,
                                                                         effectiveEnvTransfer);

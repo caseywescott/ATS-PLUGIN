@@ -28,6 +28,7 @@ public:
     [[nodiscard]] bool isValid() const noexcept { return valid; }
     [[nodiscard]] int getBinCount() const noexcept { return static_cast<int>(ampBins.size()); }
     [[nodiscard]] double getAmplitudeFloor() const noexcept { return amplitudeFloor; }
+    [[nodiscard]] double getPeakAmplitude() const noexcept { return peakAmplitude; }
 
     [[nodiscard]] static double hzToBark(double frequencyHz);
 
@@ -35,6 +36,7 @@ private:
     std::vector<double> ampBins;
     double maxBark = kDefaultMaxBark;
     double amplitudeFloor = kDefaultAmplitudeFloor;
+    double peakAmplitude = kDefaultAmplitudeFloor;
     bool valid = false;
 };
 
