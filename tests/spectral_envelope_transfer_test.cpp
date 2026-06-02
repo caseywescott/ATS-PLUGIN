@@ -59,10 +59,12 @@ int main()
                                                                  200.0,
                                                                  1.0,
                                                                  0.5);
-        if (!partial.active || !closeEnough(partial.frequencyHz, 150.0)
-            || !closeEnough(partial.amplitude, 0.625))
+        // Geometric frequency midpoint = 100 * sqrt(2); equal-power amplitude midpoint =
+        // sqrt(0.5*0.25^2 + 0.5*1.0^2).
+        if (!partial.active || !closeEnough(partial.frequencyHz, 100.0 * std::sqrt(2.0))
+            || !closeEnough(partial.amplitude, std::sqrt(0.5 * 0.0625 + 0.5 * 1.0)))
         {
-            return fail("hybridized source amplitude should continue through the normal morph blend");
+            return fail("matched morph should use log-frequency and equal-power blends");
         }
     }
 
@@ -73,7 +75,9 @@ int main()
                                                                 440.0,
                                                                 0.8,
                                                                 0.5);
-        if (!target.active || !closeEnough(target.frequencyHz, 440.0) || !closeEnough(target.amplitude, 0.4))
+        // Equal-power fade-in: amplitude = targetAmplitude * sqrt(amount) = 0.8 * sqrt(0.5).
+        if (!target.active || !closeEnough(target.frequencyHz, 440.0)
+            || !closeEnough(target.amplitude, 0.8 * std::sqrt(0.5)))
             return fail("hybrid transfer should not suppress target-only partials when morph amount is nonzero");
     }
 

@@ -28,6 +28,24 @@ double amplitudeToDb(double amplitude, double floor)
     return 20.0 * std::log10(std::max(amplitude, floor));
 }
 
+// Geometric (log-frequency) interpolation: the perceptual midpoint of two pitches is their
+// geometric mean, not their arithmetic mean. Falls back to linear if an endpoint is not a
+// usable positive frequency.
+double logInterpHz(double f0, double f1, double t)
+{
+    if (!std::isfinite(f0) || !std::isfinite(f1) || f0 <= 0.0 || f1 <= 0.0)
+        return f0 + (f1 - f0) * t;
+    return std::exp(std::log(f0) + (std::log(f1) - std::log(f0)) * t);
+}
+
+// Equal-power (constant-energy) interpolation: interpolate power linearly, then take the
+// root. Avoids the perceived loudness sag a linear-amplitude blend produces at the midpoint.
+double equalPowerInterpAmp(double a0, double a1, double t)
+{
+    const double power = (1.0 - t) * a0 * a0 + t * a1 * a1;
+    return power > 0.0 ? std::sqrt(power) : 0.0;
+}
+
 } // namespace
 
 double BarkSpectralEnvelope::hzToBark(double frequencyHz)
@@ -195,26 +213,30 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
     switch (kind)
     {
         case HybridizedPartialKind::Matched:
-            result.frequencyHz = sourceFrequencyHz + (targetFrequencyHz - sourceFrequencyHz) * amount;
-            result.amplitude = sourceAmplitude + (targetAmplitude - sourceAmplitude) * amount;
+            // Geometric frequency blend + equal-power amplitude blend so pitch glides track
+            // perceived pitch and the morph midpoint holds its loudness.
+            result.frequencyHz = logInterpHz(sourceFrequencyHz, targetFrequencyHz, amount);
+            result.amplitude = equalPowerInterpAmp(sourceAmplitude, targetAmplitude, amount);
             break;
 
         case HybridizedPartialKind::UnmatchedSource:
             // Glide toward nearest target partial (when one is supplied) while fading out.
-            // Amplitude fade is linear in morph amount; time-domain smoothing is handled by
-            // per-sample amplitude ramping in the renderer, not here.
+            // Equal-power (sqrt) fade pairs with the UnmatchedTarget fade-in so a replacing
+            // pair holds constant power through the crossfade; time-domain smoothing is
+            // handled by per-sample amplitude ramping in the renderer, not here.
             result.frequencyHz = (nearestTargetHz > 0.0)
-                                     ? sourceFrequencyHz + (nearestTargetHz - sourceFrequencyHz) * amount
+                                     ? logInterpHz(sourceFrequencyHz, nearestTargetHz, amount)
                                      : sourceFrequencyHz;
-            result.amplitude = sourceAmplitude * (1.0 - amount);
+            result.amplitude = sourceAmplitude * std::sqrt(1.0 - amount);
             break;
 
         case HybridizedPartialKind::UnmatchedTarget:
-            // Glide in from nearest source partial (when one is supplied) while fading in.
+            // Glide in from nearest source partial (when one is supplied) while fading in
+            // with the equal-power (sqrt) law.
             result.frequencyHz = (nearestSourceHz > 0.0)
-                                     ? nearestSourceHz + (targetFrequencyHz - nearestSourceHz) * amount
+                                     ? logInterpHz(nearestSourceHz, targetFrequencyHz, amount)
                                      : targetFrequencyHz;
-            result.amplitude = targetAmplitude * amount;
+            result.amplitude = targetAmplitude * std::sqrt(amount);
             break;
     }
 
