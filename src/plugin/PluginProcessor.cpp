@@ -2806,6 +2806,14 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     // are not synthesised out of the noise floor.
     constexpr double kEnvDecolorRelFloor = 0.00398107; // -48 dB
 
+    // Per-record glide-target lock for unmatched-source partials. The nearest live target is
+    // re-picked every chunk; when freqA sits between two targets (or targets fade in/out) that
+    // pick snaps chunk-to-chunk, swinging the glide endpoint and warbling the partial's pitch.
+    // Locking the chosen target and only switching when a clearly-closer one appears (hysteresis)
+    // stabilises sustained morphs while still following the locked target's own drift.
+    constexpr double kReassignHysteresisOct = 0.25; // require 1/4 octave advantage to switch
+    std::vector<double> lockedTargetHz((size_t) nRec, 0.0);
+
     for (int s = 0; s < totalSamples; )
     {
         const int chunkEnd = juce::jmin(s + chunkSamples, totalSamples);
@@ -2956,10 +2964,34 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             // abruptly when fadeA hits zero, causing a phasor phase discontinuity (chirp) at
             // the moment the partial is most audible (high morphAmount). Source partials are
             // safe because their amplitude is already going to zero before any snap occurs.
-            const double nearestTargetHz =
-                (rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource && freqA > 0.0)
-                    ? nearestFreqLog(allTargetFreqs, freqA)
-                    : 0.0;
+            double nearestTargetHz = 0.0;
+            if (rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource && freqA > 0.0)
+            {
+                const double candidate = nearestFreqLog(allTargetFreqs, freqA);
+                double& locked = lockedTargetHz[(size_t) ri];
+                double chosen = candidate;
+                if (locked > 0.0)
+                {
+                    // Follow the locked target's drift: snap it to the nearest live frequency,
+                    // but only while one still exists within the hysteresis band of the lock.
+                    const double lockedNow = nearestFreqLog(allTargetFreqs, locked);
+                    const bool lockedAlive = lockedNow > 0.0
+                        && std::abs(std::log2(lockedNow / locked)) <= kReassignHysteresisOct;
+                    if (lockedAlive)
+                    {
+                        const double dCand = candidate > 0.0
+                            ? std::abs(std::log2(candidate / freqA))
+                            : std::numeric_limits<double>::max();
+                        const double dLock = std::abs(std::log2(lockedNow / freqA));
+                        // Only switch to a different candidate if it is clearly closer to freqA.
+                        chosen = (candidate > 0.0 && dCand + kReassignHysteresisOct < dLock)
+                            ? candidate : lockedNow;
+                    }
+                    // else: the locked target faded out — adopt the new candidate.
+                }
+                locked = chosen > 0.0 ? chosen : 0.0;
+                nearestTargetHz = chosen;
+            }
             const double nearestSourceHz = 0.0;
             const auto resolved = ats::resolveHybridizedPartialRender(toHybridizedPartialKind(rec.kind),
                                                                       freqA,
