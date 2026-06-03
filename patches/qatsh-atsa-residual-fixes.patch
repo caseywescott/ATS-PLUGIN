@@ -1,0 +1,156 @@
+diff --git a/src/atsa/residual-analysis.c b/src/atsa/residual-analysis.c
+index f23df33..2b104cf 100644
+--- a/src/atsa/residual-analysis.c
++++ b/src/atsa/residual-analysis.c
+@@ -111,7 +111,7 @@ void residual_analysis(double** res, int res_len, int s_rate, ATS_SOUND *sound)
+   fft_struct.rate = file_sampling_rate;
+   fft_struct.fdr = (double *)malloc(N * sizeof(double));
+   fft_struct.fdi = (double *)malloc(N * sizeof(double));
+-  threshold = AMP_DB(ATSA_NOISE_THRESHOLD);
++  threshold = DB_AMP(ATSA_NOISE_THRESHOLD) * DB_AMP(ATSA_NOISE_THRESHOLD);
+   frames = sound->frames;
+   fft_mag = (double)file_sampling_rate / (double)N;
+   band_limits = (int *)malloc(sizeof(int)*(ATSA_CRITICAL_BANDS+1));
+@@ -149,7 +149,7 @@ void residual_analysis(double** res, int res_len, int s_rate, ATS_SOUND *sound)
+     //e_ratio = (freq_domain_energy > 0.0) ? (time_domain_energy / freq_domain_energy) : 1.0;
+     //fprintf(stderr, "[FDE: %f TDE: %f e_ratio: %f]\n", freq_domain_energy, time_domain_energy, e_ratio);
+     for(k = 0; k < ATSA_CRITICAL_BANDS; k++){
+-      if( band_energy[k] < threshold) {
++      if(!isfinite(band_energy[k]) || band_energy[k] < threshold) {
+ 	band_arr[k][frame_n] = 0.0;
+       } else {
+ 	band_arr[k][frame_n] = band_energy[k];
+diff --git a/src/atsa/synthesis.c b/src/atsa/synthesis.c
+index 91d236a..6cc3e57 100644
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -26,9 +26,10 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
+ #define SINE_TABLE_LEN 16384
+ 
+ #define BW 0.1
+-#define BW_FREQ 500.
+-
+-#define EPSILON 0.001
++#define BW_FREQ 500.
++
++#define EPSILON 0.001
++#define ATSA_SYNTH_RANDOM_SEED 1u
+ 
+ //MACROS
+ /*
+@@ -81,16 +82,15 @@ static double sine_table[SINE_TABLE_LEN];
+ //randi output random numbers in the range of 1,-1
+ //getting a new number at frequency freq and interpolating
+ //the intermediate values.
+-void randi_setup(double sr, double freq, RANDI *radat)
+-{
+-  // Initialize random seed
+-  srand((unsigned)time(0));
+-
+-  // Initialize 
+-  radat->size = (int) (sr / freq) - 1;
+-  radat->a1   = rand();
+-  radat->a2   = rand();
+-  radat->cnt  = 0;
++void randi_setup(double sr, double freq, RANDI *radat)
++{
++  // Initialize 
++  radat->size = (int) (sr / freq) - 1;
++  if (radat->size < 1)
++    radat->size = 1;
++  radat->a1   = rand();
++  radat->a2   = rand();
++  radat->cnt  = 0;
+ }
+ ///////////////////////////////////////////////////////////////////
+ double randi(RANDI *radat)
+@@ -113,12 +113,14 @@ double randif(RANDI *radat, double freq, double sr)
+ {
+   double output;
+ 
+-  if(radat->cnt == radat->size) { //get a new random value
+-    radat->a1  = radat->a2; 
+-    radat->a2  = rand();
+-    radat->cnt = 0;
+-    radat->size= (int) (sr / freq) - 1;
+-  }
++  if(radat->cnt == radat->size) { //get a new random value
++    radat->a1  = radat->a2; 
++    radat->a2  = rand();
++    radat->cnt = 0;
++    radat->size= (int) (sr / freq) - 1;
++    if (radat->size < 1)
++      radat->size = 1;
++  }
+ 
+   output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+   radat->cnt++;
+@@ -366,21 +368,25 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   double freq_p, freq_c, freq_n;
+   double pha_p, pha_c, pha_n;
+   double resid_p, resid_c, resid_n;
+-  int n_samps;
+-  int first, last;
+-  int f, f_p, f_n;
+-  double frame_dur, time_offset, duration;
+-  int p, d, b;
+-
+-  // Fix special params values
+-  if (sparams->end <= sparams->beg)
+-      sparams->end = sparams->beg + ats_sound->dur;
+-
+-  // Transfer residual data if partial noise is present
+-  if (ats_sound->band_energy) {
+-    for(f=0; f<ats_sound->frames; f++) {
+-      band_energy_to_res(ats_sound, f);
+-    }
++  int n_samps;
++  int first, last;
++  int f, f_p, f_n;
++  double frame_dur, time_offset, duration;
++  int p, d, b;
++  int has_residual;
++
++  // Fix special params values
++  if (sparams->end <= sparams->beg)
++      sparams->end = sparams->beg + ats_sound->dur;
++
++  srand(ATSA_SYNTH_RANDOM_SEED);
++  has_residual = ats_sound->band_energy != NULL;
++
++  // Transfer residual data if partial noise is present
++  if (has_residual) {
++    for(f=0; f<ats_sound->frames; f++) {
++      band_energy_to_res(ats_sound, f);
++    }
+   }
+ 
+   // Build envelop segments descriptor and compute number of samples to generate
+@@ -436,10 +442,10 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   //fprintf(stdout, "do_synthesis: %d samples to be generated\n", todo);
+ 
+   // Allocate space for oscilators and noise generator
+-  if(sparams->ramp == 0.) { 
+-        //deterministic synthesis only
+-    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
+-        memset(ospt, 0, ats_sound->partials * sizeof(double));
++  if(sparams->ramp == 0. || !has_residual) { 
++        //deterministic synthesis only
++    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
++        memset(ospt, 0, ats_sound->partials * sizeof(double));
+   }  else if(sparams->amp == 0.) { 
+         //residual synthesis only
+     ospt = (double*)malloc(ATSA_CRITICAL_BANDS * sizeof(double));
+@@ -509,9 +515,9 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+       time_offset *= tdata[p].time_factor;      
+ 
+       // Do the sample generation.
+-      if(sparams->ramp == 0.) {
+-          //deterministic synthesis only
+-          for(d = 0; d < ats_sound->partials; d++) {
++      if(sparams->ramp == 0. || !has_residual) {
++          //deterministic synthesis only
++          for(d = 0; d < ats_sound->partials; d++) {
+               if (sparams->allorsel && selected && !selected[d])
+                   continue;
+               ampl_p = ats_sound->amp[d][f_p] * sparams->amp;
