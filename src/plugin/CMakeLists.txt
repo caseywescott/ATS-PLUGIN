@@ -50,6 +50,7 @@ target_sources(
           ../core/AtsMorphRecipe.cpp
           ../core/AtsParams.cpp
           ../core/AtsSpectralEnvelope.cpp
+          ../core/AtsTransientSmear.cpp
           ../core/ResampleLinear.cpp
           ../core/AtsMathExpr.cpp)
 

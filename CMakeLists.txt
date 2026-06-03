@@ -1,12 +1,22 @@
 cmake_minimum_required(VERSION 3.22)
 project(ats_plugin VERSION 0.1.0 LANGUAGES C CXX)
 
+# Default to an optimized build. Without this, a bare `cmake -S . -B build`
+# produces an empty build type (-O0), which makes the CPU-heavy ATSA analysis
+# and morph/resynth rendering 5-20x slower. Single-config generators only;
+# multi-config generators (Xcode/MSVC) pick the type at build time.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  message(STATUS "No CMAKE_BUILD_TYPE specified; defaulting to Release.")
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
+option(ATS_REQUIRE_QATSH_RESIDUAL_FIXES "Require local Qatsh ATSA residual fixes before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -15,6 +25,22 @@ endif()
 if(NOT EXISTS "${ATS_ATSA_SOURCE_DIR}/atsa.h")
   message(FATAL_ERROR "ATSA sources not found at ATS_ATSA_SOURCE_DIR='${ATS_ATSA_SOURCE_DIR}'. Clone Qatsh next to this project or set ATS_ATSA_SOURCE_DIR.")
 endif()
+
+if(ATS_REQUIRE_QATSH_RESIDUAL_FIXES)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/synthesis.c" _atsa_synthesis_source)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/residual-analysis.c" _atsa_residual_source)
+  string(FIND "${_atsa_synthesis_source}" "ATSA_SYNTH_RANDOM_SEED" _atsa_seed_marker)
+  string(FIND "${_atsa_synthesis_source}" "has_residual = ats_sound->band_energy != NULL" _atsa_residual_guard_marker)
+  string(FIND "${_atsa_residual_source}" "DB_AMP(ATSA_NOISE_THRESHOLD) * DB_AMP(ATSA_NOISE_THRESHOLD)" _atsa_threshold_marker)
+  if(_atsa_seed_marker EQUAL -1 OR _atsa_residual_guard_marker EQUAL -1 OR _atsa_threshold_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA residual fixes are not applied. Run scripts/apply_qatsh_residual_fixes.sh apply, or configure with -DATS_REQUIRE_QATSH_RESIDUAL_FIXES=OFF to bypass.")
+  endif()
+endif()
+unset(_atsa_synthesis_source)
+unset(_atsa_residual_source)
+unset(_atsa_seed_marker)
+unset(_atsa_residual_guard_marker)
+unset(_atsa_threshold_marker)
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h
   PATHS

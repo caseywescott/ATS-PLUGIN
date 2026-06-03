@@ -23,6 +23,13 @@ target_include_directories(ats_transient_smear_test PRIVATE
   "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_transient_smear_test PRIVATE cxx_std_17)
 
+add_executable(ats_transient_smear_accuracy_test ats_transient_smear_accuracy_test.cpp
+  ../src/core/AtsTransientSmear.cpp)
+target_include_directories(ats_transient_smear_accuracy_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_transient_smear_accuracy_test PRIVATE cxx_std_17)
+
 add_executable(atsa_residual_test atsa_residual_test.c)
 target_link_libraries(atsa_residual_test PRIVATE atsa)
 if(UNIX AND NOT APPLE)
@@ -58,3 +65,4 @@ add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)
 add_test(NAME spectral_envelope_transfer_test COMMAND $<TARGET_FILE:spectral_envelope_transfer_test>)
 add_test(NAME ats_transient_smear_test COMMAND $<TARGET_FILE:ats_transient_smear_test>)
+add_test(NAME ats_transient_smear_accuracy_test COMMAND $<TARGET_FILE:ats_transient_smear_accuracy_test>)
