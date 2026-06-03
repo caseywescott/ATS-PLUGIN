@@ -32,10 +32,16 @@ public:
         Residual,
         Isometric,
         IsometricResidual,
-        IsometricEnvelope
+        IsometricEnvelope,
+        IsometricEnvelopeRDC
     };
 
     void setMode(Mode m);
+
+    [[nodiscard]] AtsTraceSource getViewedSource() const { return traceSource; }
+
+    // Currently selected frame range in the trace, or {-1,-1} if no selection.
+    [[nodiscard]] bool getSelectedFrameRange(int& firstFrame, int& lastFrame) const;
 
 private:
     class TraceZoomBar;
@@ -60,6 +66,12 @@ private:
     void paintIsometricPartials(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricResidual(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricEnvelope(juce::Graphics&, juce::Rectangle<float> plot);
+    void paintIsometricEnvelopeRDC(juce::Graphics&, juce::Rectangle<float> plot);
+    void paintEnvelopeSurfaceRDC(juce::Graphics& g,
+                                 juce::Rectangle<float> plot,
+                                 const AtsSpectralTraceSnapshot& snap,
+                                 juce::Colour colour,
+                                 float alphaScale) const;
     void paintEnvelopeSurface(juce::Graphics& g,
                               juce::Rectangle<float> plot,
                               const AtsSpectralTraceSnapshot& snap,
@@ -69,6 +81,16 @@ private:
     void paintPlanarPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot, float playheadNorm);
     void paintIsometricPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot, float playheadNorm);
     [[nodiscard]] juce::Rectangle<int> playheadPaintBounds(juce::Rectangle<float> plot, float playheadNorm) const;
+    void paintSmearnovOverlay(juce::Graphics&, juce::Rectangle<float> plot) const;
+    void paintSmearnovDetectionCurves(juce::Graphics&, juce::Rectangle<float> plot) const;
+
+    enum class OnsetHandle { None, Marker, LeftEdge, RightEdge };
+    [[nodiscard]] bool smearnovOverlayInteractive() const;
+    [[nodiscard]] int onsetHandleAtPoint(juce::Point<float> pos,
+                                         juce::Rectangle<float> plot,
+                                         OnsetHandle& handleOut) const;
+    void updateDraggedOnset(juce::Point<float> pos);
+    void commitEditedOnsets();
     void paintSelectionOverlay(juce::Graphics&, juce::Rectangle<float> screen, juce::Rectangle<float> plot);
     void paintBandLabelGutter(juce::Graphics&, juce::Rectangle<float> gutter, juce::Rectangle<float> plot);
     void updateSelectionLabel();
@@ -112,6 +134,7 @@ private:
                                                           float freqNorm,
                                                           float ampNorm,
                                                           juce::Rectangle<float> plot) const;
+    [[nodiscard]] float xForFrame(int frame, juce::Rectangle<float> plot) const;
     [[nodiscard]] float timeNormFromScreenX(float x, juce::Rectangle<float> plot) const;
     [[nodiscard]] float freqNormFromScreenY(float y, juce::Rectangle<float> plot) const;
     [[nodiscard]] juce::Range<float> yRangeForBand(const AtsResidualBandTrace&, juce::Rectangle<float> plot) const;
@@ -139,6 +162,7 @@ private:
     juce::ToggleButton envSourceBBtn { "Source B" };
     int lastModelRevision = -1;
     uint64_t lastDisplayShapeRevision = 0;
+    uint64_t lastSmearnovOverlayRevision = 0;
     double ampDisplayReferencePeak = 0.0;
     double residualDisplayReferencePeak = 0.0;
 
@@ -183,6 +207,10 @@ private:
     int hoveredPartial = -1;
     int hoveredResidualBand = -1;
     int hoveredResidualFrame = -1;
+    int draggingOnsetIndex = -1;
+    OnsetHandle draggingOnsetHandle = OnsetHandle::None;
+    int hoveredOnsetIndex = -1;
+    OnsetHandle hoveredOnsetHandle = OnsetHandle::None;
     float animatedPlayheadNorm = -1.0f;
     double lastPlayheadAnimationMs = 0.0;
     juce::Image displayCache;

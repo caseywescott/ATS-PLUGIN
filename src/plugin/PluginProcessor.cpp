@@ -16,6 +16,7 @@
 #include "AtsMathExpr.h"
 #include "AtsMorphRecipe.h"
 #include "AtsSpectralEnvelope.h"
+#include "AtsTransientSmear.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -28,7 +29,7 @@ extern "C" {
 
 namespace
 {
-constexpr int kStateVersion = 13;
+constexpr int kStateVersion = 14;
 constexpr int kMinReadableStateVersion = 2;
 constexpr float kDefaultMorphPerformanceMacro = 0.5f;
 constexpr float kDefaultMorphSmoothingMs = 40.0f;
@@ -45,6 +46,25 @@ constexpr int kSourceAPlaybackBufferIndex = 0;
 constexpr int kSourceBPlaybackBufferIndex = 1;
 constexpr int kMorphPlaybackBufferIndex = 2;
 constexpr const char* kMorphTimelineUnknownField = "ui.morph_timeline_points";
+
+// Smearnov parameters that change *what onsets get detected*. Editing any of
+// these drops a pinned auto-detection so the next Apply re-detects (manual
+// overlay edits are kept — see invalidateAutoDetectedOnsetOverrides).
+constexpr const char* kSmearnovDetectionParamIds[] = {
+    ats_param::kSmearnovWeightDetFlux,
+    ats_param::kSmearnovWeightResFlux,
+    ats_param::kSmearnovWeightHfcFlux,
+    ats_param::kSmearnovWeightBirth,
+    ats_param::kSmearnovWeightPhaseDev,
+    ats_param::kSmearnovUsePhaseDeviation,
+    ats_param::kSmearnovThresholdLambda,
+    ats_param::kSmearnovThresholdAutoScale,
+    ats_param::kSmearnovPeakWindowFrames,
+    ats_param::kSmearnovMinGapFrames,
+    ats_param::kSmearnovPreMarginMs,
+    ats_param::kSmearnovMaxAttackFrames,
+    ats_param::kSmearnovUseRpcaFallback,
+};
 
 struct ClassicLayerRender
 {
@@ -930,7 +950,7 @@ std::string serializeMorphTimelinePoints(const std::vector<AtsMorphTimelinePoint
             text << ";";
         text << juce::String(safePoints[i].timeNorm, 6)
              << "," << juce::String(safePoints[i].morphAmount, 6)
-             << "," << (safePoints[i].kind == MorphTimelinePointKind::Hybrid ? "1" : "0")
+             << "," << static_cast<int>(safePoints[i].kind)
              << "," << static_cast<int>(safePoints[i].curve);
     }
     return text.toStdString();
@@ -949,8 +969,14 @@ std::vector<AtsMorphTimelinePoint> deserializeMorphTimelinePoints(const std::str
         AtsMorphTimelinePoint point;
         point.timeNorm = values[0].getDoubleValue();
         point.morphAmount = values[1].getDoubleValue();
-        if (values.size() >= 3 && values[2].getIntValue() == 1)
-            point.kind = MorphTimelinePointKind::Hybrid;
+        if (values.size() >= 3)
+        {
+            const int kv = values[2].getIntValue();
+            if (kv == static_cast<int>(MorphTimelinePointKind::Hybrid))
+                point.kind = MorphTimelinePointKind::Hybrid;
+            else if (kv == static_cast<int>(MorphTimelinePointKind::EnvelopeMorph))
+                point.kind = MorphTimelinePointKind::EnvelopeMorph;
+        }
         if (values.size() >= 4)
         {
             const int cv = values[3].getIntValue();
@@ -999,35 +1025,43 @@ double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, d
     return prev->morphAmount + shaped * (next->morphAmount - prev->morphAmount);
 }
 
-// Returns the envelope-transfer amount [0,1] at timeNorm, using only Hybrid-kind breakpoints.
-// Returns 0.0 when no Hybrid breakpoints exist.
-static double evaluateEnvTransferTimeline(const std::vector<AtsMorphTimelinePoint>& safePoints, double timeNorm)
+// Returns the lane amount [0,1] at timeNorm, interpolating only breakpoints of the
+// requested kind. Returns 0.0 when the lane has no breakpoints.
+static double evaluateLaneTimeline(const std::vector<AtsMorphTimelinePoint>& safePoints,
+                                   double timeNorm,
+                                   MorphTimelinePointKind laneKind)
 {
-    std::vector<const AtsMorphTimelinePoint*> hybrid;
+    std::vector<const AtsMorphTimelinePoint*> lane;
     for (const auto& p : safePoints)
-        if (p.kind == MorphTimelinePointKind::Hybrid)
-            hybrid.push_back(&p);
+        if (p.kind == laneKind)
+            lane.push_back(&p);
 
-    if (hybrid.empty())
+    if (lane.empty())
         return 0.0;
 
     const double t = juce::jlimit(0.0, 1.0, timeNorm);
-    if (t <= hybrid.front()->timeNorm)
-        return hybrid.front()->morphAmount;
-    for (size_t i = 1; i < hybrid.size(); ++i)
+    if (t <= lane.front()->timeNorm)
+        return lane.front()->morphAmount;
+    for (size_t i = 1; i < lane.size(); ++i)
     {
-        if (t <= hybrid[i]->timeNorm)
+        if (t <= lane[i]->timeNorm)
         {
-            const double span = hybrid[i]->timeNorm - hybrid[i - 1]->timeNorm;
+            const double span = lane[i]->timeNorm - lane[i - 1]->timeNorm;
             if (span <= 1.0e-9)
-                return hybrid[i]->morphAmount;
-            const double shaped = applyCurveShape((t - hybrid[i - 1]->timeNorm) / span,
-                                                  hybrid[i - 1]->curve);
-            return hybrid[i - 1]->morphAmount
-                   + shaped * (hybrid[i]->morphAmount - hybrid[i - 1]->morphAmount);
+                return lane[i]->morphAmount;
+            const double shaped = applyCurveShape((t - lane[i - 1]->timeNorm) / span,
+                                                  lane[i - 1]->curve);
+            return lane[i - 1]->morphAmount
+                   + shaped * (lane[i]->morphAmount - lane[i - 1]->morphAmount);
         }
     }
-    return hybrid.back()->morphAmount;
+    return lane.back()->morphAmount;
+}
+
+// Returns the envelope-transfer amount [0,1] at timeNorm, using only Hybrid-kind breakpoints.
+static double evaluateEnvTransferTimeline(const std::vector<AtsMorphTimelinePoint>& safePoints, double timeNorm)
+{
+    return evaluateLaneTimeline(safePoints, timeNorm, MorphTimelinePointKind::Hybrid);
 }
 
 bool getConstantMorphEndpointSourceIndex(const std::vector<AtsMorphTimelinePoint>& points, int& sourceIndex)
@@ -1039,26 +1073,25 @@ bool getConstantMorphEndpointSourceIndex(const std::vector<AtsMorphTimelinePoint
     // Hybrid breakpoints must never trigger the "pure source" shortcut path;
     // they exist to apply Bark envelope transfer, not to suppress rendering.
     bool hasMorphPoints = false;
-    bool hasHybridPoints = false;
+    bool hasEffectLanePoints = false;
     bool allSourceA = true;
     bool allSourceB = true;
     for (const auto& point : safePoints)
     {
-        if (point.kind == MorphTimelinePointKind::Hybrid)
+        // Any non-Morph lane (Hybrid envelope transfer, EnvelopeMorph) needs the full
+        // trajectory render — it must never trigger the "pure source" shortcut path.
+        if (point.kind != MorphTimelinePointKind::Morph)
         {
-            hasHybridPoints = true;
+            hasEffectLanePoints = true;
             continue;
         }
-
-        if (point.kind != MorphTimelinePointKind::Morph)
-            continue;
 
         hasMorphPoints = true;
         allSourceA = allSourceA && point.morphAmount <= kEndpointTolerance;
         allSourceB = allSourceB && point.morphAmount >= 1.0 - kEndpointTolerance;
     }
 
-    if (hasHybridPoints)
+    if (hasEffectLanePoints)
     {
         sourceIndex = -1;
         return false;
@@ -1236,6 +1269,8 @@ AtsAudioProcessor::AtsAudioProcessor()
         apvts.addParameterListener(ats_param::kMorphLaneAmountIds[i], this);
         apvts.addParameterListener(ats_param::kMorphLaneLinkedIds[i], this);
     }
+    for (const char* id : kSmearnovDetectionParamIds)
+        apvts.addParameterListener(id, this);
 
     outputTrimRaw = apvts.getRawParameterValue("outputTrim");
     partGainRaw   = apvts.getRawParameterValue("partGain");
@@ -1276,6 +1311,8 @@ AtsAudioProcessor::~AtsAudioProcessor()
         apvts.removeParameterListener(ats_param::kMorphLaneAmountIds[i], this);
         apvts.removeParameterListener(ats_param::kMorphLaneLinkedIds[i], this);
     }
+    for (const char* id : kSmearnovDetectionParamIds)
+        apvts.removeParameterListener(id, this);
 }
 
 int AtsAudioProcessor::getNumPrograms()
@@ -1406,6 +1443,102 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         "Morph transient policy",
         juce::StringArray { "Source A attack", "Source B attack", "Crossfade attacks", "Sustain after attack" },
         kDefaultMorphTransientPolicy));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovBlurMs,
+        "Smearnov blur (ms)",
+        juce::NormalisableRange<float>(0.0f, 120.0f, 0.01f, 0.45f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovSharpenAmount,
+        "Smearnov sharpen",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f, 0.5f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovExaggerateDb,
+        "Smearnov exaggerate (dB)",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.01f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovMaxDb,
+        "Smearnov max gain (dB)",
+        juce::NormalisableRange<float>(0.0f, 24.0f, 0.01f),
+        12.0f));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        ats_param::kSmearnovTargets,
+        "Smearnov targets",
+        juce::StringArray { "Partials", "Residual", "Both" },
+        2));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        ats_param::kSmearnovScope,
+        "Smearnov scope",
+        juce::StringArray { "All", "Selection", "Sensitivity" },
+        0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovWeightDetFlux,
+        "Smearnov deterministic flux weight",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f),
+        1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovWeightResFlux,
+        "Smearnov residual flux weight",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f),
+        0.8f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovWeightHfcFlux,
+        "Smearnov HFC flux weight",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f),
+        0.6f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovWeightBirth,
+        "Smearnov birth weight",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f),
+        0.7f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovWeightPhaseDev,
+        "Smearnov phase-deviation weight",
+        juce::NormalisableRange<float>(0.0f, 4.0f, 0.0001f),
+        0.4f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovThresholdLambda,
+        "Smearnov threshold lambda",
+        juce::NormalisableRange<float>(0.0f, 24.0f, 0.001f, 0.45f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovThresholdAutoScale,
+        "Smearnov auto-threshold scale",
+        juce::NormalisableRange<float>(0.0f, 8.0f, 0.001f),
+        1.5f));
+    layout.add(std::make_unique<juce::AudioParameterInt>(
+        ats_param::kSmearnovPeakWindowFrames,
+        "Smearnov peak window (frames)",
+        1,
+        64,
+        6));
+    layout.add(std::make_unique<juce::AudioParameterInt>(
+        ats_param::kSmearnovMinGapFrames,
+        "Smearnov min gap override (frames)",
+        0,
+        512,
+        0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kSmearnovPreMarginMs,
+        "Smearnov pre-margin (ms)",
+        juce::NormalisableRange<float>(0.0f, 50.0f, 0.01f, 0.5f),
+        5.0f));
+    layout.add(std::make_unique<juce::AudioParameterInt>(
+        ats_param::kSmearnovMaxAttackFrames,
+        "Smearnov max attack (frames)",
+        0,
+        1024,
+        0));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        ats_param::kSmearnovUsePhaseDeviation,
+        "Smearnov use phase deviation",
+        false));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        ats_param::kSmearnovUseRpcaFallback,
+        "Smearnov RPCA fallback",
+        false));
     for (size_t i = 0; i < ats_param::kMorphLaneCount; ++i)
     {
         const juce::String laneName(ats_param::kMorphLaneDisplayNames[i]);
@@ -1568,6 +1701,14 @@ void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float 
         return;
     }
 
+    if (isSmearnovDetectionParameter(parameterID))
+    {
+        // Detection tuning changed: drop pinned auto-detections so the next Apply
+        // re-detects. Does not affect synthesis, so no resynth is triggered.
+        invalidateAutoDetectedOnsetOverrides();
+        return;
+    }
+
     synthParamsDirty.store(true);
     triggerAsyncUpdate();
 }
@@ -1690,6 +1831,41 @@ ats::AnalysisParams AtsAudioProcessor::readAnalysisParamsFromApvts() const
     a.last_peak_cont = getRawParamValue(apvts, ats_param::kAnalysisLastPeakContribution, (float) ATSA_LPKCONT);
     a.SMR_cont = getRawParamValue(apvts, ats_param::kAnalysisSmrContribution, (float) ATSA_SMRCONT);
     return a;
+}
+
+ats::SmearnovDetectParams AtsAudioProcessor::readSmearnovDetectParamsFromApvts() const
+{
+    ats::SmearnovDetectParams params;
+    params.weightDetFlux = getRawParamValue(apvts, ats_param::kSmearnovWeightDetFlux, 1.0f);
+    params.weightResFlux = getRawParamValue(apvts, ats_param::kSmearnovWeightResFlux, 0.8f);
+    params.weightHfcFlux = getRawParamValue(apvts, ats_param::kSmearnovWeightHfcFlux, 0.6f);
+    params.weightBirth = getRawParamValue(apvts, ats_param::kSmearnovWeightBirth, 0.7f);
+    params.weightPhaseDev = getRawParamValue(apvts, ats_param::kSmearnovWeightPhaseDev, 0.4f);
+    params.usePhaseDeviation = getRawParamValue(apvts, ats_param::kSmearnovUsePhaseDeviation, 0.0f) > 0.5f;
+    params.peakWindowRadiusFrames = getRawChoiceValue(apvts, ats_param::kSmearnovPeakWindowFrames, 6);
+    params.thresholdLambda = getRawParamValue(apvts, ats_param::kSmearnovThresholdLambda, 0.0f);
+    params.thresholdAutoScale = getRawParamValue(apvts, ats_param::kSmearnovThresholdAutoScale, 1.5f);
+    params.minGapFramesOverride = getRawChoiceValue(apvts, ats_param::kSmearnovMinGapFrames, 0);
+    params.preMarginSeconds = (double) getRawParamValue(apvts, ats_param::kSmearnovPreMarginMs, 5.0f) * 0.001;
+    params.maxAttackFrames = getRawChoiceValue(apvts, ats_param::kSmearnovMaxAttackFrames, 0);
+    return params;
+}
+
+ats::SmearnovParams AtsAudioProcessor::readSmearnovParamsFromApvts() const
+{
+    ats::SmearnovParams params;
+    params.blurMs = getRawParamValue(apvts, ats_param::kSmearnovBlurMs, 0.0f);
+    params.sharpenAmount = getRawParamValue(apvts, ats_param::kSmearnovSharpenAmount, 0.0f);
+    params.exaggerateDb = getRawParamValue(apvts, ats_param::kSmearnovExaggerateDb, 0.0f);
+    params.maxDb = getRawParamValue(apvts, ats_param::kSmearnovMaxDb, 12.0f);
+    switch (getRawChoiceValue(apvts, ats_param::kSmearnovTargets, 2))
+    {
+        case 0: params.targets = ats::SmearnovTarget::Partials; break;
+        case 1: params.targets = ats::SmearnovTarget::Residual; break;
+        case 2:
+        default: params.targets = ats::SmearnovTarget::Both; break;
+    }
+    return params;
 }
 
 void AtsAudioProcessor::loadSourceFile(const juce::File& file)
@@ -1849,6 +2025,7 @@ void AtsAudioProcessor::startAnalysis()
         }
 
         modelRevision.fetch_add(1, std::memory_order_relaxed);
+        clearSmearnovOnsetOverrides(AtsTraceSource::Current);
 
         const int pendingSlot = pendingMorphSourceSlotAfterAnalysis.exchange(-1, std::memory_order_acq_rel);
         if (pendingSlot == 0 || pendingSlot == 1)
@@ -2540,14 +2717,9 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
         points.push_back({ fq, am });
     }
 
-    // Wider sigma for sparse frames, narrower for dense — preserves formants when partials crowd.
-    const int validCount = std::max(1, static_cast<int>(points.size()));
-    const double adaptiveSigma = std::clamp(
-        ats::BarkSpectralEnvelope::kDefaultSigmaBins
-            * std::sqrt(32.0 / static_cast<double>(validCount)),
-        1.0,
-        8.0);
-    envelope.build(points, ats::BarkSpectralEnvelope::kDefaultBins, adaptiveSigma);
+    // True Envelope estimation auto-selects its cepstral order from the partials' Bark spacing,
+    // so no per-frame smoothing heuristic is needed here.
+    envelope.build(points, ats::BarkSpectralEnvelope::kDefaultBins);
     return envelope;
 }
 
@@ -2827,6 +2999,13 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const double envTransferAmount = juce::jlimit(0.0, 1.0,
             useTimeline ? evaluateEnvTransferTimeline(safePoints, timeNorm) : 0.0);
 
+        // Envelope-driven amplitude morph ("true morph"): blend A/B Bark envelopes and
+        // resample each partial's amplitude from the interpolated envelope.
+        const double envMorphAmount = juce::jlimit(0.0, 1.0,
+            useTimeline ? evaluateLaneTimeline(safePoints, timeNorm,
+                                               MorphTimelinePointKind::EnvelopeMorph)
+                        : 0.0);
+
         // Fractional frame positions at this chunk's start
         const double fpA = hopA > 0.0 ? t / hopA : 0.0;
         const int fA0   = juce::jlimit(0, framesA - 1, (int) fpA);
@@ -2838,27 +3017,46 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const int fB1   = juce::jmin(fB0 + 1, framesB - 1);
         const double fracB = fpB - (double) fB0;
 
-        // When a source overruns its last frame, fA0==fA1 and ampA stays at the last-frame
-        // value forever.  Fade each source to silence over one hop so partials don't
-        // sustain past the source's natural end.
-        const double fadeA = fpA > (double)(framesA - 1)
-            ? juce::jmax(0.0, 1.0 - (fpA - (double)(framesA - 1)))
-            : 1.0;
-        const double fadeB = fpB > (double)(framesB - 1)
-            ? juce::jmax(0.0, 1.0 - (fpB - (double)(framesB - 1)))
-            : 1.0;
+        // End-of-source fade. When a source overruns its last frame, fA0==fA1 and its partials
+        // would otherwise hold the last-frame value forever, so each source is faded to silence
+        // past its end. The fade is a raised cosine (zero slope at both ends) over ~20 ms rather
+        // than a single linear hop: a source of finite length is usually truncated while still
+        // energetic, and a linear one-hop ramp leaves slope corners that splatter as a broadband
+        // "pop" when the other source is still sounding (any morph < 1). The smooth, longer
+        // window removes the corners. Applied symmetrically to A and B.
+        constexpr double kEndFadeSeconds = 0.020;
+        auto endOfSourceFade = [&](double fp, int frames, double hop) -> double
+        {
+            const double overSec = (fp - (double) (frames - 1)) * hop; // seconds past last frame
+            if (overSec <= 0.0)
+                return 1.0;
+            const double dur = std::max(hop, kEndFadeSeconds);
+            if (overSec >= dur)
+                return 0.0;
+            return 0.5 * (1.0 + std::cos(juce::MathConstants<double>::pi * (overSec / dur)));
+        };
+        const double fadeA = endOfSourceFade(fpA, framesA, hopA > 0.0 ? hopA : invSr);
+        const double fadeB = endOfSourceFade(fpB, framesB, hopB > 0.0 ? hopB : invSr);
 
         // Scale transfer amount by fadeA: as source A ends, the spectral gain exponent
         // approaches 0 so boosted partials fade naturally instead of cutting abruptly.
         const double effectiveEnvTransfer = envTransferAmount * fadeA;
 
-        // Build Bark envelopes for hybrid breakpoint envelope transfer (once per chunk).
+        // Build Bark envelopes once per chunk — shared by Hybrid envelope transfer and the
+        // EnvelopeMorph lane (both read A's and B's spectral envelope at partial frequencies).
         ats::BarkSpectralEnvelope barkA, barkB;
-        if (effectiveEnvTransfer > 1.0e-9)
+        if (effectiveEnvTransfer > 1.0e-9 || envMorphAmount > 1.0e-9)
         {
             barkA = buildBarkEnvelopeForFrame(soundA, fA0, fA1, fracA);
             barkB = buildBarkEnvelopeForFrame(soundB, fB0, fB1, fracB);
         }
+
+        // For the EnvelopeMorph lane, align the two envelopes' formants and warp the Bark axis
+        // so corresponding formants glide together before the log-amplitude blend (Caetano/Rodet).
+        // Built once per chunk and read per partial below.
+        ats::FormantAlignedEnvelopeMorph morphedEnv;
+        if (envMorphAmount > 1.0e-9 && barkA.isValid() && barkB.isValid())
+            morphedEnv.build(barkA, barkB, kEnvDecolorRelFloor);
 
         // Precompute all active source/target frequencies for unmatched-partial drift.
         std::vector<double> allTargetFreqs, allSourceFreqs;
@@ -3002,7 +3200,26 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                                                       nearestTargetHz,
                                                                       nearestSourceHz);
             const double freq = resolved.frequencyHz;
-            const double amp = resolved.amplitude;
+            double amp = resolved.amplitude;
+
+            // Envelope-driven amplitude morph: interpolate A's and B's Bark envelopes by the
+            // morph position and resample this partial's amplitude from the blended envelope.
+            // This decouples the formant/timbre shape from individual partial amplitudes, so
+            // imperfect A↔B correspondence no longer combs the spectrum (Caetano/Rodet). The
+            // partial's own presence is preserved: a partial that is already silent stays
+            // silent (no resurrection), and the result is bounded by the sources' envelopes.
+            if (envMorphAmount > 1.0e-9 && freq > 0.0 && amp > 1.0e-7 && morphedEnv.isValid())
+            {
+                // Formant-aligned blend: the envelopes' formant peaks are matched and the Bark
+                // axis is warped so a formant that moves from A to B glides as a single peak
+                // rather than double-imaging or dipping at the midpoint. Reduces to the plain
+                // fixed-frequency log blend when no formants match (identity warp).
+                const double blendedEnv = morphedEnv.sampleAtHz(freq, morphAmount);
+                // Crossfade the independent per-partial amplitude toward its position on the
+                // blended envelope. Linear so the result stays bounded by max(amp, blendedEnv)
+                // and is zero-safe at the lane endpoints.
+                amp += envMorphAmount * (blendedEnv - amp);
+            }
 
             auto& p = ps[(size_t) ri];
             double targetAmp = 0.0;
@@ -3953,6 +4170,8 @@ bool AtsAudioProcessor::setCurrentModelAsMorphSourceSlot(int slotIndex, juce::St
         morphRecipeRevision.fetch_add(1, std::memory_order_release);
     }
 
+    clearSmearnovOnsetOverrides(slotIndex == 0 ? AtsTraceSource::SourceA : AtsTraceSource::SourceB);
+
     markMorphSnapshotStale();
     {
         const juce::SpinLock::ScopedLockType sl(errorLock);
@@ -4400,6 +4619,31 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
             writeResidualState(mos, diagnostics[i], residualBands[i]);
     }
 
+    if (kStateVersion >= 14)
+    {
+        // Smearnov parameters + active control-cluster tab (SMEARNOV_SPEC §4).
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovBlurMs, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovSharpenAmount, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovExaggerateDb, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovMaxDb, 0.0f));
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kSmearnovTargets, 0));
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kSmearnovScope, 0));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovWeightDetFlux, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovWeightResFlux, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovWeightHfcFlux, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovWeightBirth, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovWeightPhaseDev, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovThresholdLambda, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovThresholdAutoScale, 0.0f));
+        mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovPreMarginMs, 0.0f));
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kSmearnovPeakWindowFrames, 0));
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kSmearnovMinGapFrames, 0));
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kSmearnovMaxAttackFrames, 0));
+        mos.writeByte((char) (getRawParamValue(apvts, ats_param::kSmearnovUsePhaseDeviation, 0.0f) > 0.5f ? 1 : 0));
+        mos.writeByte((char) (getRawParamValue(apvts, ats_param::kSmearnovUseRpcaFallback, 0.0f) > 0.5f ? 1 : 0));
+        mos.writeInt(activeControlTab.load(std::memory_order_acquire));
+    }
+
     destData = mos.getMemoryBlock();
 }
 
@@ -4600,6 +4844,47 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         hasExplicitResidualState = true;
     }
 
+    struct SmearnovState
+    {
+        double blurMs = 0.0, sharpen = 0.0, exaggerateDb = 0.0, maxDb = 0.0;
+        int targets = 0, scope = 0;
+        double wDet = 0.0, wRes = 0.0, wHfc = 0.0, wBirth = 0.0, wPhase = 0.0;
+        double threshLambda = 0.0, threshScale = 0.0, preMarginMs = 0.0;
+        int peakWindow = 0, minGap = 0, maxAttack = 0;
+        bool usePhaseDev = false, useRpcaFallback = false;
+        int controlTab = 0;
+    } smearnov;
+    bool hasSmearnovState = false;
+    if (ver >= 14)
+    {
+        // 4 doubles + 2 ints + 8 doubles + 3 ints + 2 bytes + 1 int.
+        const juce::int64 needed = (juce::int64) (12 * sizeof(double) + 6 * sizeof(int) + 2);
+        if (mis.getNumBytesRemaining() < needed)
+            return;
+
+        smearnov.blurMs = mis.readDouble();
+        smearnov.sharpen = mis.readDouble();
+        smearnov.exaggerateDb = mis.readDouble();
+        smearnov.maxDb = mis.readDouble();
+        smearnov.targets = mis.readInt();
+        smearnov.scope = mis.readInt();
+        smearnov.wDet = mis.readDouble();
+        smearnov.wRes = mis.readDouble();
+        smearnov.wHfc = mis.readDouble();
+        smearnov.wBirth = mis.readDouble();
+        smearnov.wPhase = mis.readDouble();
+        smearnov.threshLambda = mis.readDouble();
+        smearnov.threshScale = mis.readDouble();
+        smearnov.preMarginMs = mis.readDouble();
+        smearnov.peakWindow = mis.readInt();
+        smearnov.minGap = mis.readInt();
+        smearnov.maxAttack = mis.readInt();
+        smearnov.usePhaseDev = mis.readByte() != 0;
+        smearnov.useRpcaFallback = mis.readByte() != 0;
+        smearnov.controlTab = mis.readInt();
+        hasSmearnovState = true;
+    }
+
     setChoiceParameter(apvts, ats_param::kAnalysisType, juce::jlimit(1, 4, ap.type) - 1);
     setParameterValue(apvts, ats_param::kAnalysisStart, (float) ap.start);
     setParameterValue(apvts, ats_param::kAnalysisDuration, (float) ap.duration);
@@ -4642,6 +4927,30 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     setChoiceParameter(apvts, ats_param::kClassicPreviewMode, classicPreviewMode);
     if (auto* p = apvts.getParameter("outputTrim"))
         p->setValueNotifyingHost(apvts.getParameterRange("outputTrim").convertTo0to1(outputTrim));
+
+    if (hasSmearnovState)
+    {
+        setParameterValue(apvts, ats_param::kSmearnovBlurMs, (float) smearnov.blurMs);
+        setParameterValue(apvts, ats_param::kSmearnovSharpenAmount, (float) smearnov.sharpen);
+        setParameterValue(apvts, ats_param::kSmearnovExaggerateDb, (float) smearnov.exaggerateDb);
+        setParameterValue(apvts, ats_param::kSmearnovMaxDb, (float) smearnov.maxDb);
+        setChoiceParameter(apvts, ats_param::kSmearnovTargets, smearnov.targets);
+        setChoiceParameter(apvts, ats_param::kSmearnovScope, smearnov.scope);
+        setParameterValue(apvts, ats_param::kSmearnovWeightDetFlux, (float) smearnov.wDet);
+        setParameterValue(apvts, ats_param::kSmearnovWeightResFlux, (float) smearnov.wRes);
+        setParameterValue(apvts, ats_param::kSmearnovWeightHfcFlux, (float) smearnov.wHfc);
+        setParameterValue(apvts, ats_param::kSmearnovWeightBirth, (float) smearnov.wBirth);
+        setParameterValue(apvts, ats_param::kSmearnovWeightPhaseDev, (float) smearnov.wPhase);
+        setParameterValue(apvts, ats_param::kSmearnovThresholdLambda, (float) smearnov.threshLambda);
+        setParameterValue(apvts, ats_param::kSmearnovThresholdAutoScale, (float) smearnov.threshScale);
+        setParameterValue(apvts, ats_param::kSmearnovPreMarginMs, (float) smearnov.preMarginMs);
+        setChoiceParameter(apvts, ats_param::kSmearnovPeakWindowFrames, smearnov.peakWindow);
+        setChoiceParameter(apvts, ats_param::kSmearnovMinGapFrames, smearnov.minGap);
+        setChoiceParameter(apvts, ats_param::kSmearnovMaxAttackFrames, smearnov.maxAttack);
+        setParameterBool(apvts, ats_param::kSmearnovUsePhaseDeviation, smearnov.usePhaseDev);
+        setParameterBool(apvts, ats_param::kSmearnovUseRpcaFallback, smearnov.useRpcaFallback);
+        setActiveControlTab(smearnov.controlTab);
+    }
 
     {
         const juce::ScopedLock ml(morphRecipeLock);
@@ -4848,6 +5157,8 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         synthParamsDirty.store(true);
         triggerAsyncUpdate();
     }
+
+    clearSmearnovOnsetOverrides(AtsTraceSource::Current);
 }
 
 bool AtsAudioProcessor::isWorkerBusy() const
@@ -5001,6 +5312,383 @@ void AtsAudioProcessor::startMathExpr(const juce::String& script)
     });
 }
 
+bool AtsAudioProcessor::detectOnsets(AtsTraceSource source,
+                                     const ats::SmearnovDetectParams& params,
+                                     std::vector<ats::AtsOnset>& out,
+                                     juce::String& error) const
+{
+    error.clear();
+    out.clear();
+
+    ats::AtsSoundPtr snapshot;
+    if (source == AtsTraceSource::Current)
+    {
+        const juce::ScopedLock ml(modelLock);
+        auto* s = analyzedModel.get();
+        if (s == nullptr)
+        {
+            error = "No model.";
+            return false;
+        }
+        snapshot.reset(copy_sound(s));
+    }
+    else
+    {
+        const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
+        const juce::ScopedLock ml(morphRecipeLock);
+        auto* s = morphSourceSounds[(size_t) slotIndex].get();
+        if (s == nullptr)
+        {
+            error = source == AtsTraceSource::SourceA ? "Source A has no model." : "Source B has no model.";
+            return false;
+        }
+        snapshot.reset(copy_sound(s));
+    }
+
+    if (snapshot.get() == nullptr)
+    {
+        error = "Could not copy ATS model for onset detection.";
+        return false;
+    }
+
+    out = ats::detectOnsets(snapshot.get(), params);
+    return true;
+}
+
+bool AtsAudioProcessor::detectOnsets(AtsTraceSource source,
+                                     std::vector<ats::AtsOnset>& out,
+                                     juce::String& error) const
+{
+    // RPCA segmentation (C11) is not implemented; the toggle falls through to
+    // standard flux detection so a stale persisted "true" never bricks detect.
+    return detectOnsets(source, readSmearnovDetectParamsFromApvts(), out, error);
+}
+
+bool AtsAudioProcessor::smearAttacks(AtsTraceSource source,
+                                     const std::vector<ats::AtsOnset>& onsets,
+                                     const ats::SmearnovParams& params,
+                                     juce::String& error)
+{
+    error.clear();
+    if (onsets.empty())
+    {
+        error = "No onsets to smear.";
+        return false;
+    }
+
+    if (source == AtsTraceSource::Current)
+    {
+        bool changed = false;
+        {
+            const juce::ScopedLock ml(modelLock);
+            auto* s = analyzedModel.get();
+            if (s == nullptr)
+            {
+                error = "No model.";
+                return false;
+            }
+            changed = ats::smearAttacks(s, onsets, params);
+        }
+
+        if (!changed)
+        {
+            error = "No current-model attack windows were changed.";
+            return false;
+        }
+
+        clearPreviewLayerCache();
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
+        synthParamsDirty.store(true);
+        triggerAsyncUpdate();
+        return true;
+    }
+
+    const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
+    bool changed = false;
+    ATS_SOUND* editedSound = nullptr;
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        editedSound = morphSourceSounds[(size_t) slotIndex].get();
+        if (editedSound == nullptr)
+        {
+            error = source == AtsTraceSource::SourceA ? "Source A has no model." : "Source B has no model.";
+            return false;
+        }
+
+        changed = ats::smearAttacks(editedSound, onsets, params);
+        if (changed)
+        {
+            morphSourceAssignments[(size_t) slotIndex] =
+                makeMorphAssignmentsFromSound(editedSound, morphRecipe.frequencyGrid);
+            morphSourceDiagnostics[(size_t) slotIndex] = makeResidualDiagnostics(editedSound);
+            morphSourceResidualBands[(size_t) slotIndex] = makeMorphResidualNoiseBands(editedSound);
+            rebuildMorphCorrespondenceIfReady();
+            serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
+        }
+    }
+
+    if (!changed)
+    {
+        error = source == AtsTraceSource::SourceA ? "No Source A attack windows were changed."
+                                                  : "No Source B attack windows were changed.";
+        return false;
+    }
+
+    const int bufferIndex = slotIndex == 0 ? kSourceAPlaybackBufferIndex : kSourceBPlaybackBufferIndex;
+    if (activePlaybackBufferIndex.load(std::memory_order_acquire) == bufferIndex)
+        stopPreviewPlayback();
+    while (readingPlaybackBufferIndex.load(std::memory_order_acquire) == bufferIndex)
+        std::this_thread::yield();
+    playbackBuffers[(size_t) bufferIndex].setSize(0, 0);
+
+    markMorphSnapshotStale();
+    clearPreviewLayerCache();
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+bool AtsAudioProcessor::smearAttacks(AtsTraceSource source,
+                                     const std::vector<ats::AtsOnset>& onsets,
+                                     juce::String& error)
+{
+    return smearAttacks(source, onsets, readSmearnovParamsFromApvts(), error);
+}
+
+// Filters detected onsets per the Scope selector:
+//   0 = All        — keep every onset.
+//   1 = Selection  — keep onsets whose attack window [preFrame, peakFrame]
+//                    intersects the display selection [selFirst, selLast].
+//   2 = Sensitivity — keep onsets at or above the mean detection strength
+//                    (the more salient attacks), parameter-free.
+// Sets scopeError + msg when Selection is requested with no display selection.
+static std::vector<ats::AtsOnset> applySmearnovScope(int scope,
+                                                     std::vector<ats::AtsOnset> onsets,
+                                                     int selFirst,
+                                                     int selLast,
+                                                     juce::String& msg,
+                                                     bool& scopeError)
+{
+    scopeError = false;
+
+    if (scope == 1) // Selection
+    {
+        if (selFirst < 0 || selLast < 0)
+        {
+            scopeError = true;
+            msg = "Select a region in the display, or set Scope to All.";
+            onsets.clear();
+            return onsets;
+        }
+
+        const int lo = std::min(selFirst, selLast);
+        const int hi = std::max(selFirst, selLast);
+        std::vector<ats::AtsOnset> kept;
+        kept.reserve(onsets.size());
+        for (const auto& o : onsets)
+            if (o.peakFrame >= lo && o.preFrame <= hi)
+                kept.push_back(o);
+        return kept;
+    }
+
+    if (scope == 2) // Sensitivity: keep onsets at or above mean strength
+    {
+        if (onsets.size() <= 1)
+            return onsets;
+
+        double sum = 0.0;
+        for (const auto& o : onsets)
+            sum += o.strength;
+        const double mean = sum / (double) onsets.size();
+
+        std::vector<ats::AtsOnset> kept;
+        kept.reserve(onsets.size());
+        for (const auto& o : onsets)
+            if (o.strength >= mean)
+                kept.push_back(o);
+        return kept;
+    }
+
+    return onsets; // All
+}
+
+void AtsAudioProcessor::startSmearnovApply(AtsTraceSource source,
+                                           int selectionFirstFrame,
+                                           int selectionLastFrame)
+{
+    cancelJobs();
+    joinWorkers();
+
+    const auto detectParams = readSmearnovDetectParamsFromApvts();
+    const auto smearParams = readSmearnovParamsFromApvts();
+    const int scope = getRawChoiceValue(apvts, ats_param::kSmearnovScope, 0);
+    const uint64_t gen = jobGeneration.load();
+
+    transformThreadRunning.store(true);
+    setUiState(AtsUiState::ApplyingMath);
+    setMathStatus("Detecting attacks...");
+
+    transformThread = std::thread([this, source, detectParams, smearParams, scope,
+                                   selectionFirstFrame, selectionLastFrame, gen]() {
+        juce::String msg;
+        bool applied = false;
+
+        {
+            std::vector<ats::AtsOnset> onsets;
+            // Edited onsets (drag/disable in the overlay) take precedence over
+            // a fresh detection pass so the user's window edits are smeared.
+            const bool useOverride = copySmearnovOnsetOverride(source, onsets);
+            if (useOverride || detectOnsets(source, detectParams, onsets, msg))
+            {
+                if (jobGeneration.load() != gen)
+                {
+                    transformThreadRunning.store(false);
+                    setMathStatus("Cancelled.");
+                    setUiState(AtsUiState::Analyzed);
+                    return;
+                }
+
+                bool scopeError = false;
+                if (!onsets.empty())
+                    onsets = applySmearnovScope(scope, std::move(onsets),
+                                                selectionFirstFrame, selectionLastFrame,
+                                                msg, scopeError);
+
+                if (scopeError)
+                {
+                    // msg already set by applySmearnovScope (e.g. no selection).
+                }
+                else if (onsets.empty())
+                {
+                    msg = "No attacks detected.";
+                }
+                else if (smearAttacks(source, onsets, smearParams, msg))
+                {
+                    applied = true;
+                    msg = "Smeared " + juce::String((int) onsets.size()) + " attack"
+                          + (onsets.size() == 1 ? "." : "s.");
+                }
+            }
+        }
+
+        transformThreadRunning.store(false);
+
+        if (jobGeneration.load() != gen)
+        {
+            setMathStatus("Cancelled.");
+            setUiState(AtsUiState::Analyzed);
+            return;
+        }
+
+        setMathStatus(msg);
+        juce::ignoreUnused(applied);
+        setUiState(AtsUiState::Analyzed);
+    });
+}
+
+static int smearnovSourceSlot(AtsTraceSource source)
+{
+    switch (source)
+    {
+        case AtsTraceSource::SourceA: return 1;
+        case AtsTraceSource::SourceB: return 2;
+        case AtsTraceSource::Current:
+        default: return 0;
+    }
+}
+
+bool AtsAudioProcessor::copySmearnovOnsetOverride(AtsTraceSource source,
+                                                  std::vector<ats::AtsOnset>& out) const
+{
+    const int slot = smearnovSourceSlot(source);
+    const juce::ScopedLock sl(smearnovOnsetLock);
+    if (!smearnovOnsetOverrideActive[(size_t) slot])
+    {
+        out.clear();
+        return false;
+    }
+    out = smearnovOnsetOverrides[(size_t) slot];
+    return true;
+}
+
+bool AtsAudioProcessor::hasSmearnovOnsetOverrides(AtsTraceSource source) const
+{
+    const int slot = smearnovSourceSlot(source);
+    const juce::ScopedLock sl(smearnovOnsetLock);
+    return smearnovOnsetOverrideActive[(size_t) slot];
+}
+
+std::vector<ats::AtsOnset> AtsAudioProcessor::getSmearnovOnsets(AtsTraceSource source) const
+{
+    std::vector<ats::AtsOnset> onsets;
+    if (copySmearnovOnsetOverride(source, onsets))
+        return onsets;
+
+    juce::String error;
+    if (detectOnsets(source, onsets, error))
+        return onsets;
+    onsets.clear();
+    return onsets;
+}
+
+void AtsAudioProcessor::setSmearnovOnsetOverrides(AtsTraceSource source,
+                                                  std::vector<ats::AtsOnset> onsets,
+                                                  bool userEdited)
+{
+    const int slot = smearnovSourceSlot(source);
+    {
+        const juce::ScopedLock sl(smearnovOnsetLock);
+        smearnovOnsetOverrides[(size_t) slot] = std::move(onsets);
+        smearnovOnsetOverrideActive[(size_t) slot] = true;
+        smearnovOnsetOverrideUserEdited[(size_t) slot] = userEdited;
+    }
+    smearnovOverlayRevision.fetch_add(1, std::memory_order_release);
+}
+
+void AtsAudioProcessor::clearSmearnovOnsetOverrides(AtsTraceSource source)
+{
+    const int slot = smearnovSourceSlot(source);
+    bool changed = false;
+    {
+        const juce::ScopedLock sl(smearnovOnsetLock);
+        if (smearnovOnsetOverrideActive[(size_t) slot])
+        {
+            smearnovOnsetOverrideActive[(size_t) slot] = false;
+            smearnovOnsetOverrideUserEdited[(size_t) slot] = false;
+            smearnovOnsetOverrides[(size_t) slot].clear();
+            changed = true;
+        }
+    }
+    if (changed)
+        smearnovOverlayRevision.fetch_add(1, std::memory_order_release);
+}
+
+bool AtsAudioProcessor::isSmearnovDetectionParameter(const juce::String& parameterID)
+{
+    for (const char* id : kSmearnovDetectionParamIds)
+        if (parameterID == id)
+            return true;
+    return false;
+}
+
+void AtsAudioProcessor::invalidateAutoDetectedOnsetOverrides()
+{
+    bool changed = false;
+    {
+        const juce::ScopedLock sl(smearnovOnsetLock);
+        for (size_t slot = 0; slot < smearnovOnsetOverrideActive.size(); ++slot)
+        {
+            if (smearnovOnsetOverrideActive[slot] && !smearnovOnsetOverrideUserEdited[slot])
+            {
+                smearnovOnsetOverrideActive[slot] = false;
+                smearnovOnsetOverrides[slot].clear();
+                changed = true;
+            }
+        }
+    }
+    if (changed)
+        smearnovOverlayRevision.fetch_add(1, std::memory_order_release);
+}
+
 bool AtsAudioProcessor::getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const
 {
     const juce::ScopedLock ml(modelLock);
@@ -5104,7 +5792,9 @@ static bool buildSpectralTraceSnapshotForSound(const ATS_SOUND* s,
                                                int residualColumns,
                                                const AtsSpectralTraceDisplayReference& displayReference,
                                                const ats::FrequencyShapeSettings& frequencyShape,
-                                               uint64_t shapeRevision)
+                                               const ats::SmearnovDetectParams& onsetDetectParams,
+                                               uint64_t shapeRevision,
+                                               const std::vector<ats::AtsOnset>* onsetOverride)
 {
     out = {};
     if (s == nullptr || s->frames <= 0)
@@ -5120,6 +5810,14 @@ static bool buildSpectralTraceSnapshotForSound(const ATS_SOUND* s,
     out.frameCount = s->frames;
     out.durationSeconds = s->dur;
     out.hasResidual = (s->band_energy != nullptr);
+    ats::SmearnovDetectionFunctions onsetFunctions;
+    auto detectedOnsets = ats::detectOnsets(s, onsetDetectParams, &onsetFunctions);
+    // User edits (drag/disable) take precedence over auto-detection so the
+    // overlay reflects the edited window; detection curves still come from the
+    // raw detector for the foot-of-plot display.
+    out.onsets = onsetOverride != nullptr ? *onsetOverride : std::move(detectedOnsets);
+    out.smearnovDetectionCurve = std::move(onsetFunctions.combined);
+    out.smearnovThresholdCurve = std::move(onsetFunctions.threshold);
 
     if (s->partials <= 0 || s->frq == nullptr || s->amp == nullptr)
         return true;
@@ -5384,6 +6082,7 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsSpectralTraceSnapshot& out
                                                    const AtsSpectralTraceDisplayReference& displayReference) const
 {
     const auto shape = readFrequencyShapeFromApvts();
+    const auto onsetDetectParams = readSmearnovDetectParamsFromApvts();
     const auto shapeRevision = displayShapeRevision.load(std::memory_order_acquire);
 
     // Acquire lock only long enough to copy the model; the heavy
@@ -5398,6 +6097,9 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsSpectralTraceSnapshot& out
     }
     if (snap.get() == nullptr)
         return false;
+
+    std::vector<ats::AtsOnset> onsetOverride;
+    const bool hasOverride = copySmearnovOnsetOverride(AtsTraceSource::Current, onsetOverride);
     return buildSpectralTraceSnapshotForSound(snap.get(),
                                               out,
                                               maxPartials,
@@ -5405,7 +6107,9 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsSpectralTraceSnapshot& out
                                               residualColumns,
                                               displayReference,
                                               shape,
-                                              shapeRevision);
+                                              onsetDetectParams,
+                                              shapeRevision,
+                                              hasOverride ? &onsetOverride : nullptr);
 }
 
 bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
@@ -5419,6 +6123,7 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
         return buildSpectralTraceSnapshot(out, maxPartials, maxPointsPerPartial, residualColumns, displayReference);
 
     const auto shape = readFrequencyShapeFromApvts();
+    const auto onsetDetectParams = readSmearnovDetectParamsFromApvts();
     const auto shapeRevision = displayShapeRevision.load(std::memory_order_acquire);
     const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
 
@@ -5432,6 +6137,9 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
     }
     if (snap.get() == nullptr)
         return false;
+
+    std::vector<ats::AtsOnset> onsetOverride;
+    const bool hasOverride = copySmearnovOnsetOverride(source, onsetOverride);
     return buildSpectralTraceSnapshotForSound(snap.get(),
                                               out,
                                               maxPartials,
@@ -5439,7 +6147,9 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
                                               residualColumns,
                                               displayReference,
                                               shape,
-                                              shapeRevision);
+                                              onsetDetectParams,
+                                              shapeRevision,
+                                              hasOverride ? &onsetOverride : nullptr);
 }
 
 bool AtsAudioProcessor::mutePartials(const std::vector<int>& partialIndices, juce::String& error)
@@ -6511,6 +7221,7 @@ bool AtsAudioProcessor::importAtsFile(const juce::File& file, juce::String& erro
     }
 
     modelRevision.fetch_add(1, std::memory_order_relaxed);
+    clearSmearnovOnsetOverrides(AtsTraceSource::Current);
 
     setChoiceParameter(apvts, ats_param::kAnalysisType, juce::jlimit(1, 4, loadedType) - 1);
 

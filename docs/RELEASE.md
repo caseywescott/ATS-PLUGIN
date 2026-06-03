@@ -2,29 +2,6 @@
 
 Checklist and templates for shipping **ATS Resynth** binaries. **This is not legal advice.** Verify Apple, Microsoft, Steinberg, and JUCE obligations for your distribution model.
 
-## Modern ATSH release-candidate baseline
-
-As of the Modern ATSH Commit 74 quality pass, the `improvements` worktree is
-at a release-candidate baseline for the current four first-party fixtures:
-
-- `ctest --test-dir build --output-on-failure` passes 14/14 tests, including
-  the expanded external real-audio acceptance test.
-- `tests/run_external_acceptance.py` runs 54 checks across plucked guitar,
-  crotale, vocal chop, and vowel phrase fixtures with zero failures.
-- `cmake --build build_plugin --target AtsResynth` builds the plugin target;
-  JUCE `ranlib` no-symbol warnings for ARA/LV2 translation units are expected
-  in the current build and are not release blockers by themselves.
-- Modern transient source buffers protect 180 ms after detected onsets, with
-  captured buffers capped at 250 ms. This is the shortest passing handoff
-  extension after a 190/265 ms probe improved source NRMS but failed the
-  plucked-guitar timing/phase gate.
-- Current source normalized-RMS ceilings are ratcheted to `0.085` plucked
-  guitar, `0.13` crotale, `0.001` vocal chop, and `0.14` vowel phrase.
-
-Before publishing binaries, rerun the verification commands from
-`docs/MODERN_ATSH_ACCEPTANCE.md`, then complete the signing/notarization steps
-below.
-
 ## License pointers for release notes
 
 Every public release should link or name:
@@ -48,6 +25,7 @@ Every public release should link or name:
 - Windows: VST3, Standalone (x64) — …
 
 ### Highlights
+- Smearnov: model-domain onset detection + attack-smearing (Blur / Sharpen / Exaggerate) with editable spectrogram overlay — Session tab `[Morph | Smearnov]`. See `docs/SMEARNOV_SPEC.md`.
 - …
 
 ### Upstream / licenses

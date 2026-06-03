@@ -9,6 +9,7 @@ namespace
 {
 constexpr double kPi = 3.141592653589793238462643383279;
 constexpr double kTwoPi = 6.283185307179586476925286766559;
+constexpr double kEpsilon = 1.0e-12;
 
 bool finitePositive(double v)
 {
@@ -49,6 +50,11 @@ int secondsToFrames(double seconds, double hop)
     if (!finitePositive(hop) || seconds <= 0.0)
         return 0;
     return (int) std::lround(seconds / hop);
+}
+
+double clampPositiveFinite(double v)
+{
+    return std::isfinite(v) && v > 0.0 ? v : 0.0;
 }
 
 // Wrap to [-pi, pi].
@@ -113,6 +119,321 @@ double globalMad(const std::vector<double>& d)
     for (auto& v : tmp)
         v = std::abs(v - med);
     return medianOf(tmp);
+}
+
+bool smearTargetsPartials(SmearnovTarget target)
+{
+    return target == SmearnovTarget::Partials || target == SmearnovTarget::Both;
+}
+
+bool smearTargetsResidual(SmearnovTarget target)
+{
+    return target == SmearnovTarget::Residual || target == SmearnovTarget::Both;
+}
+
+bool smearParamsActive(const SmearnovParams& params)
+{
+    return params.blurMs > 0.0
+           || params.sharpenAmount > 0.0
+           || std::abs(params.exaggerateDb) > 1.0e-9;
+}
+
+// Reusable scratch for the per-envelope smear pipeline; avoids re-allocating a
+// handful of small vectors on every partial/band the smear touches.
+struct EnvelopeScratch
+{
+    std::vector<double> original;
+    std::vector<double> values;
+    std::vector<double> low;     // blurred copy used by sharpen
+    std::vector<double> blurred; // blur-stage output
+    std::vector<double> kernel;
+};
+
+// Gaussian-blur `in` into `out` (resized to match), reusing `kernel` as scratch.
+void gaussianBlurInto(const std::vector<double>& in,
+                      double sigmaFrames,
+                      std::vector<double>& out,
+                      std::vector<double>& kernel)
+{
+    if (in.size() <= 1 || !(sigmaFrames > 0.0) || !std::isfinite(sigmaFrames))
+    {
+        out = in;
+        return;
+    }
+
+    const int radius = std::max(1, (int) std::ceil(3.0 * sigmaFrames));
+    kernel.assign((size_t) (2 * radius + 1), 0.0);
+    double kernelSum = 0.0;
+    const double denom = 2.0 * sigmaFrames * sigmaFrames;
+    for (int k = -radius; k <= radius; ++k)
+    {
+        const double w = std::exp(-(double) (k * k) / denom);
+        kernel[(size_t) (k + radius)] = w;
+        kernelSum += w;
+    }
+    if (kernelSum <= 0.0)
+    {
+        out = in;
+        return;
+    }
+    for (auto& w : kernel)
+        w /= kernelSum;
+
+    const int n = (int) in.size();
+    out.assign(in.size(), 0.0);
+    for (int i = 0; i < n; ++i)
+    {
+        double acc = 0.0;
+        double wsum = 0.0;
+        for (int k = -radius; k <= radius; ++k)
+        {
+            const int j = i + k;
+            if (j < 0 || j >= n)
+                continue;
+            const double w = kernel[(size_t) (k + radius)];
+            acc += w * in[(size_t) j];
+            wsum += w;
+        }
+        out[(size_t) i] = wsum > 0.0 ? acc / wsum : in[(size_t) i];
+    }
+}
+
+double sumOf(const std::vector<double>& values)
+{
+    double sum = 0.0;
+    for (const auto v : values)
+        sum += v;
+    return sum;
+}
+
+double peakOf(const std::vector<double>& values)
+{
+    double peak = 0.0;
+    for (const auto v : values)
+        peak = std::max(peak, v);
+    return peak;
+}
+
+double maxSlopeOf(const std::vector<double>& values)
+{
+    double slope = 0.0;
+    for (size_t i = 1; i < values.size(); ++i)
+        slope = std::max(slope, std::abs(values[i] - values[i - 1]));
+    return slope;
+}
+
+void rescaleToSum(std::vector<double>& values, double targetSum)
+{
+    const double current = sumOf(values);
+    if (current > kEpsilon && std::isfinite(current) && std::isfinite(targetSum))
+    {
+        const double scale = targetSum / current;
+        for (auto& v : values)
+            v = clampPositiveFinite(v * scale);
+    }
+}
+
+void clampToPeakPreservingSum(std::vector<double>& values, double peakBound, double targetSum)
+{
+    if (!(peakBound > 0.0) || !std::isfinite(peakBound) || !std::isfinite(targetSum))
+        return;
+
+    for (int pass = 0; pass < 8; ++pass)
+    {
+        bool clippedAny = false;
+        for (auto& v : values)
+        {
+            v = clampPositiveFinite(v);
+            if (v > peakBound)
+            {
+                v = peakBound;
+                clippedAny = true;
+            }
+        }
+
+        const double deficit = targetSum - sumOf(values);
+        if (std::abs(deficit) <= 1.0e-12)
+            return;
+        if (deficit < 0.0)
+        {
+            rescaleToSum(values, targetSum);
+            continue;
+        }
+
+        double headroom = 0.0;
+        for (const auto v : values)
+            headroom += std::max(0.0, peakBound - v);
+        if (headroom <= kEpsilon)
+            return;
+
+        for (auto& v : values)
+            v += deficit * (std::max(0.0, peakBound - v) / headroom);
+
+        if (!clippedAny)
+            break;
+    }
+}
+
+void enforceBlurSlopeLimit(std::vector<double>& blurred, const std::vector<double>& original)
+{
+    const double originalSlope = maxSlopeOf(original);
+    if (maxSlopeOf(blurred) <= originalSlope + 1.0e-12)
+        return;
+
+    std::vector<double> candidate(blurred.size(), 0.0);
+    double lo = 0.0;
+    double hi = 1.0;
+    for (int iter = 0; iter < 32; ++iter)
+    {
+        const double alpha = 0.5 * (lo + hi);
+        for (size_t i = 0; i < blurred.size(); ++i)
+            candidate[i] = original[i] + alpha * (blurred[i] - original[i]);
+        if (maxSlopeOf(candidate) <= originalSlope + 1.0e-12)
+            lo = alpha;
+        else
+            hi = alpha;
+    }
+
+    for (size_t i = 0; i < blurred.size(); ++i)
+        blurred[i] = original[i] + lo * (blurred[i] - original[i]);
+}
+
+double dbToLinearGain(double db, bool energyTarget)
+{
+    return std::pow(10.0, db / (energyTarget ? 10.0 : 20.0));
+}
+
+double smoothStep(double x)
+{
+    x = std::clamp(x, 0.0, 1.0);
+    return x * x * (3.0 - 2.0 * x);
+}
+
+bool transformEnvelope(double* row,
+                       int startFrame,
+                       int endFrame,
+                       double hop,
+                       const SmearnovParams& params,
+                       bool energyTarget,
+                       EnvelopeScratch& scratch)
+{
+    if (row == nullptr || endFrame < startFrame)
+        return false;
+
+    const int count = endFrame - startFrame + 1;
+    if (count <= 0)
+        return false;
+
+    auto& original = scratch.original;
+    auto& values = scratch.values;
+    original.assign((size_t) count, 0.0);
+    for (int i = 0; i < count; ++i)
+        original[(size_t) i] = clampPositiveFinite(row[startFrame + i]);
+
+    values = original;
+    const double originalSum = sumOf(original);
+    const double originalPeak = peakOf(original);
+
+    bool stageRan = false;
+    const double blurSeconds = params.blurMs * 0.001;
+    if (blurSeconds > 0.0 && finitePositive(hop))
+    {
+        const double sigmaFrames = blurSeconds / hop;
+        if (sigmaFrames > 0.0)
+        {
+            gaussianBlurInto(values, sigmaFrames, scratch.blurred, scratch.kernel);
+            rescaleToSum(scratch.blurred, originalSum);
+            clampToPeakPreservingSum(scratch.blurred, originalPeak, originalSum);
+            enforceBlurSlopeLimit(scratch.blurred, original);
+            values = scratch.blurred;
+            stageRan = true;
+        }
+    }
+
+    if (params.sharpenAmount > 0.0 && std::isfinite(params.sharpenAmount))
+    {
+        const double sigmaFrames = std::max(0.5, blurSeconds > 0.0 && finitePositive(hop)
+                                                     ? blurSeconds / hop
+                                                     : 1.0);
+        gaussianBlurInto(values, sigmaFrames, scratch.low, scratch.kernel);
+        const auto& low = scratch.low;
+        for (size_t i = 0; i < values.size(); ++i)
+        {
+            const double sharpened = values[i] + params.sharpenAmount * (values[i] - low[i]);
+            values[i] = std::clamp(clampPositiveFinite(sharpened), 0.0, originalPeak);
+        }
+        stageRan = true;
+    }
+
+    const double maxDb = std::isfinite(params.maxDb) && params.maxDb > 0.0 ? params.maxDb : 12.0;
+    const double exDb = std::clamp(std::isfinite(params.exaggerateDb) ? params.exaggerateDb : 0.0,
+                                   -maxDb,
+                                   maxDb);
+    if (std::abs(exDb) > 1.0e-9)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            const double x = count == 1 ? 1.0 : (double) i / (double) (count - 1);
+            values[(size_t) i] = clampPositiveFinite(values[(size_t) i]
+                                                     * dbToLinearGain(exDb * smoothStep(x),
+                                                                      energyTarget));
+        }
+        stageRan = true;
+    }
+
+    if (!stageRan)
+        return false;
+
+    const double peakBound = originalPeak * dbToLinearGain(std::max(exDb, 0.0), energyTarget);
+    for (auto& v : values)
+        v = std::clamp(clampPositiveFinite(v), 0.0, std::max(0.0, peakBound));
+
+    bool changed = false;
+    for (int i = 0; i < count; ++i)
+    {
+        const double next = values[(size_t) i];
+        if (std::abs(row[startFrame + i] - next) > 1.0e-12)
+            changed = true;
+        row[startFrame + i] = next;
+    }
+    return changed;
+}
+
+void refreshAmplitudeMetadata(ATS_SOUND* sound)
+{
+    if (sound == nullptr || sound->amp == nullptr || sound->partials <= 0 || sound->frames <= 0)
+        return;
+
+    double ampMax = 0.0;
+    std::vector<double> partialMean((size_t) sound->partials, 0.0);
+    for (int p = 0; p < sound->partials; ++p)
+    {
+        if (sound->amp[p] == nullptr)
+            continue;
+        double sum = 0.0;
+        int count = 0;
+        for (int f = 0; f < sound->frames; ++f)
+        {
+            const double a = clampPositiveFinite(sound->amp[p][f]);
+            ampMax = std::max(ampMax, a);
+            if (a > 0.0)
+            {
+                sum += a;
+                ++count;
+            }
+        }
+        partialMean[(size_t) p] = count > 0 ? sum / (double) count : 0.0;
+    }
+
+    sound->ampmax = ampMax;
+    if (sound->av == nullptr)
+        return;
+
+    for (int i = 0; i < sound->partials; ++i)
+    {
+        const int track = std::clamp(sound->av[i].track, 0, sound->partials - 1);
+        sound->av[i].amp = partialMean[(size_t) track];
+    }
 }
 } // namespace
 
@@ -203,7 +524,9 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
             if (hasPhase && aPrev > 0.0 && a > 0.0 && sound->pha[p] != nullptr
                 && sound->frq != nullptr && sound->frq[p] != nullptr)
             {
-                const double predicted = sound->pha[p][f - 1] + kTwoPi * sound->frq[p][f] * hop;
+                // Expected phase advance uses the frequency during the elapsed
+                // hop [f-1, f], i.e. the previous frame's instantaneous freq.
+                const double predicted = sound->pha[p][f - 1] + kTwoPi * sound->frq[p][f - 1] * hop;
                 d5[(size_t) f] += std::abs(wrapPhase(sound->pha[p][f] - predicted));
             }
         }
@@ -352,6 +675,54 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
     }
 
     return onsets;
+}
+
+bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const SmearnovParams& params)
+{
+    if (sound == nullptr || sound->frames <= 0 || onsets.empty() || !smearParamsActive(params))
+        return false;
+
+    const double hop = hopSeconds(sound);
+    const bool editPartials = smearTargetsPartials(params.targets)
+                              && sound->amp != nullptr
+                              && sound->partials > 0;
+    const bool editResidual = smearTargetsResidual(params.targets)
+                              && sound->band_energy != nullptr;
+    if (!editPartials && !editResidual)
+        return false;
+
+    bool changed = false;
+    EnvelopeScratch scratch;
+    for (const auto& onset : onsets)
+    {
+        int start = std::min(onset.preFrame, onset.peakFrame);
+        int end = std::max(onset.preFrame, onset.peakFrame);
+        start = std::clamp(start, 0, sound->frames - 1);
+        end = std::clamp(end, 0, sound->frames - 1);
+        if (end < start)
+            continue;
+
+        if (editPartials)
+        {
+            for (int p = 0; p < sound->partials; ++p)
+                if (sound->amp[p] != nullptr)
+                    changed = transformEnvelope(sound->amp[p], start, end, hop, params, false, scratch)
+                              || changed;
+        }
+
+        if (editResidual)
+        {
+            for (int b = 0; b < ATSA_CRITICAL_BANDS; ++b)
+                if (sound->band_energy[b] != nullptr)
+                    changed = transformEnvelope(sound->band_energy[b], start, end, hop, params, true, scratch)
+                              || changed;
+        }
+    }
+
+    if (changed && editPartials)
+        refreshAmplitudeMetadata(sound);
+
+    return changed;
 }
 
 } // namespace ats

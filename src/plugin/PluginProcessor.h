@@ -15,6 +15,7 @@
 #include "AtsModel.h"
 #include "AtsMorphRecipe.h"
 #include "AtsParams.h"
+#include "AtsTransientSmear.h"
 
 namespace ats_param
 {
@@ -54,6 +55,25 @@ inline constexpr const char* kClassicPreviewMode = "classicPreviewMode";
 inline constexpr const char* kFreqShapeMode = "freqShapeMode";
 inline constexpr const char* kFreqShapeAmount = "freqShapeAmount";
 inline constexpr const char* kFreqShapePivotHz = "freqShapePivotHz";
+inline constexpr const char* kSmearnovBlurMs = "smearnovBlurMs";
+inline constexpr const char* kSmearnovSharpenAmount = "smearnovSharpenAmount";
+inline constexpr const char* kSmearnovExaggerateDb = "smearnovExaggerateDb";
+inline constexpr const char* kSmearnovMaxDb = "smearnovMaxDb";
+inline constexpr const char* kSmearnovTargets = "smearnovTargets";
+inline constexpr const char* kSmearnovScope = "smearnovScope";
+inline constexpr const char* kSmearnovWeightDetFlux = "smearnovWeightDetFlux";
+inline constexpr const char* kSmearnovWeightResFlux = "smearnovWeightResFlux";
+inline constexpr const char* kSmearnovWeightHfcFlux = "smearnovWeightHfcFlux";
+inline constexpr const char* kSmearnovWeightBirth = "smearnovWeightBirth";
+inline constexpr const char* kSmearnovWeightPhaseDev = "smearnovWeightPhaseDev";
+inline constexpr const char* kSmearnovThresholdLambda = "smearnovThresholdLambda";
+inline constexpr const char* kSmearnovThresholdAutoScale = "smearnovThresholdAutoScale";
+inline constexpr const char* kSmearnovPeakWindowFrames = "smearnovPeakWindowFrames";
+inline constexpr const char* kSmearnovMinGapFrames = "smearnovMinGapFrames";
+inline constexpr const char* kSmearnovPreMarginMs = "smearnovPreMarginMs";
+inline constexpr const char* kSmearnovMaxAttackFrames = "smearnovMaxAttackFrames";
+inline constexpr const char* kSmearnovUsePhaseDeviation = "smearnovUsePhaseDeviation";
+inline constexpr const char* kSmearnovUseRpcaFallback = "smearnovUseRpcaFallback";
 inline constexpr std::array<const char*, kMorphLaneCount> kMorphLaneAmountIds = {
     "morphLaneFrequencyAmount",
     "morphLaneAmplitudeAmount",
@@ -181,7 +201,8 @@ struct AtsMorphSnapshotSlotInfo
 enum class MorphTimelinePointKind
 {
     Morph  = 0, // standard A→B partial blend
-    Hybrid = 1  // apply Source B's Bark envelope to Source A amplitudes
+    Hybrid = 1, // apply Source B's Bark envelope to Source A amplitudes
+    EnvelopeMorph = 2 // blend A/B Bark envelopes and resample partials onto the result
 };
 
 struct AtsMorphTimelinePoint
@@ -256,6 +277,9 @@ struct AtsSpectralTraceSnapshot
     uint64_t displayShapeRevision = 0;
     std::vector<AtsPartialTrace> partials;
     std::vector<AtsResidualBandTrace> residualBands;
+    std::vector<ats::AtsOnset> onsets;
+    std::vector<double> smearnovDetectionCurve;
+    std::vector<double> smearnovThresholdCurve;
 };
 
 struct AtsSpectralTraceDisplayReference
@@ -407,6 +431,49 @@ public:
                                   const ResidualBandFrameMutator& mutator,
                                   juce::String& error);
 
+    bool detectOnsets(AtsTraceSource source,
+                      const ats::SmearnovDetectParams& params,
+                      std::vector<ats::AtsOnset>& out,
+                      juce::String& error) const;
+    bool detectOnsets(AtsTraceSource source, std::vector<ats::AtsOnset>& out, juce::String& error) const;
+    bool smearAttacks(AtsTraceSource source,
+                      const std::vector<ats::AtsOnset>& onsets,
+                      const ats::SmearnovParams& params,
+                      juce::String& error);
+    bool smearAttacks(AtsTraceSource source, const std::vector<ats::AtsOnset>& onsets, juce::String& error);
+    // selectionFirstFrame/LastFrame are only consulted when the Scope parameter
+    // is "Selection"; pass -1/-1 when there is no display selection.
+    void startSmearnovApply(AtsTraceSource source,
+                            int selectionFirstFrame = -1,
+                            int selectionLastFrame = -1);
+
+    /** Onset overrides drive the Smearnov overlay edits (drag/disable). When an
+     *  override is active for a source it replaces auto-detection in the trace
+     *  snapshot and is what `startSmearnovApply`/`smearAttacks` operate on. */
+    std::vector<ats::AtsOnset> getSmearnovOnsets(AtsTraceSource source) const;
+    bool hasSmearnovOnsetOverrides(AtsTraceSource source) const;
+    /** `userEdited` = true for manual overlay edits (kept across detection-param
+     *  changes); false for a pinned auto-detection (dropped when detection params
+     *  change). Defaults to true since the overlay is the manual-edit caller. */
+    void setSmearnovOnsetOverrides(AtsTraceSource source,
+                                   std::vector<ats::AtsOnset> onsets,
+                                   bool userEdited = true);
+    void clearSmearnovOnsetOverrides(AtsTraceSource source);
+    /** Bumps whenever the editable onset overlay changes, so the UI can refresh
+     *  markers without a full model-revision (audio cache) invalidation. */
+    uint64_t getSmearnovOverlayRevision() const
+    {
+        return smearnovOverlayRevision.load(std::memory_order_acquire);
+    }
+
+    /** Active control-cluster tab (0 = Morph, 1 = Smearnov). UI-only state that
+     *  persists with the session so the editor reopens on the same tab. */
+    int getActiveControlTab() const { return activeControlTab.load(std::memory_order_acquire); }
+    void setActiveControlTab(int tab)
+    {
+        activeControlTab.store(juce::jlimit(0, 1, tab), std::memory_order_release);
+    }
+
     bool isWorkerBusy() const;
 
     /** Returns false if no model. */
@@ -496,6 +563,14 @@ private:
     ats::SynthParams readCoreSynthParamsFromApvts() const;
     ats::FrequencyShapeSettings readFrequencyShapeFromApvts() const;
     ats::AnalysisParams readAnalysisParamsFromApvts() const;
+    ats::SmearnovDetectParams readSmearnovDetectParamsFromApvts() const;
+    ats::SmearnovParams readSmearnovParamsFromApvts() const;
+    /** Copies the active onset override for `source` into `out`; false if none. */
+    bool copySmearnovOnsetOverride(AtsTraceSource source, std::vector<ats::AtsOnset>& out) const;
+    /** Drops pinned auto-detected overrides (keeps manual overlay edits). Called
+     *  when a Smearnov detection parameter changes so the next Apply re-detects. */
+    void invalidateAutoDetectedOnsetOverrides();
+    static bool isSmearnovDetectionParameter(const juce::String& parameterID);
 
     std::atomic<AtsUiState> uiState { AtsUiState::NoSource };
     std::atomic<float> analysisProgress { 0.0f };
@@ -528,6 +603,7 @@ private:
     std::array<AtsMorphSnapshotSlotInfo, ats_param::kMorphVariationSlotCount> morphVariationSlots;
     std::atomic<int> morphSnapshotState { (int) AtsMorphSnapshotUiState::Ready };
     std::atomic<int> pendingMorphSourceSlotAfterAnalysis { -1 };
+    std::atomic<int> activeControlTab { 0 }; // 0 = Morph, 1 = Smearnov (persisted UI state)
 
     /** Host-rate partial / residual / classic-combined layers; skip re-synthesis when core + model revision unchanged. */
     bool previewLayerCacheValid = false;
@@ -576,6 +652,15 @@ private:
     std::atomic<int> modelRevision { 0 };
     std::atomic<int> morphRecipeRevision { 0 };
     std::atomic<uint64_t> displayShapeRevision { 0 };
+
+    // Onset overrides per trace source (Current, SourceA, SourceB). `userEdited`
+    // distinguishes a manual overlay edit (drag/disable, survives detection-param
+    // changes) from a pinned auto-detection (cleared when detection params change).
+    mutable juce::CriticalSection smearnovOnsetLock;
+    std::array<std::vector<ats::AtsOnset>, 3> smearnovOnsetOverrides;
+    std::array<bool, 3> smearnovOnsetOverrideActive { { false, false, false } };
+    std::array<bool, 3> smearnovOnsetOverrideUserEdited { { false, false, false } };
+    std::atomic<uint64_t> smearnovOverlayRevision { 0 };
 
     // Debounce for freq-shape resynth: avoid spawning a thread on every drag tick.
     std::atomic<bool> freqShapePendingResynth { false };

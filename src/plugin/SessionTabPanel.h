@@ -76,24 +76,35 @@ private:
 
     juce::ToggleButton morphModeBtn  { "Morph" };
     juce::ToggleButton hybridModeBtn { "Hybrid" };
+    juce::ToggleButton envMorphModeBtn { "Env" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphTimelineEditor)
 };
 
 /** Main session tab: import, analyze, presets, status, core knobs, spectrogram. */
-class SessionTabPanel : public juce::Component
+class SessionTabPanel : public juce::Component,
+                        public juce::FileDragAndDropTarget
 {
 public:
     explicit SessionTabPanel(AtsAudioProcessor&);
     void resized() override;
+    void paintOverChildren(juce::Graphics&) override;
 
     void refreshFromProcessor();
+
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
 private:
     static constexpr size_t kMorphLaneUiCount = 6;
 
     void pickFile();
     void pickMorphSourceFile(int slotIndex);
+    void loadDroppedFileToSlot(int slotIndex, const juce::File& f);
     void pickImportAts();
     void pickExportAts();
     void rebuildPresetList();
@@ -111,6 +122,14 @@ private:
     int getMorphTimelineAuditionModeIndex() const;
     int getSourceAuditionModeIndex(int slotIndex) const;
     void exportMorphSourceSlotAts(int slotIndex);
+
+    void setActiveControlTab(int tab);
+    void refreshSmearnovControls();
+    void runSmearnovDetect();
+    void runSmearnovApply();
+    void hideMorphCluster();
+    void hideSmearnovPanel();
+    void layoutSmearnovPanel(juce::Rectangle<int> area);
 
     AtsAudioProcessor& audioProcessor;
 
@@ -189,6 +208,48 @@ private:
     std::vector<AtsMorphBandDiagnostic> morphBandDiagnostics;
     int selectedMorphBandIndex = 0;
 
+    // --- Control-cluster tab + Smearnov panel (SMEARNOV_SPEC §4) ---
+    int activeControlTab = 0; // 0 = Morph, 1 = Smearnov
+    bool smearKnobsExpanded = false;
+    bool smearAdvancedExpanded = false;
+    bool smearShowMathStatus = true; // false freezes a Detect result until next Apply
+
+    juce::TextButton morphTabButton { "Morph" };
+    juce::TextButton smearnovTabButton { "Smearnov" };
+
+    juce::Label smearMacroLabel;
+    juce::Slider smearBlurSlider;
+    juce::Label smearSharpenLabel;
+    juce::Slider smearSharpenSlider;
+    juce::Label smearExaggerateLabel;
+    juce::Slider smearExaggerateSlider;
+    juce::TextButton smearKnobsDisclosure { "+ knobs" };
+
+    juce::Label smearTargetsLabel;
+    juce::ComboBox smearTargetsCombo;
+    juce::Label smearScopeLabel;
+    juce::ComboBox smearScopeCombo;
+
+    juce::TextButton smearDetectButton { "Detect" };
+    juce::TextButton smearApplyButton { "Apply Smear" };
+    juce::Label smearStatusLabel;
+
+    juce::TextButton smearAdvancedDisclosure { "Advanced" };
+    juce::Label smearMaxDbLabel;        juce::Slider smearMaxDbSlider;
+    juce::Label smearWeightDetLabel;    juce::Slider smearWeightDetSlider;
+    juce::Label smearWeightResLabel;    juce::Slider smearWeightResSlider;
+    juce::Label smearWeightHfcLabel;    juce::Slider smearWeightHfcSlider;
+    juce::Label smearWeightBirthLabel;  juce::Slider smearWeightBirthSlider;
+    juce::Label smearWeightPhaseLabel;  juce::Slider smearWeightPhaseSlider;
+    juce::Label smearThreshLambdaLabel; juce::Slider smearThreshLambdaSlider;
+    juce::Label smearThreshScaleLabel;  juce::Slider smearThreshScaleSlider;
+    juce::Label smearPreMarginLabel;    juce::Slider smearPreMarginSlider;
+    juce::Label smearPeakWindowLabel;   juce::Slider smearPeakWindowSlider;
+    juce::Label smearMinGapLabel;       juce::Slider smearMinGapSlider;
+    juce::Label smearMaxAttackLabel;    juce::Slider smearMaxAttackSlider;
+    juce::ToggleButton smearUsePhaseDevButton { "Phase dev" };
+    juce::ToggleButton smearRpcaFallbackButton { "RPCA fallback" };
+
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::FileChooser> presetSaveChooser;
     std::unique_ptr<juce::FileChooser> atsImportChooser;
@@ -228,6 +289,28 @@ private:
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>,
                kMorphLaneUiCount>
         morphLaneLinkedAttach;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearBlurAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearSharpenAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearExaggerateAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMaxDbAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightDetAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightResAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightHfcAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightBirthAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightPhaseAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearThreshLambdaAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearThreshScaleAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearPreMarginAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearPeakWindowAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMinGapAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMaxAttackAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> smearTargetsAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> smearScopeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> smearUsePhaseDevAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> smearRpcaFallbackAttach;
+
+    int dragHoverSlot = -1; // 0=A, 1=B, -1=none
 
     // Cached values for refreshFromProcessor — only re-queried when revisions change.
     int cachedModelRevision   = -1;

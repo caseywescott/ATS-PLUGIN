@@ -18,7 +18,7 @@ Reviewed against: **Session**, **Analysis**, **Synthesis**, **Partials**, **Math
 | ---- | ---- | ------- | ----------- |
 | Analysis model | 7 | 0 | 0 |
 | Pitch & frequency | 4 | 1 | 2 |
-| Time | 2 | 3 | 1 |
+| Time | 4 | 3 | 1 |
 | Amplitude & envelope | 2 | 3 | 1 |
 | Noise | 4 | 2 | 0 |
 | Spectral editing | 2 | 4 | 0 |
@@ -26,6 +26,8 @@ Reviewed against: **Session**, **Analysis**, **Synthesis**, **Partials**, **Math
 | Psychoacoustic | 3 | 1 | 0 |
 | ATSH graphical editing | 4 | 2 | 0 |
 | Modern extensions | 0 | 1 | 7 |
+
+**Recent (Jun 2026):** **Smearnov** (Session tab, `[Morph | Smearnov]` toggle) adds model-domain onset detection and attack-smearing: a Smear macro expanding into Blur / Sharpen / Exaggerate knobs plus an Advanced panel (detector weights, adaptive threshold, peak/min-gap/attack windows, phase-deviation and offline RPCA toggles). Onsets and attack windows are editable in the spectrogram overlay; tab + all parameters persist in session/preset state. See `docs/SMEARNOV_SPEC.md`.
 
 **Recent (May 2026):** Synthesis **Frequency shaping** adds Stretch, Compress, and Harmonic modes with live spectrogram warp display, pivot/F0 overlay, auto pivot readout, preview resynth, and factory presets. Residual / Iso 3D Residual modes also include a **Bark-band noise editor**: left Hz gutter, per-band envelope draw, per-cell dB edit, smooth, tilt, copy/paste/swap band — all writing `band_energy` on Current / Source A / B via `mutateResidualBandFrames`.
 
@@ -84,6 +86,8 @@ This separation allows transformations to be performed independently on tonal an
 | Temporal Interpolation | Smooth transition between temporal states | Morphing tool | **Partial** | Morph timeline A→B; morph *lanes* include Time; not arbitrary state A/B/C |
 | Trajectory Resampling | Reconstructs partial motion at different rates | Useful for generative systems | **Partial** | Implicit via time factor + analysis hop; no dedicated resample tool |
 | Scrubbing | Non-linear traversal through spectral data | Interactive playback | **Partial** | Spectrogram playhead during preview; no live scrub-driven resynth |
+| Onset Detection | Locate note/transient attacks from the model | Editing & attack reshaping | **Done** | **Smearnov** (Session tab): fuses 5 detectors (deterministic/residual/HFC flux, partial-birth, phase deviation) over partials + `band_energy`; editable onset markers + attack windows in spectrogram |
+| Attack Smearing | Blur / sharpen / exaggerate detected attacks | Transient design | **Done** | **Smearnov** Smear macro → Blur (Gaussian), Sharpen (unsharp), Exaggerate (energy-bounded dB); phase never edited; Targets (partials/residual/both) + Scope; offline apply on Current/Source A/B |
 
 ---
 
@@ -115,14 +119,14 @@ This separation allows transformations to be performed independently on tonal an
 
 # Spectral Editing
 
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| Partial Deletion | Remove selected tracks | Spectral cleanup | **Done** | Spectrogram Delete → `mutePartials` |
-| Partial Isolation | Solo individual trajectories | Analysis tool | **Partial** | Multi-select + audition; no solo-one-track button |
-| Partial Cloning | Duplicate spectral structures | Experimental | **Not started** | — |
-| Partial Group Editing | Operate on harmonic groups | Musical editing | **Partial** | Lasso multi-partial scale/delete |
-| Spectral Pruning | Remove low-SMR components | Data reduction | **Partial** | At analysis time via SMR thresholds, not post-hoc prune UI |
-| Harmonic Extraction | Isolate harmonic subsets | Timbre simplification | **Not started** | — |
+| Feature               | Technical Description         | Notes                 | Status          | Plugin evidence                                            |
+| --------------------- | ----------------------------- | --------------------- | --------------- | ---------------------------------------------------------- |
+| Partial Deletion      | Remove selected tracks        | Spectral cleanup      | **Done**        | Spectrogram Delete → `mutePartials`                        |
+| Partial Isolation     | Solo individual trajectories  | Analysis tool         | **Partial**     | Multi-select + audition; no solo-one-track button          |
+| Partial Cloning       | Duplicate spectral structures | Experimental          | **Not started** | —                                                          |
+| Partial Group Editing | Operate on harmonic groups    | Musical editing       | **Partial**     | Lasso multi-partial scale/delete                           |
+| Spectral Pruning      | Remove low-SMR components     | Data reduction        | **Partial**     | At analysis time via SMR thresholds, not post-hoc prune UI |
+| Harmonic Extraction   | Isolate harmonic subsets      | Timbre simplification | **Not started** | —                                                          |
 
 ---
 

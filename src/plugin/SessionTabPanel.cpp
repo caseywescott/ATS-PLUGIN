@@ -202,10 +202,12 @@ MorphTimelineEditor::MorphTimelineEditor()
 {
     morphModeBtn.setRadioGroupId(101);
     hybridModeBtn.setRadioGroupId(101);
+    envMorphModeBtn.setRadioGroupId(101);
     morphModeBtn.setToggleState(true, juce::dontSendNotification);
 
     morphModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffb8d4ff));
     hybridModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd08030));
+    envMorphModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff5fc88a));
 
     morphModeBtn.onStateChange = [this] {
         if (morphModeBtn.getToggleState())
@@ -223,9 +225,18 @@ MorphTimelineEditor::MorphTimelineEditor()
             repaint();
         }
     };
+    envMorphModeBtn.onStateChange = [this] {
+        if (envMorphModeBtn.getToggleState())
+        {
+            newPointKind = MorphTimelinePointKind::EnvelopeMorph;
+            selectedPoint = -1;
+            repaint();
+        }
+    };
 
     addAndMakeVisible(morphModeBtn);
     addAndMakeVisible(hybridModeBtn);
+    addAndMakeVisible(envMorphModeBtn);
 }
 
 void MorphTimelineEditor::resized()
@@ -235,6 +246,7 @@ void MorphTimelineEditor::resized()
     header.removeFromLeft(28);
     morphModeBtn.setBounds(header.removeFromLeft(54));
     hybridModeBtn.setBounds(header.removeFromLeft(58));
+    envMorphModeBtn.setBounds(header.removeFromLeft(48));
 }
 
 juce::Rectangle<float> MorphTimelineEditor::getPlotArea() const
@@ -308,8 +320,12 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
     if (points.empty())
         return;
 
-    const bool editingHybrid = newPointKind == MorphTimelinePointKind::Hybrid;
-    paintLane(g, editingHybrid ? MorphTimelinePointKind::Morph : MorphTimelinePointKind::Hybrid, false);
+    // Paint unselected lanes first, then the selected lane on top.
+    for (auto kind : { MorphTimelinePointKind::Morph,
+                       MorphTimelinePointKind::Hybrid,
+                       MorphTimelinePointKind::EnvelopeMorph })
+        if (kind != newPointKind)
+            paintLane(g, kind, false);
     paintLane(g, newPointKind, true);
 }
 
@@ -325,31 +341,40 @@ void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
     const int nearest = findNearestPoint(e.position, e.mods.isPopupMenu() ? false : true);
     if (e.mods.isPopupMenu() && nearest >= 0)
     {
-        const bool isHybrid = points[(size_t) nearest].kind == MorphTimelinePointKind::Hybrid;
         const auto& nearestPoint = points[(size_t) nearest];
-        const bool canRemove = nearestPoint.kind == MorphTimelinePointKind::Hybrid
+        const auto currentKind = nearestPoint.kind;
+        const bool canRemove = currentKind != MorphTimelinePointKind::Morph
                                || (nearestPoint.timeNorm > 1.0e-6
                                    && nearestPoint.timeNorm < 1.0 - 1.0e-6);
 
         juce::PopupMenu menu;
-        menu.addItem(1, isHybrid ? "Make Morph"  : "Make Hybrid",  true, false);
+        if (currentKind != MorphTimelinePointKind::Morph)
+            menu.addItem(10, "Make Morph", true, false);
+        if (currentKind != MorphTimelinePointKind::Hybrid)
+            menu.addItem(11, "Make Hybrid", true, false);
+        if (currentKind != MorphTimelinePointKind::EnvelopeMorph)
+            menu.addItem(12, "Make Env Morph", true, false);
         if (canRemove)
             menu.addItem(2, "Remove point", true, false);
 
         menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this),
-            [this, nearest, isHybrid](int result)
+            [this, nearest](int result)
             {
-                if (result == 1 && juce::isPositiveAndBelow(nearest, (int) points.size()))
+                if (!juce::isPositiveAndBelow(nearest, (int) points.size()))
+                    return;
+                if (result >= 10 && result <= 12)
                 {
-                    points[(size_t) nearest].kind = isHybrid ? MorphTimelinePointKind::Morph
-                                                             : MorphTimelinePointKind::Hybrid;
+                    points[(size_t) nearest].kind =
+                        result == 10 ? MorphTimelinePointKind::Morph
+                      : result == 11 ? MorphTimelinePointKind::Hybrid
+                                     : MorphTimelinePointKind::EnvelopeMorph;
                     notifyChange();
                     repaint();
                 }
-                else if (result == 2 && juce::isPositiveAndBelow(nearest, (int) points.size()))
+                else if (result == 2)
                 {
                     const auto& point = points[(size_t) nearest];
-                    const bool canRemovePoint = point.kind == MorphTimelinePointKind::Hybrid
+                    const bool canRemovePoint = point.kind != MorphTimelinePointKind::Morph
                                                 || (point.timeNorm > 1.0e-6
                                                     && point.timeNorm < 1.0 - 1.0e-6);
                     if (canRemovePoint)
@@ -396,7 +421,7 @@ void MorphTimelineEditor::mouseDoubleClick(const juce::MouseEvent& e)
     if (nearest >= 0)
     {
         const auto& point = points[(size_t) nearest];
-        const bool canRemovePoint = point.kind == MorphTimelinePointKind::Hybrid
+        const bool canRemovePoint = point.kind != MorphTimelinePointKind::Morph
                                     || (point.timeNorm > 1.0e-6 && point.timeNorm < 1.0 - 1.0e-6);
         if (canRemovePoint)
         {
@@ -463,7 +488,10 @@ void MorphTimelineEditor::paintLane(juce::Graphics& g, MorphTimelinePointKind ki
     });
 
     const bool isHybrid = kind == MorphTimelinePointKind::Hybrid;
-    const auto baseColour = isHybrid ? juce::Colour(0xffd08030) : juce::Colour(0xff75a7ff);
+    const bool isEnvMorph = kind == MorphTimelinePointKind::EnvelopeMorph;
+    const auto baseColour = isHybrid    ? juce::Colour(0xffd08030)
+                          : isEnvMorph  ? juce::Colour(0xff5fc88a)
+                                        : juce::Colour(0xff75a7ff);
     const float pathAlpha = selectedLane ? 0.95f : 0.22f;
     const float pointAlpha = selectedLane ? 1.0f : 0.30f;
 
@@ -498,6 +526,14 @@ void MorphTimelineEditor::paintLane(juce::Graphics& g, MorphTimelinePointKind ki
             g.fillPath(diamond);
             g.setColour(juce::Colour(0xff12121a).withAlpha(selectedLane ? 1.0f : 0.35f));
             g.strokePath(diamond, juce::PathStrokeType(selectedLane ? 1.0f : 0.7f));
+        }
+        else if (isEnvMorph)
+        {
+            constexpr float r = 4.8f;
+            g.setColour((selected ? juce::Colour(0xffc7ffdf) : juce::Colour(0xff5fc88a)).withAlpha(pointAlpha));
+            g.fillRect(p.x - r, p.y - r, 2.0f * r, 2.0f * r);
+            g.setColour(juce::Colour(0xff12121a).withAlpha(selectedLane ? 1.0f : 0.35f));
+            g.drawRect(p.x - r, p.y - r, 2.0f * r, 2.0f * r, selectedLane ? 1.0f : 0.7f);
         }
         else
         {
@@ -868,6 +904,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         "Morph breakpoints (circles): blend Source A toward B. "
         "Hybrid breakpoints (diamonds): scale Source A amplitudes by Source B's Bark envelope - "
         "Source A partials are preserved unchanged. "
+        "Env Morph breakpoints (squares): blend the A/B spectral envelopes and resample each "
+        "partial onto the interpolated envelope, removing comb coloration from imperfect "
+        "correspondence. "
         "For a pure Hybrid effect, press Reset first so the morph stays at A, then add Hybrid breakpoints.");
     morphTimelineEditor.onPointsChanged = [this](std::vector<AtsMorphTimelinePoint> points) {
         audioProcessor.setMorphTimelinePoints(points);
@@ -1024,10 +1063,177 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(morphBandStrip);
     addAndMakeVisible(morphBandInspectorLabel);
 
+    // --- Control-cluster tab bar + Smearnov panel (SMEARNOV_SPEC §4) ---
+    morphTabButton.setClickingTogglesState(true);
+    smearnovTabButton.setClickingTogglesState(true);
+    morphTabButton.setRadioGroupId(7100);
+    smearnovTabButton.setRadioGroupId(7100);
+    morphTabButton.setConnectedEdges(juce::Button::ConnectedOnRight);
+    smearnovTabButton.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    morphTabButton.setToggleState(true, juce::dontSendNotification);
+    morphTabButton.setHelpText("Show the morph correspondence, lane, and policy controls.");
+    smearnovTabButton.setHelpText("Show the Smearnov attack onset-detection and smear controls.");
+    morphTabButton.onClick = [this] { setActiveControlTab(0); };
+    smearnovTabButton.onClick = [this] { setActiveControlTab(1); };
+    addAndMakeVisible(morphTabButton);
+    addAndMakeVisible(smearnovTabButton);
+
+    auto setupSmearKnob = [this](juce::Label& lab, juce::Slider& sld,
+                                 const juce::String& title, const juce::String& help) {
+        lab.setText(title, juce::dontSendNotification);
+        lab.setJustificationType(juce::Justification::centred);
+        lab.setFont(juce::Font(10.5f, juce::Font::bold));
+        lab.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+        sld.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        sld.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 16);
+        sld.setName(title);
+        sld.setHelpText(help);
+        addAndMakeVisible(lab);
+        addAndMakeVisible(sld);
+    };
+    setupSmearKnob(smearMacroLabel, smearBlurSlider, "Smear",
+                   "Attack blur time in milliseconds: spreads attack energy forward in time.");
+    setupSmearKnob(smearSharpenLabel, smearSharpenSlider, "Sharpen",
+                   "Unsharp attack emphasis: subtracts a blurred copy to crisp the attack.");
+    setupSmearKnob(smearExaggerateLabel, smearExaggerateSlider, "Exaggerate",
+                   "Attack-window gain in dB, energy-bounded by Max dB.");
+
+    smearKnobsDisclosure.setClickingTogglesState(true);
+    smearKnobsDisclosure.setHelpText("Reveal the Sharpen and Exaggerate knobs.");
+    smearKnobsDisclosure.onClick = [this] {
+        smearKnobsExpanded = smearKnobsDisclosure.getToggleState();
+        resized();
+    };
+    addAndMakeVisible(smearKnobsDisclosure);
+
+    auto setupSmearCombo = [this](juce::Label& lab, juce::ComboBox& combo,
+                                  const juce::String& title, const juce::StringArray& items,
+                                  const juce::String& help) {
+        lab.setText(title, juce::dontSendNotification);
+        lab.setJustificationType(juce::Justification::centredLeft);
+        lab.setFont(juce::Font(10.5f, juce::Font::bold));
+        for (int i = 0; i < items.size(); ++i)
+            combo.addItem(items[i], i + 1);
+        combo.setHelpText(help);
+        addAndMakeVisible(lab);
+        addAndMakeVisible(combo);
+    };
+    setupSmearCombo(smearTargetsLabel, smearTargetsCombo, "Targets",
+                    { "Partials", "Residual", "Both" },
+                    "Which layers the smear transform edits.");
+    setupSmearCombo(smearScopeLabel, smearScopeCombo, "Scope",
+                    { "All", "Selection", "Sensitivity" },
+                    "Which detected onsets are smeared.");
+
+    smearDetectButton.setHelpText("Detect onsets on the current model and pin the markers in the spectrogram overlay.");
+    smearDetectButton.onClick = [this] { runSmearnovDetect(); };
+    addAndMakeVisible(smearDetectButton);
+    smearApplyButton.setHelpText("Detect attacks (or use edited overlay markers) and apply the smear transform to the current model.");
+    smearApplyButton.onClick = [this] { runSmearnovApply(); };
+    addAndMakeVisible(smearApplyButton);
+    smearStatusLabel.setJustificationType(juce::Justification::centredLeft);
+    smearStatusLabel.setFont(juce::Font(10.5f));
+    smearStatusLabel.setMinimumHorizontalScale(0.7f);
+    smearStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    addAndMakeVisible(smearStatusLabel);
+
+    smearAdvancedDisclosure.setClickingTogglesState(true);
+    smearAdvancedDisclosure.setHelpText("Reveal detection-tuning controls.");
+    smearAdvancedDisclosure.onClick = [this] {
+        smearAdvancedExpanded = smearAdvancedDisclosure.getToggleState();
+        resized();
+    };
+    addAndMakeVisible(smearAdvancedDisclosure);
+
+    auto setupAdvSlider = [this](juce::Label& lab, juce::Slider& sld,
+                                 const juce::String& title, const juce::String& help) {
+        lab.setText(title, juce::dontSendNotification);
+        lab.setJustificationType(juce::Justification::centredLeft);
+        lab.setFont(juce::Font(10.0f, juce::Font::bold));
+        lab.setMinimumHorizontalScale(0.7f);
+        sld.setSliderStyle(juce::Slider::LinearHorizontal);
+        sld.setTextBoxStyle(juce::Slider::TextBoxRight, false, 46, 16);
+        sld.setName(title);
+        sld.setHelpText(help);
+        addAndMakeVisible(lab);
+        addAndMakeVisible(sld);
+    };
+    setupAdvSlider(smearMaxDbLabel, smearMaxDbSlider, "Max dB",
+                   "Upper bound on attack-window gain for the Exaggerate stage.");
+    setupAdvSlider(smearWeightDetLabel, smearWeightDetSlider, "Det flux",
+                   "Fusion weight for deterministic (partial) energy flux D1.");
+    setupAdvSlider(smearWeightResLabel, smearWeightResSlider, "Res flux",
+                   "Fusion weight for residual band-energy flux D2.");
+    setupAdvSlider(smearWeightHfcLabel, smearWeightHfcSlider, "HFC flux",
+                   "Fusion weight for residual high-frequency-content flux D3.");
+    setupAdvSlider(smearWeightBirthLabel, smearWeightBirthSlider, "Birth",
+                   "Fusion weight for the partial-birth rate D4.");
+    setupAdvSlider(smearWeightPhaseLabel, smearWeightPhaseSlider, "Phase dev",
+                   "Fusion weight for phase deviation D5 (needs phase + Phase dev on).");
+    setupAdvSlider(smearThreshLambdaLabel, smearThreshLambdaSlider, "Threshold",
+                   "Additive peak-picking threshold; 0 auto-derives from global MAD.");
+    setupAdvSlider(smearThreshScaleLabel, smearThreshScaleSlider, "Auto scale",
+                   "Multiplier on global MAD when the threshold auto-derives.");
+    setupAdvSlider(smearPreMarginLabel, smearPreMarginSlider, "Pre ms",
+                   "Pre-onset margin folded into the attack window.");
+    setupAdvSlider(smearPeakWindowLabel, smearPeakWindowSlider, "Peak win",
+                   "Local-max + adaptive-threshold window radius in frames.");
+    setupAdvSlider(smearMinGapLabel, smearMinGapSlider, "Min gap",
+                   "Refractory gap between onsets in frames (0 uses the time default).");
+    setupAdvSlider(smearMaxAttackLabel, smearMaxAttackSlider, "Max atk",
+                   "Cap on attack-window length in frames (0 uncapped).");
+
+    smearUsePhaseDevButton.setHelpText("Include phase deviation D5 in detection (phase-bearing models only).");
+    smearRpcaFallbackButton.setButtonText("RPCA fallback (experimental)");
+    smearRpcaFallbackButton.setHelpText("RPCA onset segmentation is not implemented yet; detection always uses flux.");
+    smearRpcaFallbackButton.setEnabled(false);
+    addAndMakeVisible(smearUsePhaseDevButton);
+    addAndMakeVisible(smearRpcaFallbackButton);
+
+    smearBlurAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovBlurMs, smearBlurSlider);
+    smearSharpenAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovSharpenAmount, smearSharpenSlider);
+    smearExaggerateAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovExaggerateDb, smearExaggerateSlider);
+    smearMaxDbAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovMaxDb, smearMaxDbSlider);
+    smearWeightDetAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovWeightDetFlux, smearWeightDetSlider);
+    smearWeightResAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovWeightResFlux, smearWeightResSlider);
+    smearWeightHfcAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovWeightHfcFlux, smearWeightHfcSlider);
+    smearWeightBirthAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovWeightBirth, smearWeightBirthSlider);
+    smearWeightPhaseAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovWeightPhaseDev, smearWeightPhaseSlider);
+    smearThreshLambdaAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovThresholdLambda, smearThreshLambdaSlider);
+    smearThreshScaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovThresholdAutoScale, smearThreshScaleSlider);
+    smearPreMarginAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovPreMarginMs, smearPreMarginSlider);
+    smearPeakWindowAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovPeakWindowFrames, smearPeakWindowSlider);
+    smearMinGapAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovMinGapFrames, smearMinGapSlider);
+    smearMaxAttackAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovMaxAttackFrames, smearMaxAttackSlider);
+    smearTargetsAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovTargets, smearTargetsCombo);
+    smearScopeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovScope, smearScopeCombo);
+    smearUsePhaseDevAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovUsePhaseDeviation, smearUsePhaseDevButton);
+    smearRpcaFallbackAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovUseRpcaFallback, smearRpcaFallbackButton);
+
     spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
 
     rebuildPresetList();
+    setActiveControlTab(audioProcessor.getActiveControlTab());
 }
 
 void SessionTabPanel::rebuildPresetList()
@@ -1493,64 +1699,85 @@ void SessionTabPanel::resized()
         button.setBounds({});
     body.removeFromTop(sc(4));
 
-    auto laneArea = body.removeFromTop(juce::jmin(sc(116), juce::jmax(sc(78), body.getHeight() / 2)));
-    auto laneHeader = laneArea.removeFromTop(sc(24));
-    morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
-    morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(160)));
-    laneHeader.removeFromLeft(sc(6));
-    resetMorphLanesButton.setBounds(laneHeader.removeFromLeft(sc(92)));
-    laneArea.removeFromTop(sc(2));
+    // Control-cluster tab bar: [Morph | Smearnov]. The selected tab owns the
+    // cluster region above the global partial/residual/output knob row.
+    auto tabBar = body.removeFromTop(sc(24));
+    morphTabButton.setBounds(tabBar.removeFromLeft(sc(88)));
+    smearnovTabButton.setBounds(tabBar.removeFromLeft(sc(96)));
+    body.removeFromTop(sc(6));
 
-    auto laneGrid = laneArea;
-    for (size_t row = 0; row < 2; ++row)
+    if (activeControlTab == 1)
     {
-        auto laneRow = laneGrid.removeFromTop(laneGrid.getHeight() / (int) (2 - row));
-        for (size_t col = 0; col < 3; ++col)
-        {
-            const size_t index = row * 3 + col;
-            auto cell = laneRow.removeFromLeft(laneRow.getWidth() / (int) (3 - col)).reduced(sc(3));
-            auto title = cell.removeFromTop(sc(18));
-            morphLaneLinkedButtons[index].setBounds(title.removeFromRight(sc(34)));
-            morphLaneLabels[index].setBounds(title);
-            morphLaneSliders[index].setBounds(cell.removeFromTop(sc(28)));
-        }
+        hideMorphCluster();
+
+        const int knobBlock = sc(32) + sc(104) + sc(6) + sc(4);
+        auto clusterArea = body.removeFromTop(juce::jmax(sc(0), body.getHeight() - knobBlock));
+        layoutSmearnovPanel(clusterArea);
+        body.removeFromTop(sc(4));
     }
-    body.removeFromTop(sc(4));
-
-    auto policyArea = body.removeFromTop(juce::jmin(sc(96), juce::jmax(sc(64), body.getHeight() / 2)));
-    auto policyHeader = policyArea.removeFromTop(sc(20));
-    morphPolicyLabel.setBounds(policyHeader.removeFromLeft(sc(54)));
-    morphDiscardOptInButton.setBounds(policyHeader.removeFromLeft(sc(96)));
-    policyArea.removeFromTop(sc(2));
-
-    std::array<juce::ComboBox*, 8> policyCombos {
-        &morphGridTypeCombo,
-        &morphCorrespondenceCombo,
-        &morphSourcePolicyCombo,
-        &morphTargetPolicyCombo,
-        &morphFrequencyDomainCombo,
-        &morphAmplitudeDomainCombo,
-        &morphPhaseStrategyCombo,
-        &morphTransientPolicyCombo,
-    };
-    for (size_t row = 0; row < 2; ++row)
+    else
     {
-        auto comboRow = policyArea.removeFromTop(sc(30));
-        for (size_t col = 0; col < 4; ++col)
-        {
-            const size_t index = row * 4 + col;
-            policyCombos[index]->setBounds(comboRow.removeFromLeft(comboRow.getWidth() / (int) (4 - col))
-                                               .reduced(sc(2)));
-        }
-    }
-    body.removeFromTop(sc(4));
+        hideSmearnovPanel();
 
-    auto bandArea = body.removeFromTop(juce::jmin(sc(112), juce::jmax(sc(64), body.getHeight() / 2)));
-    auto bandHeader = bandArea.removeFromTop(sc(18));
-    morphBandLabel.setBounds(bandHeader.removeFromLeft(sc(64)));
-    morphBandStrip.setBounds(bandArea.removeFromTop(sc(30)).reduced(sc(2)));
-    morphBandInspectorLabel.setBounds(bandArea.reduced(sc(2)));
-    body.removeFromTop(sc(4));
+        auto laneArea = body.removeFromTop(juce::jmin(sc(116), juce::jmax(sc(78), body.getHeight() / 2)));
+        auto laneHeader = laneArea.removeFromTop(sc(24));
+        morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
+        morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(160)));
+        laneHeader.removeFromLeft(sc(6));
+        resetMorphLanesButton.setBounds(laneHeader.removeFromLeft(sc(92)));
+        laneArea.removeFromTop(sc(2));
+
+        auto laneGrid = laneArea;
+        for (size_t row = 0; row < 2; ++row)
+        {
+            auto laneRow = laneGrid.removeFromTop(laneGrid.getHeight() / (int) (2 - row));
+            for (size_t col = 0; col < 3; ++col)
+            {
+                const size_t index = row * 3 + col;
+                auto cell = laneRow.removeFromLeft(laneRow.getWidth() / (int) (3 - col)).reduced(sc(3));
+                auto title = cell.removeFromTop(sc(18));
+                morphLaneLinkedButtons[index].setBounds(title.removeFromRight(sc(34)));
+                morphLaneLabels[index].setBounds(title);
+                morphLaneSliders[index].setBounds(cell.removeFromTop(sc(28)));
+            }
+        }
+        body.removeFromTop(sc(4));
+
+        auto policyArea = body.removeFromTop(juce::jmin(sc(96), juce::jmax(sc(64), body.getHeight() / 2)));
+        auto policyHeader = policyArea.removeFromTop(sc(20));
+        morphPolicyLabel.setBounds(policyHeader.removeFromLeft(sc(54)));
+        morphDiscardOptInButton.setBounds(policyHeader.removeFromLeft(sc(96)));
+        policyArea.removeFromTop(sc(2));
+
+        std::array<juce::ComboBox*, 8> policyCombos {
+            &morphGridTypeCombo,
+            &morphCorrespondenceCombo,
+            &morphSourcePolicyCombo,
+            &morphTargetPolicyCombo,
+            &morphFrequencyDomainCombo,
+            &morphAmplitudeDomainCombo,
+            &morphPhaseStrategyCombo,
+            &morphTransientPolicyCombo,
+        };
+        for (size_t row = 0; row < 2; ++row)
+        {
+            auto comboRow = policyArea.removeFromTop(sc(30));
+            for (size_t col = 0; col < 4; ++col)
+            {
+                const size_t index = row * 4 + col;
+                policyCombos[index]->setBounds(comboRow.removeFromLeft(comboRow.getWidth() / (int) (4 - col))
+                                                   .reduced(sc(2)));
+            }
+        }
+        body.removeFromTop(sc(4));
+
+        auto bandArea = body.removeFromTop(juce::jmin(sc(112), juce::jmax(sc(64), body.getHeight() / 2)));
+        auto bandHeader = bandArea.removeFromTop(sc(18));
+        morphBandLabel.setBounds(bandHeader.removeFromLeft(sc(64)));
+        morphBandStrip.setBounds(bandArea.removeFromTop(sc(30)).reduced(sc(2)));
+        morphBandInspectorLabel.setBounds(bandArea.reduced(sc(2)));
+        body.removeFromTop(sc(4));
+    }
 
     const int labelH = sc(32);
     const int knobH = sc(104);
@@ -1565,6 +1792,202 @@ void SessionTabPanel::resized()
     placeColumn(partGainLabel, partGainSlider);
     placeColumn(resGainLabel, resGainSlider);
     placeColumn(outputTrimLabel, outputTrimSlider);
+}
+
+void SessionTabPanel::setActiveControlTab(int tab)
+{
+    activeControlTab = juce::jlimit(0, 1, tab);
+    audioProcessor.setActiveControlTab(activeControlTab);
+    morphTabButton.setToggleState(activeControlTab == 0, juce::dontSendNotification);
+    smearnovTabButton.setToggleState(activeControlTab == 1, juce::dontSendNotification);
+    resized();
+}
+
+void SessionTabPanel::hideMorphCluster()
+{
+    morphSmoothingLabel.setBounds({});
+    morphSmoothingSlider.setBounds({});
+    resetMorphLanesButton.setBounds({});
+    for (size_t i = 0; i < morphLaneLabels.size(); ++i)
+    {
+        morphLaneLabels[i].setBounds({});
+        morphLaneSliders[i].setBounds({});
+        morphLaneLinkedButtons[i].setBounds({});
+    }
+    morphPolicyLabel.setBounds({});
+    morphDiscardOptInButton.setBounds({});
+    for (auto* combo : { &morphGridTypeCombo, &morphCorrespondenceCombo, &morphSourcePolicyCombo,
+                         &morphTargetPolicyCombo, &morphFrequencyDomainCombo, &morphAmplitudeDomainCombo,
+                         &morphPhaseStrategyCombo, &morphTransientPolicyCombo })
+        combo->setBounds({});
+    morphBandLabel.setBounds({});
+    morphBandStrip.setBounds({});
+    morphBandInspectorLabel.setBounds({});
+}
+
+void SessionTabPanel::hideSmearnovPanel()
+{
+    const std::initializer_list<juce::Component*> comps {
+        &smearMacroLabel, &smearBlurSlider,
+        &smearSharpenLabel, &smearSharpenSlider,
+        &smearExaggerateLabel, &smearExaggerateSlider,
+        &smearKnobsDisclosure,
+        &smearTargetsLabel, &smearTargetsCombo,
+        &smearScopeLabel, &smearScopeCombo,
+        &smearDetectButton, &smearApplyButton, &smearStatusLabel,
+        &smearAdvancedDisclosure,
+        &smearMaxDbLabel, &smearMaxDbSlider,
+        &smearWeightDetLabel, &smearWeightDetSlider,
+        &smearWeightResLabel, &smearWeightResSlider,
+        &smearWeightHfcLabel, &smearWeightHfcSlider,
+        &smearWeightBirthLabel, &smearWeightBirthSlider,
+        &smearWeightPhaseLabel, &smearWeightPhaseSlider,
+        &smearThreshLambdaLabel, &smearThreshLambdaSlider,
+        &smearThreshScaleLabel, &smearThreshScaleSlider,
+        &smearPreMarginLabel, &smearPreMarginSlider,
+        &smearPeakWindowLabel, &smearPeakWindowSlider,
+        &smearMinGapLabel, &smearMinGapSlider,
+        &smearMaxAttackLabel, &smearMaxAttackSlider,
+        &smearUsePhaseDevButton, &smearRpcaFallbackButton };
+    for (auto* c : comps)
+        c->setBounds({});
+}
+
+void SessionTabPanel::layoutSmearnovPanel(juce::Rectangle<int> area)
+{
+    const auto sc = [](int px) { return scaledUi(px); };
+
+    auto knobRow = area.removeFromTop(sc(86));
+    auto knobs = knobRow.removeFromTop(sc(64) + sc(16));
+    auto placeKnob = [&](juce::Label& lab, juce::Slider& sld) {
+        auto col = knobs.removeFromLeft(sc(76)).reduced(sc(3));
+        lab.setBounds(col.removeFromTop(sc(16)));
+        sld.setBounds(col);
+    };
+    placeKnob(smearMacroLabel, smearBlurSlider);
+    if (smearKnobsExpanded)
+    {
+        placeKnob(smearSharpenLabel, smearSharpenSlider);
+        placeKnob(smearExaggerateLabel, smearExaggerateSlider);
+    }
+    else
+    {
+        smearSharpenLabel.setBounds({});
+        smearSharpenSlider.setBounds({});
+        smearExaggerateLabel.setBounds({});
+        smearExaggerateSlider.setBounds({});
+    }
+    smearKnobsDisclosure.setBounds(knobs.removeFromTop(sc(22)).removeFromLeft(sc(84)));
+    area.removeFromTop(sc(4));
+
+    auto ctrlRow = area.removeFromTop(sc(24));
+    smearTargetsLabel.setBounds(ctrlRow.removeFromLeft(sc(50)));
+    smearTargetsCombo.setBounds(ctrlRow.removeFromLeft(sc(94)).reduced(sc(1)));
+    ctrlRow.removeFromLeft(sc(6));
+    smearScopeLabel.setBounds(ctrlRow.removeFromLeft(sc(42)));
+    smearScopeCombo.setBounds(ctrlRow.removeFromLeft(sc(102)).reduced(sc(1)));
+    ctrlRow.removeFromLeft(sc(8));
+    smearDetectButton.setBounds(ctrlRow.removeFromLeft(sc(70)).reduced(sc(1)));
+    smearApplyButton.setBounds(ctrlRow.removeFromLeft(sc(96)).reduced(sc(1)));
+    area.removeFromTop(sc(2));
+
+    smearStatusLabel.setBounds(area.removeFromTop(sc(16)));
+    area.removeFromTop(sc(2));
+
+    smearAdvancedDisclosure.setBounds(area.removeFromTop(sc(22)).removeFromLeft(sc(96)));
+    area.removeFromTop(sc(2));
+
+    std::array<std::pair<juce::Label*, juce::Slider*>, 12> advs { {
+        { &smearMaxDbLabel, &smearMaxDbSlider },
+        { &smearWeightDetLabel, &smearWeightDetSlider },
+        { &smearWeightResLabel, &smearWeightResSlider },
+        { &smearWeightHfcLabel, &smearWeightHfcSlider },
+        { &smearWeightBirthLabel, &smearWeightBirthSlider },
+        { &smearWeightPhaseLabel, &smearWeightPhaseSlider },
+        { &smearThreshLambdaLabel, &smearThreshLambdaSlider },
+        { &smearThreshScaleLabel, &smearThreshScaleSlider },
+        { &smearPreMarginLabel, &smearPreMarginSlider },
+        { &smearPeakWindowLabel, &smearPeakWindowSlider },
+        { &smearMinGapLabel, &smearMinGapSlider },
+        { &smearMaxAttackLabel, &smearMaxAttackSlider },
+    } };
+
+    if (smearAdvancedExpanded)
+    {
+        for (int row = 0; row < 6; ++row)
+        {
+            auto advRow = area.removeFromTop(sc(20));
+            for (int col = 0; col < 2; ++col)
+            {
+                const size_t idx = (size_t) (row * 2 + col);
+                auto cell = advRow.removeFromLeft(advRow.getWidth() / (2 - col)).reduced(sc(2), sc(1));
+                advs[idx].first->setBounds(cell.removeFromLeft(sc(60)));
+                advs[idx].second->setBounds(cell);
+            }
+        }
+        area.removeFromTop(sc(2));
+        auto toggleRow = area.removeFromTop(sc(20));
+        smearUsePhaseDevButton.setBounds(toggleRow.removeFromLeft(sc(118)));
+        smearRpcaFallbackButton.setBounds(toggleRow.removeFromLeft(sc(140)));
+    }
+    else
+    {
+        for (auto& pair : advs)
+        {
+            pair.first->setBounds({});
+            pair.second->setBounds({});
+        }
+        smearUsePhaseDevButton.setBounds({});
+        smearRpcaFallbackButton.setBounds({});
+    }
+}
+
+void SessionTabPanel::refreshSmearnovControls()
+{
+    const bool workerBusy = audioProcessor.isWorkerBusy();
+    const bool hasModel = (cachedModelPartials > 0 || cachedModelFrames > 0);
+    smearDetectButton.setEnabled(hasModel && !workerBusy);
+    smearApplyButton.setEnabled(hasModel && !workerBusy);
+
+    if (smearShowMathStatus)
+    {
+        const auto math = audioProcessor.getMathStatus();
+        if (math.isNotEmpty())
+            smearStatusLabel.setText(math, juce::dontSendNotification);
+    }
+}
+
+void SessionTabPanel::runSmearnovDetect()
+{
+    const AtsTraceSource source = spectroPanel.getViewedSource();
+    std::vector<ats::AtsOnset> onsets;
+    juce::String err;
+    smearShowMathStatus = false;
+    if (!audioProcessor.detectOnsets(source, onsets, err))
+    {
+        smearStatusLabel.setText(err.isEmpty() ? juce::String("Detection failed.") : err,
+                                 juce::dontSendNotification);
+        return;
+    }
+    audioProcessor.setSmearnovOnsetOverrides(source, onsets, false);
+    smearStatusLabel.setText("Detected " + juce::String((int) onsets.size()) + " attack"
+                                 + (onsets.size() == 1 ? "." : "s."),
+                             juce::dontSendNotification);
+}
+
+void SessionTabPanel::runSmearnovApply()
+{
+    if (audioProcessor.isWorkerBusy())
+    {
+        smearStatusLabel.setText("Busy - wait for the current job.", juce::dontSendNotification);
+        return;
+    }
+    smearShowMathStatus = true;
+    int selFirst = -1, selLast = -1;
+    spectroPanel.getSelectedFrameRange(selFirst, selLast);
+    audioProcessor.startSmearnovApply(spectroPanel.getViewedSource(), selFirst, selLast);
+    smearStatusLabel.setText("Applying smear...", juce::dontSendNotification);
+    refreshFromProcessor();
 }
 
 void SessionTabPanel::refreshFromProcessor()
@@ -1734,6 +2157,10 @@ void SessionTabPanel::refreshFromProcessor()
     }
 
     refreshMorphBandDiagnostics();
+    refreshSmearnovControls();
+
+    if (audioProcessor.getActiveControlTab() != activeControlTab)
+        setActiveControlTab(audioProcessor.getActiveControlTab());
 
     if (prevErrorText != errorLabel.getText() || prevCpuWarningText != cpuWarningLabel.getText())
         resized();
@@ -1779,6 +2206,110 @@ void SessionTabPanel::pickFile()
         if (f.existsAsFile())
             audioProcessor.loadSourceFile(f);
     });
+}
+
+bool SessionTabPanel::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (f.endsWithIgnoreCase(".wav") || f.endsWithIgnoreCase(".ats"))
+            return true;
+    return false;
+}
+
+int slotForPosition(const juce::GroupComponent& groupA,
+                    const juce::GroupComponent& groupB,
+                    int x, int y)
+{
+    if (groupA.getBounds().contains(x, y)) return 0;
+    if (groupB.getBounds().contains(x, y)) return 1;
+    return -1;
+}
+
+void SessionTabPanel::fileDragEnter(const juce::StringArray&, int x, int y)
+{
+    dragHoverSlot = slotForPosition(sourceAGroup, sourceBGroup, x, y);
+    repaint();
+}
+
+void SessionTabPanel::fileDragMove(const juce::StringArray&, int x, int y)
+{
+    const int slot = slotForPosition(sourceAGroup, sourceBGroup, x, y);
+    if (slot != dragHoverSlot)
+    {
+        dragHoverSlot = slot;
+        repaint();
+    }
+}
+
+void SessionTabPanel::fileDragExit(const juce::StringArray&)
+{
+    dragHoverSlot = -1;
+    repaint();
+}
+
+void SessionTabPanel::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    const int slot = slotForPosition(sourceAGroup, sourceBGroup, x, y);
+    dragHoverSlot = -1;
+    repaint();
+
+    if (slot < 0)
+        return;
+
+    for (const auto& filePath : files)
+    {
+        const juce::File f(filePath);
+        if (f.existsAsFile() && (f.hasFileExtension(".wav") || f.hasFileExtension(".ats")))
+        {
+            loadDroppedFileToSlot(slot, f);
+            return;
+        }
+    }
+}
+
+void SessionTabPanel::loadDroppedFileToSlot(int slotIndex, const juce::File& f)
+{
+    const auto slotName = slotIndex == 0 ? juce::String("Source A") : juce::String("Source B");
+    juce::String err;
+
+    if (f.hasFileExtension(".ats"))
+    {
+        if (audioProcessor.importAtsFile(f, err)
+            && audioProcessor.setCurrentModelAsMorphSourceSlot(slotIndex, err))
+        {
+            refreshFromProcessor();
+            return;
+        }
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon, slotName,
+            err.isEmpty() ? juce::String("Could not load ATS source.") : err);
+        refreshFromProcessor();
+        return;
+    }
+
+    if (!audioProcessor.loadAndAnalyzeMorphSourceSlot(slotIndex, f, err))
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon, slotName,
+            err.isEmpty() ? juce::String("Could not analyze morph source.") : err);
+    refreshFromProcessor();
+}
+
+void SessionTabPanel::paintOverChildren(juce::Graphics& g)
+{
+    if (dragHoverSlot < 0)
+        return;
+
+    const auto& group = (dragHoverSlot == 0) ? sourceAGroup : sourceBGroup;
+    const auto bounds = group.getBounds().toFloat();
+
+    g.setColour(juce::Colour(0x446a9cff));
+    g.fillRoundedRectangle(bounds, 5.0f);
+    g.setColour(juce::Colour(0xff6a9cff));
+    g.drawRoundedRectangle(bounds.reduced(1.0f), 5.0f, 2.0f);
+
+    g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setColour(juce::Colours::white.withAlpha(0.9f));
+    g.drawText("Drop to load", bounds, juce::Justification::centred);
 }
 
 void SessionTabPanel::pickMorphSourceFile(int slotIndex)

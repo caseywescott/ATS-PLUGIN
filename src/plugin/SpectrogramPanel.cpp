@@ -36,7 +36,8 @@ bool isIsometricDisplayMode(SpectrogramPanel::Mode mode)
 {
     return mode == SpectrogramPanel::Mode::Isometric
         || mode == SpectrogramPanel::Mode::IsometricResidual
-        || mode == SpectrogramPanel::Mode::IsometricEnvelope;
+        || mode == SpectrogramPanel::Mode::IsometricEnvelope
+        || mode == SpectrogramPanel::Mode::IsometricEnvelopeRDC;
 }
 } // namespace
 
@@ -365,11 +366,11 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
 
     // Envelope overlay toggles
     envSourceABtn.setToggleState(true, juce::dontSendNotification);
-    envSourceBBtn.setToggleState(true, juce::dontSendNotification);
+    envSourceBBtn.setToggleState(false, juce::dontSendNotification);
     envSourceABtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff4090d0));
     envSourceBBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd08030));
-    envSourceABtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope) repaint(); };
-    envSourceBBtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope) repaint(); };
+    envSourceABtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC) repaint(); };
+    envSourceBBtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC) repaint(); };
     addChildComponent(envSourceABtn);
     addChildComponent(envSourceBBtn);
 
@@ -437,7 +438,8 @@ void SpectrogramPanel::showViewMenu()
             case Mode::Residual: return juce::String("Residual");
             case Mode::Isometric: return juce::String("Iso 3D");
             case Mode::IsometricResidual: return juce::String("Iso 3D Residual");
-            case Mode::IsometricEnvelope: return juce::String("Iso 3D Envelope");
+            case Mode::IsometricEnvelope:    return juce::String("Iso 3D Envelope");
+            case Mode::IsometricEnvelopeRDC: return juce::String("Iso 3D Env (RDC)");
         }
         return juce::String("Trace + Residual");
     };
@@ -460,6 +462,8 @@ void SpectrogramPanel::showViewMenu()
                     traceSource == source && mode == Mode::IsometricResidual);
         sub.addItem(baseId + 6, modeName(Mode::IsometricEnvelope), enabled,
                     traceSource == source && mode == Mode::IsometricEnvelope);
+        sub.addItem(baseId + 7, modeName(Mode::IsometricEnvelopeRDC), enabled,
+                    traceSource == source && mode == Mode::IsometricEnvelopeRDC);
         root.addSubMenu(label, sub, enabled);
     };
 
@@ -506,6 +510,8 @@ void SpectrogramPanel::showViewMenu()
                                nextMode = Mode::IsometricResidual;
                            else if (modeOffset == 6)
                                nextMode = Mode::IsometricEnvelope;
+                           else if (modeOffset == 7)
+                               nextMode = Mode::IsometricEnvelopeRDC;
                            setView(nextSource, nextMode);
                        });
 }
@@ -529,6 +535,8 @@ void SpectrogramPanel::updateViewMenuButton()
         modeName = "Iso 3D Residual";
     else if (mode == Mode::IsometricEnvelope)
         modeName = "Iso 3D Envelope";
+    else if (mode == Mode::IsometricEnvelopeRDC)
+        modeName = "Iso 3D Env (RDC)";
 
     viewMenuButton.setButtonText(sourceName + " / " + modeName);
 }
@@ -539,18 +547,31 @@ void SpectrogramPanel::timerCallback()
     if (processor.isWorkerBusy())
         return;
 
+    // Never clobber an in-progress onset edit with a rebuilt snapshot.
+    if (draggingOnsetIndex >= 0)
+        return;
+
     const int rev = processor.getModelRevision();
     const uint64_t shapeRev = processor.getDisplayShapeRevision();
+    const uint64_t overlayRev = processor.getSmearnovOverlayRevision();
     if (rev != lastModelRevision)
     {
         lastModelRevision = rev;
         lastDisplayShapeRevision = shapeRev;
+        lastSmearnovOverlayRevision = overlayRev;
         rebuildTraceSnapshot();
         repaintDisplay();
     }
     else if (shapeRev != lastDisplayShapeRevision)
     {
         lastDisplayShapeRevision = shapeRev;
+        lastSmearnovOverlayRevision = overlayRev;
+        rebuildTraceSnapshot(true);
+        repaintDisplay();
+    }
+    else if (overlayRev != lastSmearnovOverlayRevision)
+    {
+        lastSmearnovOverlayRevision = overlayRev;
         rebuildTraceSnapshot(true);
         repaintDisplay();
     }
@@ -636,6 +657,7 @@ void SpectrogramPanel::rebuildTraceSnapshot(bool preserveDisplayReference)
                                          displayReference);
     traceSnapshot = std::move(next);
     lastDisplayShapeRevision = traceSnapshot.displayShapeRevision;
+    lastSmearnovOverlayRevision = processor.getSmearnovOverlayRevision();
 
     if (ampDisplayReferencePeak <= 0.0)
         ampDisplayReferencePeak = traceSnapshot.ampDisplayReferencePeak;
@@ -681,7 +703,7 @@ void SpectrogramPanel::rebuildTraceSnapshot(bool preserveDisplayReference)
     updateSelectionLabel();
 
     // Build the complementary source snapshot for the envelope overlay.
-    if (mode == Mode::IsometricEnvelope)
+    if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC)
     {
         AtsTraceSource altSource = AtsTraceSource::SourceA;
         if (traceSource == AtsTraceSource::SourceA)
@@ -784,9 +806,12 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
             paintIsometricResidual(g, plot);
         else if (mode == Mode::IsometricEnvelope)
             paintIsometricEnvelope(g, plot);
+        else if (mode == Mode::IsometricEnvelopeRDC)
+            paintIsometricEnvelopeRDC(g, plot);
         else if (mode != Mode::Residual)
             paintPartialTraces(g, plot);
 
+        paintSmearnovOverlay(g, plot);
         paintSelectionOverlay(g, screen, plot);
     }
 
@@ -1147,9 +1172,9 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
 
 // ---------------------------------------------------------------------------
 // Envelope surface helper — draws a smoothed spectral envelope waterfall from
-// the partial amplitudes in `snap`.  Each time slice is sampled at N columns,
-// the amplitudes are sorted by frequency and run-max-smoothed, then rendered
-// as a filled ribbon at its iso depth position.
+// the partial amplitudes in `snap`.  Each time slice interpolates both
+// freqNorm and ampNorm at the exact timeNorm, then builds a smooth envelope
+// via Gaussian kernel regression — matching the Python Bark-scale RDC output.
 void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
                                             juce::Rectangle<float> plot,
                                             const AtsSpectralTraceSnapshot& snap,
@@ -1161,20 +1186,31 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
 
     const auto timeRange = visibleTimeRange();
     const auto freqRange = visibleFreqRange();
-    constexpr int kSlices = 40;   // time columns
-    constexpr int kFreqBins = 64; // freq resolution per slice
+    constexpr int   kSlices   = 40;    // time columns
+    constexpr int   kFreqBins = 128;   // freq resolution per slice
+    constexpr float kSigma    = 6.5f;  // wider Gaussian → smoother envelope
+    constexpr int   kTaperBins = 14;   // wider fade-in/out → no steep box edges
 
-    // For each time slice, collect the peak amplitude in each freq bin.
+
+    // Pre-build all slice paths so we can do clearance + colour in two passes.
+    struct SliceData { juce::Path path; float depthAlpha; };
+    std::vector<SliceData> slices;
+    slices.reserve(static_cast<std::size_t>(kSlices));
+
     for (int si = 0; si < kSlices; ++si)
     {
-        const float timeNorm = timeRange.getStart() + timeRange.getLength() * (float) si / (float) (kSlices - 1);
+        const float timeNorm = timeRange.getStart()
+                               + timeRange.getLength() * (float) si / (float) (kSlices - 1);
 
-        // Fill freq-bin array by sampling each partial trace at this timeNorm.
-        std::vector<float> bins(static_cast<std::size_t>(kFreqBins), 0.0f);
+        // Collect (visFreqNorm, ampNorm) for every active partial at this time.
+        std::vector<std::pair<float, float>> samples;
+        samples.reserve(snap.partials.size());
+
         for (const auto& trace : snap.partials)
         {
-            // Interpolate ampNorm at timeNorm.
-            float ampAtTime = 0.0f;
+            float ampAtTime  = 0.0f;
+            float freqAtTime = -1.0f;
+
             for (std::size_t pi = 1; pi < trace.points.size(); ++pi)
             {
                 const auto& prev = trace.points[pi - 1];
@@ -1186,62 +1222,93 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
                 if (!prev.active || !cur.active)
                     continue;
                 const float span = cur.timeNorm - prev.timeNorm;
-                const float alpha = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
-                ampAtTime = prev.ampNorm + alpha * (cur.ampNorm - prev.ampNorm);
+                const float t = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
+                ampAtTime  = prev.ampNorm  + t * (cur.ampNorm  - prev.ampNorm);
+                freqAtTime = prev.freqNorm + t * (cur.freqNorm - prev.freqNorm);
                 break;
             }
-            if (ampAtTime <= 0.0f)
+
+            if (ampAtTime <= 0.0f || freqAtTime < 0.0f)
                 continue;
 
-            // Place into frequency bin.
-            const float fNorm = trace.points.empty() ? 0.5f : trace.points.front().freqNorm;
-            const float fVis = (fNorm - freqRange.getStart()) / juce::jmax(1.0e-6f, freqRange.getLength());
-            const int bin = juce::jlimit(0, kFreqBins - 1, (int) (fVis * kFreqBins));
-            bins[static_cast<std::size_t>(bin)] = juce::jmax(bins[static_cast<std::size_t>(bin)], ampAtTime);
+            const float fVis = (freqAtTime - freqRange.getStart())
+                               / juce::jmax(1.0e-6f, freqRange.getLength());
+            if (fVis >= -0.1f && fVis <= 1.1f)
+                samples.push_back({ fVis, ampAtTime });
         }
 
-        // Apply a small running-max smoothing window (width = 3 bins).
-        std::vector<float> smoothed(static_cast<std::size_t>(kFreqBins), 0.0f);
-        for (int b = 0; b < kFreqBins; ++b)
-        {
-            float peak = 0.0f;
-            for (int w = juce::jmax(0, b - 2); w <= juce::jmin(kFreqBins - 1, b + 2); ++w)
-                peak = juce::jmax(peak, bins[static_cast<std::size_t>(w)]);
-            smoothed[static_cast<std::size_t>(b)] = peak;
-        }
-
-        // Build the envelope curve + floor ribbon for this time slice.
-        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
-        const juce::Colour lineCol = colour.withAlpha(depthAlpha * alphaScale);
-        const juce::Colour fillCol = colour.withAlpha(depthAlpha * alphaScale * 0.18f);
-
-        juce::Path topPath;
-        bool started = false;
-        for (int b = 0; b < kFreqBins; ++b)
-        {
-            const float freqN = freqRange.getStart() + freqRange.getLength() * (float) b / (float) (kFreqBins - 1);
-            const float ampN  = smoothed[static_cast<std::size_t>(b)];
-            const auto pt = positionForIsoCoords(timeNorm, freqN, ampN, plot);
-            if (!started) { topPath.startNewSubPath(pt); started = true; }
-            else          { topPath.lineTo(pt); }
-        }
-        if (!started)
+        if (samples.empty())
             continue;
 
-        // Filled ribbon: top path + floor back.
-        juce::Path ribbon = topPath;
-        for (int b = kFreqBins - 1; b >= 0; --b)
+        // Gaussian kernel regression — wider sigma fills harmonic gaps smoothly.
+        std::vector<float> sumW (static_cast<std::size_t>(kFreqBins), 0.0f);
+        std::vector<float> sumWA(static_cast<std::size_t>(kFreqBins), 0.0f);
+
+        for (const auto& [fVis, amp] : samples)
         {
-            const float freqN = freqRange.getStart() + freqRange.getLength() * (float) b / (float) (kFreqBins - 1);
-            ribbon.lineTo(positionForIsoCoords(timeNorm, freqN, 0.0f, plot));
+            const float binF = juce::jlimit(-0.5f, kFreqBins - 0.5f, fVis * kFreqBins);
+            const int lo = juce::jmax(0, (int) (binF - 4.0f * kSigma));
+            const int hi = juce::jmin(kFreqBins - 1, (int) (binF + 4.0f * kSigma) + 1);
+            for (int b = lo; b <= hi; ++b)
+            {
+                const float dist = (float) b - binF;
+                const float w = std::exp(-0.5f * dist * dist / (kSigma * kSigma));
+                sumW [static_cast<std::size_t>(b)] += w;
+                sumWA[static_cast<std::size_t>(b)] += w * amp;
+            }
         }
-        ribbon.closeSubPath();
 
-        g.setColour(fillCol);
-        g.fillPath(ribbon);
+        // Cosine taper over wider edge region → gentler slopes, no box silhouette.
+        auto getAmpN = [&](int b) -> float {
+            if (sumW[static_cast<std::size_t>(b)] <= 1.0e-6f)
+                return 0.0f;
+            float val = sumWA[static_cast<std::size_t>(b)] / sumW[static_cast<std::size_t>(b)];
+            const int edgeDist = std::min(b, kFreqBins - 1 - b);
+            if (edgeDist < kTaperBins)
+            {
+                const float t = (float) edgeDist / (float) kTaperBins;
+                val *= 0.5f - 0.5f * std::cos(juce::MathConstants<float>::pi * t);
+            }
+            return val;
+        };
 
+        // Draw the full frequency span — the cosine taper already decays the
+        // edges to exactly 0, so there is no box-outline silhouette.
+        juce::Path topPath;
+        for (int b = 0; b < kFreqBins; ++b)
+        {
+            const float ampN  = getAmpN(b);
+            const float freqN = freqRange.getStart()
+                                + freqRange.getLength() * (float) b / (float) (kFreqBins - 1);
+            const auto pt = positionForIsoCoords(timeNorm, freqN, ampN, plot);
+            if (b == 0)
+                topPath.startNewSubPath(pt);
+            else
+                topPath.lineTo(pt);
+        }
+
+        if (topPath.isEmpty())
+            continue;
+
+        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
+        slices.push_back({ std::move(topPath), depthAlpha });
+    }
+
+    // Painter's algorithm: two passes back-to-front.
+    // Pass 1 — thick near-black clearance stroke so front slices occlude back slices.
+    const juce::Colour clearCol = juce::Colour(0xff050a0e);
+    for (const auto& s : slices)
+        g.setColour(clearCol.withAlpha(s.depthAlpha * 0.92f)),
+        g.strokePath(s.path, juce::PathStrokeType(4.5f));
+
+    // Pass 2 — glow + crisp coloured line.
+    for (const auto& s : slices)
+    {
+        const juce::Colour lineCol = colour.withAlpha(s.depthAlpha * alphaScale);
+        g.setColour(lineCol.withAlpha(lineCol.getFloatAlpha() * 0.25f));
+        g.strokePath(s.path, juce::PathStrokeType(3.5f));
         g.setColour(lineCol);
-        g.strokePath(topPath, juce::PathStrokeType(1.4f));
+        g.strokePath(s.path, juce::PathStrokeType(1.5f));
     }
 }
 
@@ -1253,6 +1320,264 @@ void SpectrogramPanel::paintIsometricEnvelope(juce::Graphics& g, juce::Rectangle
 
     if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
         paintEnvelopeSurface(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Self-contained Bark-scale Regularized Discrete Cepstrum (RDC) envelope math.
+// Mirrors the Python visualize_envelopes.py rdc_fit_and_eval implementation.
+namespace
+{
+namespace rdcDisplay
+{
+// Bark-scale normalization to [0,1].
+static float barkNorm(float hz, float minHz, float maxHz)
+{
+    auto bark = [](float f) { return 6.0f * std::asinh(juce::jmax(1.0f, f) / 600.0f); };
+    const float bMin = bark(juce::jmax(1.0f, minHz));
+    const float bMax = bark(juce::jmax(1.0f, maxHz));
+    return juce::jlimit(0.0f, 1.0f, (bark(juce::jmax(1.0f, hz)) - bMin)
+                                     / juce::jmax(1.0e-6f, bMax - bMin));
+}
+
+// Cosine basis row: [1, 2cos(π·pos), 2cos(2π·pos), ..., 2cos(order·π·pos)].
+static void buildBasisRow(float pos, int order, float* row)
+{
+    row[0] = 1.0f;
+    const float theta = juce::MathConstants<float>::pi * juce::jlimit(0.0f, 1.0f, pos);
+    for (int k = 1; k <= order; ++k)
+        row[k] = 2.0f * std::cos((float) k * theta);
+}
+
+// Gaussian elimination with partial pivoting for a small n×n system.
+// A (n*n, row-major) and b (n) are modified in-place; solution written to x.
+static bool solveGaussian(int n, float* A, float* b, float* x)
+{
+    for (int col = 0; col < n; ++col)
+    {
+        int pivotRow = col;
+        float pivotAbs = std::abs(A[col * n + col]);
+        for (int row = col + 1; row < n; ++row)
+        {
+            const float v = std::abs(A[row * n + col]);
+            if (v > pivotAbs) { pivotAbs = v; pivotRow = row; }
+        }
+        if (pivotAbs < 1.0e-9f) return false;
+        if (pivotRow != col)
+        {
+            for (int k = 0; k < n; ++k) std::swap(A[col * n + k], A[pivotRow * n + k]);
+            std::swap(b[col], b[pivotRow]);
+        }
+        const float diag = A[col * n + col];
+        for (int row = col + 1; row < n; ++row)
+        {
+            const float f = A[row * n + col] / diag;
+            for (int k = col; k < n; ++k) A[row * n + k] -= f * A[col * n + k];
+            b[row] -= f * b[col];
+        }
+    }
+    for (int row = n - 1; row >= 0; --row)
+    {
+        x[row] = b[row];
+        for (int k = row + 1; k < n; ++k) x[row] -= A[row * n + k] * x[k];
+        x[row] /= A[row * n + row];
+    }
+    return true;
+}
+
+// Fit RDC envelope to weighted (barkPos, dB) points.  Returns false on failure.
+// order+1 ≤ 16. coeffs[] receives order+1 values.
+static bool fitRDC(const std::vector<std::pair<float, float>>& pts,
+                   const std::vector<float>& weights,
+                   int order, float reg, float* coeffs)
+{
+    const int n = order + 1;
+    if (n > 16 || (int) pts.size() < 2) return false;
+
+    constexpr int kMaxN = 16;
+    float A[kMaxN * kMaxN] = {};
+    float rhs[kMaxN]       = {};
+    float row[kMaxN];
+
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        buildBasisRow(pts[i].first, order, row);
+        const float w = weights[i];
+        const float y = pts[i].second;
+        for (int r = 0; r < n; ++r)
+        {
+            rhs[r] += w * row[r] * y;
+            for (int c = 0; c < n; ++c)
+                A[r * n + c] += w * row[r] * row[c];
+        }
+    }
+    // Second-derivative Tikhonov penalty: diag [0, 1^4, 2^4, 3^4, ...]
+    for (int k = 1; k < n; ++k)
+        A[k * n + k] += reg * (float) (k * k * k * k);
+
+    return solveGaussian(n, A, rhs, coeffs);
+}
+
+// Evaluate fitted RDC envelope at barkPos.
+static float evalRDC(float barkPos, const float* coeffs, int order)
+{
+    constexpr int kMaxN = 16;
+    float row[kMaxN];
+    buildBasisRow(barkPos, order, row);
+    float val = 0.0f;
+    for (int k = 0; k <= order; ++k)
+        val += coeffs[k] * row[k];
+    return val;
+}
+} // namespace rdcDisplay
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+void SpectrogramPanel::paintIsometricEnvelopeRDC(juce::Graphics& g, juce::Rectangle<float> plot)
+{
+    if (envSourceBBtn.getToggleState() && !secondarySnapshot.partials.empty())
+        paintEnvelopeSurfaceRDC(g, plot, secondarySnapshot, juce::Colour(0xffd08030), 0.85f);
+    if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
+        paintEnvelopeSurfaceRDC(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// RDC envelope waterfall.  For each time slice, fits a Bark-scale regularised
+// cepstrum to the partial amplitudes (matching the Python rdc_fit_and_eval
+// implementation), then evaluates on a dense log-Hz grid for display.
+void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
+                                               juce::Rectangle<float> plot,
+                                               const AtsSpectralTraceSnapshot& snap,
+                                               juce::Colour colour,
+                                               float alphaScale) const
+{
+    if (snap.partials.empty())
+        return;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    constexpr int   kSlices    = 40;
+    constexpr int   kGridSize  = 128;
+    constexpr int   kOrder     = 10;       // cosine series order
+    constexpr float kReg       = 8.0e-3f;  // second-derivative Tikhonov lambda
+    constexpr float kMinDb     = -120.0f;
+    constexpr float kDbRange   = 120.0f;
+    constexpr int   kTaperBins = 14;       // wider taper → gentler edges, no box silhouette
+
+
+    // Model frequency range — used for log↔Hz and Bark normalisation.
+    const float minHz    = (float) juce::jmax(1.0, snap.minFrequencyHz);
+    const float maxHz    = (float) juce::jmax((double) minHz * 1.1, snap.maxFrequencyHz);
+    const float logRange = std::log(maxHz / minHz);
+
+    // freqNorm (log-scaled 0-1) → Hz.
+    auto freqNormToHz = [&](float fn) -> float {
+        return minHz * std::exp(fn * logRange);
+    };
+
+    // Pre-build all slice paths for painter's algorithm (back-to-front two-pass draw).
+    struct SliceData { juce::Path path; float depthAlpha; };
+    std::vector<SliceData> slices;
+    slices.reserve(static_cast<std::size_t>(kSlices));
+
+    for (int si = 0; si < kSlices; ++si)
+    {
+        const float timeNorm = timeRange.getStart()
+                               + timeRange.getLength() * (float) si / (float) (kSlices - 1);
+
+        // Collect (barkPos, dB, weight) from all active partials at this time.
+        std::vector<std::pair<float, float>> fitPts;
+        std::vector<float> fitWeights;
+        fitPts.reserve(snap.partials.size());
+        fitWeights.reserve(snap.partials.size());
+
+        for (const auto& trace : snap.partials)
+        {
+            float ampAtTime  = 0.0f;
+            float freqAtTime = -1.0f;
+
+            for (std::size_t pi = 1; pi < trace.points.size(); ++pi)
+            {
+                const auto& prev = trace.points[pi - 1];
+                const auto& cur  = trace.points[pi];
+                if (cur.timeNorm < timeNorm)  continue;
+                if (prev.timeNorm > timeNorm) break;
+                if (!prev.active || !cur.active) continue;
+                const float span = cur.timeNorm - prev.timeNorm;
+                const float t = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
+                ampAtTime  = prev.ampNorm  + t * (cur.ampNorm  - prev.ampNorm);
+                freqAtTime = prev.freqNorm + t * (cur.freqNorm - prev.freqNorm);
+                break;
+            }
+
+            if (ampAtTime <= 0.0f || freqAtTime < 0.0f)
+                continue;
+
+            const float hz      = freqNormToHz(freqAtTime);
+            const float barkPos = rdcDisplay::barkNorm(hz, minHz, maxHz);
+            const float dB      = kMinDb + ampAtTime * kDbRange;
+            fitPts.push_back({ barkPos, dB });
+            fitWeights.push_back(juce::jmax(1.0e-4f, ampAtTime));
+        }
+
+        if ((int) fitPts.size() < 3)
+            continue;
+
+        // Fit RDC — reduce order for sparse frames.
+        const int effOrder = std::min(kOrder, std::max(1, (int) fitPts.size() - 1));
+        float coeffs[16] = {};
+        if (!rdcDisplay::fitRDC(fitPts, fitWeights, effOrder, kReg, coeffs))
+            continue;
+
+        // Evaluate RDC on a dense grid spanning the visible frequency range.
+        // Draw the full span — the cosine taper decays edges to 0, avoiding box silhouettes.
+        juce::Path topPath;
+        for (int b = 0; b < kGridSize; ++b)
+        {
+            const float freqN   = freqRange.getStart()
+                                  + freqRange.getLength() * (float) b / (float) (kGridSize - 1);
+            const float hz      = freqNormToHz(freqN);
+            const float barkPos = rdcDisplay::barkNorm(hz, minHz, maxHz);
+            const float rawDb   = rdcDisplay::evalRDC(barkPos, coeffs, effOrder);
+            float ampN = juce::jlimit(0.0f, 1.0f, (rawDb - kMinDb) / kDbRange);
+
+            // Wider cosine edge taper → smooth fade at frequency boundaries.
+            const int edgeDist = std::min(b, kGridSize - 1 - b);
+            if (edgeDist < kTaperBins)
+            {
+                const float t = (float) edgeDist / (float) kTaperBins;
+                ampN *= 0.5f - 0.5f * std::cos(juce::MathConstants<float>::pi * t);
+            }
+
+            const auto pt = positionForIsoCoords(timeNorm, freqN, ampN, plot);
+            if (b == 0)
+                topPath.startNewSubPath(pt);
+            else
+                topPath.lineTo(pt);
+        }
+
+        if (topPath.isEmpty())
+            continue;
+
+        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
+        slices.push_back({ std::move(topPath), depthAlpha });
+    }
+
+    // Painter's algorithm: two passes back-to-front.
+    // Pass 1 — thick near-black clearance stroke so front slices occlude back slices.
+    const juce::Colour clearCol = juce::Colour(0xff050a0e);
+    for (const auto& s : slices)
+        g.setColour(clearCol.withAlpha(s.depthAlpha * 0.92f)),
+        g.strokePath(s.path, juce::PathStrokeType(4.5f));
+
+    // Pass 2 — glow + crisp coloured line.
+    for (const auto& s : slices)
+    {
+        const juce::Colour lineCol = colour.withAlpha(s.depthAlpha * alphaScale);
+        g.setColour(lineCol.withAlpha(lineCol.getFloatAlpha() * 0.25f));
+        g.strokePath(s.path, juce::PathStrokeType(3.5f));
+        g.setColour(lineCol);
+        g.strokePath(s.path, juce::PathStrokeType(1.5f));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1608,6 +1933,209 @@ void SpectrogramPanel::paintIsometricPlaybackPlayhead(juce::Graphics& g,
     g.drawLine(throughLine, 2.2f);
 }
 
+void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<float> plot) const
+{
+    if (traceSnapshot.frameCount <= 1 || isIsometricDisplayMode(mode))
+        return;
+
+    if (traceSnapshot.onsets.empty() && traceSnapshot.smearnovDetectionCurve.empty())
+        return;
+
+    g.saveState();
+    g.reduceClipRegion(plot.toNearestInt());
+
+    const auto spanColour = isResidualDisplayMode(mode) ? juce::Colour(0xff74fff0)
+                                                        : juce::Colour(0xfffff3a0);
+    const auto markerColour = isResidualDisplayMode(mode) ? juce::Colour(0xffbaffea)
+                                                          : juce::Colour(0xfffff3a0);
+
+    double maxStrength = 0.0;
+    for (const auto& onset : traceSnapshot.onsets)
+    {
+        if (std::isfinite(onset.strength) && onset.strength > 0.0)
+            maxStrength = std::max(maxStrength, onset.strength);
+    }
+
+    auto strengthNormFor = [maxStrength](const ats::AtsOnset& onset) {
+        if (maxStrength <= 0.0 || !std::isfinite(onset.strength))
+            return 0.65f;
+        return juce::jlimit(0.15f, 1.0f, (float) (onset.strength / maxStrength));
+    };
+
+    const int activeOnset = draggingOnsetIndex >= 0 ? draggingOnsetIndex : hoveredOnsetIndex;
+    const OnsetHandle activeHandle = draggingOnsetIndex >= 0 ? draggingOnsetHandle : hoveredOnsetHandle;
+
+    for (int onsetIdx = 0; onsetIdx < (int) traceSnapshot.onsets.size(); ++onsetIdx)
+    {
+        const auto& onset = traceSnapshot.onsets[(size_t) onsetIdx];
+        const int firstFrame = juce::jlimit(0,
+                                            traceSnapshot.frameCount - 1,
+                                            std::min(onset.preFrame, onset.peakFrame));
+        const int lastFrame = juce::jlimit(0,
+                                           traceSnapshot.frameCount - 1,
+                                           std::max(onset.preFrame, onset.peakFrame));
+        const float x0 = xForFrame(firstFrame, plot);
+        const float x1 = xForFrame(lastFrame, plot);
+        const float left = std::min(x0, x1);
+        const float right = std::max(x0, x1) + 1.0f;
+        if (right < plot.getX() || left > plot.getRight())
+            continue;
+
+        const float strength = strengthNormFor(onset);
+        const bool onsetActive = onsetIdx == activeOnset;
+        const auto span = juce::Rectangle<float>::leftTopRightBottom(juce::jmax(plot.getX(), left),
+                                                                     plot.getY(),
+                                                                     juce::jmin(plot.getRight(), right),
+                                                                     plot.getBottom());
+        g.setColour(spanColour.withAlpha((onsetActive ? 0.090f : 0.035f) + 0.070f * strength));
+        g.fillRect(span);
+
+        const bool leftActive = onsetActive && activeHandle == OnsetHandle::LeftEdge;
+        const bool rightActive = onsetActive && activeHandle == OnsetHandle::RightEdge;
+        g.setColour(spanColour.withAlpha((leftActive ? 0.85f : 0.13f) + 0.10f * strength));
+        g.drawVerticalLine(juce::roundToInt(left), plot.getY(), plot.getBottom());
+        g.setColour(spanColour.withAlpha((rightActive ? 0.85f : 0.13f) + 0.10f * strength));
+        g.drawVerticalLine(juce::roundToInt(right), plot.getY(), plot.getBottom());
+    }
+
+    paintSmearnovDetectionCurves(g, plot);
+
+    for (int onsetIdx = 0; onsetIdx < (int) traceSnapshot.onsets.size(); ++onsetIdx)
+    {
+        const auto& onset = traceSnapshot.onsets[(size_t) onsetIdx];
+        const int frame = juce::jlimit(0, traceSnapshot.frameCount - 1, onset.frame);
+        const float x = xForFrame(frame, plot);
+        if (x < plot.getX() - 2.0f || x > plot.getRight() + 2.0f)
+            continue;
+
+        const float strength = strengthNormFor(onset);
+        const bool markerActive = onsetIdx == activeOnset && activeHandle == OnsetHandle::Marker;
+        const float glow = markerActive ? 0.30f : 0.0f;
+        const auto line = juce::Line<float>({ x, plot.getY() }, { x, plot.getBottom() });
+        g.setColour(markerColour.withAlpha(0.09f + 0.10f * strength + glow));
+        g.drawLine(line, markerActive ? 9.0f : 7.0f);
+        g.setColour(markerColour.withAlpha(0.24f + 0.18f * strength + glow));
+        g.drawLine(line, 2.4f);
+        g.setColour(markerColour.withAlpha(juce::jmin(1.0f, 0.78f + 0.20f * strength + glow)));
+        g.drawLine(line, markerActive ? 1.6f : 1.05f);
+
+        constexpr float headW = 7.0f;
+        constexpr float headH = 7.5f;
+        juce::Path topHead;
+        topHead.startNewSubPath(x - headW * 0.5f, plot.getY() + 1.0f);
+        topHead.lineTo(x + headW * 0.5f, plot.getY() + 1.0f);
+        topHead.lineTo(x, plot.getY() + headH);
+        topHead.closeSubPath();
+
+        juce::Path bottomHead;
+        bottomHead.startNewSubPath(x - headW * 0.5f, plot.getBottom() - 1.0f);
+        bottomHead.lineTo(x + headW * 0.5f, plot.getBottom() - 1.0f);
+        bottomHead.lineTo(x, plot.getBottom() - headH);
+        bottomHead.closeSubPath();
+
+        g.setColour(markerColour.withAlpha(0.58f + 0.25f * strength));
+        g.fillPath(topHead);
+        g.fillPath(bottomHead);
+    }
+
+    g.restoreState();
+}
+
+void SpectrogramPanel::paintSmearnovDetectionCurves(juce::Graphics& g, juce::Rectangle<float> plot) const
+{
+    const auto& combined = traceSnapshot.smearnovDetectionCurve;
+    const auto& threshold = traceSnapshot.smearnovThresholdCurve;
+    if (combined.size() < 2 && threshold.size() < 2)
+        return;
+
+    const float curveHeight = juce::jlimit(22.0f, 54.0f, plot.getHeight() * 0.18f);
+    const auto curveArea = juce::Rectangle<float>(plot.getX() + 2.0f,
+                                                  plot.getBottom() - curveHeight - 3.0f,
+                                                  juce::jmax(1.0f, plot.getWidth() - 4.0f),
+                                                  curveHeight);
+    if (curveArea.getWidth() < 2.0f || curveArea.getHeight() < 2.0f)
+        return;
+
+    double maxValue = 0.0;
+    auto inspect = [&maxValue](const std::vector<double>& values) {
+        for (const double value : values)
+        {
+            if (std::isfinite(value) && value > maxValue)
+                maxValue = value;
+        }
+    };
+    inspect(combined);
+    inspect(threshold);
+    if (maxValue <= 0.0)
+        return;
+
+    g.setColour(juce::Colour(0x26000000));
+    g.fillRoundedRectangle(curveArea.expanded(2.0f, 1.0f), 3.0f);
+
+    const auto timeRange = visibleTimeRange();
+    const float timeSpan = juce::jmax(1.0e-6f, timeRange.getLength());
+    auto pointsFor = [&](const std::vector<double>& values) {
+        std::vector<juce::Point<float>> points;
+        const int count = (int) values.size();
+        if (count < 2)
+            return points;
+
+        const int step = juce::jmax(1, count / 900);
+        points.reserve((size_t) (count / step + 2));
+        auto append = [&](int i) {
+            const double value = values[(size_t) i];
+            if (!std::isfinite(value))
+                return;
+
+            const float timeNorm = (float) i / (float) (count - 1);
+            const float xNorm = (timeNorm - timeRange.getStart()) / timeSpan;
+            if (xNorm < -0.01f)
+                return;
+            if (xNorm > 1.01f)
+                return;
+
+            const float yNorm = juce::jlimit(0.0f, 1.0f, (float) (value / maxValue));
+            points.push_back({ plot.getX() + plot.getWidth() * xNorm,
+                               curveArea.getBottom() - curveArea.getHeight() * yNorm });
+        };
+
+        for (int i = 0; i < count; i += step)
+            append(i);
+        if ((count - 1) % step != 0)
+            append(count - 1);
+        return points;
+    };
+
+    auto drawPoints = [&g](const std::vector<juce::Point<float>>& points,
+                           juce::Colour colour,
+                           float thickness,
+                           bool dashed) {
+        if (points.size() < 2)
+            return;
+
+        if (!dashed)
+        {
+            juce::Path path;
+            path.startNewSubPath(points.front());
+            for (size_t i = 1; i < points.size(); ++i)
+                path.lineTo(points[i]);
+            g.setColour(colour);
+            g.strokePath(path, juce::PathStrokeType(thickness));
+            return;
+        }
+
+        g.setColour(colour);
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            if (((int) i / 3) % 2 == 0)
+                g.drawLine({ points[i - 1], points[i] }, thickness);
+        }
+    };
+
+    drawPoints(pointsFor(threshold), juce::Colour(0xfffff3a0).withAlpha(0.42f), 1.05f, true);
+    drawPoints(pointsFor(combined), juce::Colour(0xff78fff1).withAlpha(0.58f), 1.25f, false);
+}
+
 juce::Rectangle<int> SpectrogramPanel::playheadPaintBounds(juce::Rectangle<float> plot,
                                                            float playheadNorm) const
 {
@@ -1671,7 +2199,7 @@ void SpectrogramPanel::resized()
 {
     auto r = getLocalBounds().reduced(5);
     const bool residualUi = isResidualDisplayMode(mode);
-    const bool envelopeUi = (mode == Mode::IsometricEnvelope);
+    const bool envelopeUi = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
     auto header = r.removeFromTop(residualUi ? 50 : 26);
     auto headerRow1 = header.removeFromTop(26);
 
@@ -1850,6 +2378,122 @@ void SpectrogramPanel::scrollBarMoved(juce::ScrollBar* scrollBarThatHasMoved, do
     repaintDisplay();
 }
 
+bool SpectrogramPanel::smearnovOverlayInteractive() const
+{
+    return !isIsometricDisplayMode(mode)
+        && traceSnapshot.frameCount > 1
+        && !traceSnapshot.onsets.empty();
+}
+
+int SpectrogramPanel::onsetHandleAtPoint(juce::Point<float> pos,
+                                         juce::Rectangle<float> plot,
+                                         OnsetHandle& handleOut) const
+{
+    handleOut = OnsetHandle::None;
+    if (!smearnovOverlayInteractive() || !plot.expanded(2.0f).contains(pos))
+        return -1;
+
+    constexpr float edgeTol = 4.0f;
+    constexpr float markerTol = 5.0f;
+
+    int bestEdgeIndex = -1;
+    OnsetHandle bestEdgeHandle = OnsetHandle::None;
+    float bestEdgeDist = edgeTol;
+    int bestMarkerIndex = -1;
+    float bestMarkerDist = markerTol;
+
+    const int frameCount = traceSnapshot.frameCount;
+    for (int i = 0; i < (int) traceSnapshot.onsets.size(); ++i)
+    {
+        const auto& onset = traceSnapshot.onsets[(size_t) i];
+        const int firstFrame = juce::jlimit(0, frameCount - 1, std::min(onset.preFrame, onset.peakFrame));
+        const int lastFrame = juce::jlimit(0, frameCount - 1, std::max(onset.preFrame, onset.peakFrame));
+        const float leftX = xForFrame(firstFrame, plot);
+        const float rightX = xForFrame(lastFrame, plot) + 1.0f;
+        const float markerX = xForFrame(juce::jlimit(0, frameCount - 1, onset.frame), plot);
+
+        const float dl = std::abs(pos.x - leftX);
+        if (dl < bestEdgeDist)
+        {
+            bestEdgeDist = dl;
+            bestEdgeIndex = i;
+            bestEdgeHandle = OnsetHandle::LeftEdge;
+        }
+        const float dr = std::abs(pos.x - rightX);
+        if (dr < bestEdgeDist)
+        {
+            bestEdgeDist = dr;
+            bestEdgeIndex = i;
+            bestEdgeHandle = OnsetHandle::RightEdge;
+        }
+        const float dm = std::abs(pos.x - markerX);
+        if (dm < bestMarkerDist)
+        {
+            bestMarkerDist = dm;
+            bestMarkerIndex = i;
+        }
+    }
+
+    // Edges win over the marker so a window can be narrowed even when the
+    // marker sits close by.
+    if (bestEdgeIndex >= 0)
+    {
+        handleOut = bestEdgeHandle;
+        return bestEdgeIndex;
+    }
+    if (bestMarkerIndex >= 0)
+    {
+        handleOut = OnsetHandle::Marker;
+        return bestMarkerIndex;
+    }
+    return -1;
+}
+
+void SpectrogramPanel::updateDraggedOnset(juce::Point<float> pos)
+{
+    if (draggingOnsetIndex < 0 || draggingOnsetIndex >= (int) traceSnapshot.onsets.size())
+        return;
+
+    const auto plot = getPlotBounds();
+    const int frameCount = traceSnapshot.frameCount;
+    const int frame = juce::jlimit(0, frameCount - 1, frameForX(pos.x, plot));
+    auto& onset = traceSnapshot.onsets[(size_t) draggingOnsetIndex];
+
+    switch (draggingOnsetHandle)
+    {
+        case OnsetHandle::Marker:
+        {
+            // Translate the whole attack window with the onset marker.
+            const int delta = frame - onset.frame;
+            const int lo = std::min(onset.preFrame, std::min(onset.peakFrame, onset.frame));
+            const int hi = std::max(onset.preFrame, std::max(onset.peakFrame, onset.frame));
+            const int clampedDelta = juce::jlimit(-lo, frameCount - 1 - hi, delta);
+            onset.frame = juce::jlimit(0, frameCount - 1, onset.frame + clampedDelta);
+            onset.preFrame = juce::jlimit(0, frameCount - 1, onset.preFrame + clampedDelta);
+            onset.peakFrame = juce::jlimit(0, frameCount - 1, onset.peakFrame + clampedDelta);
+            break;
+        }
+        case OnsetHandle::LeftEdge:
+            onset.preFrame = juce::jlimit(0, onset.peakFrame, frame);
+            break;
+        case OnsetHandle::RightEdge:
+            onset.peakFrame = juce::jlimit(onset.preFrame, frameCount - 1, frame);
+            break;
+        case OnsetHandle::None:
+        default:
+            return;
+    }
+
+    repaintDisplay();
+}
+
+void SpectrogramPanel::commitEditedOnsets()
+{
+    processor.setSmearnovOnsetOverrides(traceSource, traceSnapshot.onsets);
+    lastSmearnovOverlayRevision = processor.getSmearnovOverlayRevision();
+    repaintDisplay();
+}
+
 void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
@@ -1866,6 +2510,22 @@ void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
         panTimeCenterStart = timeCenter;
         panFreqCenterStart = freqCenter;
         return;
+    }
+
+    // Smearnov onset/attack-window editing takes precedence over trace/residual
+    // selection when a handle is grabbed.
+    if (!e.mods.isAltDown() && !e.mods.isMiddleButtonDown())
+    {
+        OnsetHandle handle = OnsetHandle::None;
+        const int idx = onsetHandleAtPoint(e.position, plot, handle);
+        if (idx >= 0)
+        {
+            draggingOnsetIndex = idx;
+            draggingOnsetHandle = handle;
+            hoveredOnsetIndex = idx;
+            hoveredOnsetHandle = handle;
+            return;
+        }
     }
 
     if (isResidualDisplayMode(mode))
@@ -1965,6 +2625,12 @@ void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
 
 void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingOnsetIndex >= 0)
+    {
+        updateDraggedOnset(e.position);
+        return;
+    }
+
     if (panningView)
     {
         const auto plot = getPlotBounds();
@@ -2018,6 +2684,17 @@ void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
 
 void SpectrogramPanel::mouseUp(const juce::MouseEvent& e)
 {
+    if (draggingOnsetIndex >= 0)
+    {
+        commitEditedOnsets();
+        draggingOnsetIndex = -1;
+        draggingOnsetHandle = OnsetHandle::None;
+        panningView = false;
+        draggingLasso = false;
+        lassoRect = {};
+        return;
+    }
+
     if (drawingResidualEnvelope)
     {
         commitEnvelopeDraw();
@@ -2104,6 +2781,35 @@ void SpectrogramPanel::mouseUp(const juce::MouseEvent& e)
 
 void SpectrogramPanel::mouseMove(const juce::MouseEvent& e)
 {
+    if (smearnovOverlayInteractive())
+    {
+        const auto plot = getPlotBounds();
+        OnsetHandle handle = OnsetHandle::None;
+        const int idx = onsetHandleAtPoint(e.position, plot, handle);
+        if (idx >= 0)
+        {
+            if (idx != hoveredOnsetIndex || handle != hoveredOnsetHandle)
+            {
+                hoveredOnsetIndex = idx;
+                hoveredOnsetHandle = handle;
+                hoveredPartial = -1;
+                hoveredResidualBand = -1;
+                setMouseCursor(handle == OnsetHandle::Marker
+                                   ? juce::MouseCursor::DraggingHandCursor
+                                   : juce::MouseCursor::LeftRightResizeCursor);
+                repaintDisplay();
+            }
+            return;
+        }
+        if (hoveredOnsetIndex >= 0)
+        {
+            hoveredOnsetIndex = -1;
+            hoveredOnsetHandle = OnsetHandle::None;
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+            repaintDisplay();
+        }
+    }
+
     if (isResidualDisplayMode(mode))
     {
         const auto plot = getPlotBounds();
@@ -2134,6 +2840,23 @@ void SpectrogramPanel::mouseMove(const juce::MouseEvent& e)
 
 void SpectrogramPanel::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (smearnovOverlayInteractive())
+    {
+        const auto plot = getPlotBounds();
+        OnsetHandle handle = OnsetHandle::None;
+        const int idx = onsetHandleAtPoint(e.position, plot, handle);
+        if (idx >= 0 && idx < (int) traceSnapshot.onsets.size())
+        {
+            traceSnapshot.onsets.erase(traceSnapshot.onsets.begin() + idx);
+            hoveredOnsetIndex = -1;
+            hoveredOnsetHandle = OnsetHandle::None;
+            draggingOnsetIndex = -1;
+            draggingOnsetHandle = OnsetHandle::None;
+            commitEditedOnsets();
+            return;
+        }
+    }
+
     if (!isResidualDisplayMode(mode))
         return;
 
@@ -2166,11 +2889,12 @@ void SpectrogramPanel::mouseExit(const juce::MouseEvent&)
 {
     hoveredResidualBand = -1;
     hoveredResidualFrame = -1;
-    if (hoveredPartial >= 0)
-    {
-        hoveredPartial = -1;
+    bool needsRepaint = hoveredPartial >= 0 || hoveredOnsetIndex >= 0;
+    hoveredPartial = -1;
+    hoveredOnsetIndex = -1;
+    hoveredOnsetHandle = OnsetHandle::None;
+    if (needsRepaint)
         repaintDisplay();
-    }
 }
 
 void SpectrogramPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -2640,6 +3364,18 @@ juce::Point<float> SpectrogramPanel::positionForIsoCoords(float pointTimeNorm,
              origin.y + freqAxis.y * freqNorm + timeAxis.y * timeNorm + ampAxis.y * ampNorm };
 }
 
+float SpectrogramPanel::xForFrame(int frame, juce::Rectangle<float> plot) const
+{
+    if (traceSnapshot.frameCount <= 1)
+        return plot.getX();
+
+    const int clampedFrame = juce::jlimit(0, traceSnapshot.frameCount - 1, frame);
+    const float timeNorm = (float) clampedFrame / (float) (traceSnapshot.frameCount - 1);
+    const auto timeRange = visibleTimeRange();
+    const float xNorm = (timeNorm - timeRange.getStart()) / juce::jmax(1.0e-6f, timeRange.getLength());
+    return plot.getX() + plot.getWidth() * xNorm;
+}
+
 float SpectrogramPanel::timeNormFromScreenX(float x, juce::Rectangle<float> plot) const
 {
     const auto timeRange = visibleTimeRange();
@@ -2991,9 +3727,24 @@ void SpectrogramPanel::updateResidualToolbarVisibility()
         envelopeDrawPoints.clear();
     }
 
-    const bool envMode = (mode == Mode::IsometricEnvelope);
+    const bool envMode = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
     envSourceABtn.setVisible(envMode);
     envSourceBBtn.setVisible(envMode);
+}
+
+bool SpectrogramPanel::getSelectedFrameRange(int& firstFrame, int& lastFrame) const
+{
+    if (selectedResidualFirstFrame < 0 || selectedResidualLastFrame < 0
+        || traceSnapshot.frameCount <= 0)
+    {
+        firstFrame = -1;
+        lastFrame = -1;
+        return false;
+    }
+
+    firstFrame = getSelectionFirstFrame();
+    lastFrame = getSelectionLastFrame();
+    return true;
 }
 
 int SpectrogramPanel::getSelectionFirstFrame() const

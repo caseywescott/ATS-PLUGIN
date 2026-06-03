@@ -51,6 +51,23 @@ struct AtsOnset
     double strength = 0.0; // combined detection value D[f0]
 };
 
+enum class SmearnovTarget
+{
+    Partials,
+    Residual,
+    Both
+};
+
+/** Attack-smear transform settings (see docs/SMEARNOV_SPEC.md §3). */
+struct SmearnovParams
+{
+    double blurMs = 0.0;
+    double sharpenAmount = 0.0;
+    double exaggerateDb = 0.0;
+    double maxDb = 12.0;
+    SmearnovTarget targets = SmearnovTarget::Both;
+};
+
 /** Optional per-frame detection curves, for visualization and tests. */
 struct SmearnovDetectionFunctions
 {
@@ -66,5 +83,10 @@ struct SmearnovDetectionFunctions
 [[nodiscard]] std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
                                                  const SmearnovDetectParams& params,
                                                  SmearnovDetectionFunctions* functionsOut = nullptr);
+
+/** Reshape partial amplitudes and/or residual band energy inside onset attack windows. */
+[[nodiscard]] bool smearAttacks(ATS_SOUND* sound,
+                                const std::vector<AtsOnset>& onsets,
+                                const SmearnovParams& params);
 
 } // namespace ats
