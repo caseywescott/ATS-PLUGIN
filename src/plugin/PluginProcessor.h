@@ -498,6 +498,7 @@ public:
 
     juce::String getMathStatus() const;
     bool playCurrentModelPreview(juce::String& error);
+    bool playCurrentModelPreview(juce::String& error, bool liveSmear);
     void startPreviewPlayback();
     void stopPreviewPlayback();
     bool isPreviewPlaying() const { return previewPlaying.load(); }
@@ -514,6 +515,7 @@ public:
     bool playMorphPreview(juce::String& error);
     bool playMorphTimelinePreview(juce::String& error);
     bool playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error);
+    bool playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error);
     bool bounceMorphTimelineToFile(const juce::File& file, AtsSourceAuditionMode mode, juce::String& error);
     bool installPreparedMorphSnapshotForPlayback(const ats::MorphRenderSnapshot& snapshot,
                                                  double durationSeconds,
@@ -527,6 +529,7 @@ public:
     bool getMorphSourceSlotInfo(int slotIndex, AtsMorphSourceSlotInfo& out) const;
     bool setCurrentModelAsMorphSourceSlot(int slotIndex, juce::String& error);
     bool listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMode mode, juce::String& error);
+    bool listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMode mode, bool liveSmear, juce::String& error);
     bool listenMorphSourceSlot(int slotIndex, juce::String& error);
     std::vector<AtsMorphBandDiagnostic> buildMorphBandDiagnostics() const;
     void applyMorphQuickSnapshot(float amount);
@@ -552,9 +555,22 @@ private:
     void joinWorkers();
     void clearPreviewLayerCache();
     void markMorphSnapshotStale();
-    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error);
-    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error);
+    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false);
+    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false);
     void rebuildMorphCorrespondenceIfReady();
+
+    // --- Live (non-destructive) Smearnov preview (transport "Smear" toggle) ---
+    /** Hash of the current detect+smear params + effective scope + overlay revision; the
+     *  smeared-clone caches rebuild when it changes. */
+    [[nodiscard]] size_t computeSmearLiveHash() const;
+    /** Detect (or reuse override) + scope-filter + smearAttacks on `clone` in place.
+     *  Returns true if any attack window changed. Operates on the caller's private copy. */
+    bool applyLiveSmearToClone(AtsTraceSource source, ATS_SOUND* clone) const;
+    /** Borrowed pointer to the cached smeared clone for `source`, or nullptr when there is no
+     *  model or smearing changed nothing (caller then renders the unmodified source). Rebuilds
+     *  the cache lazily on source-revision / param-hash change. Renders are serialized
+     *  (isWorkerBusy / joinWorkers), so the borrowed pointer is valid for the caller's render. */
+    [[nodiscard]] const ATS_SOUND* getSmearedSound(AtsTraceSource source, juce::String& error);
 
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -661,6 +677,35 @@ private:
     std::array<bool, 3> smearnovOnsetOverrideActive { { false, false, false } };
     std::array<bool, 3> smearnovOnsetOverrideUserEdited { { false, false, false } };
     std::atomic<uint64_t> smearnovOverlayRevision { 0 };
+
+    // Live (non-destructive) smear caches. Guarded by smearedCacheLock. `sound` is nullptr
+    // when smearing changed nothing (so the caller falls back to the unmodified source).
+    struct SmearedSourceCache
+    {
+        ats::AtsSoundPtr sound;
+        uint64_t sourceRevision = 0;
+        size_t paramHash = 0;
+        bool valid = false;
+    };
+    // Cached correspondence for the live-smeared morph timeline (the heavy part flagged in the
+    // plan). Records the smeared-source geometry so repeated Timeline plays skip the rebuild.
+    struct SmearedTimelineCache
+    {
+        std::vector<ats::MorphCorrespondenceRecord> records;
+        uint64_t revA = 0;
+        uint64_t revB = 0;
+        size_t paramHash = 0;
+        int strategy = -1;
+        bool valid = false;
+    };
+    mutable juce::CriticalSection smearedCacheLock;
+    SmearedSourceCache smearedCurrent;
+    SmearedSourceCache smearedA;
+    SmearedSourceCache smearedB;
+    SmearedTimelineCache smearedTimeline;
+    /** Bumped by markMorphSnapshotStale whenever Source A/B state changes; keys the A/B and
+     *  timeline live-smear caches (coarse: any source change invalidates both slots). */
+    std::atomic<uint64_t> morphSourcesRevision { 0 };
 
     // Debounce for freq-shape resynth: avoid spawning a thread on every drag tick.
     std::atomic<bool> freqShapePendingResynth { false };

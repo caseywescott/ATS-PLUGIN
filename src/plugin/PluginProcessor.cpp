@@ -109,8 +109,9 @@ juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::Synth
         return out;
 
     out.setSize(1, nOut);
+    float* const dst = out.getWritePointer(0);
     for (int i = 0; i < nOut; ++i)
-        out.setSample(0, i, static_cast<float>(rawOut[i]));
+        dst[i] = static_cast<float>(rawOut[i]);
 
     std::free(rawOut);
     return out;
@@ -172,6 +173,31 @@ AtsResidualDiagnostics makeResidualDiagnostics(const ATS_SOUND* sound)
     return diagnostics;
 }
 
+// Correspondence-strategy dispatch shared by rebuildMorphCorrespondenceIfReady (which writes
+// member state) and the live-smear timeline path (which builds into a local recipe copy).
+// strategy: 1 = greedy nearest, 2 = assignment matrix, otherwise frequency-rank.
+std::vector<ats::MorphCorrespondenceRecord> buildMorphCorrespondence(
+    const std::vector<ats::MorphBandAssignment>& asgA,
+    const std::vector<ats::MorphBandAssignment>& asgB,
+    int strategy)
+{
+    if (asgA.empty() || asgB.empty())
+        return {};
+
+    if (strategy == 1)
+        return ats::buildGreedyNearestCorrespondence(asgA, asgB);
+
+    if (strategy == 2)
+    {
+        ats::MorphAssignmentMatrixOptions options;
+        options.advancedStrategyEnabled = true;
+        options.amplitudeRankWeight = 0.25;
+        return ats::buildAssignmentMatrixCorrespondence(asgA, asgB, options).records;
+    }
+
+    return ats::buildFrequencyRankCorrespondence(asgA, asgB);
+}
+
 std::vector<ats::MorphResidualNoiseBand> makeMorphResidualNoiseBands(const ATS_SOUND* sound)
 {
     std::vector<ats::MorphResidualNoiseBand> bands;
@@ -231,7 +257,13 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
         }
     }
 
-    render.modelSampleRate = renderSound->srate;
+    // do_synthesis generates output at sparams->sr (= core.sampleRate, the host rate),
+    // independent of the model's analysis srate — partials carry absolute frequencies.
+    // Report that synthesis rate here so the downstream resample-to-host is a no-op;
+    // using renderSound->srate instead double-converts and stretches by hostSr/modelSr
+    // (audibly lengthened + pitched down when host != analysis rate).
+    render.modelSampleRate = core.sampleRate > 0.0 ? juce::roundToInt(core.sampleRate)
+                                                   : renderSound->srate;
     render.hasResidual = hasResidualBandEnergy(renderSound);
 
     ats::SynthParams spPartials = core;
@@ -293,17 +325,21 @@ juce::AudioBuffer<float> makePlaybackBufferFromClassicLayers(const ClassicLayerR
         return playback;
 
     playback.setSize(resampledC.empty() ? 2 : 3, (int) outN);
+    const bool hasCombined = playback.getNumChannels() > 2;
+    float* const dstP = playback.getWritePointer(0);
+    float* const dstR = playback.getWritePointer(1);
+    float* const dstC = hasCombined ? playback.getWritePointer(2) : nullptr;
+    const int nResP = (int) resampledP.size();
+    const int nResR = (int) resampledR.size();
+    const int nResC = (int) resampledC.size();
     for (int i = 0; i < (int) outN; ++i)
     {
-        const float p = i < (int) resampledP.size() ? resampledP[(size_t) i] : 0.0f;
-        const float r = i < (int) resampledR.size() ? resampledR[(size_t) i] : 0.0f;
-        playback.setSample(0, i, p);
-        playback.setSample(1, i, r);
-        if (playback.getNumChannels() > 2)
-        {
-            const float c = i < (int) resampledC.size() ? resampledC[(size_t) i] : p + r;
-            playback.setSample(2, i, c);
-        }
+        const float p = i < nResP ? resampledP[(size_t) i] : 0.0f;
+        const float r = i < nResR ? resampledR[(size_t) i] : 0.0f;
+        dstP[i] = p;
+        dstR[i] = r;
+        if (dstC != nullptr)
+            dstC[i] = i < nResC ? resampledC[(size_t) i] : p + r;
     }
 
     return playback;
@@ -2244,22 +2280,22 @@ void AtsAudioProcessor::startResynthWorker()
 
         auto& playback = playbackBuffers[(size_t) kMorphPlaybackBufferIndex];
         playback.setSize(previewLayerCacheCombined.empty() ? 2 : 3, (int) outN);
-        for (int i = 0; i < (int) outN; ++i)
         {
-            const float p = (i < (int) previewLayerCachePartials.size())
-                                ? previewLayerCachePartials[(size_t) i]
-                                : 0.0f;
-            const float r = (i < (int) previewLayerCacheResidual.size())
-                                ? previewLayerCacheResidual[(size_t) i]
-                                : 0.0f;
-            playback.setSample(0, i, p);
-            playback.setSample(1, i, r);
-            if (playback.getNumChannels() > 2)
+            const bool hasCombined = playback.getNumChannels() > 2;
+            float* const dstP = playback.getWritePointer(0);
+            float* const dstR = playback.getWritePointer(1);
+            float* const dstC = hasCombined ? playback.getWritePointer(2) : nullptr;
+            const int nCacheP = (int) previewLayerCachePartials.size();
+            const int nCacheR = (int) previewLayerCacheResidual.size();
+            const int nCacheC = (int) previewLayerCacheCombined.size();
+            for (int i = 0; i < (int) outN; ++i)
             {
-                const float c = (i < (int) previewLayerCacheCombined.size())
-                                    ? previewLayerCacheCombined[(size_t) i]
-                                    : p + r;
-                playback.setSample(2, i, c);
+                const float p = i < nCacheP ? previewLayerCachePartials[(size_t) i] : 0.0f;
+                const float r = i < nCacheR ? previewLayerCacheResidual[(size_t) i] : 0.0f;
+                dstP[i] = p;
+                dstR[i] = r;
+                if (dstC != nullptr)
+                    dstC[i] = i < nCacheC ? previewLayerCacheCombined[(size_t) i] : p + r;
             }
         }
 
@@ -2470,6 +2506,11 @@ bool AtsAudioProcessor::hasMorphPreviewAudio() const
 
 bool AtsAudioProcessor::playCurrentModelPreview(juce::String& error)
 {
+    return playCurrentModelPreview(error, false);
+}
+
+bool AtsAudioProcessor::playCurrentModelPreview(juce::String& error, bool liveSmear)
+{
     error.clear();
     if (isWorkerBusy())
     {
@@ -2486,7 +2527,7 @@ bool AtsAudioProcessor::playCurrentModelPreview(juce::String& error)
         return false;
     }
 
-    if (!renderCurrentModelToPlaybackBuffer(kMorphPlaybackBufferIndex, error))
+    if (!renderCurrentModelToPlaybackBuffer(kMorphPlaybackBufferIndex, error, liveSmear))
         return false;
 
     activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
@@ -2509,7 +2550,7 @@ bool AtsAudioProcessor::canPlayMorphPreview() const
     return true;
 }
 
-bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error)
+bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear)
 {
     error.clear();
     if (bufferIndex < 0 || bufferIndex >= (int) playbackBuffers.size())
@@ -2523,6 +2564,19 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
     juce::AudioBuffer<float> monoC;
     int modelSr = 44100;
     const ats::SynthParams core = readCoreSynthParamsFromApvts();
+
+    ClassicLayerRender rendered;
+    bool renderedLive = false;
+    if (liveSmear)
+    {
+        juce::String smearErr;
+        if (const ATS_SOUND* smeared = getSmearedSound(AtsTraceSource::Current, smearErr))
+        {
+            rendered = renderClassicLayers(smeared, core); // private copy: no modelLock needed
+            renderedLive = true;
+        }
+    }
+    if (!renderedLive)
     {
         const juce::ScopedLock ml(modelLock);
         if (analyzedModel.get() == nullptr)
@@ -2530,8 +2584,9 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
             error = "No analyzed ATS model to render.";
             return false;
         }
-
-        auto rendered = renderClassicLayers(analyzedModel.get(), core);
+        rendered = renderClassicLayers(analyzedModel.get(), core);
+    }
+    {
         modelSr = rendered.modelSampleRate;
         monoP = std::move(rendered.partials);
         monoR = std::move(rendered.residual);
@@ -2589,7 +2644,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
     return true;
 }
 
-bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error)
+bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear)
 {
     error.clear();
     if (slotIndex < 0 || slotIndex > 1)
@@ -2604,6 +2659,20 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
     juce::AudioBuffer<float> monoC;
     int modelSr = 44100;
     const ats::SynthParams core = readCoreSynthParamsFromApvts();
+
+    ClassicLayerRender rendered;
+    bool renderedLive = false;
+    if (liveSmear)
+    {
+        juce::String smearErr;
+        const AtsTraceSource src = slotIndex == 0 ? AtsTraceSource::SourceA : AtsTraceSource::SourceB;
+        if (const ATS_SOUND* smeared = getSmearedSound(src, smearErr))
+        {
+            rendered = renderClassicLayers(smeared, core); // private copy: no morphRecipeLock needed
+            renderedLive = true;
+        }
+    }
+    if (!renderedLive)
     {
         const juce::ScopedLock ml(morphRecipeLock);
         auto* sound = morphSourceSounds[(size_t) slotIndex].get();
@@ -2612,8 +2681,9 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
             error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
             return false;
         }
-
-        auto rendered = renderClassicLayers(sound, core);
+        rendered = renderClassicLayers(sound, core);
+    }
+    {
         modelSr = rendered.modelSampleRate;
         monoP = std::move(rendered.partials);
         monoR = std::move(rendered.residual);
@@ -2721,25 +2791,6 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
     // so no per-frame smoothing heuristic is needed here.
     envelope.build(points, ats::BarkSpectralEnvelope::kDefaultBins);
     return envelope;
-}
-
-// Returns the closest frequency from freqs to queryHz in log-frequency space, or 0 if none
-// is within kMaxGlideOctaves (to prevent chirp glides across large spectral distances).
-static double nearestFreqLog(const std::vector<double>& freqs, double queryHz) noexcept
-{
-    constexpr double kMaxGlideOctaves = 1.0; // suppress drift beyond one octave
-    if (freqs.empty() || !(queryHz > 0.0))
-        return 0.0;
-    double nearest = 0.0;
-    double minDist = std::numeric_limits<double>::max();
-    for (const double f : freqs)
-    {
-        if (!(f > 0.0))
-            continue;
-        const double d = std::abs(std::log2(f / queryHz));
-        if (d < minDist) { minDist = d; nearest = f; }
-    }
-    return minDist <= kMaxGlideOctaves ? nearest : 0.0;
 }
 
 ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind kind)
@@ -2978,13 +3029,13 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     // are not synthesised out of the noise floor.
     constexpr double kEnvDecolorRelFloor = 0.00398107; // -48 dB
 
-    // Per-record glide-target lock for unmatched-source partials. The nearest live target is
-    // re-picked every chunk; when freqA sits between two targets (or targets fade in/out) that
-    // pick snaps chunk-to-chunk, swinging the glide endpoint and warbling the partial's pitch.
-    // Locking the chosen target and only switching when a clearly-closer one appears (hysteresis)
-    // stabilises sustained morphs while still following the locked target's own drift.
-    constexpr double kReassignHysteresisOct = 0.25; // require 1/4 octave advantage to switch
-    std::vector<double> lockedTargetHz((size_t) nRec, 0.0);
+    // Active partials/carriers are fixed for the duration of a chunk (set in per-chunk setup).
+    // Collect their indices once per chunk so the per-sample hot loop iterates only live
+    // entries instead of branching on `active` for every dead partial on every sample.
+    std::vector<int> activePartials;
+    activePartials.reserve((size_t) nRec);
+    std::vector<int> activeCarriers;
+    activeCarriers.reserve(rs.size());
 
     for (int s = 0; s < totalSamples; )
     {
@@ -3058,51 +3109,6 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         if (envMorphAmount > 1.0e-9 && barkA.isValid() && barkB.isValid())
             morphedEnv.build(barkA, barkB, kEnvDecolorRelFloor);
 
-        // Precompute all active source/target frequencies for unmatched-partial drift.
-        std::vector<double> allTargetFreqs, allSourceFreqs;
-        allTargetFreqs.reserve(static_cast<size_t>(nRec));
-        allSourceFreqs.reserve(static_cast<size_t>(nRec));
-        for (int ri = 0; ri < nRec; ++ri)
-        {
-            const auto& rec = records[(size_t) ri];
-            if (rec.kind != ats::MorphCorrespondenceKind::UnmatchedSource)
-            {
-                const int pB = rec.targetPartialIndex;
-                if (pB >= 0 && pB < soundB->partials
-                    && soundB->frq != nullptr && soundB->frq[pB] != nullptr
-                    && soundB->amp != nullptr && soundB->amp[pB] != nullptr)
-                {
-                    const double fq0 = soundB->frq[pB][fB0], fq1 = soundB->frq[pB][fB1];
-                    const double am0 = soundB->amp[pB][fB0], am1 = soundB->amp[pB][fB1];
-                    if (std::isfinite(fq0) && std::isfinite(fq1) && std::isfinite(am0) && std::isfinite(am1))
-                    {
-                        const double fq = juce::jmax(0.0, fq0 + (fq1 - fq0) * fracB);
-                        const double am = juce::jmax(0.0, am0 + (am1 - am0) * fracB) * fadeB;
-                        if (fq > 0.0 && am > 1.0e-9) allTargetFreqs.push_back(fq);
-                    }
-                }
-            }
-            if (rec.kind != ats::MorphCorrespondenceKind::UnmatchedTarget)
-            {
-                const int pA = rec.sourcePartialIndex;
-                if (pA >= 0 && pA < soundA->partials
-                    && soundA->frq != nullptr && soundA->frq[pA] != nullptr
-                    && soundA->amp != nullptr && soundA->amp[pA] != nullptr)
-                {
-                    const double fq0 = soundA->frq[pA][fA0], fq1 = soundA->frq[pA][fA1];
-                    const double am0 = soundA->amp[pA][fA0], am1 = soundA->amp[pA][fA1];
-                    if (std::isfinite(fq0) && std::isfinite(fq1) && std::isfinite(am0) && std::isfinite(am1))
-                    {
-                        const double fq = juce::jmax(0.0, fq0 + (fq1 - fq0) * fracA);
-                        // Gate by live amplitude (including fadeA) — dead partials must not
-                        // anchor drift for unmatched target partials.
-                        const double am = juce::jmax(0.0, am0 + (am1 - am0) * fracA) * fadeA;
-                        if (fq > 0.0 && am > 1.0e-9) allSourceFreqs.push_back(fq);
-                    }
-                }
-            }
-        }
-
         // Per-chunk setup: compute freq/amp and the phasor rotation (cos/sin once per chunk).
         for (int ri = 0; ri < nRec; ++ri)
         {
@@ -3157,39 +3163,11 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     ampA = std::min(transfer.outputAmplitude, ampA * kMaxEnvBoostLinear);
             }
 
-            // Drift unmatched SOURCE partials toward the nearest live target partial.
-            // UnmatchedTarget drift is intentionally omitted: the source reference disappears
-            // abruptly when fadeA hits zero, causing a phasor phase discontinuity (chirp) at
-            // the moment the partial is most audible (high morphAmount). Source partials are
-            // safe because their amplitude is already going to zero before any snap occurs.
-            double nearestTargetHz = 0.0;
-            if (rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource && freqA > 0.0)
-            {
-                const double candidate = nearestFreqLog(allTargetFreqs, freqA);
-                double& locked = lockedTargetHz[(size_t) ri];
-                double chosen = candidate;
-                if (locked > 0.0)
-                {
-                    // Follow the locked target's drift: snap it to the nearest live frequency,
-                    // but only while one still exists within the hysteresis band of the lock.
-                    const double lockedNow = nearestFreqLog(allTargetFreqs, locked);
-                    const bool lockedAlive = lockedNow > 0.0
-                        && std::abs(std::log2(lockedNow / locked)) <= kReassignHysteresisOct;
-                    if (lockedAlive)
-                    {
-                        const double dCand = candidate > 0.0
-                            ? std::abs(std::log2(candidate / freqA))
-                            : std::numeric_limits<double>::max();
-                        const double dLock = std::abs(std::log2(lockedNow / freqA));
-                        // Only switch to a different candidate if it is clearly closer to freqA.
-                        chosen = (candidate > 0.0 && dCand + kReassignHysteresisOct < dLock)
-                            ? candidate : lockedNow;
-                    }
-                    // else: the locked target faded out — adopt the new candidate.
-                }
-                locked = chosen > 0.0 ? chosen : 0.0;
-                nearestTargetHz = chosen;
-            }
+            // Unmatched partials cross-fade in place at their own frequency (no glide toward a
+            // nearest neighbour): with dissimilar sources that turned the blend into a mass of
+            // partials sliding to arbitrary targets — audible downward sweeps and tones present
+            // in neither source. The midpoint stays a clean union of the two spectra.
+            const double nearestTargetHz = 0.0;
             const double nearestSourceHz = 0.0;
             const auto resolved = ats::resolveHybridizedPartialRender(toHybridizedPartialKind(rec.kind),
                                                                       freqA,
@@ -3312,15 +3290,34 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             }
         }
 
+        // Collect this chunk's live entries so the per-sample loop skips dead partials/carriers
+        // without a per-iteration branch (active state is constant across the chunk).
+        activePartials.clear();
+        for (int ri = 0; ri < nRec; ++ri)
+            if (ps[(size_t) ri].active)
+                activePartials.push_back(ri);
+
+        activeCarriers.clear();
+        if (doResidual)
+            for (int idx = 0; idx < (int) rs.size(); ++idx)
+                if (rs[(size_t) idx].active)
+                    activeCarriers.push_back(idx);
+
         // Hot loop: phasor multiply only — no trig, no timeline lookup.
+        // Write through cached channel pointers; out.setSample() per sample
+        // re-fetches the channel pointer and bounds-checks on every call.
+        float* const outL = out.getWritePointer(0);
+        float* const outR = out.getWritePointer(1);
+        const int nActiveP = (int) activePartials.size();
+        const int nActiveR = (int) activeCarriers.size();
+        const int* const activeP = activePartials.data();
+        const int* const activeR = activeCarriers.data();
         for (int si = s; si < chunkEnd; ++si)
         {
             float sample = 0.0f;
-            for (int ri = 0; ri < nRec; ++ri)
+            for (int ai = 0; ai < nActiveP; ++ai)
             {
-                auto& p = ps[(size_t) ri];
-                if (!p.active)
-                    continue;
+                auto& p = ps[(size_t) activeP[ai]];
                 const double newRe = p.re * p.rotRe - p.im * p.rotIm;
                 const double newIm = p.re * p.rotIm + p.im * p.rotRe;
                 p.re = newRe;
@@ -3329,16 +3326,14 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 p.amp += p.ampInc;
                 if (p.amp < 0.0) p.amp = 0.0;
             }
-            out.setSample(0, si, sample);
+            outL[si] = sample;
 
             if (doResidual)
             {
                 float resSample = 0.0f;
-                for (int idx = 0; idx < (int) rs.size(); ++idx)
+                for (int ai = 0; ai < nActiveR; ++ai)
                 {
-                    auto& r = rs[(size_t) idx];
-                    if (!r.active)
-                        continue;
+                    auto& r = rs[(size_t) activeR[ai]];
 
                     // Advance carrier phasor
                     const double newRe = r.re * r.rotRe - r.im * r.rotIm;
@@ -3364,7 +3359,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                     r.amp += r.ampInc;
                     if (r.amp < 0.0) r.amp = 0.0;
                 }
-                out.setSample(1, si, resSample);
+                outR[si] = resSample;
             }
         }
 
@@ -3468,10 +3463,15 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
 
 bool AtsAudioProcessor::playMorphTimelinePreview(juce::String& error)
 {
-    return playMorphTimelinePreview(AtsSourceAuditionMode::Both, error);
+    return playMorphTimelinePreview(AtsSourceAuditionMode::Both, false, error);
 }
 
 bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error)
+{
+    return playMorphTimelinePreview(mode, false, error);
+}
+
+bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error)
 {
     error.clear();
     if (isWorkerBusy())
@@ -3530,14 +3530,64 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juc
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : 44100.0;
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds,
                                                         recipe.sourceB.durationSeconds));
+    const int strategy = getRawChoiceValue(apvts,
+                                           ats_param::kMorphCorrespondenceStrategy,
+                                           kDefaultMorphCorrespondenceStrategy);
     const uint64_t gen = jobGeneration.load(std::memory_order_acquire);
     morphSnapshotState.store((int) AtsMorphSnapshotUiState::Rebuilding, std::memory_order_release);
     transformThreadRunning.store(true, std::memory_order_release);
 
-    transformThread = std::thread([this, recipe, timelinePoints, options, sA, sB, core, renderSampleRate, duration, gen, mode]() mutable {
+    transformThread = std::thread([this, recipe, timelinePoints, options, sA, sB, core, renderSampleRate, duration, gen, mode, liveSmear, strategy]() mutable {
         try
         {
             juce::AudioBuffer<float> timelineBuffer;
+
+            // Live (non-destructive) smear: swap in smeared clones of both sources and rebuild
+            // the morph correspondence on that geometry. The clones come from the A/B smear
+            // caches (one-time detect+smear); the correspondence is cached separately so a
+            // repeated Timeline play with unchanged sources/params skips the heavy rebuild.
+            if (liveSmear && sA != nullptr && sB != nullptr)
+            {
+                juce::String smearErr;
+                const ATS_SOUND* cloneA = getSmearedSound(AtsTraceSource::SourceA, smearErr);
+                const ATS_SOUND* cloneB = getSmearedSound(AtsTraceSource::SourceB, smearErr);
+                if (cloneA != nullptr || cloneB != nullptr)
+                {
+                    const ATS_SOUND* useA = cloneA != nullptr ? cloneA : sA;
+                    const ATS_SOUND* useB = cloneB != nullptr ? cloneB : sB;
+
+                    const uint64_t rev = morphSourcesRevision.load(std::memory_order_acquire);
+                    const size_t ph = computeSmearLiveHash();
+
+                    std::vector<ats::MorphCorrespondenceRecord> records;
+                    {
+                        const juce::ScopedLock cl(smearedCacheLock);
+                        if (smearedTimeline.valid && smearedTimeline.revA == rev && smearedTimeline.revB == rev
+                            && smearedTimeline.paramHash == ph && smearedTimeline.strategy == strategy)
+                            records = smearedTimeline.records;
+                    }
+                    if (records.empty())
+                    {
+                        const auto asgA = makeMorphAssignmentsFromSound(useA, recipe.frequencyGrid);
+                        const auto asgB = makeMorphAssignmentsFromSound(useB, recipe.frequencyGrid);
+                        records = buildMorphCorrespondence(asgA, asgB, strategy);
+                        const juce::ScopedLock cl(smearedCacheLock);
+                        smearedTimeline.records = records;
+                        smearedTimeline.revA = rev;
+                        smearedTimeline.revB = rev;
+                        smearedTimeline.paramHash = ph;
+                        smearedTimeline.strategy = strategy;
+                        smearedTimeline.valid = true;
+                    }
+                    if (!records.empty())
+                        recipe.correspondenceRecords = std::move(records);
+
+                    options.sourceResidualNoiseBands = makeMorphResidualNoiseBands(useA);
+                    options.targetResidualNoiseBands = makeMorphResidualNoiseBands(useB);
+                    sA = useA;
+                    sB = useB;
+                }
+            }
 
             int endpointSourceIndex = -1;
             if (sA != nullptr && sB != nullptr
@@ -4049,6 +4099,9 @@ bool AtsAudioProcessor::getMorphSourceFile(int slotIndex, juce::File& out) const
 
 void AtsAudioProcessor::markMorphSnapshotStale()
 {
+    // Any morph-source change invalidates the live-smear A/B + timeline caches.
+    morphSourcesRevision.fetch_add(1, std::memory_order_relaxed);
+
     const auto current = (AtsMorphSnapshotUiState) morphSnapshotState.load(std::memory_order_acquire);
     if (current == AtsMorphSnapshotUiState::Ready)
         morphSnapshotState.store((int) AtsMorphSnapshotUiState::Stale, std::memory_order_release);
@@ -4062,25 +4115,8 @@ void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady()
     const int strategy = getRawChoiceValue(apvts,
                                            ats_param::kMorphCorrespondenceStrategy,
                                            kDefaultMorphCorrespondenceStrategy);
-    if (strategy == 1)
-    {
-        morphRecipe.correspondenceRecords =
-            ats::buildGreedyNearestCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1]);
-    }
-    else if (strategy == 2)
-    {
-        ats::MorphAssignmentMatrixOptions options;
-        options.advancedStrategyEnabled = true;
-        options.amplitudeRankWeight = 0.25;
-        morphRecipe.correspondenceRecords =
-            ats::buildAssignmentMatrixCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], options)
-                .records;
-    }
-    else
-    {
-        morphRecipe.correspondenceRecords =
-            ats::buildFrequencyRankCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1]);
-    }
+    morphRecipe.correspondenceRecords =
+        buildMorphCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], strategy);
 }
 
 bool AtsAudioProcessor::getMorphSourceSlotInfo(int slotIndex, AtsMorphSourceSlotInfo& out) const
@@ -4182,6 +4218,11 @@ bool AtsAudioProcessor::setCurrentModelAsMorphSourceSlot(int slotIndex, juce::St
 
 bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMode mode, juce::String& error)
 {
+    return listenMorphSourceSlot(slotIndex, mode, false, error);
+}
+
+bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMode mode, bool liveSmear, juce::String& error)
+{
     error.clear();
     AtsMorphSourceSlotInfo info;
     if (!getMorphSourceSlotInfo(slotIndex, info) || !info.hasModel)
@@ -4196,7 +4237,7 @@ bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMo
     }
 
     const int bufferIndex = slotIndex == 0 ? kSourceAPlaybackBufferIndex : kSourceBPlaybackBufferIndex;
-    if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error))
+    if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error, liveSmear))
     {
         if (error.isEmpty())
             error = "No rendered source preview is available. Analyze this source again.";
@@ -5594,6 +5635,122 @@ static int smearnovSourceSlot(AtsTraceSource source)
         case AtsTraceSource::Current:
         default: return 0;
     }
+}
+
+size_t AtsAudioProcessor::computeSmearLiveHash() const
+{
+    const auto d = readSmearnovDetectParamsFromApvts();
+    const auto s = readSmearnovParamsFromApvts();
+    const int rawScope = getRawChoiceValue(apvts, ats_param::kSmearnovScope, 0);
+    const int scope = (rawScope == 1) ? 0 : rawScope; // Selection narrows only the destructive bake
+
+    size_t h = 1469598103934665603ull;
+    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
+    auto mixD = [&](double v) { mix(std::hash<double>{}(v)); };
+    auto mixI = [&](long long v) { mix(std::hash<long long>{}(v)); };
+
+    mixD(d.weightDetFlux); mixD(d.weightResFlux); mixD(d.weightHfcFlux);
+    mixD(d.weightBirth); mixD(d.weightPhaseDev);
+    mixI(d.usePhaseDeviation); mixI(d.useSmrWeighting); mixD(d.smrWeightFloor);
+    mixI(d.normWindowRadiusFrames); mixI(d.peakWindowRadiusFrames);
+    mixD(d.thresholdLambda); mixD(d.thresholdAutoScale); mixD(d.onsetFloor);
+    mixD(d.minGapSeconds); mixI(d.minGapFramesOverride);
+    mixD(d.preMarginSeconds); mixI(d.maxAttackFrames);
+
+    mixD(s.blurMs); mixD(s.sharpenAmount); mixD(s.exaggerateDb); mixD(s.maxDb);
+    mixI((long long) s.targets);
+
+    mixI(scope);
+    mixI((long long) smearnovOverlayRevision.load(std::memory_order_acquire));
+    return h;
+}
+
+bool AtsAudioProcessor::applyLiveSmearToClone(AtsTraceSource source, ATS_SOUND* clone) const
+{
+    if (clone == nullptr)
+        return false;
+
+    const auto detect = readSmearnovDetectParamsFromApvts();
+    const auto smear = readSmearnovParamsFromApvts();
+
+    std::vector<ats::AtsOnset> onsets;
+    if (!copySmearnovOnsetOverride(source, onsets))
+        onsets = ats::detectOnsets(clone, detect);
+
+    const int rawScope = getRawChoiceValue(apvts, ats_param::kSmearnovScope, 0);
+    const int scope = (rawScope == 1) ? 0 : rawScope; // Selection narrows only the bake; live uses All
+    juce::String msg;
+    bool scopeError = false;
+    if (!onsets.empty())
+        onsets = applySmearnovScope(scope, std::move(onsets), -1, -1, msg, scopeError);
+
+    if (onsets.empty())
+        return false;
+
+    return ats::smearAttacks(clone, onsets, smear);
+}
+
+const ATS_SOUND* AtsAudioProcessor::getSmearedSound(AtsTraceSource source, juce::String& error)
+{
+    error.clear();
+    const juce::ScopedLock cl(smearedCacheLock);
+
+    SmearedSourceCache* cache = nullptr;
+    uint64_t rev = 0;
+    switch (source)
+    {
+        case AtsTraceSource::SourceA: cache = &smearedA; rev = morphSourcesRevision.load(std::memory_order_acquire); break;
+        case AtsTraceSource::SourceB: cache = &smearedB; rev = morphSourcesRevision.load(std::memory_order_acquire); break;
+        case AtsTraceSource::Current:
+        default:                      cache = &smearedCurrent; rev = (uint64_t) modelRevision.load(std::memory_order_acquire); break;
+    }
+
+    const size_t hash = computeSmearLiveHash();
+    if (cache->valid && cache->sourceRevision == rev && cache->paramHash == hash)
+        return cache->sound.get(); // may be nullptr (cached "no change")
+
+    // Snapshot the source under its own lock, then smear the private copy unlocked.
+    ats::AtsSoundPtr clone;
+    if (source == AtsTraceSource::Current)
+    {
+        const juce::ScopedLock ml(modelLock);
+        if (analyzedModel.get() == nullptr)
+        {
+            error = "No analyzed ATS model to smear.";
+            return nullptr;
+        }
+        clone.reset(copy_sound(analyzedModel.get()));
+    }
+    else
+    {
+        const int slot = source == AtsTraceSource::SourceA ? 0 : 1;
+        const juce::ScopedLock ml(morphRecipeLock);
+        auto* s = morphSourceSounds[(size_t) slot].get();
+        if (s == nullptr)
+        {
+            error = slot == 0 ? "Source A has no model." : "Source B has no model.";
+            return nullptr;
+        }
+        clone.reset(copy_sound(s));
+    }
+
+    if (clone.get() == nullptr)
+    {
+        error = "Could not copy ATS model for smear preview.";
+        return nullptr;
+    }
+
+    const bool changed = applyLiveSmearToClone(source, clone.get());
+    cache->sourceRevision = rev;
+    cache->paramHash = hash;
+    cache->valid = true;
+    if (!changed)
+    {
+        cache->sound.reset();
+        return nullptr; // caller renders the unmodified source
+    }
+    cache->sound = std::move(clone);
+    return cache->sound.get();
 }
 
 bool AtsAudioProcessor::copySmearnovOnsetOverride(AtsTraceSource source,

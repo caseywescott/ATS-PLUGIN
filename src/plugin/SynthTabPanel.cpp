@@ -59,8 +59,13 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     setup(timeStretchSlider, "timeStretch");
     setup(synStartSlider, "synStart");
     setup(synDurSlider, "synDur");
-    setup(freqShapeAmountSlider, "Frequency shaping amount");
-    setup(freqShapePivotSlider, "Frequency shaping pivot");
+
+    freqShapeAmountSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    freqShapeAmountSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 22);
+    freqShapeAmountSlider.setName("Frequency shaping amount");
+    freqShapePivotSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    freqShapePivotSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 22);
+    freqShapePivotSlider.setName("Frequency shaping pivot");
     freqSlider.setHelpText("Frequency factor (SPARAMS frec), before MIDI transpose.");
     timeStretchSlider.setHelpText("Time stretch factor (SPARAMS max_stretch).");
     synStartSlider.setHelpText("Synthesis window start in seconds (SPARAMS beg).");
@@ -84,8 +89,6 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     freqShapeModeBox.addItemList(juce::StringArray { "Linear", "Stretch", "Compress", "Harmonic" }, 1);
     freqShapeModeBox.setHelpText("Choose the frequency shaping model applied before the main freq transpose.");
     freqShapeModeBox.onChange = [this] { updateFrequencyShapeUi(); };
-    freqShapeAmountSlider.onValueChange = [this] { updateFrequencyShapeUi(); };
-    freqShapePivotSlider.onValueChange = [this] { updateFrequencyShapeUi(); };
     addAndMakeVisible(freqShapeModeBox);
 
     usePhaseButton.setButtonText("Use partial phases");
@@ -163,7 +166,7 @@ void SynthTabPanel::resized()
     placeKnobColumn(synDurLabel, synDurSlider);
 
     r.removeFromTop(10);
-    auto shapeRow = r.removeFromTop(110);
+    auto shapeRow = r.removeFromTop(130);
     freqShapeSectionLabel.setBounds(shapeRow.removeFromTop(20));
     auto shapeControls = shapeRow;
     auto modeCol = shapeControls.removeFromLeft(180).reduced(4);
@@ -171,14 +174,15 @@ void SynthTabPanel::resized()
     freqShapeModeBox.setBounds(modeCol.removeFromTop(28));
     shapeControls.removeFromLeft(10);
 
-    auto amountCol = shapeControls.removeFromLeft(120).reduced(4);
-    freqShapeAmountLabel.setBounds(amountCol.removeFromTop(28));
-    freqShapeAmountSlider.setBounds(amountCol);
+    const int sliderColW = juce::jmax(160, shapeControls.getWidth() / 2 - 10);
+    auto amountCol = shapeControls.removeFromLeft(sliderColW).reduced(4);
+    freqShapeAmountLabel.setBounds(amountCol.removeFromTop(24));
+    freqShapeAmountSlider.setBounds(amountCol.removeFromTop(36));
     shapeControls.removeFromLeft(10);
 
-    auto pivotCol = shapeControls.removeFromLeft(128).reduced(4);
-    freqShapePivotLabel.setBounds(pivotCol.removeFromTop(28));
-    freqShapePivotSlider.setBounds(pivotCol);
+    auto pivotCol = shapeControls.removeFromLeft(sliderColW).reduced(4);
+    freqShapePivotLabel.setBounds(pivotCol.removeFromTop(24));
+    freqShapePivotSlider.setBounds(pivotCol.removeFromTop(36));
 
     r.removeFromTop(10);
     auto row3 = r.removeFromTop(28);
@@ -199,7 +203,12 @@ void SynthTabPanel::resized()
 
 void SynthTabPanel::timerCallback()
 {
-    updateFrequencyShapeUi();
+    const uint64_t rev = audioProcessor.getDisplayShapeRevision();
+    if (rev != lastDisplayShapeRevision)
+    {
+        lastDisplayShapeRevision = rev;
+        updateFrequencyShapeUi();
+    }
 }
 
 void SynthTabPanel::updateFrequencyShapeUi()
@@ -242,12 +251,17 @@ void SynthTabPanel::updateFrequencyShapeUi()
     freqShapePivotSlider.setHelpText(pivotHelp);
     freqShapePivotSlider.setTooltip(pivotHelp);
 
-    freqShapeAmountSlider.setEnabled(!linear);
-    freqShapePivotSlider.setEnabled(!linear);
-    freqShapeAmountLabel.setAlpha(linear ? 0.45f : 1.0f);
-    freqShapePivotLabel.setAlpha(linear ? 0.45f : 1.0f);
-    freqShapeAmountSlider.setAlpha(linear ? 0.45f : 1.0f);
-    freqShapePivotSlider.setAlpha(linear ? 0.45f : 1.0f);
+    if (linear != lastLinearState)
+    {
+        lastLinearState = linear;
+        freqShapeAmountSlider.setEnabled(!linear);
+        freqShapePivotSlider.setEnabled(!linear);
+        const float alpha = linear ? 0.45f : 1.0f;
+        freqShapeAmountLabel.setAlpha(alpha);
+        freqShapePivotLabel.setAlpha(alpha);
+        freqShapeAmountSlider.setAlpha(alpha);
+        freqShapePivotSlider.setAlpha(alpha);
+    }
 
     const juce::String modeHelp = "Frequency shaping mode: Linear leaves partial spacing unchanged; "
                                   "Stretch and Compress use a log-pivot warp; Harmonic uses approximate partial rank.";

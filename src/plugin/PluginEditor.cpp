@@ -5,7 +5,9 @@
 AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , audioProcessor(p)
+    , tooltipWindow(this, 650)
     , sessionTab(p)
+    , analysisTab(p)
     , synthTab(p)
     , partialTab(p)
     , mathTab(p)
@@ -32,26 +34,16 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
 
     addAndMakeVisible(tabs);
     tabs.addTab("Session", juce::Colours::transparentBlack, &sessionTab, false);
+    tabs.addTab("Analysis", juce::Colours::transparentBlack, &analysisTab, false);
     tabs.addTab("Synthesis", juce::Colours::transparentBlack, &synthTab, false);
     tabs.addTab("Partials", juce::Colours::transparentBlack, &partialTab, false);
     tabs.addTab("Math", juce::Colours::transparentBlack, &mathTab, false);
 
-    // Auto-fit: size the window so the spectrogram panel is visible on launch.
-    auto* disp = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
-    const int screenW = disp ? disp->totalArea.getWidth() : 1920;
-    const int screenH = disp ? disp->totalArea.getHeight() : 1080;
-    const int resizeMinW = 500;
-    const int resizeMinH = 350;
-    const int resizeMaxW = juce::jmax(resizeMinW, screenW);
-    const int resizeMaxH = juce::jmax(resizeMinH, screenH);
-    const int defaultMinW = juce::jmin(700, juce::jmax(resizeMinW, screenW - 50));
-    const int defaultMinH = juce::jmin(420, juce::jmax(resizeMinH, screenH - 100));
-    const int defaultMaxW = juce::jmax(defaultMinW, screenW - 50);
-    const int defaultMaxH = juce::jmax(defaultMinH, screenH - 100);
-    const int defaultW = juce::jlimit(defaultMinW, defaultMaxW, (int) (screenW * 0.55f));
-    const int defaultH = juce::jlimit(defaultMinH, defaultMaxH, (int) (screenH * 0.58f));
+    // User request: default window roughly 70% smaller, but resizable.
+    const int defaultW = juce::jmax(300, scaled(276));
+    const int defaultH = juce::jmax(220, scaled(192));
     setResizable(true, true);
-    setResizeLimits(resizeMinW, resizeMinH, resizeMaxW, resizeMaxH);
+    setResizeLimits(300, 220, scaled(1800), scaled(1200));
     setSize(defaultW, defaultH);
 
     startTimerHz(10);
@@ -83,6 +75,7 @@ void AtsAudioProcessorEditor::resized()
 void AtsAudioProcessorEditor::timerCallback()
 {
     sessionTab.refreshFromProcessor();
+    analysisTab.refreshFromProcessor();
     partialTab.tick();
     mathTab.tick();
 }

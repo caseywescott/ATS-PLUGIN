@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 
+#include "AnalysisTabPanel.h"
 #include "MathExprPanel.h"
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
@@ -26,8 +27,10 @@ private:
     AtsAudioProcessor& audioProcessor;
 
     juce::LookAndFeel_V4 pluginLookAndFeel;
+    juce::TooltipWindow tooltipWindow;
 
     SessionTabPanel sessionTab;
+    AnalysisTabPanel analysisTab;
     SynthTabPanel synthTab;
     PartialEditPanel partialTab;
     MathExprPanel mathTab;

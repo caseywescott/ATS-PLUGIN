@@ -11,7 +11,7 @@ juce::File getUserPresetDirectory();
 
 /** Built-in parameter sets (no embedded ATS model). */
 juce::StringArray factoryPresetNames();
-juce::String factoryPresetMetadata(int factoryIndex);
+juce::String factoryPresetDescription(int factoryIndex);
 void applyFactoryPreset(AtsAudioProcessor& proc, int factoryIndex);
 
 } // namespace ats_preset

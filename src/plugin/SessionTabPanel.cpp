@@ -600,8 +600,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     loadButton.setHelpText("Choose a mono or stereo WAV file to analyze.");
     analyzeButton.setExplicitFocusOrder(2);
     analyzeButton.setHelpText("Run ATS analysis on the imported audio (CPU heavy, background thread).");
-    currentPlayButton.setExplicitFocusOrder(3);
-    currentPlayButton.setHelpText("Render and play the current analyzed ATS model, including partial edits and deletes.");
+    transportPlayButton.setExplicitFocusOrder(3);
+    transportPlayButton.setHelpText("Play or stop the selected source. Honors the audition mode and the Smear preview toggle.");
     cancelButton.setExplicitFocusOrder(4);
     cancelButton.setHelpText("Stop the current analysis or resynthesis job.");
     presetCombo.setExplicitFocusOrder(5);
@@ -660,24 +660,48 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     analyzeButton.onClick = [this] { audioProcessor.startAnalysis(); };
     addAndMakeVisible(analyzeButton);
 
-    currentPlayButton.onClick = [this] {
-        if (audioProcessor.isPreviewPlaying()
-            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::MorphPreview)
-        {
-            audioProcessor.stopPreviewPlayback();
-            refreshFromProcessor();
-            return;
-        }
+    // --- Unified transport bar ---
+    transportSourceLabel.setText("Source", juce::dontSendNotification);
+    transportSourceLabel.setJustificationType(juce::Justification::centredLeft);
+    transportSourceLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    addAndMakeVisible(transportSourceLabel);
 
-        juce::String err;
-        if (!audioProcessor.playCurrentModelPreview(err))
-            juce::NativeMessageBox::showMessageBoxAsync(
-                juce::AlertWindow::WarningIcon,
-                "Play current model",
-                err.isEmpty() ? juce::String("Could not play the current model.") : err);
+    transportSourceCombo.addItem("Current", 1);
+    transportSourceCombo.addItem("Source A", 2);
+    transportSourceCombo.addItem("Source B", 3);
+    transportSourceCombo.addItem("Timeline", 4);
+    transportSourceCombo.setSelectedId(1, juce::dontSendNotification);
+    transportSourceCombo.setHelpText("Choose which signal the Play button auditions.");
+    transportSourceCombo.onChange = [this] {
+        // Switching the audition target must halt any in-flight preview; otherwise the old
+        // source keeps playing and the next Play click only acts as a Stop.
+        if (audioProcessor.isPreviewPlaying())
+            audioProcessor.stopPreviewPlayback();
         refreshFromProcessor();
     };
-    addAndMakeVisible(currentPlayButton);
+    addAndMakeVisible(transportSourceCombo);
+
+    transportAuditionLabel.setText("Audition", juce::dontSendNotification);
+    transportAuditionLabel.setJustificationType(juce::Justification::centredLeft);
+    transportAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    addAndMakeVisible(transportAuditionLabel);
+
+    for (auto* button : { &auditionBothButton, &auditionPartialsButton, &auditionResidualButton })
+    {
+        button->setRadioGroupId(5100);
+        button->setClickingTogglesState(true);
+        button->setHelpText("Choose which layer to audition: full mix, partials only, or residual only.");
+    }
+    auditionBothButton.setToggleState(true, juce::dontSendNotification);
+    addAndMakeVisible(auditionBothButton);
+    addAndMakeVisible(auditionPartialsButton);
+    addAndMakeVisible(auditionResidualButton);
+
+    smearEffectToggle.setHelpText("Preview transient smear live (non-destructive) on the selected source. Use Apply Smear to bake.");
+    addAndMakeVisible(smearEffectToggle);
+
+    transportPlayButton.onClick = [this] { transportPlay(); };
+    addAndMakeVisible(transportPlayButton);
 
     cancelButton.onClick = [this] {
         if (!audioProcessor.isWorkerBusy())
@@ -776,16 +800,12 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     sourceBLoadAnalyzeButton.setButtonText("Choose B");
     sourceAUseCurrentButton.setButtonText("Re-analyze A");
     sourceBUseCurrentButton.setButtonText("Re-analyze B");
-    sourceAListenButton.setButtonText("Play A");
-    sourceBListenButton.setButtonText("Play B");
     exportSourceAButton.setButtonText("Export ATS");
     exportSourceBButton.setButtonText("Export ATS");
     sourceALoadAnalyzeButton.setHelpText("Choose a WAV or ATS file and assign it to Source A.");
     sourceBLoadAnalyzeButton.setHelpText("Choose a WAV or ATS file and assign it to Source B.");
     sourceAUseCurrentButton.setHelpText("Re-analyze Source A from its chosen WAV file.");
     sourceBUseCurrentButton.setHelpText("Re-analyze Source B from its chosen WAV file.");
-    sourceAListenButton.setHelpText("Preview Source A with the current audition mode.");
-    sourceBListenButton.setHelpText("Preview Source B with the current audition mode.");
     exportSourceAButton.setHelpText("Export Source A model to an ATS file.");
     exportSourceBButton.setHelpText("Export Source B model to an ATS file.");
 
@@ -804,31 +824,6 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
             juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source B", err);
         refreshFromProcessor();
     };
-    sourceAListenButton.onClick = [this] {
-        if (audioProcessor.isPreviewPlaying()
-            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::SourceA)
-        {
-            audioProcessor.stopPreviewPlayback();
-            return;
-        }
-
-        juce::String err;
-        if (!audioProcessor.listenMorphSourceSlot(0, (AtsSourceAuditionMode) getSourceAuditionModeIndex(0), err))
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Listen A", err);
-    };
-    sourceBListenButton.onClick = [this] {
-        if (audioProcessor.isPreviewPlaying()
-            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::SourceB)
-        {
-            audioProcessor.stopPreviewPlayback();
-            return;
-        }
-
-        juce::String err;
-        if (!audioProcessor.listenMorphSourceSlot(1, (AtsSourceAuditionMode) getSourceAuditionModeIndex(1), err))
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Listen B", err);
-    };
-
     exportSourceAButton.onClick = [this] { exportMorphSourceSlotAts(0); };
     exportSourceBButton.onClick = [this] { exportMorphSourceSlotAts(1); };
 
@@ -836,41 +831,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(sourceBLoadAnalyzeButton);
     addAndMakeVisible(sourceAUseCurrentButton);
     addAndMakeVisible(sourceBUseCurrentButton);
-    addAndMakeVisible(sourceAListenButton);
-    addAndMakeVisible(sourceBListenButton);
     addAndMakeVisible(exportSourceAButton);
     addAndMakeVisible(exportSourceBButton);
-
-    sourceAAuditionLabel.setText("Audition", juce::dontSendNotification);
-    sourceBAuditionLabel.setText("Audition", juce::dontSendNotification);
-    sourceAAuditionLabel.setJustificationType(juce::Justification::centredLeft);
-    sourceBAuditionLabel.setJustificationType(juce::Justification::centredLeft);
-    sourceAAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
-    sourceBAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
-    sourceAAuditionLabel.setMinimumHorizontalScale(0.7f);
-    sourceBAuditionLabel.setMinimumHorizontalScale(0.7f);
-    addAndMakeVisible(sourceAAuditionLabel);
-    addAndMakeVisible(sourceBAuditionLabel);
-
-    auto setupAuditionButtons = [](juce::ToggleButton& both,
-                                   juce::ToggleButton& partials,
-                                   juce::ToggleButton& residual,
-                                   int radioGroup) {
-        for (auto* button : { &both, &partials, &residual })
-        {
-            button->setRadioGroupId(radioGroup);
-            button->setClickingTogglesState(true);
-        }
-        both.setToggleState(true, juce::dontSendNotification);
-    };
-    setupAuditionButtons(sourceABothButton, sourceAPartialsButton, sourceAResidualButton, 5101);
-    setupAuditionButtons(sourceBBothButton, sourceBPartialsButton, sourceBResidualButton, 5102);
-    addAndMakeVisible(sourceABothButton);
-    addAndMakeVisible(sourceAPartialsButton);
-    addAndMakeVisible(sourceAResidualButton);
-    addAndMakeVisible(sourceBBothButton);
-    addAndMakeVisible(sourceBPartialsButton);
-    addAndMakeVisible(sourceBResidualButton);
 
     morphSnapshotLabel.setText("Morph preview", juce::dontSendNotification);
     morphSnapshotLabel.setJustificationType(juce::Justification::centredLeft);
@@ -912,42 +874,15 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.setMorphTimelinePoints(points);
         refreshMorphSnapshotControls();
     };
-    morphTimelinePlayButton.setHelpText("Render the drawn morph timeline and play it from the beginning.");
-    morphTimelinePlayButton.onClick = [this] {
-        if (audioProcessor.isPreviewPlaying()
-            && audioProcessor.getPreviewPlaybackKind() == AtsPreviewPlaybackKind::MorphTimeline)
-        {
-            audioProcessor.stopPreviewPlayback();
-            refreshFromProcessor();
-            return;
-        }
-        playMorphTimeline();
-    };
     morphTimelineBounceButton.setHelpText("Render the morph timeline to a WAV file and reveal it for import into your DAW.");
     morphTimelineBounceButton.onClick = [this] { bounceMorphTimeline(); };
-    morphTimelineAuditionLabel.setText("Audition", juce::dontSendNotification);
-    morphTimelineAuditionLabel.setJustificationType(juce::Justification::centredLeft);
-    morphTimelineAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
-    morphTimelineAuditionLabel.setMinimumHorizontalScale(0.7f);
-    for (auto* button : { &morphTimelineBothButton, &morphTimelinePartialsButton, &morphTimelineResidualButton })
-    {
-        button->setRadioGroupId(5201);
-        button->setClickingTogglesState(true);
-        button->setHelpText("Choose which layer to audition for timeline playback.");
-    }
-    morphTimelineBothButton.setToggleState(true, juce::dontSendNotification);
     morphTimelineResetButton.setHelpText("Reset to Source A (morph = 0). Recommended starting point before adding Hybrid breakpoints.");
     morphTimelineResetButton.onClick = [this] {
         setMorphTimelinePreset({ { 0.0, 0.0 }, { 1.0, 0.0 } });
     };
     addAndMakeVisible(morphTimelineLabel);
-    addAndMakeVisible(morphTimelineAuditionLabel);
-    addAndMakeVisible(morphTimelineBothButton);
-    addAndMakeVisible(morphTimelinePartialsButton);
-    addAndMakeVisible(morphTimelineResidualButton);
     addAndMakeVisible(morphTimelineHintLabel);
     addAndMakeVisible(morphTimelineEditor);
-    addAndMakeVisible(morphTimelinePlayButton);
     addAndMakeVisible(morphTimelineBounceButton);
     addAndMakeVisible(morphTimelineResetButton);
 
@@ -1427,15 +1362,51 @@ void SessionTabPanel::setMorphTimelinePreset(std::vector<AtsMorphTimelinePoint> 
     refreshMorphTimeline();
 }
 
-void SessionTabPanel::playMorphTimeline()
+void SessionTabPanel::transportPlay()
 {
+    // Single transport dispatcher: stop if already playing, otherwise audition the source
+    // chosen in transportSourceCombo with the shared audition mode and live-smear toggle.
+    if (audioProcessor.isPreviewPlaying())
+    {
+        audioProcessor.stopPreviewPlayback();
+        refreshFromProcessor();
+        return;
+    }
+
+    const auto mode = (AtsSourceAuditionMode) getAuditionModeIndex();
+    const bool liveSmear = smearEffectToggle.getToggleState();
+    const int sourceId = transportSourceCombo.getSelectedId();
+
     juce::String err;
-    if (!audioProcessor.playMorphTimelinePreview((AtsSourceAuditionMode) getMorphTimelineAuditionModeIndex(), err))
+    bool ok = true;
+    juce::String title = "Play";
+    switch (sourceId)
+    {
+        case 2: // Source A
+            title = "Listen A";
+            ok = audioProcessor.listenMorphSourceSlot(0, mode, liveSmear, err);
+            break;
+        case 3: // Source B
+            title = "Listen B";
+            ok = audioProcessor.listenMorphSourceSlot(1, mode, liveSmear, err);
+            break;
+        case 4: // Timeline
+            title = "Play Morph Timeline";
+            ok = audioProcessor.playMorphTimelinePreview(mode, liveSmear, err);
+            break;
+        case 1: // Current
+        default:
+            title = "Play current model";
+            ok = audioProcessor.playCurrentModelPreview(err, liveSmear);
+            break;
+    }
+
+    if (!ok)
     {
         juce::NativeMessageBox::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon,
-            "Play Morph Timeline",
-            err.isEmpty() ? juce::String("Could not play morph timeline.") : err);
+            title,
+            err.isEmpty() ? juce::String("Could not start playback.") : err);
     }
     refreshFromProcessor();
 }
@@ -1455,7 +1426,7 @@ void SessionTabPanel::bounceMorphTimeline()
 
         juce::String err;
         if (!audioProcessor.bounceMorphTimelineToFile(file,
-                                                      (AtsSourceAuditionMode) getMorphTimelineAuditionModeIndex(),
+                                                      (AtsSourceAuditionMode) getAuditionModeIndex(),
                                                       err))
         {
             juce::NativeMessageBox::showMessageBoxAsync(
@@ -1470,29 +1441,11 @@ void SessionTabPanel::bounceMorphTimeline()
     });
 }
 
-int SessionTabPanel::getSourceAuditionModeIndex(int slotIndex) const
+int SessionTabPanel::getAuditionModeIndex() const
 {
-    if (slotIndex == 0)
-    {
-        if (sourceAPartialsButton.getToggleState())
-            return (int) AtsSourceAuditionMode::PartialsOnly;
-        if (sourceAResidualButton.getToggleState())
-            return (int) AtsSourceAuditionMode::ResidualOnly;
-        return (int) AtsSourceAuditionMode::Both;
-    }
-
-    if (sourceBPartialsButton.getToggleState())
+    if (auditionPartialsButton.getToggleState())
         return (int) AtsSourceAuditionMode::PartialsOnly;
-    if (sourceBResidualButton.getToggleState())
-        return (int) AtsSourceAuditionMode::ResidualOnly;
-    return (int) AtsSourceAuditionMode::Both;
-}
-
-int SessionTabPanel::getMorphTimelineAuditionModeIndex() const
-{
-    if (morphTimelinePartialsButton.getToggleState())
-        return (int) AtsSourceAuditionMode::PartialsOnly;
-    if (morphTimelineResidualButton.getToggleState())
+    if (auditionResidualButton.getToggleState())
         return (int) AtsSourceAuditionMode::ResidualOnly;
     return (int) AtsSourceAuditionMode::Both;
 }
@@ -1527,7 +1480,6 @@ void SessionTabPanel::resized()
     auto r = getLocalBounds().reduced(sc(8));
     loadButton.setBounds({});
     analyzeButton.setBounds({});
-    currentPlayButton.setBounds({});
     cancelButton.setBounds({});
     presetLabel.setBounds({});
     presetCombo.setBounds({});
@@ -1566,6 +1518,20 @@ void SessionTabPanel::resized()
     progressBar.setBounds(r.removeFromTop(sc(12)));
     r.removeFromTop(sc(6));
 
+    // Unified transport bar: [Source ▾] [Audition: Both Partials Residual] [Smear] [Play]
+    auto transportRow = r.removeFromTop(sc(24));
+    transportSourceLabel.setBounds(transportRow.removeFromLeft(sc(48)));
+    transportSourceCombo.setBounds(transportRow.removeFromLeft(sc(108)).reduced(sc(1)));
+    transportRow.removeFromLeft(sc(10));
+    transportAuditionLabel.setBounds(transportRow.removeFromLeft(sc(54)));
+    auditionBothButton.setBounds(transportRow.removeFromLeft(sc(54)));
+    auditionPartialsButton.setBounds(transportRow.removeFromLeft(sc(72)));
+    auditionResidualButton.setBounds(transportRow.removeFromLeft(sc(78)));
+    transportRow.removeFromLeft(sc(10));
+    smearEffectToggle.setBounds(transportRow.removeFromLeft(sc(70)));
+    transportPlayButton.setBounds(transportRow.removeFromRight(sc(96)).reduced(sc(1)));
+    r.removeFromTop(sc(6));
+
     const bool narrowSourceCards = r.getWidth() < 680;
     auto sourceCards = r.removeFromTop(narrowSourceCards ? 232 : 112);
     r.removeFromTop(sc(6));
@@ -1582,12 +1548,7 @@ void SessionTabPanel::resized()
                                juce::Label& overview,
                                juce::TextButton& chooseButton,
                                juce::TextButton& reanalyzeButton,
-                               juce::TextButton& playButton,
-                               juce::TextButton& exportButton,
-                               juce::Label& auditionLabel,
-                               juce::ToggleButton& bothButton,
-                               juce::ToggleButton& partialsButton,
-                               juce::ToggleButton& residualButton) {
+                               juce::TextButton& exportButton) {
         group.setBounds(area);
         auto inner = area.reduced(10, 14);
         auto buttonCol = inner.removeFromRight(narrowSourceCards ? 132 : 192);
@@ -1595,19 +1556,11 @@ void SessionTabPanel::resized()
         buttonCol.removeFromTop(4);
         reanalyzeButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
         buttonCol.removeFromTop(4);
-        playButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
-        buttonCol.removeFromTop(4);
-        exportButton.setBounds(buttonCol.removeFromTop(18).reduced(2));
+        exportButton.setBounds(buttonCol.removeFromTop(24).reduced(2));
         inner.removeFromRight(6);
         heading.setBounds({});
         meta.setBounds(inner.removeFromTop(24));
         overview.setBounds(inner.removeFromTop(24));
-        inner.removeFromTop(4);
-        auto auditionRow = inner.removeFromTop(24);
-        auditionLabel.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 54 : 62));
-        bothButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 54 : 62));
-        partialsButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 72 : 82));
-        residualButton.setBounds(auditionRow.removeFromLeft(narrowSourceCards ? 78 : 88));
     };
 
     if (narrowSourceCards)
@@ -1619,12 +1572,7 @@ void SessionTabPanel::resized()
                         sourceAOverviewLabel,
                         sourceALoadAnalyzeButton,
                         sourceAUseCurrentButton,
-                        sourceAListenButton,
-                        exportSourceAButton,
-                        sourceAAuditionLabel,
-                        sourceABothButton,
-                        sourceAPartialsButton,
-                        sourceAResidualButton);
+                        exportSourceAButton);
         sourceCards.removeFromTop(4);
         placeSourceSlot(sourceCards.removeFromTop(112).reduced(0, 1),
                         sourceBGroup,
@@ -1633,12 +1581,7 @@ void SessionTabPanel::resized()
                         sourceBOverviewLabel,
                         sourceBLoadAnalyzeButton,
                         sourceBUseCurrentButton,
-                        sourceBListenButton,
-                        exportSourceBButton,
-                        sourceBAuditionLabel,
-                        sourceBBothButton,
-                        sourceBPartialsButton,
-                        sourceBResidualButton);
+                        exportSourceBButton);
     }
     else
     {
@@ -1652,12 +1595,7 @@ void SessionTabPanel::resized()
                         sourceAOverviewLabel,
                         sourceALoadAnalyzeButton,
                         sourceAUseCurrentButton,
-                        sourceAListenButton,
-                        exportSourceAButton,
-                        sourceAAuditionLabel,
-                        sourceABothButton,
-                        sourceAPartialsButton,
-                        sourceAResidualButton);
+                        exportSourceAButton);
         placeSourceSlot(sourceB,
                         sourceBGroup,
                         sourceBLabel,
@@ -1665,26 +1603,15 @@ void SessionTabPanel::resized()
                         sourceBOverviewLabel,
                         sourceBLoadAnalyzeButton,
                         sourceBUseCurrentButton,
-                        sourceBListenButton,
-                        exportSourceBButton,
-                        sourceBAuditionLabel,
-                        sourceBBothButton,
-                        sourceBPartialsButton,
-                        sourceBResidualButton);
+                        exportSourceBButton);
     }
     body.removeFromTop(sc(4));
 
     auto timelineArea = body.removeFromTop(juce::jmin(sc(92), juce::jmax(sc(72), body.getHeight() / 5)));
     auto timelineHeader = timelineArea.removeFromTop(sc(22));
     morphTimelineLabel.setBounds(timelineHeader.removeFromLeft(sc(102)));
-    morphTimelinePlayButton.setBounds(timelineHeader.removeFromLeft(sc(112)).reduced(sc(1)));
     morphTimelineBounceButton.setBounds(timelineHeader.removeFromLeft(sc(128)).reduced(sc(1)));
     timelineHeader.removeFromLeft(sc(4));
-    morphTimelineAuditionLabel.setBounds(timelineHeader.removeFromLeft(sc(46)));
-    morphTimelineBothButton.setBounds(timelineHeader.removeFromLeft(sc(44)));
-    morphTimelinePartialsButton.setBounds(timelineHeader.removeFromLeft(sc(58)));
-    morphTimelineResidualButton.setBounds(timelineHeader.removeFromLeft(sc(62)));
-    timelineHeader.removeFromLeft(sc(2));
     morphTimelineResetButton.setBounds(timelineHeader.removeFromLeft(sc(52)).reduced(sc(1)));
     morphTimelineHintLabel.setBounds({});
     morphTimelineEditor.setBounds(timelineArea.reduced(sc(2)));
@@ -1986,6 +1913,9 @@ void SessionTabPanel::runSmearnovApply()
     int selFirst = -1, selLast = -1;
     spectroPanel.getSelectedFrameRange(selFirst, selLast);
     audioProcessor.startSmearnovApply(spectroPanel.getViewedSource(), selFirst, selLast);
+    // Apply bakes smear into the source; clear the live-preview toggle so the baked result
+    // isn't double-smeared on the next Play.
+    smearEffectToggle.setToggleState(false, juce::dontSendNotification);
     smearStatusLabel.setText("Applying smear...", juce::dontSendNotification);
     refreshFromProcessor();
 }
@@ -2004,17 +1934,15 @@ void SessionTabPanel::refreshFromProcessor()
     const bool sourceBPlaying = playing && playbackKind == AtsPreviewPlaybackKind::SourceB;
     const bool currentPreviewPlaying = playing && playbackKind == AtsPreviewPlaybackKind::MorphPreview;
     const bool timelinePlaying = playing && playbackKind == AtsPreviewPlaybackKind::MorphTimeline;
-    morphTimelinePlayButton.setEnabled(timelinePlaying || (audioProcessor.canPlayMorphPreview() && !workerBusy));
-    currentPlayButton.setButtonText(currentPreviewPlaying ? "Stop" : (workerBusy ? "Wait" : "Play"));
-    sourceAListenButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::SourceA ? "Stop A"
-                                                                                                  : "Play A");
-    sourceBListenButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::SourceB ? "Stop B"
-                                                                                                  : "Play B");
-    morphTimelinePlayButton.setButtonText(playing && playbackKind == AtsPreviewPlaybackKind::MorphTimeline
-                                              ? "Stop Timeline"
-                                              : (workerBusy && audioProcessor.canPlayMorphPreview()
-                                                     ? "Preparing..."
-                                                     : "Play Timeline"));
+    juce::ignoreUnused(sourceAPlaying, sourceBPlaying, currentPreviewPlaying, timelinePlaying);
+    // Single transport button: "Stop" while anything previews, "Preparing..." while a heavy
+    // render is in flight (timeline), "Wait" while the worker is otherwise busy, else "Play".
+    if (playing)
+        transportPlayButton.setButtonText("Stop");
+    else if (workerBusy && transportSourceCombo.getSelectedId() == 4 && audioProcessor.canPlayMorphPreview())
+        transportPlayButton.setButtonText("Preparing...");
+    else
+        transportPlayButton.setButtonText(workerBusy ? "Wait" : "Play");
     morphTimelineBounceButton.setEnabled(!workerBusy && audioProcessor.canPlayMorphPreview());
 
     switch (audioProcessor.getUiState())
@@ -2121,17 +2049,37 @@ void SessionTabPanel::refreshFromProcessor()
     sourceBLoadAnalyzeButton.setEnabled(!workerBusy);
     exportSourceAButton.setEnabled(sourceInfoA.hasModel && !workerBusy);
     exportSourceBButton.setEnabled(sourceInfoB.hasModel && !workerBusy);
-    currentPlayButton.setEnabled(currentPreviewPlaying || (hasCurrentModel && !workerBusy));
     sourceAUseCurrentButton.setEnabled(hasSourceAWav && !workerBusy);
     sourceBUseCurrentButton.setEnabled(hasSourceBWav && !workerBusy);
-    sourceAListenButton.setEnabled(sourceAPlaying || (sourceInfoA.hasModel && !workerBusy));
-    sourceBListenButton.setEnabled(sourceBPlaying || (sourceInfoB.hasModel && !workerBusy));
-    sourceAResidualButton.setEnabled(!sourceInfoA.hasModel || sourceInfoA.hasResidual);
-    sourceBResidualButton.setEnabled(!sourceInfoB.hasModel || sourceInfoB.hasResidual);
-    if (sourceInfoA.hasModel && !sourceInfoA.hasResidual && sourceAResidualButton.getToggleState())
-        sourceABothButton.setToggleState(true, juce::dontSendNotification);
-    if (sourceInfoB.hasModel && !sourceInfoB.hasResidual && sourceBResidualButton.getToggleState())
-        sourceBBothButton.setToggleState(true, juce::dontSendNotification);
+
+    // Transport enable + audition availability depend on the selected source.
+    const int transportSourceId = transportSourceCombo.getSelectedId();
+    bool selectedCanPlay = false;
+    bool selectedHasResidual = true;
+    switch (transportSourceId)
+    {
+        case 2: // Source A
+            selectedCanPlay = sourceInfoA.hasModel;
+            selectedHasResidual = !sourceInfoA.hasModel || sourceInfoA.hasResidual;
+            break;
+        case 3: // Source B
+            selectedCanPlay = sourceInfoB.hasModel;
+            selectedHasResidual = !sourceInfoB.hasModel || sourceInfoB.hasResidual;
+            break;
+        case 4: // Timeline
+            selectedCanPlay = audioProcessor.canPlayMorphPreview();
+            selectedHasResidual = true;
+            break;
+        case 1: // Current
+        default:
+            selectedCanPlay = hasCurrentModel;
+            selectedHasResidual = !hasCurrentModel || hasRes;
+            break;
+    }
+    transportPlayButton.setEnabled(playing || (selectedCanPlay && !workerBusy));
+    auditionResidualButton.setEnabled(selectedHasResidual);
+    if (!selectedHasResidual && auditionResidualButton.getToggleState())
+        auditionBothButton.setToggleState(true, juce::dontSendNotification);
 
     refreshMorphSnapshotControls();
     refreshMorphTimeline();

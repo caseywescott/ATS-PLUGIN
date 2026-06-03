@@ -55,5 +55,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqShapeAmountAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqShapePivotAttach;
 
+    uint64_t lastDisplayShapeRevision { std::numeric_limits<uint64_t>::max() };
+    bool lastLinearState { true };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthTabPanel)
 };

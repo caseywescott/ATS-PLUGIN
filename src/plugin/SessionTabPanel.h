@@ -117,10 +117,9 @@ private:
     void refreshMorphBandDiagnostics();
     void refreshMorphTimeline();
     void setMorphTimelinePreset(std::vector<AtsMorphTimelinePoint> points);
-    void playMorphTimeline();
     void bounceMorphTimeline();
-    int getMorphTimelineAuditionModeIndex() const;
-    int getSourceAuditionModeIndex(int slotIndex) const;
+    void transportPlay();
+    int getAuditionModeIndex() const;
     void exportMorphSourceSlotAts(int slotIndex);
 
     void setActiveControlTab(int tab);
@@ -135,8 +134,18 @@ private:
 
     juce::TextButton loadButton { "Import WAV" };
     juce::TextButton analyzeButton { "Analyze" };
-    juce::TextButton currentPlayButton { "Play" };
     juce::TextButton cancelButton { "Cancel" };
+
+    // Unified transport bar: one Play/Stop, a source selector, a single audition-mode
+    // radio group, and a global non-destructive Smear preview toggle.
+    juce::Label transportSourceLabel;
+    juce::ComboBox transportSourceCombo;
+    juce::TextButton transportPlayButton { "Play" };
+    juce::Label transportAuditionLabel;
+    juce::ToggleButton auditionBothButton { "Both" };
+    juce::ToggleButton auditionPartialsButton { "Partials" };
+    juce::ToggleButton auditionResidualButton { "Residual" };
+    juce::ToggleButton smearEffectToggle { "Smear" };
     juce::ComboBox presetCombo;
     juce::TextButton savePresetButton { "Save preset" };
     juce::TextButton importAtsButton { "Import ATS..." };
@@ -164,18 +173,8 @@ private:
     juce::TextButton sourceBLoadAnalyzeButton { "Analyze Source B" };
     juce::TextButton sourceAUseCurrentButton { "Use Current" };
     juce::TextButton sourceBUseCurrentButton { "Use Current" };
-    juce::TextButton sourceAListenButton { "Listen A" };
-    juce::TextButton sourceBListenButton { "Listen B" };
     juce::TextButton exportSourceAButton { "Export ATS" };
     juce::TextButton exportSourceBButton { "Export ATS" };
-    juce::Label sourceAAuditionLabel;
-    juce::Label sourceBAuditionLabel;
-    juce::ToggleButton sourceABothButton { "Both" };
-    juce::ToggleButton sourceAPartialsButton { "Partials" };
-    juce::ToggleButton sourceAResidualButton { "Residual" };
-    juce::ToggleButton sourceBBothButton { "Both" };
-    juce::ToggleButton sourceBPartialsButton { "Partials" };
-    juce::ToggleButton sourceBResidualButton { "Residual" };
     juce::Label morphSnapshotLabel;
     juce::Label morphSnapshotStatusLabel;
     std::array<juce::TextButton, ats_param::kMorphVariationSlotCount> morphVariationRecallButtons;
@@ -183,11 +182,6 @@ private:
     juce::Label morphTimelineLabel;
     juce::Label morphTimelineHintLabel;
     MorphTimelineEditor morphTimelineEditor;
-    juce::TextButton morphTimelinePlayButton { "Play Timeline" };
-    juce::Label morphTimelineAuditionLabel;
-    juce::ToggleButton morphTimelineBothButton { "Both" };
-    juce::ToggleButton morphTimelinePartialsButton { "Partials" };
-    juce::ToggleButton morphTimelineResidualButton { "Residual" };
     juce::TextButton morphTimelineBounceButton { "Bounce Timeline" };
     juce::TextButton morphTimelineResetButton { "Reset" };
     juce::Label morphSmoothingLabel;
