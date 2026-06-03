@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "scope": "morph-to-ats-metric-smoke",
+  "pairing_id": "harmonic_to_vibrato",
+  "description": "Synthetic metric report used to exercise the phase-0 morph metric harness before real morph renders exist.",
+  "endpoint_fidelity": [
+    {
+      "morph_amount": 0.0,
+      "target": "source_a",
+      "rms_error": 0.0,
+      "peak_error": 0.0
+    },
+    {
+      "morph_amount": 1.0,
+      "target": "source_b",
+      "rms_error": 0.0,
+      "peak_error": 0.0
+    }
+  ],
+  "per_band_power_delta": [
+    {
+      "morph_amount": 0.0,
+      "band_index": 4,
+      "delta_db": 0.0
+    },
+    {
+      "morph_amount": 0.25,
+      "band_index": 4,
+      "delta_db": 0.08
+    },
+    {
+      "morph_amount": 0.5,
+      "band_index": 4,
+      "delta_db": -0.11
+    },
+    {
+      "morph_amount": 0.75,
+      "band_index": 4,
+      "delta_db": 0.06
+    },
+    {
+      "morph_amount": 1.0,
+      "band_index": 4,
+      "delta_db": 0.0
+    }
+  ],
+  "correspondence_churn": [
+    {
+      "frame_index": 1,
+      "band_index": 4,
+      "changed_pairs": 0,
+      "total_pairs": 6,
+      "churn_fraction": 0.0
+    },
+    {
+      "frame_index": 2,
+      "band_index": 4,
+      "changed_pairs": 1,
+      "total_pairs": 8,
+      "churn_fraction": 0.125
+    }
+  ],
+  "trajectory_smoothness": [
+    {
+      "partial_id": "a:p1->b:p1",
+      "max_frequency_step_cents": 18.0,
+      "max_amplitude_step_db": 0.7
+    },
+    {
+      "partial_id": "a:p2->b:p2",
+      "max_frequency_step_cents": 24.0,
+      "max_amplitude_step_db": 1.1
+    }
+  ]
+}

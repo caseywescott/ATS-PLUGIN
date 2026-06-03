@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scope": "morph-to-ats-metric-tolerances",
+  "description": "Initial smoke-test tolerances for morph-to-ATS metric reports. These values are intentionally loose until real morph renders replace the synthetic metric fixture.",
+  "endpoint_fidelity": {
+    "max_rms_error": 0.0001,
+    "max_peak_error": 0.0001
+  },
+  "per_band_power_delta": {
+    "max_abs_delta_db": 0.5,
+    "required_morph_amounts": [0.0, 0.25, 0.5, 0.75, 1.0]
+  },
+  "correspondence_churn": {
+    "max_churn_fraction": 0.15
+  },
+  "trajectory_smoothness": {
+    "max_frequency_step_cents": 80.0,
+    "max_amplitude_step_db": 3.0
+  }
+}
