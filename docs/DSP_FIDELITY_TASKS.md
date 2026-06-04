@@ -30,13 +30,15 @@ Implementation note: Added `docs/DSP_FIDELITY_PRD.md` + this list. Ground-truth 
 
 Implementation note: `tests/estimator_accuracy_test.c`. **Key finding:** the live analyzer (Blackman-Harris, 2× zero-pad) is already near-exact on isolated stationary tones — 0.064 cents / 0.0018 dB worst-case. Unpadded regime is 0.534 cents / 0.031 dB (the QIFFT target). Two tones ~1.5 bins apart collapse to **1** peak (the reassignment/multi-res target). So Tier 1's real payoff is concentrated in Phase 2 (reassignment), Phase 3 (DDM non-stationary), and Phase 4 (multi-res) — not Phase 1 on clean tones. 11/11 CTest green.
 
-### Commit 3 — `test: extend morph metrics with transport cost and continuity`
+### Commit 3 — `test: extend morph metrics with transport cost and continuity` ✅
 
 **PRD:** §8
 
-- [ ] Add transport-cost and correspondence-churn metrics to the morph metric harness.
-- [ ] Add a pop-free continuity check across the morph sweep for count-mismatched source pairs.
-- [ ] Pin endpoint-fidelity tolerances (amount 0/1) so OT work cannot regress them.
+- [x] Add transport-cost metrics to the morph metric harness (`check_transport_cost`): normalized cost bounded by `max_normalized_cost`, amount-0 endpoint anchored to 0, and monotone non-decreasing across the sweep within `max_monotonicity_violation` — the continuity contract the OT plan (Commit 11) must satisfy. (Correspondence-churn was already present; left intact.)
+- [x] Add a pop-free continuity check for count-mismatched source pairs (`check_count_mismatch_continuity`): each row must describe an actually count-mismatched pair (A≠B partials) and bounds the largest single-step amplitude (`max_amplitude_jump_db`) and frequency (`max_frequency_jump_cents`) jump from birth/death/mass-split handling.
+- [x] Pin endpoint-fidelity tolerances: harness now enforces a hard `ENDPOINT_TOLERANCE_CEILING = 1e-3` on `max_rms_error`/`max_peak_error` independent of the JSON, so OT work can tighten but never loosen the amount-0/1 contract.
+
+Implementation note: `tests/morph_metric_harness.py` + the two `tests/fixtures/morph_metric_*.json`. Both CTest targets green; four negative tests confirm each new gate fires (non-monotone cost, equal-count "mismatch" row, loosened endpoint tolerance, oversized amplitude pop). Tolerances stay intentionally loose pending real morph renders.
 
 ---
 

@@ -60,6 +60,44 @@
       "churn_fraction": 0.125
     }
   ],
+  "transport_cost": [
+    {
+      "morph_amount": 0.0,
+      "normalized_cost": 0.0
+    },
+    {
+      "morph_amount": 0.25,
+      "normalized_cost": 0.24
+    },
+    {
+      "morph_amount": 0.5,
+      "normalized_cost": 0.49
+    },
+    {
+      "morph_amount": 0.75,
+      "normalized_cost": 0.73
+    },
+    {
+      "morph_amount": 1.0,
+      "normalized_cost": 1.0
+    }
+  ],
+  "count_mismatch_continuity": [
+    {
+      "morph_amount": 0.5,
+      "source_a_partials": 6,
+      "source_b_partials": 8,
+      "max_amplitude_jump_db": 1.4,
+      "max_frequency_jump_cents": 35.0
+    },
+    {
+      "morph_amount": 0.75,
+      "source_a_partials": 6,
+      "source_b_partials": 8,
+      "max_amplitude_jump_db": 2.1,
+      "max_frequency_jump_cents": 52.0
+    }
+  ],
   "trajectory_smoothness": [
     {
       "partial_id": "a:p1->b:p1",

@@ -38,6 +38,13 @@ def require_list(report: dict[str, Any], field: str) -> list[Any]:
     return value
 
 
+# Endpoint fidelity is the contract the optimal-transport morph (Phase 7) must
+# never regress: at amount 0 the render must equal source A, at amount 1 source
+# B. To stop that contract being quietly loosened, the harness caps how large
+# the endpoint tolerances are allowed to be, independent of the JSON file.
+ENDPOINT_TOLERANCE_CEILING = 1.0e-3
+
+
 def check_tolerances(tolerances: dict[str, Any]) -> None:
     if tolerances.get("schema_version") != 1:
         raise ValueError("tolerances schema_version must be 1")
@@ -49,6 +56,8 @@ def check_tolerances(tolerances: dict[str, Any]) -> None:
         "per_band_power_delta": ("max_abs_delta_db",),
         "correspondence_churn": ("max_churn_fraction",),
         "trajectory_smoothness": ("max_frequency_step_cents", "max_amplitude_step_db"),
+        "transport_cost": ("max_normalized_cost", "max_monotonicity_violation"),
+        "count_mismatch_continuity": ("max_amplitude_jump_db", "max_frequency_jump_cents"),
     }.items():
         config = tolerances.get(group)
         if not isinstance(config, dict):
@@ -56,6 +65,16 @@ def check_tolerances(tolerances: dict[str, Any]) -> None:
         for field in fields:
             if as_finite_float(config.get(field), field, group) < 0.0:
                 raise ValueError(f"{group}: {field} must be non-negative")
+
+    # Pin the endpoint contract: tolerances may be tightened but not loosened
+    # past the ceiling, so optimal-transport work cannot mask an endpoint drift.
+    endpoint = tolerances["endpoint_fidelity"]
+    for field in ("max_rms_error", "max_peak_error"):
+        if float(endpoint[field]) > ENDPOINT_TOLERANCE_CEILING:
+            raise ValueError(
+                f"endpoint_fidelity.{field} {endpoint[field]} exceeds the pinned "
+                f"ceiling {ENDPOINT_TOLERANCE_CEILING}"
+            )
 
     required_amounts = tolerances["per_band_power_delta"].get("required_morph_amounts")
     if not isinstance(required_amounts, list) or not required_amounts:
@@ -178,6 +197,113 @@ def check_correspondence_churn(report: dict[str, Any], tolerances: dict[str, Any
     return failures
 
 
+def check_transport_cost(report: dict[str, Any], tolerances: dict[str, Any]) -> int:
+    """Validate the realized optimal-transport cost across the morph sweep.
+
+    Cost is the perceptual-frequency mass movement of the partial
+    correspondence at a given morph amount, normalized so that 1.0 is the full
+    A->B plan. The gate enforces the continuity properties the OT morph (Phase
+    7) must satisfy: endpoints are anchored (amount 0 moves no mass), cost is
+    bounded, and it rises monotonically with morph amount (no sudden re-pairing
+    that would pop). A small per-step monotonicity tolerance absorbs numerical
+    noise without permitting a real backward jump.
+    """
+    transport_tolerances = tolerances["transport_cost"]
+    max_cost = float(transport_tolerances["max_normalized_cost"])
+    max_violation = float(transport_tolerances["max_monotonicity_violation"])
+    rows = require_list(report, "transport_cost")
+
+    points: list[tuple[float, float]] = []
+    failures = 0
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"transport_cost[{index}] must be an object")
+        owner = f"transport_cost[{index}]"
+        amount = as_finite_float(row.get("morph_amount"), "morph_amount", owner)
+        cost = as_finite_float(row.get("normalized_cost"), "normalized_cost", owner)
+        if amount < 0.0 or amount > 1.0:
+            raise ValueError(f"{owner}: morph_amount must be between 0 and 1")
+        if cost < 0.0:
+            raise ValueError(f"{owner}: normalized_cost must be non-negative")
+        points.append((amount, cost))
+        if cost > max_cost:
+            print(f"{owner}: normalized_cost {cost} exceeds {max_cost}", file=sys.stderr)
+            failures += 1
+
+    points.sort(key=lambda item: item[0])
+    if points[0][0] != 0.0:
+        raise ValueError("transport_cost must include the amount 0 endpoint")
+    if abs(points[0][1]) > max_violation:
+        print(
+            f"transport_cost: amount 0 normalized_cost {points[0][1]} is not anchored to 0",
+            file=sys.stderr,
+        )
+        failures += 1
+    for (prev_amount, prev_cost), (amount, cost) in zip(points, points[1:]):
+        if cost < prev_cost - max_violation:
+            print(
+                f"transport_cost: cost drops from {prev_cost} (amount {prev_amount}) "
+                f"to {cost} (amount {amount})",
+                file=sys.stderr,
+            )
+            failures += 1
+    return failures
+
+
+def check_count_mismatch_continuity(report: dict[str, Any], tolerances: dict[str, Any]) -> int:
+    """Validate pop-free continuity for count-mismatched source pairs.
+
+    When A and B have different partial counts the correspondence must split or
+    merge mass rather than abruptly birthing/killing partials; the largest
+    single-step amplitude and frequency jump introduced by that handling is the
+    audible pop risk. Each row must describe an actually count-mismatched pair.
+    """
+    continuity_tolerances = tolerances["count_mismatch_continuity"]
+    max_amplitude_jump = float(continuity_tolerances["max_amplitude_jump_db"])
+    max_frequency_jump = float(continuity_tolerances["max_frequency_jump_cents"])
+    rows = require_list(report, "count_mismatch_continuity")
+
+    failures = 0
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"count_mismatch_continuity[{index}] must be an object")
+        owner = f"count_mismatch_continuity[{index}]"
+        amount = as_finite_float(row.get("morph_amount"), "morph_amount", owner)
+        source_a_partials = row.get("source_a_partials")
+        source_b_partials = row.get("source_b_partials")
+        amplitude_jump = as_finite_float(row.get("max_amplitude_jump_db"), "max_amplitude_jump_db", owner)
+        frequency_jump = as_finite_float(row.get("max_frequency_jump_cents"), "max_frequency_jump_cents", owner)
+
+        if amount < 0.0 or amount > 1.0:
+            raise ValueError(f"{owner}: morph_amount must be between 0 and 1")
+        for field, value in (
+            ("source_a_partials", source_a_partials),
+            ("source_b_partials", source_b_partials),
+        ):
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{owner}: {field} must be a positive integer")
+        if source_a_partials == source_b_partials:
+            raise ValueError(
+                f"{owner}: source partial counts must differ (this gate is for count-mismatched pairs)"
+            )
+        if amplitude_jump < 0.0 or frequency_jump < 0.0:
+            raise ValueError(f"{owner}: jump magnitudes must be non-negative")
+
+        if amplitude_jump > max_amplitude_jump:
+            print(
+                f"{owner}: max_amplitude_jump_db {amplitude_jump} exceeds {max_amplitude_jump}",
+                file=sys.stderr,
+            )
+            failures += 1
+        if frequency_jump > max_frequency_jump:
+            print(
+                f"{owner}: max_frequency_jump_cents {frequency_jump} exceeds {max_frequency_jump}",
+                file=sys.stderr,
+            )
+            failures += 1
+    return failures
+
+
 def check_trajectory_smoothness(report: dict[str, Any], tolerances: dict[str, Any]) -> int:
     trajectory_tolerances = tolerances["trajectory_smoothness"]
     max_frequency_step = float(trajectory_tolerances["max_frequency_step_cents"])
@@ -224,6 +350,8 @@ def main() -> int:
             check_endpoint_fidelity(report, tolerances)
             + check_per_band_power_delta(report, tolerances)
             + check_correspondence_churn(report, tolerances)
+            + check_transport_cost(report, tolerances)
+            + check_count_mismatch_continuity(report, tolerances)
             + check_trajectory_smoothness(report, tolerances)
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -237,6 +365,8 @@ def main() -> int:
         f"({len(report['endpoint_fidelity'])} endpoints, "
         f"{len(report['per_band_power_delta'])} band-power rows, "
         f"{len(report['correspondence_churn'])} churn rows, "
+        f"{len(report['transport_cost'])} transport-cost rows, "
+        f"{len(report['count_mismatch_continuity'])} count-mismatch rows, "
         f"{len(report['trajectory_smoothness'])} trajectories)"
     )
     return 0
