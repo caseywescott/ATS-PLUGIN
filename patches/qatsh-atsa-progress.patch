@@ -1,0 +1,68 @@
+diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
+index 753ab10..50f762c 100644
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -140,6 +140,9 @@ typedef struct {
+   int highest_bin;
+   int frames;
+   int type;
++  /* optional progress reporting (zero-initialized = disabled) */
++  void (*progress_cb)(void *user, double fraction);
++  void *progress_user;
+ } ANARGS;
+ 
+ /* ATS_FFT
+diff --git a/src/atsa/tracker.c b/src/atsa/tracker.c
+index 39816a8..b304fe6 100644
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
+@@ -204,6 +204,14 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   filptr = anargs->first_smp - M_2;   
+   /* main loop */
+   for (frame_n=0; frame_n<anargs->frames; frame_n++) {
++    /* report frame-tracking progress (throttled), mapped into [0, 0.75] */
++    if (anargs->progress_cb != NULL) {
++      int throttle = anargs->frames / 200;
++      if (throttle < 1) throttle = 1;
++      if (frame_n % throttle == 0)
++        anargs->progress_cb(anargs->progress_user,
++                            0.75 * (double)frame_n / (double)anargs->frames);
++    }
+     /* clear fft arrays */
+     for(k=0; k<anargs->fft_size; k++) fft_struct.fdr[k] = fft_struct.fdi[k] = 0.0f;
+     /* multiply by window */
+@@ -282,6 +290,7 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   free(tracks);
+ 
+   /* init sound */
++  if (anargs->progress_cb != NULL) anargs->progress_cb(anargs->progress_user, 0.78);
+   fprintf(stderr, "Initializing sound...\n");
+   sound = (ATS_SOUND *)malloc(sizeof(ATS_SOUND));
+   init_sound(sound, anargs->srate, (int)floor(anargs->hop_size * anargs->win_size), 
+@@ -308,18 +317,24 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   free(ana_frames);                                            
+ 
+   /* optimize sound */
++  if (anargs->progress_cb != NULL) anargs->progress_cb(anargs->progress_user, 0.82);
+   optimize_sound(anargs, sound);
+ 
+   /* compute  residual */
+-  if( anargs->type == 3 || anargs->type == 4 )
++  if( anargs->type == 3 || anargs->type == 4 ) {
++      if (anargs->progress_cb != NULL) anargs->progress_cb(anargs->progress_user, 0.86);
+       compute_residual(in_samps, sflen, sound, win_samps, anargs->srate, res, res_len);
++  }
+ 
+   /* free the rest of the memory */
+   free(win_samps);
+ 
+   /* analyze residual */
+-  if( anargs->type == 3 || anargs->type == 4 )
++  if( anargs->type == 3 || anargs->type == 4 ) {
++    if (anargs->progress_cb != NULL) anargs->progress_cb(anargs->progress_user, 0.94);
+     residual_analysis(*res, *res_len, s_rate, sound);
++  }
+ 
++  if (anargs->progress_cb != NULL) anargs->progress_cb(anargs->progress_user, 1.0);
+   return(sound);
+ }

@@ -29,10 +29,11 @@ static int next_pow2(int n)
 typedef struct
 {
     int found;
-    double frq;    /* Hz, current parabolic-in-dB estimator (peak_detection) */
-    double amp;    /* linear, window-norm scaled */
-    double pha;    /* radians */
-    double frq_re; /* Hz, derivative-window spectral reassignment (Phase 2 prototype) */
+    double frq;     /* Hz, current parabolic-in-dB estimator (peak_detection) */
+    double amp;     /* linear, window-norm scaled */
+    double pha;     /* radians, current linear phase_interp */
+    double pha_bin; /* radians, candidate: complex phase at the peak bin */
+    double frq_re;  /* Hz, derivative-window spectral reassignment (Phase 2 prototype) */
 } EstResult;
 
 /* Build a windowed cosine A*cos(2*pi*f*n/sr + phi), n=0..win_size-1, lay it into
@@ -41,7 +42,7 @@ typedef struct
 static EstResult estimate_tone(double f_true, double amp_true, double phi,
                                int win_size, int sample_rate, double pad_factor)
 {
-    EstResult out = { 0, 0.0, 0.0, 0.0, 0.0 };
+    EstResult out = { 0, 0.0, 0.0, 0.0, 0.0, 0.0 };
 
     const int fft_size = next_pow2((int) (pad_factor * (double) win_size));
     const int M_2 = (int) floor(((double) win_size - 1) / 2);
@@ -87,7 +88,7 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
     const int lowest_bin = 2;
     const int highest_bin = fft_size / 2;
     int peaks_size = 0;
-    ATS_PEAK* peaks = peak_detection(&fft_struct, lowest_bin, highest_bin, -120.0, norm, &peaks_size);
+    ATS_PEAK* peaks = peak_detection(&fft_struct, NULL, lowest_bin, highest_bin, -120.0, norm, &peaks_size);
 
     double best_df = 1.0e18;
     for (int i = 0; i < peaks_size; ++i)
@@ -124,6 +125,9 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
         {
             out.frq_re = out.frq;
         }
+        /* Candidate phase estimator: complex phase at the peak bin, same
+         * convention as to_polar (atan2(-y, x)). */
+        out.pha_bin = atan2(-fi, fr);
     }
 
     free(peaks);
@@ -164,6 +168,9 @@ int main(void)
     double worst_cents[2] = { 0.0, 0.0 };
     double worst_amp_db[2] = { 0.0, 0.0 };
     double worst_cents_re[2] = { 0.0, 0.0 };
+    double worst_pha_cur[2] = { 0.0, 0.0 };
+    double worst_pha_bin[2] = { 0.0, 0.0 };
+    const int M_2 = (int) floor(((double) win_size - 1) / 2);
 
     for (size_t pi = 0; pi < 2; ++pi)
     {
@@ -192,12 +199,25 @@ int main(void)
                         worst_amp_db[pi] = ae;
                     if (ce_re > worst_cents_re[pi])
                         worst_cents_re[pi] = ce_re;
+
+                    /* Ground-truth phase at the window center (FFT time origin,
+                     * sample M_2): wrap(2*pi*f*M_2/sr + phi). */
+                    const double theta = 2.0 * M_PI * f_true * (double) M_2 / (double) sr + 0.37;
+                    const double pe_cur = fabs(remainder(r.pha - theta, 2.0 * M_PI));
+                    const double pe_bin = fabs(remainder(r.pha_bin - theta, 2.0 * M_PI));
+                    if (pe_cur > worst_pha_cur[pi])
+                        worst_pha_cur[pi] = pe_cur;
+                    if (pe_bin > worst_pha_bin[pi])
+                        worst_pha_bin[pi] = pe_bin;
                 }
             }
         }
         printf("single-tone sweep (pad %.1fx): parabolic |freq err| = %.4f cents, "
                "reassigned |freq err| = %.4f cents, |amp err| = %.4f dB\n",
                pads[pi], worst_cents[pi], worst_cents_re[pi], worst_amp_db[pi]);
+        printf("  phase (pad %.1fx): linear phase_interp |err| = %.4f rad, "
+               "peak-bin phase |err| = %.4f rad\n",
+               pads[pi], worst_pha_cur[pi], worst_pha_bin[pi]);
     }
 
     const double fft_mag = (double) sr / (double) next_pow2(2 * win_size);
@@ -244,7 +264,7 @@ int main(void)
         }
         fft(ff.fdr, ff.fdi, fft_size, 1);
         int ps = 0;
-        ATS_PEAK* pk = peak_detection(&ff, 2, fft_size / 2, -120.0, norm, &ps);
+        ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size / 2, -120.0, norm, &ps);
         int near = 0;
         for (int i = 0; i < ps; ++i)
             if (pk[i].frq > f1 - 2.0 * fft_mag && pk[i].frq < f2 + 2.0 * fft_mag)

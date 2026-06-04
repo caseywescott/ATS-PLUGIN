@@ -25,6 +25,12 @@ jobs:
       - name: Clone Qatsh (ATSA + synthesis sources)
         run: git clone --depth 1 https://gitlab.com/dxarts/projects/ats/qatsh.git qatsh
 
+      - name: Apply Qatsh vendor patches
+        run: |
+          ./scripts/apply_qatsh_residual_fixes.sh apply
+          ./scripts/apply_qatsh_progress.sh apply
+          ./scripts/apply_qatsh_reassignment.sh apply
+
       - name: Install libsndfile (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsndfile1-dev

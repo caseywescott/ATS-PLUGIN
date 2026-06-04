@@ -69,14 +69,16 @@ Implementation note: `tests/estimator_accuracy_test.c`. **Key finding:** the liv
 
 Implementation note: Reassignment cut worst-case frequency error from **0.534 → 0.019 cents (~29×)** unpadded and **0.064 → 0.010 cents (~6×)** in the live 2× regime. Sign of the Auger-Flandrin correction flips because qatsh `fft(...,1)` uses the `+j` convention (per `to_polar`'s `atan2(-y,x)`). Two closely-spaced tones still collapse to one peak — reassignment sharpens a *resolved* peak but adds no resolution; that remains the Phase 4 target. The gate is met, so the qatsh integration (5b) is justified.
 
-### Commit 5b — `feat(atsa): reassigned instantaneous frequency and true phase`  **[ear]**
+### Commit 5b — `feat(atsa): reassigned instantaneous frequency`  **[ear — pending audition]**
 
 **PRD:** §6.2, §9
 
-- [ ] Port the validated reassignment estimator into `peak-detection.c` (derivative window built once alongside the analysis window in `tracker.c`).
-- [ ] Replace the linear `phase_interp` shortcut with the correct peak phase; remove the `// wrong method` path.
-- [ ] Validate on moving-partial fixtures (chirp/vibrato) and confirm round-trip/determinism.
-- [ ] Regenerate the patch, add CMake markers + apply-script entry, update CI.
+- [x] Port the validated reassignment estimator into `peak-detection.c` (`reassign_frq`, `ATSA_REASSIGN_FREQ` marker); derivative window + second per-frame FFT built in `tracker.c`. `peak_detection` gains a `dfft` arg (NULL → legacy parabolic).
+- [~] **Phase left unchanged — data-driven decision.** The Phase 0 harness measured `phase_interp` at <0.0015 rad worst-case; the `// wrong method` flag refers to already-fixed commented-out code, not the live path. Porting frequency-only avoids touching an already-correct estimator. (PRD ground-truth row updated.)
+- [x] Round-trip/determinism: all 11 CTest green with the patch live; `ats_roundtrip` passes. Moving-partial (chirp/vibrato) gains are a Phase 3 (DDM) concern — reassignment is exact for *stationary* sinusoids.
+- [x] Patch delivery: `patches/qatsh-atsa-reassignment.patch` (isolated from the unrelated progress-cb edits via pre-edit snapshots), `scripts/apply_qatsh_reassignment.sh`, CMake `ATS_REQUIRE_QATSH_REASSIGNMENT` marker guard (`ATSA_REASSIGN_FREQ` in `peak-detection.c` + `tracker.c`), `patches/README.md` section. Forward-apply + reverse-roundtrip verified on a clean tree.
+- [x] **Audition gate (passed 2026-06-05):** A/B renders in `Testing/reassign_audition/` (`guitar_baseline.wav` parabolic vs `guitar_reassign.wav` reassigned). A−B difference ≈ −46 dB RMS / −38 dB peak (~30 dB below signal). User confirmed the reassigned render sounds good.
+- [x] **CI gap resolved.** Root cause: CI cloned upstream `qatsh` (HEAD `5515648`) but never applied any patch, and the local working `qatsh` carried two uncommitted/unpatched deltas — the residual fixes *and* an orphan progress-cb edit (`an.progress_cb`, needed by `PluginProcessor`). The reassignment hunks in `tracker.c` sit adjacent to the progress block, so they only apply on top of it. Fixes: extracted the progress-cb delta into `patches/qatsh-atsa-progress.patch` + `scripts/apply_qatsh_progress.sh` + `ATS_REQUIRE_QATSH_PROGRESS` guard (marker: `progress_cb` field in `atsa.h`); CI `ci.yml` now applies residual → progress → reassignment after cloning. Verified end-to-end: fresh upstream clone + 3 patches + configure (3 guards pass) + build + 11/11 CTest green; negative test confirms guards fire on an unpatched clone.
 
 ---
 
