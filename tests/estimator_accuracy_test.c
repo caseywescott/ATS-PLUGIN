@@ -29,9 +29,10 @@ static int next_pow2(int n)
 typedef struct
 {
     int found;
-    double frq; /* Hz */
-    double amp; /* linear, window-norm scaled */
-    double pha; /* radians */
+    double frq;    /* Hz, current parabolic-in-dB estimator (peak_detection) */
+    double amp;    /* linear, window-norm scaled */
+    double pha;    /* radians */
+    double frq_re; /* Hz, derivative-window spectral reassignment (Phase 2 prototype) */
 } EstResult;
 
 /* Build a windowed cosine A*cos(2*pi*f*n/sr + phi), n=0..win_size-1, lay it into
@@ -40,7 +41,7 @@ typedef struct
 static EstResult estimate_tone(double f_true, double amp_true, double phi,
                                int win_size, int sample_rate, double pad_factor)
 {
-    EstResult out = { 0, 0.0, 0.0, 0.0 };
+    EstResult out = { 0, 0.0, 0.0, 0.0, 0.0 };
 
     const int fft_size = next_pow2((int) (pad_factor * (double) win_size));
     const int M_2 = (int) floor(((double) win_size - 1) / 2);
@@ -49,19 +50,38 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
     double* window = make_window(BLACKMAN_H, win_size);
     const double norm = window_norm(window, win_size);
 
+    /* Central-difference derivative of the analysis window (dimensionless,
+     * per-sample). Reassignment folds the 1/T into the sr/(2*pi) scale below. */
+    double* dwindow = (double*) malloc((size_t) win_size * sizeof(double));
+    for (int k = 0; k < win_size; ++k)
+    {
+        const double hp = window[k + 1 < win_size ? k + 1 : k];
+        const double hm = window[k - 1 >= 0 ? k - 1 : k];
+        const double span = (k + 1 < win_size && k - 1 >= 0) ? 0.5 : 1.0;
+        dwindow[k] = (hp - hm) * span;
+    }
+
     ATS_FFT fft_struct;
     fft_struct.size = fft_size;
     fft_struct.rate = sample_rate;
     fft_struct.fdr = (double*) calloc((size_t) fft_size, sizeof(double));
     fft_struct.fdi = (double*) calloc((size_t) fft_size, sizeof(double));
 
+    /* Second FFT with the derivative window, same circular placement so the
+     * window-centering phase ramp cancels in the X_dh/X_h ratio. */
+    double* gdr = (double*) calloc((size_t) fft_size, sizeof(double));
+    double* gdi = (double*) calloc((size_t) fft_size, sizeof(double));
+
     for (int k = 0; k < win_size; ++k)
     {
         const double s = amp_true * cos(2.0 * M_PI * f_true * (double) k / (double) sample_rate + phi);
-        fft_struct.fdr[(k + first_point) % fft_size] = window[k] * s;
+        const int idx = (k + first_point) % fft_size;
+        fft_struct.fdr[idx] = window[k] * s;
+        gdr[idx] = dwindow[k] * s;
     }
 
     fft(fft_struct.fdr, fft_struct.fdi, fft_size, 1);
+    fft(gdr, gdi, fft_size, 1);
 
     const double fft_mag = (double) sample_rate / (double) fft_size;
     const int lowest_bin = 2;
@@ -83,10 +103,35 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
         }
     }
 
-    (void) fft_mag;
+    if (out.found)
+    {
+        /* Reassign frequency at the integer bin nearest the detected peak:
+         *   f_hat = f_bin - (sr/2pi) * Im( X_Dh / X_h )      (Auger-Flandrin)
+         * qatsh's fft(...,1) uses the +j convention (see to_polar's
+         * atan2(-y,x)), i.e. it returns conj of the -j-convention spectrum, so
+         * Im( X_Dh/X_h ) is negated relative to the textbook derivation and the
+         * correction sign flips to +. */
+        const int b = (int) (out.frq / fft_mag + 0.5);
+        const double fr = fft_struct.fdr[b], fi = fft_struct.fdi[b];
+        const double gr = gdr[b], gi = gdi[b];
+        const double denom = fr * fr + fi * fi;
+        if (denom > 0.0)
+        {
+            const double im_ratio = (gi * fr - gr * fi) / denom;
+            out.frq_re = (double) b * fft_mag + (sample_rate / (2.0 * M_PI)) * im_ratio;
+        }
+        else
+        {
+            out.frq_re = out.frq;
+        }
+    }
+
     free(peaks);
     free(fft_struct.fdr);
     free(fft_struct.fdi);
+    free(gdr);
+    free(gdi);
+    free(dwindow);
     free(window);
     return out;
 }
@@ -118,6 +163,7 @@ int main(void)
     const double pads[] = { 2.0, 1.0 };
     double worst_cents[2] = { 0.0, 0.0 };
     double worst_amp_db[2] = { 0.0, 0.0 };
+    double worst_cents_re[2] = { 0.0, 0.0 };
 
     for (size_t pi = 0; pi < 2; ++pi)
     {
@@ -139,15 +185,19 @@ int main(void)
                     }
                     const double ce = fabs(cents(r.frq, f_true));
                     const double ae = fabs(db(r.amp / amps[ai]));
+                    const double ce_re = fabs(cents(r.frq_re, f_true));
                     if (ce > worst_cents[pi])
                         worst_cents[pi] = ce;
                     if (ae > worst_amp_db[pi])
                         worst_amp_db[pi] = ae;
+                    if (ce_re > worst_cents_re[pi])
+                        worst_cents_re[pi] = ce_re;
                 }
             }
         }
-        printf("single-tone sweep (pad %.1fx): worst |freq err| = %.4f cents, worst |amp err| = %.4f dB\n",
-               pads[pi], worst_cents[pi], worst_amp_db[pi]);
+        printf("single-tone sweep (pad %.1fx): parabolic |freq err| = %.4f cents, "
+               "reassigned |freq err| = %.4f cents, |amp err| = %.4f dB\n",
+               pads[pi], worst_cents[pi], worst_cents_re[pi], worst_amp_db[pi]);
     }
 
     const double fft_mag = (double) sr / (double) next_pow2(2 * win_size);
@@ -158,6 +208,16 @@ int main(void)
         return fprintf(stderr, "FAIL: freq error %.4f cents exceeds baseline 0.5\n", worst_cents[0]), 1;
     if (worst_amp_db[0] > 0.05)
         return fprintf(stderr, "FAIL: amp error %.4f dB exceeds baseline 0.05\n", worst_amp_db[0]), 1;
+
+    /* Phase 2 numerical gate: derivative-window reassignment must beat the
+     * parabolic estimator on the unpadded regime, where parabolic bias is
+     * largest. Reassignment is exact for stationary tones, so this is a wide
+     * margin -- if it is not met, the qatsh integration is not worth doing. */
+    if (!(worst_cents_re[1] < 0.25 * worst_cents[1]))
+        return fprintf(stderr,
+                       "FAIL: reassignment (%.4f cents) did not beat parabolic (%.4f cents) by 4x\n",
+                       worst_cents_re[1], worst_cents[1]),
+               1;
 
     /* --- Two closely-spaced tones (resolution reference, documented) -------- */
     {

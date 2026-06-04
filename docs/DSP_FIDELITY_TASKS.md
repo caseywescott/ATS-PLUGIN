@@ -55,14 +55,28 @@ Implementation note: `tests/estimator_accuracy_test.c`. **Key finding:** the liv
 
 ## Phase 2 — Spectral Reassignment / Correct Phase
 
-### Commit 5 — `feat(atsa): reassigned instantaneous frequency and true phase`
+> **Reordered to front:** the Phase 0 harness showed the parabolic estimator is
+> already near-exact on padded isolated tones, so QIFFT (Phase 1) buys little.
+> Reassignment is the higher-value change — it both sharpens frequency and gives
+> the correct phase (fixing the `// wrong method` shortcut) — so it goes first.
+
+### Commit 5a — `test: prototype derivative-window reassignment (numerical gate)` ✅
+
+**PRD:** §6.2, §8
+
+- [x] Add a derivative-of-window auxiliary FFT and reassigned-frequency estimator to `estimator_accuracy_test.c`.
+- [x] Demonstrate it beats parabolic in the unpadded regime (PRD §8 gate before touching the vendored core).
+
+Implementation note: Reassignment cut worst-case frequency error from **0.534 → 0.019 cents (~29×)** unpadded and **0.064 → 0.010 cents (~6×)** in the live 2× regime. Sign of the Auger-Flandrin correction flips because qatsh `fft(...,1)` uses the `+j` convention (per `to_polar`'s `atan2(-y,x)`). Two closely-spaced tones still collapse to one peak — reassignment sharpens a *resolved* peak but adds no resolution; that remains the Phase 4 target. The gate is met, so the qatsh integration (5b) is justified.
+
+### Commit 5b — `feat(atsa): reassigned instantaneous frequency and true phase`  **[ear]**
 
 **PRD:** §6.2, §9
 
-- [ ] Add derivative-of-window (or phase-difference) auxiliary FFT(s) to compute reassigned frequency.
-- [ ] Replace the linear `phase_interp` shortcut with the correct peak phase at the reassigned location; remove the `// wrong method` path.
-- [ ] Validate on closely-spaced and moving-partial fixtures in the harness (resolution + phase-error metrics).
-- [ ] Update patch, markers, and CI.
+- [ ] Port the validated reassignment estimator into `peak-detection.c` (derivative window built once alongside the analysis window in `tracker.c`).
+- [ ] Replace the linear `phase_interp` shortcut with the correct peak phase; remove the `// wrong method` path.
+- [ ] Validate on moving-partial fixtures (chirp/vibrato) and confirm round-trip/determinism.
+- [ ] Regenerate the patch, add CMake markers + apply-script entry, update CI.
 
 ---
 
