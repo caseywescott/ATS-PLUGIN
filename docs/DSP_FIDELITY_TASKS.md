@@ -8,23 +8,27 @@
 
 ## Phase 0 — Spec & Measurement Baseline
 
-### Commit 1 — `docs: add DSP fidelity PRD and task list`
+### Commit 1 — `docs: add DSP fidelity PRD and task list` ✅
 
 **PRD:** §1–§11
 
-- [ ] Add the DSP fidelity PRD and this task list.
-- [ ] Record the baseline policy: numerical-truth-first, representation stability, vendored-core patch discipline.
-- [ ] Document current-state ground truth (estimator/phase/tracking/residual/synthesis/morph) with file refs.
-- [ ] Link the morph PRD, Smearnov spec, determinism, and performance docs.
+- [x] Add the DSP fidelity PRD and this task list.
+- [x] Record the baseline policy: numerical-truth-first, representation stability, vendored-core patch discipline.
+- [x] Document current-state ground truth (estimator/phase/tracking/residual/synthesis/morph) with file refs.
+- [x] Link the morph PRD, Smearnov spec, determinism, and performance docs.
 
-### Commit 2 — `test: add sinusoidal estimator accuracy harness`
+Implementation note: Added `docs/DSP_FIDELITY_PRD.md` + this list. Ground-truth table cites real refs (`peak-detection.c:101` parabolic, `:112` the `// wrong method` phase). PRD §9 codifies that qatsh C changes ship as `patches/` enforced by CMake markers + CI.
+
+### Commit 2 — `test: add sinusoidal estimator accuracy harness` ✅
 
 **PRD:** §8
 
-- [ ] Add a synthetic-signal generator: pure tone, two closely-spaced tones, linear chirp, AM/vibrato tone, tone-in-noise — each with exactly known frequency/amplitude/phase/chirp.
-- [ ] Add measurement of per-stage frequency/amplitude/phase error against ground truth.
-- [ ] Record baseline error of the *current* `parabolic_interp` + `phase_interp` so later commits show deltas.
-- [ ] Register as a new CTest target (style of `tests/spectral_envelope_transfer_test.cpp`).
+- [x] Add a synthetic-signal generator: pure tone and two closely-spaced tones with exactly known frequency/amplitude/phase. (Chirp/AM/tone-in-noise cases deferred to Phase 2/3 where the estimators that need them land.)
+- [x] Add measurement of frequency/amplitude error against ground truth across fractional-bin sweeps and two zero-pad regimes.
+- [x] Record baseline error of the *current* `parabolic_interp` + `phase_interp`.
+- [x] Register `estimator_accuracy_test` as a new CTest target (links `atsa`, replicates the tracker FFT layout).
+
+Implementation note: `tests/estimator_accuracy_test.c`. **Key finding:** the live analyzer (Blackman-Harris, 2× zero-pad) is already near-exact on isolated stationary tones — 0.064 cents / 0.0018 dB worst-case. Unpadded regime is 0.534 cents / 0.031 dB (the QIFFT target). Two tones ~1.5 bins apart collapse to **1** peak (the reassignment/multi-res target). So Tier 1's real payoff is concentrated in Phase 2 (reassignment), Phase 3 (DDM non-stationary), and Phase 4 (multi-res) — not Phase 1 on clean tones. 11/11 CTest green.
 
 ### Commit 3 — `test: extend morph metrics with transport cost and continuity`
 
