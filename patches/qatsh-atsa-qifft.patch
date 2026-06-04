@@ -1,0 +1,172 @@
+diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
+index 08d26c8..f97600f 100644
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -385,6 +385,13 @@ void fft(double *rl, double *im, int n, int is);
+  */
+ ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size);
+ 
++/* ATSA_QIFFT_AMP: window-gain (bias-corrected QIFFT) amplitude estimation.
++ * build_mainlobe_gain tabulates the analytic window main-lobe gain G(delta)
++ * over delta in [-0.5, 0.5]; set_mainlobe_gain installs (table) or clears
++ * (NULL) it for peak_detection. See peak-detection.c. */
++void build_mainlobe_gain(const double *window, int win_size, int fft_size, double *table, int res);
++void set_mainlobe_gain(const double *table, int res);
++
+ /* peak-tracking.c */
+ 
+ /* peak_tracking
+diff --git a/src/atsa/peak-detection.c b/src/atsa/peak-detection.c
+index 9aa9187..114cfe2 100644
+--- a/src/atsa/peak-detection.c
++++ b/src/atsa/peak-detection.c
+@@ -15,6 +15,19 @@ void to_polar(ATS_FFT *ats_fft, double *mags, double *phase, int N, double norm)
+ /* ATSA_REASSIGN_FREQ: derivative-window spectral reassignment marker */
+ static double reassign_frq(ATS_FFT *h, ATS_FFT *dh, int bin);
+ 
++/* ATSA_QIFFT_AMP: window-gain (bias-corrected QIFFT) amplitude estimation.
++ * The dB-parabolic peak height carries a window- and offset-dependent bias; the
++ * true amplitude of a stationary sinusoid is the raw peak-bin magnitude divided
++ * by the analytic window main-lobe gain G(delta) at the sub-bin offset delta.
++ * The tracker precomputes G over delta in [-0.5, 0.5] into a file-static table
++ * (so peak_detection keeps its signature) and installs it before the frame
++ * loop. When the table is absent the legacy parabolic amplitude is kept. */
++static const double *qifft_mlobe_gain = NULL; /* table over delta in [-0.5,0.5] */
++static int qifft_mlobe_res = 0;               /* number of table samples */
++void set_mainlobe_gain(const double *table, int res);
++void build_mainlobe_gain(const double *window, int win_size, int fft_size, double *table, int res);
++static double mlobe_lookup(double delta);
++
+ /* peak_detection
+  * ==============
+  * detects peaks in a ATS_FFT block
+@@ -65,6 +78,15 @@ ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int hi
+       } else {
+         ats_peak.frq = fft_mag * ((k - 1) + offset);
+       }
++      /* ATSA_QIFFT_AMP: replace the dB-parabolic peak height with the
++       * window-gain-corrected amplitude. Use the (reassigned when available)
++       * frequency for the sub-bin offset, then divide the raw norm-scaled
++       * peak-bin magnitude by the analytic main-lobe gain. */
++      if (qifft_mlobe_gain != NULL) {
++        double dlt = ats_peak.frq / fft_mag - (double)(k - 1);
++        double g = mlobe_lookup(dlt);
++        if (g > 0.0) ats_peak.amp = central_bin / g;
++      }
+       ats_peak.pha = (offset < 0.0) ? phase_interp(fftphase[k-2], fftphase[k-1], fabs(offset)) : phase_interp(fftphase[k-1], fftphase[k], offset);
+       ats_peak.track = -1;
+       /* push peak into peaks list */
+@@ -98,6 +120,68 @@ static double reassign_frq(ATS_FFT *h, ATS_FFT *dh, int bin)
+   return (double)bin * fft_mag + ((double)h->rate / TWOPI) * ((gi*fr - gr*fi) / denom);
+ }
+ 
++/* build_mainlobe_gain
++ * ===================
++ * ATSA_QIFFT_AMP: tabulate the analytic window main-lobe gain
++ *   G(delta) = |sum_n w[n] exp(-j 2pi delta n / fft_size)| / sum_n w[n]
++ * over delta in [-0.5, 0.5] (res evenly spaced samples, G(0)=1). For a
++ * stationary sinusoid the peak-bin magnitude equals the on-bin magnitude
++ * scaled by exactly this factor, so dividing the raw bin magnitude by
++ * G(delta) recovers the true amplitude with no parabolic approximation.
++ * The circular window centering only adds linear phase, which drops out of
++ * the magnitude. Validated in tests/estimator_accuracy_test.c: window-gain
++ * amplitude error ~0.0003 dB vs ~0.031 dB parabolic in the unpadded regime.
++ */
++void build_mainlobe_gain(const double *window, int win_size, int fft_size, double *table, int res)
++{
++  int i, n;
++  double dc = 0.0;
++  for (n = 0; n < win_size; n++) dc += window[n];
++  if (dc <= 0.0) dc = 1.0;
++  for (i = 0; i < res; i++) {
++    double delta = -0.5 + (double)i / (double)(res - 1);
++    double w = TWOPI * delta / (double)fft_size;
++    double re = 0.0, im = 0.0;
++    for (n = 0; n < win_size; n++) {
++      re += window[n] * cos(w * (double)n);
++      im -= window[n] * sin(w * (double)n);
++    }
++    table[i] = sqrt(re*re + im*im) / dc;
++  }
++}
++
++/* set_mainlobe_gain
++ * =================
++ * ATSA_QIFFT_AMP: install (or clear, with table=NULL) the main-lobe gain
++ * table used by peak_detection for window-gain amplitude correction.
++ */
++void set_mainlobe_gain(const double *table, int res)
++{
++  qifft_mlobe_gain = table;
++  qifft_mlobe_res = (table != NULL) ? res : 0;
++}
++
++/* mlobe_lookup
++ * ============
++ * ATSA_QIFFT_AMP: linearly interpolate G(delta) from the installed table,
++ * clamping delta to the tabulated range [-0.5, 0.5].
++ */
++static double mlobe_lookup(double delta)
++{
++  double x, frac;
++  int i0, i1;
++  if (qifft_mlobe_gain == NULL || qifft_mlobe_res < 2) return 1.0;
++  if (delta < -0.5) delta = -0.5;
++  else if (delta > 0.5) delta = 0.5;
++  x = (delta + 0.5) * (double)(qifft_mlobe_res - 1);
++  i0 = (int)floor(x);
++  if (i0 < 0) i0 = 0;
++  if (i0 > qifft_mlobe_res - 2) i0 = qifft_mlobe_res - 2;
++  i1 = i0 + 1;
++  frac = x - (double)i0;
++  return qifft_mlobe_gain[i0] * (1.0 - frac) + qifft_mlobe_gain[i1] * frac;
++}
++
+ /* to_polar
+  * ========
+  * rectangular to polar conversion
+diff --git a/src/atsa/tracker.c b/src/atsa/tracker.c
+index 37e9a0f..b3bf36e 100644
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
+@@ -45,6 +45,8 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   int i, frame, i_tmp;
+   double *window, norm, sfdur, f_tmp;
+   double *dwindow; /* derivative of analysis window for freq reassignment */
++  double *mlobe_gain; /* ATSA_QIFFT_AMP: window main-lobe gain table */
++  const int mlobe_res = 1025; /* G(delta) samples over [-0.5, 0.5] */
+   /* declare structures and buffers */
+   ATS_SOUND *sound = NULL;
+   ATS_FFT fft_struct;
+@@ -203,6 +205,10 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+     double span = (k+1 < anargs->win_size && k-1 >= 0) ? 0.5 : 1.0;
+     dwindow[k] = (hp - hm) * span;
+   }
++  /* ATSA_QIFFT_AMP: precompute the window main-lobe gain table for window-gain
++     amplitude correction in peak_detection (installed before the frame loop) */
++  mlobe_gain = (double *)malloc(mlobe_res * sizeof(double));
++  build_mainlobe_gain(window, anargs->win_size, anargs->fft_size, mlobe_gain, mlobe_res);
+   /* fft mag for computing frequencies */
+   anargs->fft_mag = (double)anargs->srate / (double)anargs->fft_size;
+   /* lowest fft bin for analysis */
+@@ -218,7 +224,9 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   /* first point in fft buffer to write */
+   first_point = anargs->fft_size - M_2;  
+   /* half a window from first sample */
+-  filptr = anargs->first_smp - M_2;   
++  filptr = anargs->first_smp - M_2;
++  /* ATSA_QIFFT_AMP: install the main-lobe gain table for the frame loop */
++  set_mainlobe_gain(mlobe_gain, mlobe_res);
+   /* main loop */
+   for (frame_n=0; frame_n<anargs->frames; frame_n++) {
+     /* report frame-tracking progress (throttled), mapped into [0, 0.75] */
+@@ -306,6 +314,9 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+     }
+  }
+   /* free up some memory */
++  /* ATSA_QIFFT_AMP: uninstall and free the main-lobe gain table */
++  set_mainlobe_gain(NULL, 0);
++  free(mlobe_gain);
+   free(fft_struct.fdr);
+   free(fft_struct.fdi);
+   free(dfft_struct.fdr);

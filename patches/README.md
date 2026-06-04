@@ -58,3 +58,27 @@ unpadded). Touches `src/atsa/atsa.h`, `peak-detection.c`, `tracker.c`.
 CMake also requires this patch by default (markers `ATSA_REASSIGN_FREQ` in
 `peak-detection.c` and `tracker.c`). Use `-DATS_REQUIRE_QATSH_REASSIGNMENT=OFF`
 to build against unpatched Qatsh.
+
+## `qatsh-atsa-qifft.patch`
+
+Replaces the dB-parabolic peak height with window-gain (bias-corrected QIFFT)
+amplitude estimation. The dB-parabolic height carries a window- and
+offset-dependent bias; the true amplitude of a stationary sinusoid is the raw
+peak-bin magnitude divided by the analytic window main-lobe gain `G(delta)` at
+the sub-bin offset. `tracker.c` precomputes `G` over `delta` in `[-0.5, 0.5]`
+(`build_mainlobe_gain`) and installs it (`set_mainlobe_gain`) before the frame
+loop, so `peak_detection` keeps its signature. The offset uses the reassigned
+frequency when available. Validated in `tests/estimator_accuracy_test.c`
+(~0.0003 dB vs ~0.031 dB parabolic worst-case unpadded, >100x). Apply it
+*after* `qatsh-atsa-reassignment.patch`. Touches `src/atsa/atsa.h`,
+`peak-detection.c`, `tracker.c`.
+
+```sh
+./scripts/apply_qatsh_qifft.sh apply
+./scripts/apply_qatsh_qifft.sh status
+./scripts/apply_qatsh_qifft.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_QIFFT_AMP` in `peak-detection.c` and
+`tracker.c`). Use `-DATS_REQUIRE_QATSH_QIFFT=OFF` to build against unpatched
+Qatsh.

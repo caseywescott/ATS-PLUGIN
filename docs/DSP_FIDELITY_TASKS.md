@@ -44,14 +44,16 @@ Implementation note: `tests/morph_metric_harness.py` + the two `tests/fixtures/m
 
 ## Phase 1 — QIFFT Bias Correction
 
-### Commit 4 — `feat(atsa): window-aware QIFFT peak estimation`
+### Commit 4 — `feat(atsa): window-aware QIFFT peak estimation` ✅
 
 **PRD:** §6.1, §9
 
-- [ ] Implement bias-corrected quadratic-interpolation FFT estimation (Abe & Smith) in `peak-detection.c`, parameterized by window type.
-- [ ] Replace/guard the dB-parabolic path so it degrades to current behavior when correction is disabled.
-- [ ] Regenerate `patches/qatsh-atsa-fidelity-tier1.patch`; add a marker guard in `CMakeLists.txt` and the apply script.
-- [ ] Show measurable frequency/amplitude error reduction in the estimator harness; update CI clone+patch step.
+- [x] Implement bias-corrected QIFFT amplitude estimation in `peak-detection.c`, parameterized by window type via a precomputed main-lobe gain table `G(delta)`.
+- [x] Replace/guard the dB-parabolic amplitude path so it degrades to current behavior when the gain table is absent (`set_mainlobe_gain(NULL,0)`).
+- [x] Add `patches/qatsh-atsa-qifft.patch` + `scripts/apply_qatsh_qifft.sh`; marker guard `ATS_REQUIRE_QATSH_QIFFT` (marker `ATSA_QIFFT_AMP` in `peak-detection.c` + `tracker.c`); `patches/README.md` section; CI apply step.
+- [x] Show measurable amplitude error reduction in the estimator harness; update CI clone+patch step.
+
+Implementation note: Window-gain amplitude (Abe & Smith style, computed analytically from the window rather than fit) replaces the dB-parabolic height. The true amplitude of a stationary sinusoid is the raw peak-bin magnitude divided by the analytic window main-lobe gain `G(delta)` at the reassigned sub-bin offset — exact in *both* zero-pad regimes, unlike the parabolic height which carries a window-dependent bias. **Harness gate (passed):** window-gain amp error **0.0003 dB vs 0.031 dB parabolic** unpadded (~100×) and **0.0001 dB vs 0.0018 dB** in the live 2× regime (~18×) — both well past the 2× gate. Ported via a file-static gain table installed by `tracker.c` so `peak_detection` keeps its signature (harness + reassignment patch untouched). Forward-apply + reverse-roundtrip + guard negative-test verified on the snapshot tree; 11/11 CTest green. The rendered amplitude change is ≤0.002 dB in the live regime — far below the ~0.1 dB JND, so not [ear]-flagged, but it *is* a numerically-validated rendered-output change.
 
 ---
 

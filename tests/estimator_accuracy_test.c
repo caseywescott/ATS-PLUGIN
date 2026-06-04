@@ -30,11 +30,32 @@ typedef struct
 {
     int found;
     double frq;     /* Hz, current parabolic-in-dB estimator (peak_detection) */
-    double amp;     /* linear, window-norm scaled */
+    double amp;     /* linear, window-norm scaled (current parabolic height) */
+    double amp_wg;  /* linear, window-gain corrected amplitude (Phase 1 QIFFT prototype) */
     double pha;     /* radians, current linear phase_interp */
     double pha_bin; /* radians, candidate: complex phase at the peak bin */
     double frq_re;  /* Hz, derivative-window spectral reassignment (Phase 2 prototype) */
 } EstResult;
+
+/* Analytic main-lobe gain of the analysis window at a fractional-bin offset
+ * delta (in FFT bins), normalized so G(0) = 1. For a stationary sinusoid the
+ * peak-bin magnitude is the on-bin magnitude scaled by exactly this factor, so
+ * dividing the raw bin magnitude by G(delta) recovers the true amplitude with
+ * no parabolic approximation. |W(delta)| = |sum_n w[n] exp(-j 2pi delta n /
+ * Nfft)|; the circular window centering only adds linear phase and drops out of
+ * the magnitude. */
+static double window_gain(const double* window, int win_size, double delta, int fft_size)
+{
+    double re = 0.0, im = 0.0, dc = 0.0;
+    const double w = 2.0 * M_PI * delta / (double) fft_size;
+    for (int n = 0; n < win_size; ++n)
+    {
+        re += window[n] * cos(w * (double) n);
+        im -= window[n] * sin(w * (double) n);
+        dc += window[n];
+    }
+    return sqrt(re * re + im * im) / dc;
+}
 
 /* Build a windowed cosine A*cos(2*pi*f*n/sr + phi), n=0..win_size-1, lay it into
  * the FFT buffer exactly as tracker.c does (window centered at M_2), run the
@@ -42,7 +63,7 @@ typedef struct
 static EstResult estimate_tone(double f_true, double amp_true, double phi,
                                int win_size, int sample_rate, double pad_factor)
 {
-    EstResult out = { 0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    EstResult out = { 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
 
     const int fft_size = next_pow2((int) (pad_factor * (double) win_size));
     const int M_2 = (int) floor(((double) win_size - 1) / 2);
@@ -128,6 +149,15 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
         /* Candidate phase estimator: complex phase at the peak bin, same
          * convention as to_polar (atan2(-y, x)). */
         out.pha_bin = atan2(-fi, fr);
+
+        /* Phase 1 prototype: window-gain amplitude correction. Use the
+         * reassigned frequency for the sub-bin offset, then divide the raw
+         * peak-bin magnitude by the analytic window main-lobe gain. Exact for a
+         * stationary sinusoid regardless of zero-pad, unlike the dB-parabolic
+         * height which carries a window-dependent bias. */
+        const double delta = out.frq_re / fft_mag - (double) b;
+        const double g = window_gain(window, win_size, delta, fft_size);
+        out.amp_wg = (g > 0.0) ? norm * sqrt(fr * fr + fi * fi) / g : out.amp;
     }
 
     free(peaks);
@@ -167,6 +197,7 @@ int main(void)
     const double pads[] = { 2.0, 1.0 };
     double worst_cents[2] = { 0.0, 0.0 };
     double worst_amp_db[2] = { 0.0, 0.0 };
+    double worst_amp_wg_db[2] = { 0.0, 0.0 };
     double worst_cents_re[2] = { 0.0, 0.0 };
     double worst_pha_cur[2] = { 0.0, 0.0 };
     double worst_pha_bin[2] = { 0.0, 0.0 };
@@ -192,11 +223,14 @@ int main(void)
                     }
                     const double ce = fabs(cents(r.frq, f_true));
                     const double ae = fabs(db(r.amp / amps[ai]));
+                    const double ae_wg = fabs(db(r.amp_wg / amps[ai]));
                     const double ce_re = fabs(cents(r.frq_re, f_true));
                     if (ce > worst_cents[pi])
                         worst_cents[pi] = ce;
                     if (ae > worst_amp_db[pi])
                         worst_amp_db[pi] = ae;
+                    if (ae_wg > worst_amp_wg_db[pi])
+                        worst_amp_wg_db[pi] = ae_wg;
                     if (ce_re > worst_cents_re[pi])
                         worst_cents_re[pi] = ce_re;
 
@@ -213,8 +247,10 @@ int main(void)
             }
         }
         printf("single-tone sweep (pad %.1fx): parabolic |freq err| = %.4f cents, "
-               "reassigned |freq err| = %.4f cents, |amp err| = %.4f dB\n",
-               pads[pi], worst_cents[pi], worst_cents_re[pi], worst_amp_db[pi]);
+               "reassigned |freq err| = %.4f cents, |amp err| = %.4f dB, "
+               "window-gain |amp err| = %.4f dB\n",
+               pads[pi], worst_cents[pi], worst_cents_re[pi], worst_amp_db[pi],
+               worst_amp_wg_db[pi]);
         printf("  phase (pad %.1fx): linear phase_interp |err| = %.4f rad, "
                "peak-bin phase |err| = %.4f rad\n",
                pads[pi], worst_pha_cur[pi], worst_pha_bin[pi]);
@@ -237,6 +273,17 @@ int main(void)
         return fprintf(stderr,
                        "FAIL: reassignment (%.4f cents) did not beat parabolic (%.4f cents) by 4x\n",
                        worst_cents_re[1], worst_cents[1]),
+               1;
+
+    /* Phase 1 numerical gate (QIFFT): window-gain amplitude correction must beat
+     * the dB-parabolic height on the unpadded regime, where the parabolic
+     * amplitude bias is largest. The padded live regime is already near-exact,
+     * so the payoff is concentrated unpadded -- this gate is what justifies
+     * porting the correction into the vendored core. */
+    if (!(worst_amp_wg_db[1] < 0.5 * worst_amp_db[1]))
+        return fprintf(stderr,
+                       "FAIL: window-gain amp (%.4f dB) did not beat parabolic amp (%.4f dB) by 2x\n",
+                       worst_amp_wg_db[1], worst_amp_db[1]),
                1;
 
     /* --- Two closely-spaced tones (resolution reference, documented) -------- */

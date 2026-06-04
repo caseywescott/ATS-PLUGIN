@@ -30,6 +30,7 @@ jobs:
           ./scripts/apply_qatsh_residual_fixes.sh apply
           ./scripts/apply_qatsh_progress.sh apply
           ./scripts/apply_qatsh_reassignment.sh apply
+          ./scripts/apply_qatsh_qifft.sh apply
 
       - name: Install libsndfile (Linux)
         if: runner.os == 'Linux'
