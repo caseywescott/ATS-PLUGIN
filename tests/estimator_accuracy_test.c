@@ -170,6 +170,103 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
     return out;
 }
 
+/* Order-2 Distribution Derivative Method (Betser 2009) on a windowed segment.
+ * Models the underlying signal over sample-offset tau (centered at the window
+ * midpoint) as s(tau) = exp(b0 + b1*tau + b2*tau^2), b_k complex, then recovers
+ * the within-frame slopes the stationary sinusoid model cannot represent:
+ *   - chirp (FM) rate  c  [Hz/s]      = Im(b2) * sr^2 / pi
+ *   - amplitude log-slope mu [nepers/s] = Re(b1) * sr
+ * The estimator uses the integration-by-parts identity <s', phi> = -<s, phi'>
+ * with the demodulated atoms phi = h e^{-j w0 tau} and tau*phi (h = analysis
+ * window, w0 = peak angular freq), giving a 2x2 complex system in (b1, b2):
+ *   [P0  2P1][b1]   [ -D  + j w0 P0      ]
+ *   [P1  2P2][b2] = [ -P0 - DT + j w0 P1 ]
+ * where P_m = <s, tau^m h e^{-j w0 tau}>, D = <s, h' e^{-j w0 tau}>,
+ * DT = <s, tau h' e^{-j w0 tau}>. Inner products are formed directly in time
+ * (textbook -j convention; independent of qatsh's +j fft). */
+typedef struct
+{
+    int found;
+    double f_center;    /* Hz, instantaneous freq at the window center (Im b1) */
+    double chirp_hz_s;  /* Hz/s, frequency slope (2*Im b2 in rad/sample^2)      */
+    double amp_slope_s; /* nepers/s, amplitude log-slope (Re b1)                */
+} DdmResult;
+
+static DdmResult estimate_chirp_ddm(const double* s, int win_size, int sample_rate,
+                                    double f0_peak)
+{
+    DdmResult out = { 0, 0.0, 0.0, 0.0 };
+
+    double* window = make_window(BLACKMAN_H, win_size);
+    double* dwindow = (double*) malloc((size_t) win_size * sizeof(double));
+    for (int k = 0; k < win_size; ++k)
+    {
+        const double hp = window[k + 1 < win_size ? k + 1 : k];
+        const double hm = window[k - 1 >= 0 ? k - 1 : k];
+        const double span = (k + 1 < win_size && k - 1 >= 0) ? 0.5 : 1.0;
+        dwindow[k] = (hp - hm) * span;
+    }
+
+    const double n_c = floor(((double) win_size - 1) / 2.0);
+    const double w0 = 2.0 * M_PI * f0_peak / (double) sample_rate;
+
+    /* Accumulate the five complex inner products (re/im pairs). */
+    double p0r = 0, p0i = 0, p1r = 0, p1i = 0, p2r = 0, p2i = 0;
+    double dr = 0, di = 0, dtr = 0, dti = 0;
+    for (int n = 0; n < win_size; ++n)
+    {
+        const double tau = (double) n - n_c;
+        const double ph = -w0 * tau;
+        const double c = cos(ph), sn = sin(ph); /* e^{-j w0 tau} = c + j sn */
+        const double sh = s[n] * window[n];     /* s * h */
+        const double sdh = s[n] * dwindow[n];   /* s * h' */
+        /* P0 += sh * e^{-j w0 tau} */
+        p0r += sh * c;       p0i += sh * sn;
+        p1r += sh * tau * c; p1i += sh * tau * sn;
+        p2r += sh * tau * tau * c; p2i += sh * tau * tau * sn;
+        dr  += sdh * c;      di  += sdh * sn;
+        dtr += sdh * tau * c; dti += sdh * tau * sn;
+    }
+
+    /* 2x2 complex system: [a b; c d] [b1; b2] = [e; f]
+       a=P0, b=2P1, c=P1, d=2P2, e=-D + j w0 P0, f=-P0 - DT + j w0 P1 */
+    const double ar = p0r, ai = p0i;
+    const double br = 2 * p1r, bi = 2 * p1i;
+    const double cr = p1r, ci = p1i;
+    const double dr2 = 2 * p2r, di2 = 2 * p2i;
+    const double er = -dr - w0 * p0i, ei = -di + w0 * p0r;          /* -D + j w0 P0 */
+    const double fr = -p0r - dtr - w0 * p1i, fi = -p0i - dti + w0 * p1r; /* -P0 - DT + j w0 P1 */
+
+    /* det = a*d - b*c (complex) */
+    const double detr = (ar * dr2 - ai * di2) - (br * cr - bi * ci);
+    const double deti = (ar * di2 + ai * dr2) - (br * ci + bi * cr);
+    const double detm = detr * detr + deti * deti;
+    free(dwindow);
+    free(window);
+    if (detm <= 0.0)
+        return out;
+
+    /* b1 = (e*d - b*f)/det ; b2 = (a*f - e*c)/det  (Cramer) */
+    const double edr = er * dr2 - ei * di2, edi = er * di2 + ei * dr2; /* e*d */
+    const double bfr = br * fr - bi * fi, bfi = br * fi + bi * fr;     /* b*f */
+    const double n1r = edr - bfr, n1i = edi - bfi;                     /* e*d - b*f */
+    const double afr = ar * fr - ai * fi, afi = ar * fi + ai * fr;     /* a*f */
+    const double ecr = er * cr - ei * ci, eci = er * ci + ei * cr;     /* e*c */
+    const double n2r = afr - ecr, n2i = afi - eci;                     /* a*f - e*c */
+
+    /* divide by det: q = n / det = n * conj(det) / |det|^2 */
+    const double b1i = (n1i * detr - n1r * deti) / detm; /* Im(b1) */
+    const double b1r = (n1r * detr + n1i * deti) / detm; /* Re(b1) */
+    const double b2i = (n2i * detr - n2r * deti) / detm; /* Im(b2) */
+
+    const double sr = (double) sample_rate;
+    out.found = 1;
+    out.f_center = b1i * sr / (2.0 * M_PI);          /* Im(b1) rad/sample -> Hz */
+    out.chirp_hz_s = b2i * sr * sr / M_PI;           /* 2*Im(b2)/(2pi) * sr^2  */
+    out.amp_slope_s = b1r * sr;                      /* Re(b1) 1/sample -> 1/s */
+    return out;
+}
+
 static double cents(double f_meas, double f_true)
 {
     return 1200.0 * log2(f_meas / f_true);
@@ -321,6 +418,92 @@ int main(void)
         free(ff.fdr);
         free(ff.fdi);
         free(window);
+    }
+
+    /* --- Within-frame slopes: DDM chirp + AM recovery (Phase 3 gate) -------- */
+    {
+        const int fft_size = next_pow2(2 * win_size);
+        const int M_2c = (int) floor(((double) win_size - 1) / 2);
+        const int first_point = fft_size - M_2c;
+        double* window = make_window(BLACKMAN_H, win_size);
+        const double norm = window_norm(window, win_size);
+        double* s = (double*) malloc((size_t) win_size * sizeof(double));
+
+        /* helper: lay a time signal into the FFT buffer and return the
+         * parabolic peak frequency nearest f_guess (demodulation reference). */
+        #define PEAK_OF(buf, fguess) ({                                        \
+            ATS_FFT ff; ff.size = fft_size; ff.rate = sr;                      \
+            ff.fdr = (double*) calloc((size_t) fft_size, sizeof(double));      \
+            ff.fdi = (double*) calloc((size_t) fft_size, sizeof(double));      \
+            for (int k = 0; k < win_size; ++k)                                 \
+                ff.fdr[(k + first_point) % fft_size] = window[k] * (buf)[k];   \
+            fft(ff.fdr, ff.fdi, fft_size, 1);                                  \
+            int ps = 0;                                                        \
+            ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size/2, -120.0, norm, &ps); \
+            double bf = 1e18, fr_ = (fguess);                                  \
+            for (int i = 0; i < ps; ++i)                                       \
+                if (fabs(pk[i].frq - (fguess)) < bf) { bf = fabs(pk[i].frq - (fguess)); fr_ = pk[i].frq; } \
+            free(pk); free(ff.fdr); free(ff.fdi); fr_; })
+
+        const double sr_d = (double) sr;
+        const double f_c = 1500.0;       /* inst freq at window center (Hz) */
+        const double chirp = 2000.0;     /* true frequency slope (Hz/s) */
+
+        /* Linear chirp, center inst freq f_c, chirp rate `chirp`. */
+        for (int n = 0; n < win_size; ++n)
+        {
+            const double t = ((double) n - (double) M_2c) / sr_d;
+            const double ph = 2.0 * M_PI * (f_c * t + 0.5 * chirp * t * t);
+            s[n] = cos(ph);
+        }
+        double f0 = PEAK_OF(s, f_c);
+        DdmResult dc = estimate_chirp_ddm(s, win_size, sr, f0);
+
+        /* Stationary tone at f_c (chirp rate must come out ~0). */
+        for (int n = 0; n < win_size; ++n)
+        {
+            const double t = ((double) n - (double) M_2c) / sr_d;
+            s[n] = cos(2.0 * M_PI * f_c * t);
+        }
+        double f0s = PEAK_OF(s, f_c);
+        DdmResult ds = estimate_chirp_ddm(s, win_size, sr, f0s);
+
+        /* Exponential AM, constant freq f_c, amplitude A=exp(mu t). */
+        const double mu = 40.0; /* nepers/s */
+        for (int n = 0; n < win_size; ++n)
+        {
+            const double t = ((double) n - (double) M_2c) / sr_d;
+            s[n] = exp(mu * t) * cos(2.0 * M_PI * f_c * t);
+        }
+        double f0a = PEAK_OF(s, f_c);
+        DdmResult da = estimate_chirp_ddm(s, win_size, sr, f0a);
+
+        free(s);
+        free(window);
+
+        const double chirp_rel = fabs(dc.chirp_hz_s - chirp) / chirp;
+        const double fc_err = fabs(dc.f_center - f_c);
+        const double amp_rel = fabs(da.amp_slope_s - mu) / mu;
+        printf("DDM chirp: true %.0f Hz/s -> est %.1f Hz/s (rel err %.4f), "
+               "f_center %.2f Hz (err %.3f Hz); stationary chirp est %.2f Hz/s\n",
+               chirp, dc.chirp_hz_s, chirp_rel, dc.f_center, fc_err, ds.chirp_hz_s);
+        printf("DDM AM: true %.0f nep/s -> est %.2f nep/s (rel err %.4f)\n",
+               mu, da.amp_slope_s, amp_rel);
+
+        /* Phase 3 numerical gate: DDM must recover the within-frame chirp rate
+         * the stationary model omits entirely. Require <2% chirp-rate error and
+         * an accurate center frequency, and confirm a true stationary tone reads
+         * near-zero chirp (so the slope is signal-driven, not an artifact). This
+         * is what justifies porting DDM into the vendored core. */
+        if (!(chirp_rel < 0.02))
+            return fprintf(stderr, "FAIL: DDM chirp rel err %.4f exceeds 0.02\n", chirp_rel), 1;
+        if (!(fc_err < 1.0))
+            return fprintf(stderr, "FAIL: DDM center freq err %.3f Hz exceeds 1.0\n", fc_err), 1;
+        if (!(fabs(ds.chirp_hz_s) < 0.05 * chirp))
+            return fprintf(stderr, "FAIL: stationary tone DDM chirp %.2f Hz/s not ~0\n", ds.chirp_hz_s), 1;
+        if (!(amp_rel < 0.05))
+            return fprintf(stderr, "FAIL: DDM amp-slope rel err %.4f exceeds 0.05\n", amp_rel), 1;
+        #undef PEAK_OF
     }
 
     printf("ok: estimator accuracy baseline recorded\n");

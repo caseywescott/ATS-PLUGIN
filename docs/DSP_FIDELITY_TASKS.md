@@ -88,11 +88,20 @@ Implementation note: Reassignment cut worst-case frequency error from **0.534 �
 
 ## Phase 3 — DDM Within-Frame Slopes  **[ear]**
 
-### Commit 6 — `feat(atsa): estimate per-partial AM/FM slopes (DDM)`
+### Commit 6a — `test: prototype order-2 DDM slope estimator (numerical gate)` ✅
+
+**PRD:** §6.3, §8
+
+- [x] Add an order-2 Distribution Derivative Method estimator to `estimator_accuracy_test.c` (`estimate_chirp_ddm`): models the windowed segment as `exp(b0 + b1·τ + b2·τ²)` and solves a 2×2 complex system from time-domain inner products with `{h, τh, τ²h, h', τh'}`.
+- [x] Demonstrate it recovers within-frame slopes the stationary model omits, as the PRD §8 gate before touching the vendored core.
+
+Implementation note: On a 1500 Hz / 2000 Hz·s⁻¹ linear chirp (≈4-bin sweep across the 2048-sample window) the estimator returns **1999.7 Hz/s (0.01% error)** with an exact center frequency; a true stationary tone reads **−0.00 Hz/s** chirp (slope is signal-driven, not an artifact); exponential AM at 40 nep/s is recovered **exactly**. Inner products are formed directly in time (textbook −j convention, independent of qatsh's +j fft). The gate is met, so the qatsh integration (6b) is justified.
+
+### Commit 6b — `feat(atsa): estimate per-partial AM/FM slopes (DDM)`  **[ear]**
 
 **PRD:** §6.3, §9
 
-- [ ] Implement Distribution Derivative Method estimation of per-partial frequency slope (chirp) and amplitude slope per hop.
+- [ ] Port the validated DDM estimator into the analysis front-end; estimate per-partial frequency slope (chirp) and amplitude slope per hop.
 - [ ] Add additive, zero-initialized slope aux arrays to the model; ensure save/load is backward-readable.
 - [ ] Feed slopes into cubic-phase / linear-AM synthesis interpolation.
 - [ ] Harness: reduced error on chirp and vibrato fixtures; round-trip preserves slope data.
