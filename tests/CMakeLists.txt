@@ -39,6 +39,15 @@ if(MSVC)
   target_compile_definitions(atsa_residual_test PRIVATE _USE_MATH_DEFINES)
 endif()
 
+add_executable(estimator_accuracy_test estimator_accuracy_test.c)
+target_link_libraries(estimator_accuracy_test PRIVATE atsa)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(estimator_accuracy_test PRIVATE m)
+endif()
+if(MSVC)
+  target_compile_definitions(estimator_accuracy_test PRIVATE _USE_MATH_DEFINES)
+endif()
+
 add_test(
   NAME golden_offline
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/golden_compare.py"
@@ -60,6 +69,7 @@ add_test(
 
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME estimator_accuracy_test COMMAND $<TARGET_FILE:estimator_accuracy_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)
