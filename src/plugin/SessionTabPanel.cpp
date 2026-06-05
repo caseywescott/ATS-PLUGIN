@@ -957,7 +957,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     setupPolicyCombo(morphGridTypeCombo, { "Bark", "Mel" }, "Perceptual frequency grid.");
     setupPolicyCombo(morphCorrespondenceCombo,
-                     { "Freq rank", "Greedy", "Assign" },
+                     { "Freq rank", "Greedy", "Assign", "Transport" },
                      "Partial correspondence strategy.");
     setupPolicyCombo(morphSourcePolicyCombo,
                      { "Src fade", "Src in", "Src hold", "Src residual", "Src discard" },
