@@ -176,4 +176,45 @@ MorphTransportCorrespondence buildOptimalTransportCorrespondence(
     return result;
 }
 
+std::vector<MorphCorrespondenceRecord> buildOptimalTransportRecords(
+    const std::vector<MorphBandAssignment>& sourceAssignments,
+    const std::vector<MorphBandAssignment>& targetAssignments,
+    const MorphTransportCorrespondenceOptions& options)
+{
+    const MorphTransportCorrespondence corr =
+        buildOptimalTransportCorrespondence(sourceAssignments, targetAssignments, options);
+
+    std::vector<MorphCorrespondenceRecord> records;
+    records.reserve(corr.edges.size());
+    for (const auto& e : corr.edges)
+    {
+        // Per-edge amplitude is sqrt of the transported energy so that a partial
+        // split across several edges conserves energy (sum of amplitude^2 == mass
+        // sum). Clamp the radicand to avoid a negative from rounding.
+        const double edgeAmp = std::sqrt(std::max(0.0, e.mass));
+
+        MorphCorrespondenceRecord r;
+        r.bandIndex = e.bandIndex;
+        r.kind = e.kind;
+        if (e.kind == MorphCorrespondenceKind::Matched
+            || e.kind == MorphCorrespondenceKind::UnmatchedSource)
+        {
+            r.sourcePartialIndex = e.sourcePartialIndex;
+            r.sourceFrameIndex = e.sourceFrameIndex;
+            r.sourceFrequencyHz = e.sourceFrequencyHz;
+            r.sourceAmplitude = edgeAmp;
+        }
+        if (e.kind == MorphCorrespondenceKind::Matched
+            || e.kind == MorphCorrespondenceKind::UnmatchedTarget)
+        {
+            r.targetPartialIndex = e.targetPartialIndex;
+            r.targetFrameIndex = e.targetFrameIndex;
+            r.targetFrequencyHz = e.targetFrequencyHz;
+            r.targetAmplitude = edgeAmp;
+        }
+        records.push_back(r);
+    }
+    return records;
+}
+
 } // namespace ats

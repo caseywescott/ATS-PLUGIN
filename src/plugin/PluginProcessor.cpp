@@ -15,6 +15,7 @@
 #include "AtsFrequencyShape.h"
 #include "AtsMathExpr.h"
 #include "AtsMorphRecipe.h"
+#include "AtsMorphTransportCorrespondence.h"
 #include "AtsSpectralEnvelope.h"
 #include "AtsTransientSmear.h"
 #include "PluginEditor.h"
@@ -216,7 +217,8 @@ AtsResidualDiagnostics makeResidualDiagnostics(const ATS_SOUND* sound)
 
 // Correspondence-strategy dispatch shared by rebuildMorphCorrespondenceIfReady (which writes
 // member state) and the live-smear timeline path (which builds into a local recipe copy).
-// strategy: 1 = greedy nearest, 2 = assignment matrix, otherwise frequency-rank.
+// strategy: 1 = greedy nearest, 2 = assignment matrix, 3 = optimal transport,
+// otherwise frequency-rank.
 std::vector<ats::MorphCorrespondenceRecord> buildMorphCorrespondence(
     const std::vector<ats::MorphBandAssignment>& asgA,
     const std::vector<ats::MorphBandAssignment>& asgB,
@@ -227,6 +229,9 @@ std::vector<ats::MorphCorrespondenceRecord> buildMorphCorrespondence(
 
     if (strategy == 1)
         return ats::buildGreedyNearestCorrespondence(asgA, asgB);
+
+    if (strategy == 3)
+        return ats::buildOptimalTransportRecords(asgA, asgB);
 
     if (strategy == 2)
     {
@@ -1265,6 +1270,7 @@ const char* correspondenceStrategyName(int index)
     {
         case 1: return "greedy_nearest";
         case 2: return "assignment_matrix";
+        case 3: return "optimal_transport";
         case 0:
         default: return "frequency_rank";
     }
@@ -1293,6 +1299,7 @@ juce::String correspondenceStrategyDisplayName(int index)
     {
         case 1: return "Greedy nearest";
         case 2: return "Assignment matrix";
+        case 3: return "Optimal transport";
         case 0:
         default: return "Frequency rank";
     }
@@ -1543,7 +1550,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         ats_param::kMorphCorrespondenceStrategy,
         "Morph correspondence strategy",
-        juce::StringArray { "Frequency rank", "Greedy nearest", "Assignment matrix" },
+        juce::StringArray { "Frequency rank", "Greedy nearest", "Assignment matrix", "Optimal transport" },
         kDefaultMorphCorrespondenceStrategy));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         ats_param::kMorphUnmatchedSourcePolicy,

@@ -48,6 +48,8 @@ target_sources(
           ../core/AtsFrequencyShape.cpp
           ../core/AtsModel.cpp
           ../core/AtsMorphRecipe.cpp
+          ../core/AtsMorphTransport.cpp
+          ../core/AtsMorphTransportCorrespondence.cpp
           ../core/AtsParams.cpp
           ../core/AtsSpectralEnvelope.cpp
           ../core/AtsTransientSmear.cpp

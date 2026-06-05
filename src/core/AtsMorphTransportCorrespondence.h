@@ -63,4 +63,17 @@ struct MorphTransportCorrespondence
     const std::vector<MorphBandAssignment>& targetAssignments,
     const MorphTransportCorrespondenceOptions& options = {});
 
+// Adapter to the existing render path: runs the optimal-transport correspondence
+// and projects each MorphTransportEdge onto a MorphCorrespondenceRecord so it can
+// be consumed identically to buildFrequencyRankCorrespondence's output. Each
+// edge's transported energy (mass = amplitude^2) becomes a per-edge amplitude of
+// sqrt(mass) on the participating side(s); a source/target partial split across
+// several edges therefore conserves energy (sum of edge energies == matched
+// energy). Matched edges carry both sides; UnmatchedSource/UnmatchedTarget edges
+// fade out/in (the opposite side's amplitude is left at zero).
+[[nodiscard]] std::vector<MorphCorrespondenceRecord> buildOptimalTransportRecords(
+    const std::vector<MorphBandAssignment>& sourceAssignments,
+    const std::vector<MorphBandAssignment>& targetAssignments,
+    const MorphTransportCorrespondenceOptions& options = {});
+
 } // namespace ats
