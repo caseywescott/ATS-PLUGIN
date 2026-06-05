@@ -145,6 +145,7 @@ private:
     juce::ToggleButton auditionBothButton { "Both" };
     juce::ToggleButton auditionPartialsButton { "Partials" };
     juce::ToggleButton auditionResidualButton { "Residual" };
+    juce::ToggleButton auditionSmearButton { "Smear only" };
     juce::ToggleButton smearEffectToggle { "Smear" };
     juce::ComboBox presetCombo;
     juce::TextButton savePresetButton { "Save preset" };
@@ -207,12 +208,17 @@ private:
     bool smearKnobsExpanded = false;
     bool smearAdvancedExpanded = false;
     bool smearShowMathStatus = true; // false freezes a Detect result until next Apply
+    bool smearSyncingSensitivity = false; // guards the Sensitivity knob during programmatic updates
 
     juce::TextButton morphTabButton { "Morph" };
     juce::TextButton smearnovTabButton { "Smearnov" };
 
     juce::Label smearMacroLabel;
     juce::Slider smearBlurSlider;
+    juce::Label smearMixLabel;
+    juce::Slider smearMixSlider;
+    juce::Label smearSensitivityLabel;
+    juce::Slider smearSensitivitySlider;
     juce::Label smearSharpenLabel;
     juce::Slider smearSharpenSlider;
     juce::Label smearExaggerateLabel;
@@ -236,7 +242,6 @@ private:
     juce::Label smearWeightBirthLabel;  juce::Slider smearWeightBirthSlider;
     juce::Label smearWeightPhaseLabel;  juce::Slider smearWeightPhaseSlider;
     juce::Label smearThreshLambdaLabel; juce::Slider smearThreshLambdaSlider;
-    juce::Label smearThreshScaleLabel;  juce::Slider smearThreshScaleSlider;
     juce::Label smearPreMarginLabel;    juce::Slider smearPreMarginSlider;
     juce::Label smearPeakWindowLabel;   juce::Slider smearPeakWindowSlider;
     juce::Label smearMinGapLabel;       juce::Slider smearMinGapSlider;
@@ -285,6 +290,7 @@ private:
         morphLaneLinkedAttach;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearBlurAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMixAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearSharpenAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearExaggerateAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMaxDbAttach;
@@ -294,7 +300,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightBirthAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearWeightPhaseAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearThreshLambdaAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearThreshScaleAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearPreMarginAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearPeakWindowAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMinGapAttach;

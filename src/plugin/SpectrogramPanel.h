@@ -86,6 +86,8 @@ private:
 
     enum class OnsetHandle { None, Marker, LeftEdge, RightEdge };
     [[nodiscard]] bool smearnovOverlayInteractive() const;
+    [[nodiscard]] bool smearnovOverlayPresent() const;
+    void updateOnsetEditButtonVisibility();
     [[nodiscard]] int onsetHandleAtPoint(juce::Point<float> pos,
                                          juce::Rectangle<float> plot,
                                          OnsetHandle& handleOut) const;
@@ -98,6 +100,21 @@ private:
     void refreshHoveredDbReadout();
     void applyResidualDbFromEditor();
     void commitEnvelopeDraw();
+    void runSmoothEnvelope();
+    [[nodiscard]] bool isEnvelopeDisplayMode() const
+    {
+        return mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC;
+    }
+    [[nodiscard]] float timeNormFromIsoPoint(juce::Point<float> pos, juce::Rectangle<float> plot) const;
+    void isoTimeFreqFromPoint(juce::Point<float> pos,
+                              juce::Rectangle<float> plot,
+                              float& timeNormAbs,
+                              float& freqNormAbs) const;
+    [[nodiscard]] bool pointInEnvBox(juce::Point<float> pos, juce::Rectangle<float> plot) const;
+    [[nodiscard]] bool envBoxFrameRange(int& firstFrame, int& lastFrame) const;
+    [[nodiscard]] bool envBoxFreqRangeHz(double& loHz, double& hiHz) const;
+    void scaleEnvBoxGain(float deltaY);
+    void paintEnvelopeRangeSelection(juce::Graphics&, juce::Rectangle<float> plot) const;
     void runSmoothOnSelection();
     void runTiltOnSelection();
     void runCopyBand();
@@ -160,6 +177,9 @@ private:
     AtsSpectralTraceSnapshot secondarySnapshot;  // second source for envelope overlay
     juce::ToggleButton envSourceABtn { "Source A" };
     juce::ToggleButton envSourceBBtn { "Source B" };
+    juce::Label envSmoothLabel;
+    juce::Slider envSmoothSlider;
+    juce::TextButton envSmoothButton { "Smooth Env" };
     int lastModelRevision = -1;
     uint64_t lastDisplayShapeRevision = 0;
     uint64_t lastSmearnovOverlayRevision = 0;
@@ -167,6 +187,7 @@ private:
     double residualDisplayReferencePeak = 0.0;
 
     juce::TextButton viewMenuButton { "Current / Trace + Residual" };
+    juce::TextButton onsetEditButton { "Edit onsets" };
     juce::TextButton deleteButton { "Delete" };
     juce::Label selectionLabel;
 
@@ -220,6 +241,12 @@ private:
     juce::Rectangle<float> lassoRect;
     bool draggingLasso = false;
     bool scalingSelection = false;
+    bool selectingEnvRange = false;
+    bool scalingEnvGain = false;
+    float envRangeStartNorm = -1.0f;  // absolute time-norm [0,1] of the editable envelope slab; -1 = none
+    float envRangeEndNorm = -1.0f;
+    float envFreqStartNorm = -1.0f;   // absolute freq-norm [0,1] sub-range (y); -1 = full depth
+    float envFreqEndNorm = -1.0f;
     bool drawingResidualEnvelope = false;
     int envelopeDrawBand = -1;
     std::vector<std::pair<int, double>> envelopeDrawPoints;

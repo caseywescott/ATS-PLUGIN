@@ -2711,8 +2711,45 @@ std::vector<MorphTrackCentroidAssignment> assignPartialTracksToCentroidBands(
 
 std::vector<MorphCorrespondenceRecord> buildFrequencyRankCorrespondence(
     const std::vector<MorphBandAssignment>& sourceAssignments,
-    const std::vector<MorphBandAssignment>& targetAssignments)
+    const std::vector<MorphBandAssignment>& targetAssignments,
+    double amplitudeRankWeight)
 {
+    const double ampWeight = std::isfinite(amplitudeRankWeight)
+                                 ? std::clamp(amplitudeRankWeight, 0.0, 1.0)
+                                 : 0.0;
+    // Reorder one band's candidate slice [begin, begin+count) by a blend of its existing
+    // frequency rank (index within the frequency-sorted slice) and its amplitude rank (position
+    // by descending amplitude). Returns absolute indices into `cands`. Identity when ampWeight==0,
+    // so the no-weight path is bit-for-bit the original frequency-rank pairing.
+    const auto bandOrder = [ampWeight](const std::vector<MorphBandAssignment>& cands,
+                                       size_t begin, size_t count)
+    {
+        std::vector<size_t> order(count);
+        for (size_t i = 0; i < count; ++i)
+            order[i] = begin + i;
+        if (ampWeight <= 0.0 || count < 2)
+            return order;
+
+        std::vector<size_t> byAmp(order);
+        std::stable_sort(byAmp.begin(), byAmp.end(), [&cands](size_t a, size_t b)
+        {
+            return cands[a].amplitude > cands[b].amplitude;
+        });
+
+        std::vector<double> key(count);
+        for (size_t ampRank = 0; ampRank < count; ++ampRank)
+        {
+            const size_t freqRank = byAmp[ampRank] - begin;
+            key[freqRank] = (1.0 - ampWeight) * static_cast<double>(freqRank)
+                            + ampWeight * static_cast<double>(ampRank);
+        }
+        std::stable_sort(order.begin(), order.end(), [&key, begin](size_t a, size_t b)
+        {
+            return key[a - begin] < key[b - begin];
+        });
+        return order;
+    };
+
     std::vector<MorphBandAssignment> sourceCandidates;
     std::vector<MorphBandAssignment> targetCandidates;
     sourceCandidates.reserve(sourceAssignments.size());
@@ -2757,14 +2794,17 @@ std::vector<MorphCorrespondenceRecord> buildFrequencyRankCorrespondence(
         const size_t matchedCount = std::min(sourceBandCount, targetBandCount);
         records.reserve(records.size() + std::max(sourceBandCount, targetBandCount));
 
+        const auto sourceOrder = bandOrder(sourceCandidates, sourceBandBegin, sourceBandCount);
+        const auto targetOrder = bandOrder(targetCandidates, targetBandBegin, targetBandCount);
+
         for (size_t rank = 0; rank < matchedCount; ++rank)
         {
             MorphCorrespondenceRecord record;
             record.bandIndex = bandIndex;
             record.rank = static_cast<int>(rank);
             record.kind = MorphCorrespondenceKind::Matched;
-            copySourceAssignment(record, sourceCandidates[sourceBandBegin + rank]);
-            copyTargetAssignment(record, targetCandidates[targetBandBegin + rank]);
+            copySourceAssignment(record, sourceCandidates[sourceOrder[rank]]);
+            copyTargetAssignment(record, targetCandidates[targetOrder[rank]]);
             records.push_back(record);
         }
 
@@ -2774,7 +2814,7 @@ std::vector<MorphCorrespondenceRecord> buildFrequencyRankCorrespondence(
             record.bandIndex = bandIndex;
             record.rank = static_cast<int>(rank);
             record.kind = MorphCorrespondenceKind::UnmatchedSource;
-            copySourceAssignment(record, sourceCandidates[sourceBandBegin + rank]);
+            copySourceAssignment(record, sourceCandidates[sourceOrder[rank]]);
             records.push_back(record);
         }
 
@@ -2784,12 +2824,83 @@ std::vector<MorphCorrespondenceRecord> buildFrequencyRankCorrespondence(
             record.bandIndex = bandIndex;
             record.rank = static_cast<int>(rank);
             record.kind = MorphCorrespondenceKind::UnmatchedTarget;
-            copyTargetAssignment(record, targetCandidates[targetBandBegin + rank]);
+            copyTargetAssignment(record, targetCandidates[targetOrder[rank]]);
             records.push_back(record);
         }
     }
 
     return records;
+}
+
+std::vector<int> reassignCorrespondenceByLogFrequency(
+    const std::vector<double>& sourceLogFrequencies,
+    const std::vector<double>& targetLogFrequencies,
+    const std::vector<int>& previousAssignment,
+    double hysteresisMargin)
+{
+    const size_t k = sourceLogFrequencies.size();
+
+    // Identity fallback used whenever the inputs are not a clean k==k pairing.
+    auto identity = [k]() {
+        std::vector<int> id(k);
+        for (size_t i = 0; i < k; ++i)
+            id[i] = static_cast<int>(i);
+        return id;
+    };
+
+    if (k == 0 || targetLogFrequencies.size() != k)
+        return previousAssignment.size() == k ? previousAssignment : identity();
+
+    const double margin = (std::isfinite(hysteresisMargin) && hysteresisMargin > 0.0)
+                              ? hysteresisMargin
+                              : 0.0;
+
+    // Build every (source i, target j) pair with a cost = log-frequency distance, discounted by the
+    // hysteresis margin when (i, j) is the pairing from the previous frame so an established match
+    // is only broken by a clearly closer alternative.
+    struct Pair { double cost; int i; int j; };
+    std::vector<Pair> pairs;
+    pairs.reserve(k * k);
+    for (size_t i = 0; i < k; ++i)
+    {
+        const double sf = sourceLogFrequencies[i];
+        const int prevJ = (previousAssignment.size() == k) ? previousAssignment[i] : static_cast<int>(i);
+        for (size_t j = 0; j < k; ++j)
+        {
+            const double tf = targetLogFrequencies[j];
+            double cost = (std::isfinite(sf) && std::isfinite(tf)) ? std::abs(sf - tf)
+                                                                   : std::numeric_limits<double>::max();
+            if (prevJ == static_cast<int>(j) && cost != std::numeric_limits<double>::max())
+                cost -= margin; // stickiness: prefer keeping the prior partner
+            pairs.push_back({ cost, static_cast<int>(i), static_cast<int>(j) });
+        }
+    }
+
+    std::stable_sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) {
+        return a.cost < b.cost;
+    });
+
+    std::vector<int> assignment(k, -1);
+    std::vector<char> sourceUsed(k, 0);
+    std::vector<char> targetUsed(k, 0);
+    size_t assigned = 0;
+    for (const auto& p : pairs)
+    {
+        if (assigned == k)
+            break;
+        if (sourceUsed[static_cast<size_t>(p.i)] || targetUsed[static_cast<size_t>(p.j)])
+            continue;
+        assignment[static_cast<size_t>(p.i)] = p.j;
+        sourceUsed[static_cast<size_t>(p.i)] = 1;
+        targetUsed[static_cast<size_t>(p.j)] = 1;
+        ++assigned;
+    }
+    // Greedy on a complete bipartite graph always fills every slot, but guard anyway.
+    for (size_t i = 0; i < k; ++i)
+        if (assignment[i] < 0)
+            assignment[i] = static_cast<int>(i);
+
+    return assignment;
 }
 
 std::vector<MorphCorrespondenceRecord> buildGreedyNearestCorrespondence(

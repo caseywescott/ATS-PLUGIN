@@ -309,9 +309,13 @@ double smoothStep(double x)
     return x * x * (3.0 - 2.0 * x);
 }
 
+// `peakOffset` is the index of the attack peak within [startFrame, endFrame]; the
+// Exaggerate ramp reaches full gain there and holds across any extended decay tail,
+// so widening the window for Blur never shifts where Exaggerate peaks.
 bool transformEnvelope(double* row,
                        int startFrame,
                        int endFrame,
+                       int peakOffset,
                        double hop,
                        const SmearnovParams& params,
                        bool energyTarget,
@@ -323,6 +327,7 @@ bool transformEnvelope(double* row,
     const int count = endFrame - startFrame + 1;
     if (count <= 0)
         return false;
+    peakOffset = std::clamp(peakOffset, 0, count - 1);
 
     auto& original = scratch.original;
     auto& values = scratch.values;
@@ -371,9 +376,11 @@ bool transformEnvelope(double* row,
                                    maxDb);
     if (std::abs(exDb) > 1.0e-9)
     {
+        const double rampDenom = peakOffset > 0 ? (double) peakOffset : 1.0;
         for (int i = 0; i < count; ++i)
         {
-            const double x = count == 1 ? 1.0 : (double) i / (double) (count - 1);
+            // Ramp up to the attack peak, then hold the boost across the decay tail.
+            const double x = count == 1 ? 1.0 : std::min(1.0, (double) i / rampDenom);
             values[(size_t) i] = clampPositiveFinite(values[(size_t) i]
                                                      * dbToLinearGain(exDb * smoothStep(x),
                                                                       energyTarget));
@@ -387,6 +394,18 @@ bool transformEnvelope(double* row,
     const double peakBound = originalPeak * dbToLinearGain(std::max(exDb, 0.0), energyTarget);
     for (auto& v : values)
         v = std::clamp(clampPositiveFinite(v), 0.0, std::max(0.0, peakBound));
+
+    // Dry/wet: blend the transformed envelope back toward the original.
+    // mix == 1 keeps the full effect; mix == 0 yields the dry envelope (no change).
+    const double mix = std::clamp(std::isfinite(params.mix) ? params.mix : 1.0, 0.0, 1.0);
+    if (mix < 1.0)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            const double dry = original[(size_t) i];
+            values[(size_t) i] = dry + mix * (values[(size_t) i] - dry);
+        }
+    }
 
     bool changed = false;
     for (int i = 0; i < count; ++i)
@@ -691,22 +710,45 @@ bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const S
     if (!editPartials && !editResidual)
         return false;
 
+    // Blur needs room past the attack peak to spread energy forward into the decay;
+    // reach scales with the blur kernel (~3 sigma), bounded by the next onset.
+    const double sigmaFrames = (params.blurMs > 0.0 && finitePositive(hop))
+                                   ? (params.blurMs * 0.001) / hop
+                                   : 0.0;
+    const int blurExtend = sigmaFrames > 0.0 ? (int) std::ceil(3.0 * sigmaFrames) : 0;
+
     bool changed = false;
     EnvelopeScratch scratch;
-    for (const auto& onset : onsets)
+    for (size_t i = 0; i < onsets.size(); ++i)
     {
+        const auto& onset = onsets[i];
         int start = std::min(onset.preFrame, onset.peakFrame);
-        int end = std::max(onset.preFrame, onset.peakFrame);
+        int peak = std::max(onset.preFrame, onset.peakFrame);
         start = std::clamp(start, 0, sound->frames - 1);
-        end = std::clamp(end, 0, sound->frames - 1);
-        if (end < start)
+        peak = std::clamp(peak, 0, sound->frames - 1);
+        if (peak < start)
             continue;
+
+        int end = peak;
+        if (blurExtend > 0)
+        {
+            int bound = sound->frames - 1;
+            if (i + 1 < onsets.size())
+            {
+                const auto& next = onsets[i + 1];
+                const int nextStart = std::min(next.preFrame, next.frame);
+                bound = std::min(bound, nextStart - 1);
+            }
+            end = std::clamp(peak + blurExtend, peak, std::max(peak, bound));
+        }
+
+        const int peakOffset = peak - start;
 
         if (editPartials)
         {
             for (int p = 0; p < sound->partials; ++p)
                 if (sound->amp[p] != nullptr)
-                    changed = transformEnvelope(sound->amp[p], start, end, hop, params, false, scratch)
+                    changed = transformEnvelope(sound->amp[p], start, end, peakOffset, hop, params, false, scratch)
                               || changed;
         }
 
@@ -714,7 +756,7 @@ bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const S
         {
             for (int b = 0; b < ATSA_CRITICAL_BANDS; ++b)
                 if (sound->band_energy[b] != nullptr)
-                    changed = transformEnvelope(sound->band_energy[b], start, end, hop, params, true, scratch)
+                    changed = transformEnvelope(sound->band_energy[b], start, end, peakOffset, hop, params, true, scratch)
                               || changed;
         }
     }

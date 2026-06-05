@@ -35,6 +35,22 @@ void setBoolParameter(AtsAudioProcessor& processor, const juce::String& paramete
         p->setValueNotifyingHost(value ? 1.0f : 0.0f);
 }
 
+// Smearnov Sensitivity (0-100%) <-> auto-threshold scale (global-MAD multiplier).
+// Higher sensitivity => lower threshold => more onsets. Maps so 50% reproduces the
+// previous default of 1.5x MAD; 0% ~5x (very few), 100% ~0.4x (many).
+double sensitivityToAutoScale(double sensitivityPercent)
+{
+    const double s = juce::jlimit(0.0, 1.0, sensitivityPercent / 100.0);
+    return 5.0 * std::exp(-2.5 * s);
+}
+
+double autoScaleToSensitivity(double autoScale)
+{
+    if (!(autoScale > 0.0))
+        return 100.0;
+    return juce::jlimit(0.0, 1.0, -std::log(autoScale / 5.0) / 2.5) * 100.0;
+}
+
 juce::String compactHash(juce::String hash)
 {
     hash = hash.trim();
@@ -686,16 +702,19 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     transportAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
     addAndMakeVisible(transportAuditionLabel);
 
-    for (auto* button : { &auditionBothButton, &auditionPartialsButton, &auditionResidualButton })
+    for (auto* button : { &auditionBothButton, &auditionPartialsButton, &auditionResidualButton, &auditionSmearButton })
     {
         button->setRadioGroupId(5100);
         button->setClickingTogglesState(true);
-        button->setHelpText("Choose which layer to audition: full mix, partials only, or residual only.");
+        button->setHelpText("Choose which layer to audition: full mix, partials only, residual only, or the isolated smear contribution.");
+        button->onClick = [this] { refreshFromProcessor(); };
     }
+    auditionSmearButton.setHelpText("Audition only the smear contribution in isolation: the difference between the smeared and dry render.");
     auditionBothButton.setToggleState(true, juce::dontSendNotification);
     addAndMakeVisible(auditionBothButton);
     addAndMakeVisible(auditionPartialsButton);
     addAndMakeVisible(auditionResidualButton);
+    addAndMakeVisible(auditionSmearButton);
 
     smearEffectToggle.setHelpText("Preview transient smear live (non-destructive) on the selected source. Use Apply Smear to bake.");
     addAndMakeVisible(smearEffectToggle);
@@ -871,7 +890,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         "correspondence. "
         "For a pure Hybrid effect, press Reset first so the morph stays at A, then add Hybrid breakpoints.");
     morphTimelineEditor.onPointsChanged = [this](std::vector<AtsMorphTimelinePoint> points) {
-        audioProcessor.setMorphTimelinePoints(points);
+        audioProcessor.setMorphTimelinePointsUndoable(points, "Edit Morph Timeline");
         refreshMorphSnapshotControls();
     };
     morphTimelineBounceButton.setHelpText("Render the morph timeline to a WAV file and reveal it for import into your DAW.");
@@ -1028,10 +1047,28 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     };
     setupSmearKnob(smearMacroLabel, smearBlurSlider, "Smear",
                    "Attack blur time in milliseconds: spreads attack energy forward in time.");
+    setupSmearKnob(smearMixLabel, smearMixSlider, "Mix",
+                   "Dry/wet blend of the whole smear effect: 0% leaves attacks untouched, "
+                   "100% applies the full transform.");
+    smearMixSlider.setTextValueSuffix(" %");
     setupSmearKnob(smearSharpenLabel, smearSharpenSlider, "Sharpen",
                    "Unsharp attack emphasis: subtracts a blurred copy to crisp the attack.");
     setupSmearKnob(smearExaggerateLabel, smearExaggerateSlider, "Exaggerate",
                    "Attack-window gain in dB, energy-bounded by Max dB.");
+
+    setupSmearKnob(smearSensitivityLabel, smearSensitivitySlider, "Sensitivity",
+                   "Onset detection sensitivity: higher finds more attacks (more markers), "
+                   "lower finds fewer. Re-detects live so the spectrogram markers update.");
+    smearSensitivitySlider.setRange(0.0, 100.0, 1.0);
+    smearSensitivitySlider.setTextValueSuffix(" %");
+    smearSensitivitySlider.onValueChange = [this] {
+        if (smearSyncingSensitivity)
+            return;
+        setPlainParameter(audioProcessor, ats_param::kSmearnovThresholdAutoScale,
+                          (float) sensitivityToAutoScale(smearSensitivitySlider.getValue()));
+        if (!audioProcessor.isWorkerBusy() && (cachedModelPartials > 0 || cachedModelFrames > 0))
+            runSmearnovDetect();
+    };
 
     smearKnobsDisclosure.setClickingTogglesState(true);
     smearKnobsDisclosure.setHelpText("Reveal the Sharpen and Exaggerate knobs.");
@@ -1106,9 +1143,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     setupAdvSlider(smearWeightPhaseLabel, smearWeightPhaseSlider, "Phase dev",
                    "Fusion weight for phase deviation D5 (needs phase + Phase dev on).");
     setupAdvSlider(smearThreshLambdaLabel, smearThreshLambdaSlider, "Threshold",
-                   "Additive peak-picking threshold; 0 auto-derives from global MAD.");
-    setupAdvSlider(smearThreshScaleLabel, smearThreshScaleSlider, "Auto scale",
-                   "Multiplier on global MAD when the threshold auto-derives.");
+                   "Additive peak-picking threshold; 0 auto-derives from global MAD "
+                   "(scaled by the Sensitivity knob).");
     setupAdvSlider(smearPreMarginLabel, smearPreMarginSlider, "Pre ms",
                    "Pre-onset margin folded into the attack window.");
     setupAdvSlider(smearPeakWindowLabel, smearPeakWindowSlider, "Peak win",
@@ -1127,6 +1163,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     smearBlurAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kSmearnovBlurMs, smearBlurSlider);
+    smearMixAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kSmearnovMix, smearMixSlider);
     smearSharpenAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kSmearnovSharpenAmount, smearSharpenSlider);
     smearExaggerateAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -1145,8 +1183,6 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, ats_param::kSmearnovWeightPhaseDev, smearWeightPhaseSlider);
     smearThreshLambdaAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kSmearnovThresholdLambda, smearThreshLambdaSlider);
-    smearThreshScaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, ats_param::kSmearnovThresholdAutoScale, smearThreshScaleSlider);
     smearPreMarginAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kSmearnovPreMarginMs, smearPreMarginSlider);
     smearPeakWindowAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -1356,7 +1392,7 @@ void SessionTabPanel::refreshMorphTimeline()
 
 void SessionTabPanel::setMorphTimelinePreset(std::vector<AtsMorphTimelinePoint> points)
 {
-    audioProcessor.setMorphTimelinePoints(points);
+    audioProcessor.setMorphTimelinePointsUndoable(points, "Apply Timeline Preset");
     morphTimelineEditor.setPoints(audioProcessor.getMorphTimelinePoints());
     refreshMorphSnapshotControls();
     refreshMorphTimeline();
@@ -1397,7 +1433,7 @@ void SessionTabPanel::transportPlay()
         case 1: // Current
         default:
             title = "Play current model";
-            ok = audioProcessor.playCurrentModelPreview(err, liveSmear);
+            ok = audioProcessor.playCurrentModelPreview(mode, liveSmear, err);
             break;
     }
 
@@ -1447,6 +1483,8 @@ int SessionTabPanel::getAuditionModeIndex() const
         return (int) AtsSourceAuditionMode::PartialsOnly;
     if (auditionResidualButton.getToggleState())
         return (int) AtsSourceAuditionMode::ResidualOnly;
+    if (auditionSmearButton.getToggleState())
+        return (int) AtsSourceAuditionMode::SmearOnly;
     return (int) AtsSourceAuditionMode::Both;
 }
 
@@ -1527,6 +1565,7 @@ void SessionTabPanel::resized()
     auditionBothButton.setBounds(transportRow.removeFromLeft(sc(54)));
     auditionPartialsButton.setBounds(transportRow.removeFromLeft(sc(72)));
     auditionResidualButton.setBounds(transportRow.removeFromLeft(sc(78)));
+    auditionSmearButton.setBounds(transportRow.removeFromLeft(sc(86)));
     transportRow.removeFromLeft(sc(10));
     smearEffectToggle.setBounds(transportRow.removeFromLeft(sc(70)));
     transportPlayButton.setBounds(transportRow.removeFromRight(sc(96)).reduced(sc(1)));
@@ -1756,6 +1795,8 @@ void SessionTabPanel::hideSmearnovPanel()
 {
     const std::initializer_list<juce::Component*> comps {
         &smearMacroLabel, &smearBlurSlider,
+        &smearMixLabel, &smearMixSlider,
+        &smearSensitivityLabel, &smearSensitivitySlider,
         &smearSharpenLabel, &smearSharpenSlider,
         &smearExaggerateLabel, &smearExaggerateSlider,
         &smearKnobsDisclosure,
@@ -1770,7 +1811,6 @@ void SessionTabPanel::hideSmearnovPanel()
         &smearWeightBirthLabel, &smearWeightBirthSlider,
         &smearWeightPhaseLabel, &smearWeightPhaseSlider,
         &smearThreshLambdaLabel, &smearThreshLambdaSlider,
-        &smearThreshScaleLabel, &smearThreshScaleSlider,
         &smearPreMarginLabel, &smearPreMarginSlider,
         &smearPeakWindowLabel, &smearPeakWindowSlider,
         &smearMinGapLabel, &smearMinGapSlider,
@@ -1792,6 +1832,8 @@ void SessionTabPanel::layoutSmearnovPanel(juce::Rectangle<int> area)
         sld.setBounds(col);
     };
     placeKnob(smearMacroLabel, smearBlurSlider);
+    placeKnob(smearMixLabel, smearMixSlider);
+    placeKnob(smearSensitivityLabel, smearSensitivitySlider);
     if (smearKnobsExpanded)
     {
         placeKnob(smearSharpenLabel, smearSharpenSlider);
@@ -1824,7 +1866,7 @@ void SessionTabPanel::layoutSmearnovPanel(juce::Rectangle<int> area)
     smearAdvancedDisclosure.setBounds(area.removeFromTop(sc(22)).removeFromLeft(sc(96)));
     area.removeFromTop(sc(2));
 
-    std::array<std::pair<juce::Label*, juce::Slider*>, 12> advs { {
+    std::array<std::pair<juce::Label*, juce::Slider*>, 11> advs { {
         { &smearMaxDbLabel, &smearMaxDbSlider },
         { &smearWeightDetLabel, &smearWeightDetSlider },
         { &smearWeightResLabel, &smearWeightResSlider },
@@ -1832,7 +1874,6 @@ void SessionTabPanel::layoutSmearnovPanel(juce::Rectangle<int> area)
         { &smearWeightBirthLabel, &smearWeightBirthSlider },
         { &smearWeightPhaseLabel, &smearWeightPhaseSlider },
         { &smearThreshLambdaLabel, &smearThreshLambdaSlider },
-        { &smearThreshScaleLabel, &smearThreshScaleSlider },
         { &smearPreMarginLabel, &smearPreMarginSlider },
         { &smearPeakWindowLabel, &smearPeakWindowSlider },
         { &smearMinGapLabel, &smearMinGapSlider },
@@ -1841,15 +1882,15 @@ void SessionTabPanel::layoutSmearnovPanel(juce::Rectangle<int> area)
 
     if (smearAdvancedExpanded)
     {
-        for (int row = 0; row < 6; ++row)
+        const int advCount = (int) advs.size();
+        for (int idx = 0; idx < advCount;)
         {
             auto advRow = area.removeFromTop(sc(20));
-            for (int col = 0; col < 2; ++col)
+            for (int col = 0; col < 2 && idx < advCount; ++col, ++idx)
             {
-                const size_t idx = (size_t) (row * 2 + col);
                 auto cell = advRow.removeFromLeft(advRow.getWidth() / (2 - col)).reduced(sc(2), sc(1));
-                advs[idx].first->setBounds(cell.removeFromLeft(sc(60)));
-                advs[idx].second->setBounds(cell);
+                advs[(size_t) idx].first->setBounds(cell.removeFromLeft(sc(60)));
+                advs[(size_t) idx].second->setBounds(cell);
             }
         }
         area.removeFromTop(sc(2));
@@ -1875,6 +1916,19 @@ void SessionTabPanel::refreshSmearnovControls()
     const bool hasModel = (cachedModelPartials > 0 || cachedModelFrames > 0);
     smearDetectButton.setEnabled(hasModel && !workerBusy);
     smearApplyButton.setEnabled(hasModel && !workerBusy);
+
+    // Reflect external auto-scale changes (preset load, automation, morph) onto the
+    // Sensitivity knob, unless the user is actively dragging it.
+    if (!smearSensitivitySlider.isMouseButtonDown())
+    {
+        const double scale = getPlainParameter(audioProcessor, ats_param::kSmearnovThresholdAutoScale, 1.5f);
+        const double sens = autoScaleToSensitivity(scale);
+        if (std::abs(sens - smearSensitivitySlider.getValue()) > 0.5)
+        {
+            const juce::ScopedValueSetter<bool> guard(smearSyncingSensitivity, true);
+            smearSensitivitySlider.setValue(sens, juce::dontSendNotification);
+        }
+    }
 
     if (smearShowMathStatus)
     {
@@ -2080,6 +2134,14 @@ void SessionTabPanel::refreshFromProcessor()
     auditionResidualButton.setEnabled(selectedHasResidual);
     if (!selectedHasResidual && auditionResidualButton.getToggleState())
         auditionBothButton.setToggleState(true, juce::dontSendNotification);
+
+    // Isolated-smear audition is only meaningful for a single source (Current / A / B),
+    // not the morph timeline, and makes the separate live-smear toggle redundant.
+    const bool smearAuditionSupported = transportSourceId != 4;
+    auditionSmearButton.setEnabled(smearAuditionSupported);
+    if (!smearAuditionSupported && auditionSmearButton.getToggleState())
+        auditionBothButton.setToggleState(true, juce::dontSendNotification);
+    smearEffectToggle.setEnabled(!auditionSmearButton.getToggleState());
 
     refreshMorphSnapshotControls();
     refreshMorphTimeline();

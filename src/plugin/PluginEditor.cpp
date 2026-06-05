@@ -39,6 +39,16 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     tabs.addTab("Partials", juce::Colours::transparentBlack, &partialTab, false);
     tabs.addTab("Math", juce::Colours::transparentBlack, &mathTab, false);
 
+    // Undo / redo, drawn on top of the empty space at the right of the tab bar.
+    addAndMakeVisible(undoButton);
+    addAndMakeVisible(redoButton);
+    undoButton.onClick = [this] { audioProcessor.undo(); refreshUndoButtons(); };
+    redoButton.onClick = [this] { audioProcessor.redo(); refreshUndoButtons(); };
+    refreshUndoButtons();
+
+    // Allow Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z to reach keyPressed().
+    setWantsKeyboardFocus(true);
+
     // User request: default window roughly 70% smaller, but resizable.
     const int defaultW = juce::jmax(300, scaled(276));
     const int defaultH = juce::jmax(220, scaled(192));
@@ -69,7 +79,54 @@ void AtsAudioProcessorEditor::paint(juce::Graphics& g)
 
 void AtsAudioProcessorEditor::resized()
 {
-    tabs.setBounds(getLocalBounds());
+    auto area = getLocalBounds();
+
+    // Reserve a top toolbar strip for the right-aligned undo/redo buttons so they
+    // never overlap the tab buttons, then lay the tabs out beneath it.
+    const int h = juce::jmax(18, scaled(20));
+    const int w = juce::jmax(40, scaled(46));
+    const int pad = juce::jmax(2, scaled(3));
+    auto strip = area.removeFromTop(h + pad * 2).reduced(pad);
+    redoButton.setBounds(strip.removeFromRight(w));
+    strip.removeFromRight(pad);
+    undoButton.setBounds(strip.removeFromRight(w));
+
+    tabs.setBounds(area);
+}
+
+bool AtsAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    // commandModifier maps to Cmd on macOS and Ctrl on Windows/Linux.
+    const bool cmd = key.getModifiers().isCommandDown();
+    if (cmd && key.getKeyCode() == (int) 'Z')
+    {
+        if (key.getModifiers().isShiftDown())
+            audioProcessor.redo();
+        else
+            audioProcessor.undo();
+        refreshUndoButtons();
+        return true;
+    }
+    if (cmd && key.getKeyCode() == (int) 'Y') // Windows-style redo
+    {
+        audioProcessor.redo();
+        refreshUndoButtons();
+        return true;
+    }
+    return false;
+}
+
+void AtsAudioProcessorEditor::refreshUndoButtons()
+{
+    const bool canUndo = audioProcessor.canUndo();
+    const bool canRedo = audioProcessor.canRedo();
+    undoButton.setEnabled(canUndo);
+    redoButton.setEnabled(canRedo);
+
+    const auto undoDesc = audioProcessor.getUndoDescription();
+    const auto redoDesc = audioProcessor.getRedoDescription();
+    undoButton.setTooltip(canUndo && undoDesc.isNotEmpty() ? "Undo " + undoDesc : juce::String("Nothing to undo"));
+    redoButton.setTooltip(canRedo && redoDesc.isNotEmpty() ? "Redo " + redoDesc : juce::String("Nothing to redo"));
 }
 
 void AtsAudioProcessorEditor::timerCallback()
@@ -78,4 +135,5 @@ void AtsAudioProcessorEditor::timerCallback()
     analysisTab.refreshFromProcessor();
     partialTab.tick();
     mathTab.tick();
+    refreshUndoButtons();
 }

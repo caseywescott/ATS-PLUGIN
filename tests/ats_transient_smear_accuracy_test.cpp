@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -244,15 +245,40 @@ std::vector<std::vector<double>> copyRows(double** rows, int rowCount, int frame
     return copy;
 }
 
-bool inAnyWindow(int frame, const std::vector<ats::AtsOnset>& onsets, int frames)
+// Mirror smearAttacks' blur-extended window so the invariants are checked against the
+// frames the transform may actually touch (blur reaches ceil(3*sigma) past the peak).
+std::vector<std::pair<int, int>> effectiveSmearWindows(const std::vector<ats::AtsOnset>& onsets,
+                                                       double blurMs,
+                                                       double hop,
+                                                       int frames)
 {
-    for (const auto& onset : onsets)
+    const double sigmaFrames = (blurMs > 0.0 && hop > 0.0) ? (blurMs * 0.001) / hop : 0.0;
+    const int blurExtend = sigmaFrames > 0.0 ? (int) std::ceil(3.0 * sigmaFrames) : 0;
+
+    std::vector<std::pair<int, int>> windows;
+    windows.reserve(onsets.size());
+    for (size_t i = 0; i < onsets.size(); ++i)
     {
-        const int start = std::clamp(std::min(onset.preFrame, onset.peakFrame), 0, frames - 1);
-        const int end = std::clamp(std::max(onset.preFrame, onset.peakFrame), 0, frames - 1);
-        if (frame >= start && frame <= end)
-            return true;
+        const int start = std::clamp(std::min(onsets[i].preFrame, onsets[i].peakFrame), 0, frames - 1);
+        const int peak = std::clamp(std::max(onsets[i].preFrame, onsets[i].peakFrame), 0, frames - 1);
+        int end = peak;
+        if (blurExtend > 0)
+        {
+            int bound = frames - 1;
+            if (i + 1 < onsets.size())
+                bound = std::min(bound, std::min(onsets[i + 1].preFrame, onsets[i + 1].frame) - 1);
+            end = std::clamp(peak + blurExtend, peak, std::max(peak, bound));
+        }
+        windows.emplace_back(start, end);
     }
+    return windows;
+}
+
+bool inAnyWindow(int frame, const std::vector<std::pair<int, int>>& windows)
+{
+    for (const auto& w : windows)
+        if (frame >= w.first && frame <= w.second)
+            return true;
     return false;
 }
 
@@ -277,7 +303,7 @@ int checkRowsAfterSmear(const std::string& fixtureName,
                         const std::vector<std::vector<double>>& before,
                         double** afterRows,
                         int frames,
-                        const std::vector<ats::AtsOnset>& onsets,
+                        const std::vector<std::pair<int, int>>& windows,
                         double peakGain)
 {
     if (before.empty() || afterRows == nullptr)
@@ -293,15 +319,15 @@ int checkRowsAfterSmear(const std::string& fixtureName,
             const double value = afterRows[rowIndex][frame];
             if (!std::isfinite(value) || value < 0.0)
                 return fail(fixtureName + ": " + laneName + " contains a non-finite or negative value");
-            if (!inAnyWindow(frame, onsets, frames)
+            if (!inAnyWindow(frame, windows)
                 && std::abs(value - before[(size_t) rowIndex][(size_t) frame]) > 1.0e-10)
                 return fail(fixtureName + ": " + laneName + " changed outside an attack window");
         }
 
-        for (const auto& onset : onsets)
+        for (const auto& window : windows)
         {
-            const int start = std::clamp(std::min(onset.preFrame, onset.peakFrame), 0, frames - 1);
-            const int end = std::clamp(std::max(onset.preFrame, onset.peakFrame), 0, frames - 1);
+            const int start = window.first;
+            const int end = window.second;
             const double beforePeak = maxValueInWindow(before[(size_t) rowIndex], start, end);
             const double afterPeak = maxValueInWindow(std::vector<double>(afterRows[rowIndex],
                                                                           afterRows[rowIndex] + frames),
@@ -388,6 +414,8 @@ int main()
         if (!ats::smearAttacks(sound, onsets, smearParams))
             return fail(fixture.name + ": smearAttacks should mutate fixture windows");
 
+        const auto windows = effectiveSmearWindows(onsets, smearParams.blurMs,
+                                                   hopSeconds(sound), sound->frames);
         const double amplitudeGain = std::pow(10.0, smearParams.exaggerateDb / 20.0);
         const double energyGain = std::pow(10.0, smearParams.exaggerateDb / 10.0);
         if (const int result = checkRowsAfterSmear(fixture.name,
@@ -395,7 +423,7 @@ int main()
                                                    ampBefore,
                                                    sound->amp,
                                                    sound->frames,
-                                                   onsets,
+                                                   windows,
                                                    amplitudeGain))
             return result;
         if (const int result = checkRowsAfterSmear(fixture.name,
@@ -403,7 +431,7 @@ int main()
                                                    bandBefore,
                                                    sound->band_energy,
                                                    sound->frames,
-                                                   onsets,
+                                                   windows,
                                                    energyGain))
             return result;
         if (const int result = checkPhaseUntouched(fixture.name, phaseBefore, sound->pha, sound->frames))

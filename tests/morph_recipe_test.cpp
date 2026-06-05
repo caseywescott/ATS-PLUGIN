@@ -1174,6 +1174,72 @@ int main()
     if (parsed != correspondenceRecipe)
         return fail("correspondence records did not survive serialize/deserialize round trip");
 
+    // Amplitude-rank weighting: within a band, the loud partials of source and target should be
+    // matched together when the weight is 1, instead of being paired purely by frequency rank.
+    {
+        const std::vector<ats::MorphBandAssignment> ampSource {
+            { 500, 0, 100.0, 0.2, 0, ats::MorphBandAssignmentKind::Assigned, 1.0 },
+            { 501, 0, 110.0, 0.9, 0, ats::MorphBandAssignmentKind::Assigned, 1.0 },
+        };
+        const std::vector<ats::MorphBandAssignment> ampTarget {
+            { 600, 0, 101.0, 0.9, 0, ats::MorphBandAssignmentKind::Assigned, 1.0 },
+            { 601, 0, 111.0, 0.2, 0, ats::MorphBandAssignmentKind::Assigned, 1.0 },
+        };
+
+        const auto byFreq = ats::buildFrequencyRankCorrespondence(ampSource, ampTarget, 0.0);
+        if (byFreq.size() != 2
+            || byFreq[0].sourcePartialIndex != 500 || byFreq[0].targetPartialIndex != 600
+            || byFreq[1].sourcePartialIndex != 501 || byFreq[1].targetPartialIndex != 601)
+        {
+            return fail("zero amplitude weight should preserve pure frequency-rank pairing");
+        }
+
+        const auto byAmp = ats::buildFrequencyRankCorrespondence(ampSource, ampTarget, 1.0);
+        // Loud source (501) pairs with loud target (600); quiet source (500) with quiet target (601).
+        bool loudPairMatched = false;
+        bool quietPairMatched = false;
+        for (const auto& record : byAmp)
+        {
+            if (record.kind != ats::MorphCorrespondenceKind::Matched)
+                continue;
+            if (record.sourcePartialIndex == 501 && record.targetPartialIndex == 600)
+                loudPairMatched = true;
+            if (record.sourcePartialIndex == 500 && record.targetPartialIndex == 601)
+                quietPairMatched = true;
+        }
+        if (!loudPairMatched || !quietPairMatched)
+            return fail("amplitude weight of 1 should pair loudest-with-loudest within the band");
+    }
+
+    // Per-frame correspondence re-pairing: matched partials should re-pair to the nearest
+    // instantaneous log-frequency, and hysteresis should hold an established pairing through a
+    // near-tie.
+    {
+        // No crossing: nearest partners are the in-order pair.
+        const std::vector<double> srcA { std::log(100.0), std::log(200.0) };
+        const std::vector<double> tgtA { std::log(101.0), std::log(201.0) };
+        const auto a = ats::reassignCorrespondenceByLogFrequency(srcA, tgtA, { 0, 1 }, 0.02);
+        if (a.size() != 2 || a[0] != 0 || a[1] != 1)
+            return fail("re-pairing should keep non-crossing partials in order");
+
+        // Crossing: the closest target swaps, so the assignment inverts.
+        const std::vector<double> srcB { std::log(100.0), std::log(200.0) };
+        const std::vector<double> tgtB { std::log(205.0), std::log(98.0) };
+        const auto b = ats::reassignCorrespondenceByLogFrequency(srcB, tgtB, { 0, 1 }, 0.0);
+        if (b.size() != 2 || b[0] != 1 || b[1] != 0)
+            return fail("re-pairing should swap partners at a frequency crossing");
+
+        // Hysteresis: a near-tie keeps the previous pairing instead of flipping.
+        const std::vector<double> srcC { std::log(100.0), std::log(102.0) };
+        const std::vector<double> tgtC { std::log(101.0), std::log(101.5) };
+        const auto noStick = ats::reassignCorrespondenceByLogFrequency(srcC, tgtC, { 0, 1 }, 0.0);
+        const auto stick = ats::reassignCorrespondenceByLogFrequency(srcC, tgtC, { 1, 0 }, 0.02);
+        if (noStick.size() != 2 || noStick[0] != 0 || noStick[1] != 1)
+            return fail("re-pairing without hysteresis should pick the lowest-cost assignment");
+        if (stick.size() != 2 || stick[0] != 1 || stick[1] != 0)
+            return fail("hysteresis should retain the previous pairing across a near-tie");
+    }
+
     const ats::MorphFrequencyGrid comparisonGrid = ats::makeBarkFrequencyGrid(1, 80.0, 700.0);
     const auto vibratoSourceAssignments = ats::assignPartialFramesToFrequencyBands(
         comparisonGrid,

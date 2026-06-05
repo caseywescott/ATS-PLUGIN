@@ -212,10 +212,11 @@ int main()
         }
     }
 
-    // 7. Blur preserves in-window sum and does not increase the steepest slope.
+    // 7. Blur spreads attack energy forward past the peak, conserving energy over the
+    //    blur-extended window and never increasing the steepest slope.
     {
         ModelBuilder m;
-        std::vector<double> row((size_t) 24, 0.0);
+        std::vector<double> row((size_t) 32, 0.0);
         for (int f = 8; f <= 13; ++f)
             row[(size_t) f] = 1.0;
         const auto before = row;
@@ -223,19 +224,23 @@ int main()
         auto* sound = m.build();
 
         ats::SmearnovParams smear;
-        smear.blurMs = 12.0;
+        smear.blurMs = 12.0; // hop = 256/48000 s -> sigma ~= 2.25 frames -> reach ceil(3*sigma) = 7
         smear.targets = ats::SmearnovTarget::Partials;
-        const ats::AtsOnset onset { 8, 4, 13, 1.0 };
+        const ats::AtsOnset onset { 8, 4, 13, 1.0 }; // peakFrame 13 -> extended end 20
         if (!ats::smearAttacks(sound, { onset }, smear))
             return fail("blur smear should report a mutation");
 
-        const std::vector<double> after(sound->amp[0], sound->amp[0] + 24);
-        if (!near(windowSum(before, 4, 13), windowSum(after, 4, 13), 1.0e-9))
-            return fail("blur should conserve in-window amplitude sum");
-        if (maxWindowSlope(after, 4, 13) > maxWindowSlope(before, 4, 13) + 1.0e-9)
+        const int extendedEnd = 20;
+        const std::vector<double> after(sound->amp[0], sound->amp[0] + 32);
+        if (!near(windowSum(before, 4, extendedEnd), windowSum(after, 4, extendedEnd), 1.0e-9))
+            return fail("blur should conserve energy over the blur-extended window");
+        if (windowSum(after, 14, extendedEnd) <= 1.0e-6)
+            return fail("blur should spread attack energy forward past the peak");
+        if (maxWindowSlope(after, 4, extendedEnd) > maxWindowSlope(before, 4, extendedEnd) + 1.0e-9)
             return fail("blur should not increase the maximum in-window slope");
-        if (!near(after[3], before[3], 0.0) || !near(after[14], before[14], 0.0))
-            return fail("blur should not edit frames outside the attack window");
+        if (!near(after[3], before[3], 0.0) || !near(after[(size_t) (extendedEnd + 1)],
+                                                      before[(size_t) (extendedEnd + 1)], 0.0))
+            return fail("blur should not edit frames outside the blur-extended window");
     }
 
     // 8. Sharpen is bounded by the original peak when exaggerate is off.
@@ -367,6 +372,53 @@ int main()
         for (int f = 0; f < 16; ++f)
             if (!near(sound->pha[0][f], phase[(size_t) f], 0.0))
                 return fail("smear transforms must leave phase arrays untouched");
+    }
+
+    // 11. Dry/wet mix blends linearly between the dry envelope and the full effect.
+    {
+        std::vector<double> before((size_t) 32, 0.0);
+        for (int f = 8; f <= 13; ++f)
+            before[(size_t) f] = 1.0;
+        const ats::AtsOnset onset { 8, 4, 13, 1.0 };
+
+        ats::SmearnovParams base;
+        base.blurMs = 12.0;
+        base.targets = ats::SmearnovTarget::Partials;
+
+        // Full effect (mix defaults to 1.0).
+        ModelBuilder wetM;
+        wetM.setPartials({ before });
+        auto* wetSound = wetM.build();
+        if (!ats::smearAttacks(wetSound, { onset }, base))
+            return fail("mix: full-effect smear should report a mutation");
+        const std::vector<double> wet(wetSound->amp[0], wetSound->amp[0] + 32);
+
+        // Fully dry: identity, no mutation reported.
+        ModelBuilder dryM;
+        dryM.setPartials({ before });
+        auto* drySound = dryM.build();
+        ats::SmearnovParams dryParams = base;
+        dryParams.mix = 0.0;
+        if (ats::smearAttacks(drySound, { onset }, dryParams))
+            return fail("mix=0 should be a no-op (fully dry)");
+        for (int f = 0; f < 32; ++f)
+            if (!near(drySound->amp[0][f], before[(size_t) f], 1.0e-12))
+                return fail("mix=0 must leave the dry envelope untouched");
+
+        // Halfway: each frame is the midpoint of dry and the full effect.
+        ModelBuilder halfM;
+        halfM.setPartials({ before });
+        auto* halfSound = halfM.build();
+        ats::SmearnovParams halfParams = base;
+        halfParams.mix = 0.5;
+        if (!ats::smearAttacks(halfSound, { onset }, halfParams))
+            return fail("mix=0.5 should report a mutation");
+        for (int f = 0; f < 32; ++f)
+        {
+            const double expected = 0.5 * (before[(size_t) f] + wet[(size_t) f]);
+            if (!near(halfSound->amp[0][f], expected, 1.0e-9))
+                return fail("mix=0.5 must be the midpoint of dry and the full effect");
+        }
     }
 
     return 0;

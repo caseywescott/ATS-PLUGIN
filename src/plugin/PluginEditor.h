@@ -18,11 +18,13 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     int scaled(int px) const;
 
 private:
     void timerCallback() override;
+    void refreshUndoButtons();
 
     AtsAudioProcessor& audioProcessor;
 
@@ -36,6 +38,9 @@ private:
     MathExprPanel mathTab;
 
     juce::TabbedComponent tabs;
+
+    juce::TextButton undoButton { "Undo" };
+    juce::TextButton redoButton { "Redo" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessorEditor)
 };

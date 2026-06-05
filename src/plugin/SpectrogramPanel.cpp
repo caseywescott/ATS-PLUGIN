@@ -297,6 +297,23 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     addAndMakeVisible(viewMenuButton);
     updateViewMenuButton();
 
+    onsetEditButton.setClickingTogglesState(true);
+    onsetEditButton.setName("Edit Smearnov onsets");
+    onsetEditButton.setTooltip("Edit Smearnov onset markers. When off, markers are click-through "
+                               "so you can select partials and edit residual underneath them.");
+    onsetEditButton.setHelpText("Toggle onset editing. On: drag the vertical onset markers and their "
+                                "left/right edges. Off: the overlay is dimmed and click-through so "
+                                "partial/residual editing works under the markers.");
+    onsetEditButton.onClick = [this] {
+        // Leaving onset-edit mode must not strand a half-finished drag or stale highlight.
+        draggingOnsetIndex = -1;
+        draggingOnsetHandle = OnsetHandle::None;
+        hoveredOnsetIndex = -1;
+        hoveredOnsetHandle = OnsetHandle::None;
+        repaint();
+    };
+    addChildComponent(onsetEditButton);
+
     deleteButton.setTooltip("Mute selected partial traces or residual-band energy.");
     deleteButton.onClick = [this] { deleteSelection(); };
     addAndMakeVisible(deleteButton);
@@ -373,6 +390,24 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     envSourceBBtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC) repaint(); };
     addChildComponent(envSourceABtn);
     addChildComponent(envSourceBBtn);
+
+    envSmoothLabel.setText("Smoothness", juce::dontSendNotification);
+    envSmoothLabel.setJustificationType(juce::Justification::centredRight);
+    envSmoothLabel.setFont(juce::Font(11.0f));
+    addChildComponent(envSmoothLabel);
+
+    envSmoothSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    envSmoothSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 18);
+    envSmoothSlider.setRange(0.0, 1.0, 0.01);
+    envSmoothSlider.setValue(0.5, juce::dontSendNotification);
+    envSmoothSlider.setTooltip("Envelope smoothness: higher flattens partials onto a simpler "
+                               "spectral envelope (lower polynomial order).");
+    addChildComponent(envSmoothSlider);
+
+    envSmoothButton.setTooltip("Flatten the viewed source's partial amplitudes onto the fitted "
+                               "RDC spectral envelope over the visible time range.");
+    envSmoothButton.onClick = [this] { runSmoothEnvelope(); };
+    addChildComponent(envSmoothButton);
 
     updateResidualToolbarVisibility();
     startTimerHz(10);
@@ -720,6 +755,11 @@ void SpectrogramPanel::rebuildTraceSnapshot(bool preserveDisplayReference)
     {
         secondarySnapshot = {};
     }
+
+    const bool wasOnsetButtonVisible = onsetEditButton.isVisible();
+    updateOnsetEditButtonVisibility();
+    if (onsetEditButton.isVisible() != wasOnsetButtonVisible)
+        resized();
 
     repaintDisplay();
 }
@@ -1312,6 +1352,90 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
     }
 }
 
+void SpectrogramPanel::paintEnvelopeRangeSelection(juce::Graphics& g, juce::Rectangle<float> plot) const
+{
+    if (envRangeStartNorm < 0.0f || envRangeEndNorm < 0.0f)
+        return;
+
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    float t0 = juce::jmin(envRangeStartNorm, envRangeEndNorm);
+    float t1 = juce::jmax(envRangeStartNorm, envRangeEndNorm);
+    // Clip the slab to the visible time window so it never paints outside the plot.
+    t0 = juce::jlimit(timeRange.getStart(), timeRange.getEnd(), t0);
+    t1 = juce::jlimit(timeRange.getStart(), timeRange.getEnd(), t1);
+    if (t1 <= t0)
+        return;
+
+    float frontFreq = freqRange.getStart();
+    float backFreq = freqRange.getEnd();
+    if (envFreqStartNorm >= 0.0f && envFreqEndNorm >= 0.0f)
+    {
+        frontFreq = juce::jlimit(freqRange.getStart(), freqRange.getEnd(),
+                                 juce::jmin(envFreqStartNorm, envFreqEndNorm));
+        backFreq = juce::jlimit(freqRange.getStart(), freqRange.getEnd(),
+                                juce::jmax(envFreqStartNorm, envFreqEndNorm));
+    }
+    const float topAmp = 1.1f;
+
+    const auto fb0 = positionForIsoCoords(t0, frontFreq, 0.0f, plot);
+    const auto fb1 = positionForIsoCoords(t1, frontFreq, 0.0f, plot);
+    const auto bb0 = positionForIsoCoords(t0, backFreq, 0.0f, plot);
+    const auto bb1 = positionForIsoCoords(t1, backFreq, 0.0f, plot);
+    const auto ft0 = positionForIsoCoords(t0, frontFreq, topAmp, plot);
+    const auto ft1 = positionForIsoCoords(t1, frontFreq, topAmp, plot);
+    const auto bt0 = positionForIsoCoords(t0, backFreq, topAmp, plot);
+    const auto bt1 = positionForIsoCoords(t1, backFreq, topAmp, plot);
+
+    const juce::Colour accent(0xff5ed0ff);
+
+    // Floor quad across the full frequency depth — the primary "this time region" cue.
+    {
+        juce::Path floor;
+        floor.startNewSubPath(fb0);
+        floor.lineTo(fb1);
+        floor.lineTo(bb1);
+        floor.lineTo(bb0);
+        floor.closeSubPath();
+        g.setColour(accent.withAlpha(0.15f));
+        g.fillPath(floor);
+        g.setColour(accent.withAlpha(0.5f));
+        g.strokePath(floor, juce::PathStrokeType(1.2f));
+    }
+
+    // End-walls at the start/end times (front edges bold, back edges faint for depth).
+    g.setColour(accent.withAlpha(0.8f));
+    g.drawLine(juce::Line<float>(fb0, ft0), 1.8f);
+    g.drawLine(juce::Line<float>(fb1, ft1), 1.8f);
+    g.setColour(accent.withAlpha(0.32f));
+    g.drawLine(juce::Line<float>(bb0, bt0), 1.0f);
+    g.drawLine(juce::Line<float>(bb1, bt1), 1.0f);
+
+    // Top outline of the slab.
+    g.setColour(accent.withAlpha(0.42f));
+    g.drawLine(juce::Line<float>(ft0, ft1), 1.0f);
+    g.drawLine(juce::Line<float>(bt0, bt1), 1.0f);
+    g.drawLine(juce::Line<float>(ft0, bt0), 1.0f);
+    g.drawLine(juce::Line<float>(ft1, bt1), 1.0f);
+
+    // Time-range label above the leading wall.
+    const double dur = traceSnapshot.durationSeconds;
+    juce::String label;
+    if (dur > 0.0)
+        label = juce::String(t0 * (float) dur, 3) + " - " + juce::String(t1 * (float) dur, 3) + " s";
+    else
+        label = juce::String(juce::roundToInt(t0 * 100.0f)) + " - "
+                + juce::String(juce::roundToInt(t1 * 100.0f)) + " %";
+
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    const float textW = g.getCurrentFont().getStringWidthFloat(label) + 10.0f;
+    juce::Rectangle<float> labelBounds(ft0.x - 2.0f, ft0.y - 18.0f, textW, 15.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.55f));
+    g.fillRoundedRectangle(labelBounds, 3.0f);
+    g.setColour(accent.brighter(0.25f));
+    g.drawText(label, labelBounds, juce::Justification::centred);
+}
+
 void SpectrogramPanel::paintIsometricEnvelope(juce::Graphics& g, juce::Rectangle<float> plot)
 {
     // Draw secondary source first (behind primary).
@@ -1320,6 +1444,8 @@ void SpectrogramPanel::paintIsometricEnvelope(juce::Graphics& g, juce::Rectangle
 
     if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
         paintEnvelopeSurface(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+
+    paintEnvelopeRangeSelection(g, plot);
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1564,8 @@ void SpectrogramPanel::paintIsometricEnvelopeRDC(juce::Graphics& g, juce::Rectan
         paintEnvelopeSurfaceRDC(g, plot, secondarySnapshot, juce::Colour(0xffd08030), 0.85f);
     if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
         paintEnvelopeSurfaceRDC(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+
+    paintEnvelopeRangeSelection(g, plot);
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,6 +2072,12 @@ void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<f
     g.saveState();
     g.reduceClipRegion(plot.toNearestInt());
 
+    // When onset editing is off the markers are click-through; dim them so they read as a
+    // passive reference and let the partial/residual data underneath stay legible.
+    const bool onsetEditActive = onsetEditButton.getToggleState();
+    if (!onsetEditActive)
+        g.beginTransparencyLayer(0.4f);
+
     const auto spanColour = isResidualDisplayMode(mode) ? juce::Colour(0xff74fff0)
                                                         : juce::Colour(0xfffff3a0);
     const auto markerColour = isResidualDisplayMode(mode) ? juce::Colour(0xffbaffea)
@@ -2012,15 +2146,15 @@ void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<f
         const bool markerActive = onsetIdx == activeOnset && activeHandle == OnsetHandle::Marker;
         const float glow = markerActive ? 0.30f : 0.0f;
         const auto line = juce::Line<float>({ x, plot.getY() }, { x, plot.getBottom() });
-        g.setColour(markerColour.withAlpha(0.09f + 0.10f * strength + glow));
-        g.drawLine(line, markerActive ? 9.0f : 7.0f);
-        g.setColour(markerColour.withAlpha(0.24f + 0.18f * strength + glow));
-        g.drawLine(line, 2.4f);
-        g.setColour(markerColour.withAlpha(juce::jmin(1.0f, 0.78f + 0.20f * strength + glow)));
-        g.drawLine(line, markerActive ? 1.6f : 1.05f);
+        g.setColour(markerColour.withAlpha(0.05f + 0.06f * strength + glow));
+        g.drawLine(line, markerActive ? 4.5f : 3.0f);
+        g.setColour(markerColour.withAlpha(0.14f + 0.12f * strength + glow));
+        g.drawLine(line, markerActive ? 1.6f : 1.2f);
+        g.setColour(markerColour.withAlpha(juce::jmin(1.0f, 0.58f + 0.22f * strength + glow)));
+        g.drawLine(line, markerActive ? 1.1f : 0.75f);
 
-        constexpr float headW = 7.0f;
-        constexpr float headH = 7.5f;
+        constexpr float headW = 5.0f;
+        constexpr float headH = 5.5f;
         juce::Path topHead;
         topHead.startNewSubPath(x - headW * 0.5f, plot.getY() + 1.0f);
         topHead.lineTo(x + headW * 0.5f, plot.getY() + 1.0f);
@@ -2033,10 +2167,13 @@ void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<f
         bottomHead.lineTo(x, plot.getBottom() - headH);
         bottomHead.closeSubPath();
 
-        g.setColour(markerColour.withAlpha(0.58f + 0.25f * strength));
+        g.setColour(markerColour.withAlpha(0.42f + 0.22f * strength));
         g.fillPath(topHead);
         g.fillPath(bottomHead);
     }
+
+    if (!onsetEditActive)
+        g.endTransparencyLayer();
 
     g.restoreState();
 }
@@ -2200,7 +2337,7 @@ void SpectrogramPanel::resized()
     auto r = getLocalBounds().reduced(5);
     const bool residualUi = isResidualDisplayMode(mode);
     const bool envelopeUi = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
-    auto header = r.removeFromTop(residualUi ? 50 : 26);
+    auto header = r.removeFromTop((residualUi || envelopeUi) ? 50 : 26);
     auto headerRow1 = header.removeFromTop(26);
 
     if (zoomBar != nullptr)
@@ -2212,6 +2349,12 @@ void SpectrogramPanel::resized()
     headerRow1.removeFromLeft(6);
     deleteButton.setBounds(headerRow1.removeFromLeft(72));
     headerRow1.removeFromLeft(8);
+    updateOnsetEditButtonVisibility();
+    if (onsetEditButton.isVisible())
+    {
+        onsetEditButton.setBounds(headerRow1.removeFromLeft(90));
+        headerRow1.removeFromLeft(8);
+    }
     if (envelopeUi)
     {
         envSourceABtn.setBounds(headerRow1.removeFromLeft(76));
@@ -2240,6 +2383,15 @@ void SpectrogramPanel::resized()
         toolRow.removeFromLeft(8);
         residualDbLabel.setBounds(toolRow.removeFromLeft(44));
         residualDbEditor.setBounds(toolRow.removeFromLeft(juce::jmax(72, toolRow.getWidth())));
+    }
+    else if (envelopeUi)
+    {
+        auto toolRow = header;
+        envSmoothLabel.setBounds(toolRow.removeFromLeft(76));
+        toolRow.removeFromLeft(4);
+        envSmoothSlider.setBounds(toolRow.removeFromLeft(juce::jmax(120, toolRow.getWidth() / 3)));
+        toolRow.removeFromLeft(8);
+        envSmoothButton.setBounds(toolRow.removeFromLeft(88));
     }
 
     layoutTraceViewChrome();
@@ -2380,9 +2532,26 @@ void SpectrogramPanel::scrollBarMoved(juce::ScrollBar* scrollBarThatHasMoved, do
 
 bool SpectrogramPanel::smearnovOverlayInteractive() const
 {
+    return onsetEditButton.getToggleState()
+        && !isIsometricDisplayMode(mode)
+        && traceSnapshot.frameCount > 1
+        && !traceSnapshot.onsets.empty();
+}
+
+bool SpectrogramPanel::smearnovOverlayPresent() const
+{
     return !isIsometricDisplayMode(mode)
         && traceSnapshot.frameCount > 1
         && !traceSnapshot.onsets.empty();
+}
+
+void SpectrogramPanel::updateOnsetEditButtonVisibility()
+{
+    const bool present = smearnovOverlayPresent();
+    if (onsetEditButton.isVisible() != present)
+        onsetEditButton.setVisible(present);
+    if (!present && onsetEditButton.getToggleState())
+        onsetEditButton.setToggleState(false, juce::dontSendNotification);
 }
 
 int SpectrogramPanel::onsetHandleAtPoint(juce::Point<float> pos,
@@ -2526,6 +2695,39 @@ void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
             hoveredOnsetHandle = handle;
             return;
         }
+    }
+
+    // Isometric envelope views: drag a time x frequency box, then vertical-drag inside it to
+    // raise/lower amplitude (z).  Shift+drag also constrains the frequency (y) extent.
+    if (isEnvelopeDisplayMode())
+    {
+        selectedPartials.clear();
+        const bool haveBox = (envRangeStartNorm >= 0.0f && envRangeEndNorm >= 0.0f);
+        if (haveBox && !e.mods.isShiftDown() && pointInEnvBox(e.position, plot))
+        {
+            scalingEnvGain = true;
+            lastScaleDragY = e.position.y;
+            return;
+        }
+
+        selectingEnvRange = true;
+        float t = 0.0f, f = 0.0f;
+        isoTimeFreqFromPoint(e.position, plot, t, f);
+        envRangeStartNorm = t;
+        envRangeEndNorm = t;
+        if (e.mods.isShiftDown())
+        {
+            envFreqStartNorm = f;
+            envFreqEndNorm = f;
+        }
+        else
+        {
+            envFreqStartNorm = -1.0f;
+            envFreqEndNorm = -1.0f;
+        }
+        updateSelectionLabel();
+        repaintDisplay();
+        return;
     }
 
     if (isResidualDisplayMode(mode))
@@ -2674,6 +2876,25 @@ void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    if (scalingEnvGain)
+    {
+        scaleEnvBoxGain(e.position.y - lastScaleDragY);
+        lastScaleDragY = e.position.y;
+        return;
+    }
+
+    if (selectingEnvRange)
+    {
+        float t = 0.0f, f = 0.0f;
+        isoTimeFreqFromPoint(e.position, getPlotBounds(), t, f);
+        envRangeEndNorm = t;
+        if (envFreqStartNorm >= 0.0f)
+            envFreqEndNorm = f;
+        updateSelectionLabel();
+        repaintDisplay();
+        return;
+    }
+
     if (dragStart.getDistanceFrom(e.position) < 5.0f)
         return;
 
@@ -2707,6 +2928,53 @@ void SpectrogramPanel::mouseUp(const juce::MouseEvent& e)
         lassoRect = {};
         updateSelectionLabel();
         refreshHoveredDbReadout();
+        repaintDisplay();
+        return;
+    }
+
+    if (scalingEnvGain)
+    {
+        scalingEnvGain = false;
+        panningView = false;
+        draggingLasso = false;
+        lassoRect = {};
+        updateSelectionLabel();
+        repaintDisplay();
+        return;
+    }
+
+    if (selectingEnvRange)
+    {
+        selectingEnvRange = false;
+        // A click (no meaningful drag) clears the slab and reverts to the full visible window.
+        if (std::abs(envRangeEndNorm - envRangeStartNorm) < 0.01f)
+        {
+            envRangeStartNorm = -1.0f;
+            envRangeEndNorm = -1.0f;
+            envFreqStartNorm = -1.0f;
+            envFreqEndNorm = -1.0f;
+        }
+        else
+        {
+            if (envRangeEndNorm < envRangeStartNorm)
+                std::swap(envRangeStartNorm, envRangeEndNorm);
+            if (envFreqStartNorm >= 0.0f && envFreqEndNorm >= 0.0f)
+            {
+                if (std::abs(envFreqEndNorm - envFreqStartNorm) < 0.01f)
+                {
+                    envFreqStartNorm = -1.0f;  // negligible y extent -> full depth
+                    envFreqEndNorm = -1.0f;
+                }
+                else if (envFreqEndNorm < envFreqStartNorm)
+                {
+                    std::swap(envFreqStartNorm, envFreqEndNorm);
+                }
+            }
+        }
+        panningView = false;
+        draggingLasso = false;
+        lassoRect = {};
+        updateSelectionLabel();
         repaintDisplay();
         return;
     }
@@ -3031,6 +3299,36 @@ void SpectrogramPanel::updateSelectionLabel()
     if (traceSnapshot.frameCount <= 0)
     {
         selectionLabel.setText("No model", juce::dontSendNotification);
+        return;
+    }
+
+    if (isEnvelopeDisplayMode())
+    {
+        if (envRangeStartNorm >= 0.0f && envRangeEndNorm >= 0.0f)
+        {
+            const float t0 = juce::jmin(envRangeStartNorm, envRangeEndNorm);
+            const float t1 = juce::jmax(envRangeStartNorm, envRangeEndNorm);
+            const double dur = traceSnapshot.durationSeconds;
+            juce::String text = "Box ";
+            if (dur > 0.0)
+                text << juce::String(t0 * (float) dur, 3) << "-" << juce::String(t1 * (float) dur, 3) << " s";
+            else
+                text << juce::String(juce::roundToInt(t0 * 100.0f)) << "-"
+                     << juce::String(juce::roundToInt(t1 * 100.0f)) << " %";
+
+            double loHz = 0.0, hiHz = 0.0;
+            if (envBoxFreqRangeHz(loHz, hiHz))
+                text << " | " << juce::String(loHz, 0) << "-" << juce::String(hiHz, 0) << " Hz";
+            else
+                text << " | full band";
+            text << " · drag ↕ to gain";
+            selectionLabel.setText(text, juce::dontSendNotification);
+        }
+        else
+        {
+            selectionLabel.setText("Drag box (Shift = + freq) · whole visible range",
+                                   juce::dontSendNotification);
+        }
         return;
     }
 
@@ -3362,6 +3660,131 @@ juce::Point<float> SpectrogramPanel::positionForIsoCoords(float pointTimeNorm,
 
     return { origin.x + freqAxis.x * freqNorm + timeAxis.x * timeNorm + ampAxis.x * ampNorm,
              origin.y + freqAxis.y * freqNorm + timeAxis.y * timeNorm + ampAxis.y * ampNorm };
+}
+
+float SpectrogramPanel::timeNormFromIsoPoint(juce::Point<float> pos, juce::Rectangle<float> plot) const
+{
+    // Invert the isometric projection for time only by projecting the cursor onto the
+    // front-bottom edge (freq=front, amp=0), where screen position is linear in time.
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const auto origin = positionForIsoCoords(timeRange.getStart(), freqRange.getStart(), 0.0f, plot);
+    const auto axisEnd = positionForIsoCoords(timeRange.getEnd(), freqRange.getStart(), 0.0f, plot);
+    const auto axis = axisEnd - origin;
+    const float denom = axis.x * axis.x + axis.y * axis.y;
+    if (denom < 1.0e-6f)
+        return timeRange.getStart();
+    const auto rel = pos - origin;
+    const float u = juce::jlimit(0.0f, 1.0f, (rel.x * axis.x + rel.y * axis.y) / denom);
+    return juce::jlimit(0.0f, 1.0f, timeRange.getStart() + u * timeRange.getLength());
+}
+
+void SpectrogramPanel::isoTimeFreqFromPoint(juce::Point<float> pos,
+                                            juce::Rectangle<float> plot,
+                                            float& timeNormAbs,
+                                            float& freqNormAbs) const
+{
+    // Solve the iso projection for (time, freq) on the amp=0 floor plane.  The amp axis is
+    // purely vertical, so a 2x2 solve over the time and freq screen vectors recovers both.
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+    const auto origin = positionForIsoCoords(timeRange.getStart(), freqRange.getStart(), 0.0f, plot);
+    const auto timeAxis = positionForIsoCoords(timeRange.getEnd(), freqRange.getStart(), 0.0f, plot) - origin;
+    const auto freqAxis = positionForIsoCoords(timeRange.getStart(), freqRange.getEnd(), 0.0f, plot) - origin;
+    const auto rel = pos - origin;
+
+    const float det = freqAxis.x * timeAxis.y - timeAxis.x * freqAxis.y;
+    float timeRel = 0.0f;
+    float freqRel = 0.0f;
+    if (std::abs(det) > 1.0e-6f)
+    {
+        freqRel = (rel.x * timeAxis.y - timeAxis.x * rel.y) / det;
+        timeRel = (freqAxis.x * rel.y - rel.x * freqAxis.y) / det;
+    }
+    timeRel = juce::jlimit(0.0f, 1.0f, timeRel);
+    freqRel = juce::jlimit(0.0f, 1.0f, freqRel);
+    timeNormAbs = juce::jlimit(0.0f, 1.0f, timeRange.getStart() + timeRel * timeRange.getLength());
+    freqNormAbs = juce::jlimit(0.0f, 1.0f, freqRange.getStart() + freqRel * freqRange.getLength());
+}
+
+bool SpectrogramPanel::pointInEnvBox(juce::Point<float> pos, juce::Rectangle<float> plot) const
+{
+    if (envRangeStartNorm < 0.0f || envRangeEndNorm < 0.0f)
+        return false;
+    float t = 0.0f, f = 0.0f;
+    isoTimeFreqFromPoint(pos, plot, t, f);
+    const float t0 = juce::jmin(envRangeStartNorm, envRangeEndNorm);
+    const float t1 = juce::jmax(envRangeStartNorm, envRangeEndNorm);
+    if (t < t0 || t > t1)
+        return false;
+    if (envFreqStartNorm >= 0.0f && envFreqEndNorm >= 0.0f)
+    {
+        const float f0 = juce::jmin(envFreqStartNorm, envFreqEndNorm);
+        const float f1 = juce::jmax(envFreqStartNorm, envFreqEndNorm);
+        if (f < f0 || f > f1)
+            return false;
+    }
+    return true;
+}
+
+bool SpectrogramPanel::envBoxFrameRange(int& firstFrame, int& lastFrame) const
+{
+    if (traceSnapshot.frameCount <= 0)
+        return false;
+    const int last = traceSnapshot.frameCount - 1;
+    juce::Range<float> tr = visibleTimeRange();
+    if (envRangeStartNorm >= 0.0f && envRangeEndNorm >= 0.0f
+        && std::abs(envRangeEndNorm - envRangeStartNorm) > 0.001f)
+    {
+        tr = { juce::jmin(envRangeStartNorm, envRangeEndNorm),
+               juce::jmax(envRangeStartNorm, envRangeEndNorm) };
+    }
+    firstFrame = juce::jlimit(0, last, (int) std::floor(juce::jlimit(0.0f, 1.0f, tr.getStart()) * (float) last));
+    lastFrame = juce::jlimit(0, last, (int) std::ceil(juce::jlimit(0.0f, 1.0f, tr.getEnd()) * (float) last));
+    if (lastFrame < firstFrame)
+        std::swap(firstFrame, lastFrame);
+    return true;
+}
+
+bool SpectrogramPanel::envBoxFreqRangeHz(double& loHz, double& hiHz) const
+{
+    // Returns false (full range) when no frequency sub-band is selected.
+    if (envFreqStartNorm < 0.0f || envFreqEndNorm < 0.0f)
+    {
+        loHz = 0.0;
+        hiHz = 0.0;
+        return false;
+    }
+    const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+    const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+    const double logRange = std::log(maxHz / minHz);
+    const float f0 = juce::jmin(envFreqStartNorm, envFreqEndNorm);
+    const float f1 = juce::jmax(envFreqStartNorm, envFreqEndNorm);
+    loHz = minHz * std::exp((double) f0 * logRange);
+    hiHz = minHz * std::exp((double) f1 * logRange);
+    return true;
+}
+
+void SpectrogramPanel::scaleEnvBoxGain(float deltaY)
+{
+    if (std::abs(deltaY) < 0.25f)
+        return;
+
+    int f0 = 0, f1 = 0;
+    if (!envBoxFrameRange(f0, f1))
+        return;
+    double loHz = 0.0, hiHz = 0.0;
+    (void) envBoxFreqRangeHz(loHz, hiHz);  // false -> {0,0} = full range, handled downstream
+
+    const double scale = std::pow(2.0, (double) -deltaY / 30.0);
+    juce::String error;
+    if (processor.gainPartialEnvelope(traceSource, f0, f1, loHz, hiHz, scale, error))
+    {
+        rebuildTraceSnapshot(true);
+        lastModelRevision = processor.getModelRevision();
+        updateSelectionLabel();
+        repaintDisplay();
+    }
 }
 
 float SpectrogramPanel::xForFrame(int frame, juce::Rectangle<float> plot) const
@@ -3730,6 +4153,9 @@ void SpectrogramPanel::updateResidualToolbarVisibility()
     const bool envMode = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
     envSourceABtn.setVisible(envMode);
     envSourceBBtn.setVisible(envMode);
+    envSmoothLabel.setVisible(envMode);
+    envSmoothSlider.setVisible(envMode);
+    envSmoothButton.setVisible(envMode);
 }
 
 bool SpectrogramPanel::getSelectedFrameRange(int& firstFrame, int& lastFrame) const
@@ -3871,6 +4297,41 @@ void SpectrogramPanel::commitEnvelopeDraw()
     }
 
     rebuildTraceSnapshot(true);
+}
+
+void SpectrogramPanel::runSmoothEnvelope()
+{
+    if (traceSnapshot.partials.empty() || traceSnapshot.frameCount <= 0)
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
+                                                    "Analyze a source before smoothing its envelope.");
+        return;
+    }
+
+    // Operate on the dragged time slab if one is set, otherwise the whole visible window.
+    juce::Range<float> tr = visibleTimeRange();
+    if (envRangeStartNorm >= 0.0f && envRangeEndNorm >= 0.0f
+        && std::abs(envRangeEndNorm - envRangeStartNorm) > 0.001f)
+    {
+        tr = { juce::jmin(envRangeStartNorm, envRangeEndNorm),
+               juce::jmax(envRangeStartNorm, envRangeEndNorm) };
+    }
+    const int last = juce::jmax(0, traceSnapshot.frameCount - 1);
+    int f0 = juce::jlimit(0, last, (int) std::floor(juce::jlimit(0.0f, 1.0f, tr.getStart()) * (float) last));
+    int f1 = juce::jlimit(0, last, (int) std::ceil(juce::jlimit(0.0f, 1.0f, tr.getEnd()) * (float) last));
+    if (f1 < f0)
+        std::swap(f0, f1);
+
+    juce::String error;
+    if (!processor.smoothPartialEnvelope(traceSource, f0, f1, envSmoothSlider.getValue(), error))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
+                                                    error.isEmpty() ? juce::String("Could not smooth envelope.") : error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
 }
 
 void SpectrogramPanel::runSmoothOnSelection()

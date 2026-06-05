@@ -58,6 +58,7 @@ inline constexpr const char* kFreqShapePivotHz = "freqShapePivotHz";
 inline constexpr const char* kSmearnovBlurMs = "smearnovBlurMs";
 inline constexpr const char* kSmearnovSharpenAmount = "smearnovSharpenAmount";
 inline constexpr const char* kSmearnovExaggerateDb = "smearnovExaggerateDb";
+inline constexpr const char* kSmearnovMix = "smearnovMix";
 inline constexpr const char* kSmearnovMaxDb = "smearnovMaxDb";
 inline constexpr const char* kSmearnovTargets = "smearnovTargets";
 inline constexpr const char* kSmearnovScope = "smearnovScope";
@@ -175,7 +176,8 @@ enum class AtsSourceAuditionMode
 {
     Both = 0,
     PartialsOnly,
-    ResidualOnly
+    ResidualOnly,
+    SmearOnly // isolated smear contribution: (smeared render) - (dry render)
 };
 
 enum class AtsPreviewPlaybackKind
@@ -322,7 +324,27 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    // Declared before apvts so it is fully constructed when passed to the
+    // AudioProcessorValueTreeState constructor (member init order = declaration order).
+    juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+
+    // --- Undo / redo --------------------------------------------------------
+    /** Heap ATS_SOUND snapshot (deep copy) with matching free; reusable across redo. */
+    using AtsSoundSnapshot = std::shared_ptr<ATS_SOUND>;
+    void undo();
+    void redo();
+    bool canUndo() const;
+    bool canRedo() const;
+    juce::String getUndoDescription() const;
+    juce::String getRedoDescription() const;
+    /** Deep snapshot of the live model for `source` (null when there is no model). */
+    AtsSoundSnapshot captureModelSnapshot(AtsTraceSource source) const;
+    /** Replaces the live model for `source` with `snapshot` and refreshes derived state. */
+    void installModelSnapshot(AtsTraceSource source, const AtsSoundSnapshot& snapshot);
+    /** Sets morph timeline points and records an undo transaction labelled `label`. */
+    void setMorphTimelinePointsUndoable(const std::vector<AtsMorphTimelinePoint>& points,
+                                        const juce::String& label);
 
     void loadSourceFile(const juce::File& file);
     void startAnalysis();
@@ -365,6 +387,25 @@ public:
                        const std::vector<int>& partialIndices,
                        double amplitudeScale,
                        juce::String& error);
+
+    /** Flattens partial amplitudes onto a fitted Bark-RDC spectral envelope over an inclusive
+        frame range. smoothness in [0,1] controls the polynomial order/regularization. */
+    bool smoothPartialEnvelope(AtsTraceSource source,
+                               int firstFrame,
+                               int lastFrame,
+                               double smoothness,
+                               juce::String& error);
+
+    /** Scales partial amplitudes by a gain factor inside a time x frequency box: frames in
+        [firstFrame,lastFrame] and partials whose per-frame frequency lies in [freqLoHz,freqHiHz].
+        Pass freqLoHz <= 0 and freqHiHz <= 0 to apply across the full frequency range. */
+    bool gainPartialEnvelope(AtsTraceSource source,
+                             int firstFrame,
+                             int lastFrame,
+                             double freqLoHz,
+                             double freqHiHz,
+                             double gainFactor,
+                             juce::String& error);
 
     /** Deletes residual energy in selected critical bands over an inclusive frame range. */
     bool muteResidualBands(const std::vector<int>& bandIndices, int firstFrame, int lastFrame, juce::String& error);
@@ -499,6 +540,7 @@ public:
     juce::String getMathStatus() const;
     bool playCurrentModelPreview(juce::String& error);
     bool playCurrentModelPreview(juce::String& error, bool liveSmear);
+    bool playCurrentModelPreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error);
     void startPreviewPlayback();
     void stopPreviewPlayback();
     bool isPreviewPlaying() const { return previewPlaying.load(); }
@@ -555,8 +597,39 @@ private:
     void joinWorkers();
     void clearPreviewLayerCache();
     void markMorphSnapshotStale();
-    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false);
-    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false);
+
+    /** Captures the post-edit model and pushes an undo transaction (message thread only). */
+    void recordModelEdit(AtsTraceSource source, AtsSoundSnapshot before, const juce::String& label);
+
+    // RAII guard placed at the top of each synchronous model-edit method. On
+    // construction it snapshots the model; on destruction, if the edit bumped
+    // modelRevision (i.e. actually changed something), it records an undo entry.
+    // A recursion counter dedups nested edits (e.g. scalePartials -> mutePartials)
+    // so one user action yields one undo entry with the outermost label.
+    struct ScopedModelEdit
+    {
+        ScopedModelEdit(AtsAudioProcessor& p, AtsTraceSource s, juce::String l);
+        ~ScopedModelEdit();
+        AtsAudioProcessor& proc;
+        AtsTraceSource source;
+        juce::String label;
+        AtsSoundSnapshot before;
+        int revAtStart = 0;
+        bool active = false;
+    };
+    int modelEditRecursion = 0; // message-thread only
+
+    // Worker-thread edits (math script, smear apply) can't touch the UndoManager.
+    // The before-snapshot is captured at kickoff on the message thread; the worker
+    // sets asyncUndoCommit on success and the entry is recorded in handleAsyncUpdate.
+    AtsSoundSnapshot asyncUndoBefore;
+    AtsTraceSource asyncUndoSource = AtsTraceSource::Current;
+    juce::String asyncUndoLabel;
+    std::atomic<bool> asyncUndoCommit { false };
+    int undoTransactionTick = 0;
+    std::int64_t lastTimelineEditMs = 0; // coalesces a continuous timeline drag
+    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
+    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
     void rebuildMorphCorrespondenceIfReady();
 
     // --- Live (non-destructive) Smearnov preview (transport "Smear" toggle) ---
@@ -629,6 +702,30 @@ private:
     std::vector<float> previewLayerCachePartials;
     std::vector<float> previewLayerCacheResidual;
     std::vector<float> previewLayerCacheCombined;
+
+    /** Caches the assembled transport-preview render per playback buffer so repeated Play of an
+        unchanged source/timeline reuses the audio instead of re-running full additive synthesis.
+        Stored independently of playbackBuffers so other (non-cached) writers can't yield a false hit. */
+    struct TransportRenderCacheEntry
+    {
+        bool valid = false;
+        int sourceTag = -1;            // 0 = Source A, 1 = Source B, 100 = current analyzed model
+        int modelRevisionSnap = -1;
+        uint64_t morphSourcesRevisionSnap = 0;
+        uint64_t displayShapeRevisionSnap = 0;
+        double hostSr = 0.0;
+        ats::SynthParams core {};
+        bool liveSmear = false;
+        bool smearIsolate = false;
+        size_t smearHash = 0;
+        uint64_t smearOverlayRevisionSnap = 0;
+        juce::AudioBuffer<float> buffer;
+    };
+    std::array<TransportRenderCacheEntry, 3> transportRenderCache;
+    bool transportCacheTryReuse(int bufferIndex, int sourceTag, const ats::SynthParams& core,
+                                bool liveSmear, bool smearIsolate);
+    void transportCacheStore(int bufferIndex, int sourceTag, const ats::SynthParams& core,
+                             bool liveSmear, bool smearIsolate, const juce::AudioBuffer<float>& buffer);
 
     /** Per slot: ch0 = partials-only, ch1 = residual-only, optional ch2 = classic combined. */
     std::array<juce::AudioBuffer<float>, 3> playbackBuffers;

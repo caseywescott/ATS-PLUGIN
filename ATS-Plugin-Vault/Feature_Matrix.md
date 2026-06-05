@@ -1,240 +1,272 @@
 # ATS / ATSH Feature Matrix
 
-## Implementation status (plugin, May 2026)
+Classic **ATS / ATSH** capabilities mapped to the **ATS Plugin** (VST). Status reflects what is wired end-to-end in the product today, not research goals.
 
-Reviewed against: **Session**, **Analysis**, **Synthesis**, **Partials**, **Math** tabs; `src/plugin/*`; `src/core/AtsMorphRecipe.*`; classic ATSA analysis via `tools/ats_offline.c` / Qatsh.
+## Overview
+
+ATS models sound as **sinusoidal partial tracks** plus **stochastic Bark-band noise**, so tonal and noisy content can be transformed separately. This matrix tracks parity with historical ATSH/Qatsh and modern plugin-only features.
+
+→ Index: [[ATS Plugin - Developer Hub]]
+
+---
+
+## Implementation status (Jun 2026)
+
+**Audited against:** Session, Analysis, Synthesis, Partials, Math tabs; `src/plugin/*`; `src/core/` (`AtsMorphRecipe`, `AtsSpectralEnvelope`, `AtsTransientSmear`, `AtsFrequencyShape`); ATSA via Qatsh.
+
+### Render paths
+
+| Path | When used |
+| ---- | --------- |
+| **`renderMorphTrajectoryBuffer`** | Primary audible morph — frame-wise oscillator bank when Source A/B frame data exists |
+| **`evaluateMorphRecipeSnapshot`** | Fallback when A/B frames unavailable (preset load) or timeline segment fallback |
+
+**UI vs main render:** Several Session controls persist in the recipe but are **not read** by `renderMorphTrajectoryBuffer` yet: morph lane sliders, phase strategy, transient policy, unmatched policies, interpolation domains, performance macro, smoothing. See [Priority queue](#priority-queue).
 
 ### Legend
 
 | Status | Meaning |
 | ------ | ------- |
-| **Done** | End-to-end in product: UI (where applicable) + engine + audible preview or export |
-| **Partial** | Some layer works (analysis-only, offline-only, UI stub, tests-only, or subset of classic ATSH) |
-| **Not started** | No meaningful implementation in this repo |
+| **Done** | UI (where applicable) + engine + audible preview or export |
+| **Partial** | Subset, offline-only, tests-only, or UI ahead of render wiring |
+| **Not started** | No meaningful implementation |
 
-### Summary
+### Summary by area
 
 | Area | Done | Partial | Not started |
 | ---- | ---- | ------- | ----------- |
 | Analysis model | 7 | 0 | 0 |
 | Pitch & frequency | 4 | 1 | 2 |
 | Time | 4 | 3 | 1 |
-| Amplitude & envelope | 2 | 3 | 1 |
+| Amplitude & envelope | 1 | 6 | 1 |
 | Noise | 4 | 2 | 0 |
 | Spectral editing | 2 | 4 | 0 |
-| Hybridization & morphing | 1 | 5 | 0 |
+| Hybridization & morphing | 1 | 5 | 1 |
 | Psychoacoustic | 3 | 1 | 0 |
-| ATSH graphical editing | 4 | 2 | 0 |
-| Modern extensions | 0 | 1 | 7 |
+| ATSH graphical editing | 4 | 4 | 0 |
+| Plugin workflow & UI | 16 | 4 | 0 |
+| Modern extensions | 0 | 2 | 7 |
 
-**Recent (Jun 2026):** **Smearnov** (Session tab, `[Morph | Smearnov]` toggle) adds model-domain onset detection and attack-smearing: a Smear macro expanding into Blur / Sharpen / Exaggerate knobs plus an Advanced panel (detector weights, adaptive threshold, peak/min-gap/attack windows, phase-deviation and offline RPCA toggles). Onsets and attack windows are editable in the spectrogram overlay; tab + all parameters persist in session/preset state. See `docs/SMEARNOV_SPEC.md`.
+### What works in main morph render
 
-**Recent (May 2026):** Synthesis **Frequency shaping** adds Stretch, Compress, and Harmonic modes with live spectrogram warp display, pivot/F0 overlay, auto pivot readout, preview resynth, and factory presets. Residual / Iso 3D Residual modes also include a **Bark-band noise editor**: left Hz gutter, per-band envelope draw, per-cell dB edit, smooth, tilt, copy/paste/swap band — all writing `band_energy` on Current / Source A / B via `mutateResidualBandFrames`.
+- Timeline **Morph** amount; **Hybrid** / **EnvelopeMorph** breakpoints
+- Correspondence: freq rank, greedy, assignment matrix
+- Frequency shaping on A/B; end-of-source fade
+- Smearnov live preview on trajectory play
 
-**Largest gaps vs classic ATSH:** formant-preserving pitch, partial trajectory *drawing*, true real-time resynthesis in `processBlock` (preview is pre-rendered buffers), formant/spectral-warp transforms, and multi-source (>2) hybridization.
+### Recent shipping notes
 
-**Strongest completed vertical:** dual-source ATSA analysis → `.ats` import/export → morph recipe (Bark/Mel, correspondence, lanes, timeline) → offline morph snapshot preview → spectrogram editing (partials + **Bark residual bands**: mute/scale/delete, envelope draw, tilt, clipboard).
+- **Smearnov (Jun 2026):** five flux detectors, editable overlay, live transport preview, Apply bake. RPCA toggle is **disabled** (not implemented).
+- **Spectral envelope morph (Jun 2026):** True Envelope, de-color/apply, formant-aligned blend; timeline Hybrid + EnvelopeMorph; Iso 3D Envelope / Env (RDC) viz. Full RDC stack: [[Spectral Envelope - PRD Summary]] (worktree).
+- **Frequency shaping + Bark residual editor (May 2026):** Synthesis warp + morph render; spectrogram residual edit toolbar.
 
----
+### Largest gaps
 
-## Overview
-
-ATS (Analysis Transformation Synthesis) and ATSH (ATS Hybrid) were spectral modeling systems developed primarily by Juan Pampin and researchers at DXARTS. Unlike traditional phase vocoders, ATS models a sound as:
-
-1. Deterministic sinusoidal partial tracks
-2. Stochastic noise bands
-
-This separation allows transformations to be performed independently on tonal and noisy components while maintaining perceptual coherence.
-
----
-
-# Analysis Model
-
-| Feature              | Technical Description                                               | Notes                                  | Status      | Plugin evidence                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------- | -------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Partial Tracking     | Tracks sinusoidal components across time as continuous trajectories | Core ATS representation                | **Done**    | ATSA `trackLen`, `minSegLen`, `minGapLen`; Analysis tab + profiles                                                                                                                  |
-| Frequency Estimation | Peak interpolation and trajectory linking between frames            | More stable than frame-local FFT peaks | **Done**    | `freqDev`, `lastPeakContribution`, window/hop controls                                                                                                                              |
-| Amplitude Tracking   | Stores amplitude envelopes per partial                              | Enables independent editing            | **Done**    | Analysis type 1+; Partials tab cell edit; spectrogram scale                                                                                                                         |
-| Phase Tracking       | Maintains phase continuity during resynthesis                       | Reduces artifacts                      | **Partial** | Analysis type 2+; Synthesis “Use partial phases”; morph phase *policies* in recipe, not full frame phase morph in UI                                                                |
-| Noise Modeling       | Residual energy stored separately in critical-band representation   | Major ATS innovation                   | **Done**    | Analysis type 3/4; residual audition; band_energy in model                                                                                                                          |
-| Bark Band Analysis   | Noise energy grouped into psychoacoustic Bark bands                 | Perceptually motivated                 | **Done**    | ATSA `band_energy` + critical-band edges; Residual / Iso 3D Residual views with Hz gutter, band selection, and Bark-band edit toolbar (draw / dB / smooth / tilt / copy-paste-swap) |
-| SMR Analysis         | Signal-to-Mask Ratio calculation for perceptual weighting           | Used for pruning and optimization      | **Done**    | `SMR threshold`, `min segment SMR`, `SMR weight`; profiles tune these                                                                                                               |
+Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBlock`; wire morph lanes/policies to main render; arbitrary warp maps; envelope panel beyond timeline; more than two morph sources.
 
 ---
 
-# Pitch & Frequency Transformations
+## Analysis model
 
-| Feature                        | Technical Description                               | Potential Modern Equivalent | Status          | Plugin evidence                                             |
-| ------------------------------ | --------------------------------------------------- | --------------------------- | --------------- | ----------------------------------------------------------- |
-| Pitch Shift                    | Scales partial frequencies by ratio                 | Spectral transposition      | **Done**        | Synthesis `freq`; MIDI note-on offset in `processBlock`     |
-| Formant-Preserving Pitch Shift | Pitch changes while spectral envelope remains fixed | Vocal processing            | **Not started** | —                                                           |
-| Frequency Stretching           | Expands frequency relationships non-linearly        | Inharmonic timbres          | **Done** | Synthesis Frequency shaping: Stretch mode + live trace warp + preview resynth |
-| Frequency Compression          | Compresses spectral spacing                         | Spectral clustering         | **Done** | Synthesis Frequency shaping: Compress mode + live trace warp + preview resynth |
-| Harmonic Scaling               | Adjusts harmonic series relationships               | Instrument morphing         | **Done** | Synthesis Frequency shaping: Harmonic mode, rank-based v1 + auto F0 pivot |
-| Partial Detuning               | Individual partial offsets                          | Chorus-like effects         | **Partial**     | Per-cell freq in Partials tab; no detune spread UI          |
-| Spectral Warping               | Arbitrary frequency mapping function                | Advanced timbral design     | **Not started** | Morph freq domain (log/Bark) is interpolation, not warp map |
-
----
-
-# Time Transformations
-
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| Time Stretch | Rescales temporal evolution of trajectories | Preserves pitch | **Done** | Synthesis `timeStretch` |
-| Time Compression | Shortens sound duration | Opposite of stretch | **Done** | Same control (< 1.0) |
-| Spectral Freeze | Holds partial states over time | Infinite sustain | **Not started** | — |
-| Temporal Interpolation | Smooth transition between temporal states | Morphing tool | **Partial** | Morph timeline A→B; morph *lanes* include Time; not arbitrary state A/B/C |
-| Trajectory Resampling | Reconstructs partial motion at different rates | Useful for generative systems | **Partial** | Implicit via time factor + analysis hop; no dedicated resample tool |
-| Scrubbing | Non-linear traversal through spectral data | Interactive playback | **Partial** | Spectrogram playhead during preview; no live scrub-driven resynth |
-| Onset Detection | Locate note/transient attacks from the model | Editing & attack reshaping | **Done** | **Smearnov** (Session tab): fuses 5 detectors (deterministic/residual/HFC flux, partial-birth, phase deviation) over partials + `band_energy`; editable onset markers + attack windows in spectrogram |
-| Attack Smearing | Blur / sharpen / exaggerate detected attacks | Transient design | **Done** | **Smearnov** Smear macro → Blur (Gaussian), Sharpen (unsharp), Exaggerate (energy-bounded dB); phase never edited; Targets (partials/residual/both) + Scope; offline apply on Current/Source A/B |
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Partial tracking | Continuous sinusoidal trajectories | **Done** | `trackLen`, `minSegLen`, `minGapLen`; Analysis tab + profiles |
+| Frequency estimation | Peak interpolation and trajectory linking | **Done** | `freqDev`, window/hop controls |
+| Amplitude tracking | Per-partial amplitude envelopes | **Done** | Partials tab cell edit; spectrogram scale |
+| Phase tracking | Phase continuity for resynthesis | **Partial** | Analysis type 2+; Synthesis “Use partial phases”; morph seeds phasors at t=0; phase strategy combo = snapshot only |
+| Noise modeling | Residual in critical bands | **Done** | Type 3/4; `band_energy`; residual audition |
+| Bark band analysis | Noise in psychoacoustic bands | **Done** | Residual / Iso 3D Residual + Bark edit toolbar |
+| SMR analysis | Signal-to-mask ratio weighting | **Done** | SMR thresholds and weights in Analysis |
 
 ---
 
-# Amplitude & Envelope Operations
+## Pitch & frequency
 
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| Gain Scaling | Scale all amplitudes | Global adjustment | **Done** | `partGain`, `resGain`, `outputTrim` (Session) |
-| Partial Gain Scaling | Scale selected partials | Spectral EQ | **Partial** | Vertical drag scale on selected traces (spectrogram) |
-| Envelope Remapping | Modify amplitude trajectories | Dynamic reshaping | **Partial** | MathExpr scripts; Partials tab cell edit; **residual band envelope draw** (Draw mode, dB vs time per Bark band) |
-| Spectral Tilt | Emphasize high or low partials | Brightness control | **Partial** | Residual **Tilt** control (dB per band step across selection); partial-trace tilt not implemented |
-| Harmonic Weighting | Adjust harmonic distribution | Instrument coloration | **Not started** | — |
-| Spectral Filtering | Operates directly on partials | Alternative to FFT filtering | **Partial** | Mute/delete partials & residual bands |
-
----
-
-# Noise Operations
-
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| Noise Only Resynthesis | Playback stochastic component alone | Texture extraction | **Done** | Audition Residual; Synthesis “Residual only” |
-| Harmonic Only Resynthesis | Playback sinusoidal component alone | Tonal isolation | **Done** | Audition Partials; combined modes |
-| Noise Scaling | Amplify or attenuate noise bands | Texture control | **Done** | `resGain`; vertical drag scale; per-cell **dB** read/write on `band_energy` |
-| Noise Redistribution | Move energy between Bark bands | Spectral coloration | **Partial** | **Copy / paste / swap** band clipboard over frame range; no automatic rebalancing or drag-between-bands |
-| Noise Morphing | Interpolate stochastic structures | Sound design | **Partial** | Morph **Noise** lane (independent of Freq/Amp) + `morphResidualNoiseBands`; offline snapshot |
-| Residual Manipulation | Direct editing of non-tonal energy | Advanced processing | **Done** | Residual / Iso 3D Residual: lasso, mute, scale, envelope draw, smooth, tilt, copy/paste/swap; `mutateResidualBandFrames` |
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Pitch shift | Scale partial frequencies | **Done** | Synthesis `freq`; MIDI note-on in `processBlock` |
+| Formant-preserving pitch | Pitch fixed envelope | **Not started** | Envelope morph exists; not pitch+fixed envelope |
+| Frequency stretching | Non-linear expansion | **Done** | Frequency shaping Stretch + live warp + preview |
+| Frequency compression | Non-linear compression | **Done** | Frequency shaping Compress |
+| Harmonic scaling | Harmonic series warp | **Done** | Frequency shaping Harmonic + auto F0 pivot |
+| Partial detuning | Per-partial offsets | **Partial** | Partials tab per-cell freq; no spread UI |
+| Spectral warping | Arbitrary freq map | **Not started** | Morph log/Bark interp only |
 
 ---
 
-# Spectral Editing
+## Time
 
-| Feature               | Technical Description         | Notes                 | Status          | Plugin evidence                                            |
-| --------------------- | ----------------------------- | --------------------- | --------------- | ---------------------------------------------------------- |
-| Partial Deletion      | Remove selected tracks        | Spectral cleanup      | **Done**        | Spectrogram Delete → `mutePartials`                        |
-| Partial Isolation     | Solo individual trajectories  | Analysis tool         | **Partial**     | Multi-select + audition; no solo-one-track button          |
-| Partial Cloning       | Duplicate spectral structures | Experimental          | **Not started** | —                                                          |
-| Partial Group Editing | Operate on harmonic groups    | Musical editing       | **Partial**     | Lasso multi-partial scale/delete                           |
-| Spectral Pruning      | Remove low-SMR components     | Data reduction        | **Partial**     | At analysis time via SMR thresholds, not post-hoc prune UI |
-| Harmonic Extraction   | Isolate harmonic subsets      | Timbre simplification | **Not started** | —                                                          |
-
----
-
-# Hybridization & Morphing
-
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| Spectral Interpolation | Blend partial trajectories | Smooth morphing | **Done** | `AtsMorphRecipe`, timeline, lanes, snapshot playback |
-| Timbre Morphing | Transition between analyses | Signature ATS capability | **Partial** | Dual source A/B + Session morph UI; stale-snapshot UX; offline render path |
-| Partial Replacement | Swap partial sets between sounds | Hybrid instruments | **Partial** | Unmatched source/target policies (fade, hold, merge residual, discard) |
-| Noise Transfer | Apply stochastic model from one sound to another | Texture borrowing | **Partial** | Merge-to-residual policies; noise lane |
-| Cross-Synthesis | Merge properties from multiple analyses | Creative design | **Partial** | Morph lanes (Freq/Amp/Time/Transient/Noise/Phase) |
-| Multi-Sound Hybridization | Combine multiple ATS datasets | Composite timbres | **Not started** | Two slots only (A, B) |
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Time stretch | Temporal rescale, fixed pitch | **Done** | Synthesis `timeStretch` |
+| Time compression | Shorten duration | **Done** | Same control (< 1.0) |
+| Spectral freeze | Hold partial state | **Not started** | — |
+| Temporal interpolation | Morph between states | **Partial** | Morph timeline; Time lane not in main render |
+| Trajectory resampling | Different temporal rate | **Partial** | Via time factor + hop; no dedicated tool |
+| Scrubbing | Non-linear traversal | **Partial** | Playhead during preview only |
+| Onset detection | Find attacks in model | **Done** | Smearnov D1–D5; overlay + markers |
+| Attack smearing | Blur/sharpen/exaggerate attacks | **Done** | Smearnov macro; live preview; Apply bake |
 
 ---
 
-# Psychoacoustic Features
+## Amplitude & envelope
 
-| Feature | Technical Description | Notes | Status | Plugin evidence |
-| ------- | --------------------- | ----- | ------ | ----------------- |
-| SMR Weighting | Prioritize perceptually important partials | Efficiency | **Done** | Analysis SMR params + tracking weight |
-| Masking-Based Pruning | Remove inaudible information | Compression | **Partial** | Threshold-driven at analysis; no interactive SMR map |
-| Critical Band Modeling | Noise represented psychoacoustically | Natural perception | **Done** | ATSA critical bands in model; morph Bark/Mel grid; editable residual band map in spectrogram |
-| Perceptual Resynthesis | Focus resources on audible content | Optimization | **Not started** | No adaptive partial budget at playback |
-
----
-
-# ATSH Graphical Editing Features
-
-| Feature | Technical Description | Status | Plugin evidence |
-| ------- | ----------------------------- | ------ | ----------------- |
-| Trajectory Editing | Draw and modify partial paths | **Partial** | Partial traces: delete/scale only; **residual Bark bands**: envelope draw mode |
-| Spectral Visualization | View frequency trajectories | **Done** | `SpectrogramPanel` trace + isometric modes |
-| Noise Visualization | Inspect stochastic content | **Done** | Residual / iso residual; **Bark Hz gutter** + hover readout (band, frame, dB) |
-| Bark-band noise editor | Edit stochastic energy per critical band | **Done** | Second toolbar in Residual modes: Draw, Smooth, Tilt, Copy/Paste/Swap, Cell dB |
-| Partial Selection Tools | Edit subsets of tracks | **Done** | Click, lasso, band/time residual selection |
-| Interactive Resynthesis | Immediate auditory feedback | **Partial** | Background resynth → preview buffer → `processBlock` plays buffer (not live oscillator bank) |
-| Morphing Interface | Visual interpolation controls | **Done** | Session timeline, lanes, policies, band strip |
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Gain scaling | Global levels | **Done** | `partGain`, `resGain`, `outputTrim` |
+| Partial gain scaling | Selected traces | **Partial** | Spectrogram vertical drag scale |
+| Envelope remapping | Trajectory reshape | **Partial** | MathExpr; Partials tab; residual band draw |
+| Spectral tilt | Brightness emphasis | **Partial** | Residual Tilt; not on partial traces |
+| Harmonic weighting | Harmonic balance | **Not started** | — |
+| Spectral envelope estimation | Fit envelope over partials | **Partial** | `BarkSpectralEnvelope`; Iso 3D Envelope / RDC viz |
+| Spectral envelope transfer | De-color + apply target | **Partial** | `applySpectralEnvelopeTransfer`; Hybrid timeline; morph render |
+| Spectral filtering | Edit via partials | **Partial** | Mute/delete partials and bands |
 
 ---
 
-# Interesting Modern Extensions
+## Noise
 
-These ideas are particularly relevant for modern AI music systems, spectral VSTs, and generative composition.
-
-| Modern Feature | ATS Foundation | Status | Plugin evidence |
-| -------------- | -------------- | ------ | ----------------- |
-| AI Timbre Morphing | Spectral interpolation | **Not started** | Classical morph recipe only |
-| Neural Instrument Hybridization | Partial replacement | **Not started** | — |
-| Spectral Diffusion Models | Noise + partial separation | **Not started** | — |
-| Constraint-Based Timbre Generation | Partial trajectory rules | **Partial** | Morph recipe + tests (`morph_recipe_test`, metric harness) |
-| Generative Spectral Composition | Trajectory synthesis | **Not started** | — |
-| Timbre Grammars | Harmonic/noise transformations | **Not started** | — |
-| Spectral Canon Generation | Time-shifted trajectory structures | **Not started** | — |
-| On-Chain Spectral NFTs | Compact ATS parameter storage | **Not started** | `.ats` / preset export only |
-| Differentiable Spectral Synthesis | Partial trajectory representation | **Not started** | — |
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Noise-only resynthesis | Stochastic alone | **Done** | Audition Residual |
+| Harmonic-only resynthesis | Partials alone | **Done** | Audition Partials |
+| Noise scaling | Band levels | **Done** | `resGain`; drag scale; per-cell dB on `band_energy` |
+| Noise redistribution | Move energy between bands | **Partial** | Copy/paste/swap band clipboard |
+| Noise morphing | Interpolate noise structures | **Partial** | Residual crossfade in render; Noise lane = snapshot only |
+| Residual manipulation | Direct band edit | **Done** | Lasso, draw, smooth, tilt, clipboard; `mutateResidualBandFrames` |
 
 ---
 
-# Priority queue (recommended build order)
+## Spectral editing
 
-Ordered for **musical payoff**, **dependency order**, and **closing gaps visible in current UI**. Items marked *(in progress)* already have UI or core code that needs finishing rather than greenfield work.
-
-| Prio | Feature / milestone | Why now | Status today |
-| ---- | ------------------- | ------- | ------------ |
-| **P0** | **Real-time morph preview** — drive morph amount from timeline/lanes without full offline bounce per tweak | Session tab promises live morph; snapshot stale warnings indicate gap | **Partial** (offline `evaluateMorphRecipeSnapshot` + buffer playback) |
-| **P0** | **Morph fixture audio + metric CI** — populate `morph_fixture_manifest` WAVs; tighten harness in CI | Locks recipe quality before more UI | **Partial** (harness exists; assets placeholders) |
-| **P0** | **Assignment matrix strategy in UI** | Correspondence combo includes “Assignment matrix”; ensure parity with rank/greedy in audible path | **Partial** (core + tests; verify plugin render path) |
-| **P1** | **Partial trajectory draw/edit** (freq vs time) | Residual Bark bands have envelope draw; partial paths still view + scale/delete only | **Partial** |
-| **P1** | **Spectral freeze + scrub-driven preview** | Performance / sound-design staples | **Not started** / **Partial** |
-| **P2** | **Noise redistribution** (automatic / drag between bands) | Copy-paste-swap done; full redistribution TBD | **Partial** |
-| **P2** | **Partial solo + harmonic group ops** | Faster editing than lasso-only | **Partial** |
-| **P2** | **Spectral tilt on partial traces** | Residual-band tilt done; partial harmonic weighting not started | **Partial** |
-| **P2** | **Frequency stretch / compression / warp maps** | Inharmonic + creative mapping | **Partial** (Stretch/Compress/Harmonic shipped; arbitrary warp maps TBD) |
-| **P2** | **Multi-source hybrid (>2)** | Extends working A/B morph | **Not started** |
-| **P3** | **Partial cloning** | Experimental ATSH | **Not started** |
-| **P3** | **Perceptual resynthesis** (partial budget) | Optimization / CPU | **Not started** |
-| **P3** | **Modern ML extensions** (AI morph, diffusion, differentiable synth) | Research track | **Not started** |
-
-### Already in good shape (maintain, don’t reorder)
-
-- Dual-source workflow (Analysis + Session): choose, re-analyze, play, export ATS, audition Both/Partials/Residual  
-- Analysis profiles + full ANARGS parameter surface  
-- Synthesis SPARAMS mirror (freq, time, window, phase, partials/residual modes)  
-- Morph recipe schema, lane policies, timeline bounce, variation slots  
-- Spectrogram + iso 3D: partial selection, delete, gain drag  
-- **Bark residual editor** (Residual / Iso 3D Residual): Hz gutter, envelope draw, cell dB, smooth, tilt, copy/paste/swap band  
-- Morph **Noise lane** independent of partial morph (same timeline; unlink in Session)  
-- Presets, `.ats` I/O, MathExpr offline transforms  
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Partial deletion | Remove tracks | **Done** | Delete → `mutePartials` |
+| Partial isolation | Solo trajectories | **Partial** | Multi-select + audition; no solo button |
+| Partial cloning | Duplicate structure | **Not started** | — |
+| Partial group editing | Harmonic groups | **Partial** | Lasso multi-partial ops |
+| Spectral pruning | Low-SMR removal | **Partial** | At analysis via SMR thresholds |
+| Harmonic extraction | Subset isolation | **Not started** | — |
 
 ---
 
-# Core Insight
+## Hybridization & morphing
 
-ATS is best understood not as an effect processor but as a structured representation of sound.
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Spectral interpolation | Blend trajectories | **Done** | `renderMorphTrajectoryBuffer` + timeline Morph amount |
+| Timbre morphing | A↔B transition | **Partial** | Dual slots, timeline, bounce; lane UI ahead of render |
+| Formant-aligned envelope morph | Formant-warped blend | **Partial** | `FormantAlignedEnvelopeMorph`; EnvelopeMorph timeline in render |
+| Partial replacement | Unmatched partial policies | **Partial** | Policy combos + snapshot; fixed crossfade in main render |
+| Noise transfer | Borrow stochastic model | **Partial** | Residual morph + Hybrid on bands |
+| Cross-synthesis | Multi-property merge | **Partial** | Timeline envelope kinds; lanes snapshot-only |
+| Multi-sound hybridization | More than two sources | **Not started** | A and B only |
 
-Instead of operating on FFT frames, ATS represents sound as:
+---
 
-- Partial trajectories through time
-- Independent noise structures
-- Psychoacoustic importance measures
+## Psychoacoustic
 
-This makes it particularly suitable for:
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| SMR weighting | Important partials first | **Done** | Analysis + tracking weight |
+| Masking-based pruning | Drop inaudible data | **Partial** | Analysis thresholds; no SMR map UI |
+| Critical band modeling | Bark noise representation | **Done** | Model + morph Bark/Mel grid + residual editor |
+| Perceptual resynthesis | Adaptive partial budget | **Not started** | — |
 
-- Generative timbre systems
-- Machine learning
-- Spectral morphing
-- Hybrid instruments
-- Rule-based spectral composition
-- Real-time timbre manipulation
-- On-chain procedural audio representations
+---
+
+## ATSH graphical editing
+
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Trajectory editing | Draw/edit paths | **Partial** | Partials: scale/delete; residual: envelope draw |
+| Spectral visualization | Trace views | **Done** | `SpectrogramPanel` modes |
+| Envelope visualization | Envelope surfaces | **Partial** | Iso 3D Envelope / Env (RDC) |
+| Noise visualization | Stochastic view | **Done** | Residual modes + Hz gutter |
+| Bark-band noise editor | Per-band edit | **Done** | Draw, smooth, tilt, clipboard, cell dB |
+| Partial selection | Subset tools | **Done** | Click, lasso, band/time selection |
+| Interactive resynthesis | Immediate feedback | **Partial** | Background resynth → buffer playback |
+| Morphing interface | Morph controls | **Partial** | Timeline + macro in render; lanes mostly snapshot |
+
+---
+
+## Plugin workflow & UI (outside classic ATSH taxonomy)
+
+| Feature | Description | Status | Evidence |
+| ------- | ----------- | ------ | -------- |
+| Dual morph source slots | Source A / B | **Done** | Load, re-analyze, export .ats, listen |
+| WAV + ATS import | External material | **Done** | Analysis + Session import |
+| Worker-thread analysis | Off audio thread | **Done** | startAnalysis, transformThread |
+| Offline preview transport | Buffer playback | **Done** | playbackBuffers; no RT analysis in processBlock |
+| MIDI transpose (preview) | Keyboard offset | **Done** | MIDI → synthesis freq |
+| Morph timeline editor | Breakpoints over time | **Done** | Morph / Hybrid / EnvelopeMorph; bounce WAV |
+| Morph variation slots | V1–V3 recall | **Done** | Save/recall macro + lanes |
+| Full-state presets | .atspreset files | **Done** | Parameters + embedded model |
+| Morph snapshot status | Stale/ready UX | **Done** | Session status label |
+| Morph band diagnostics | Per-band inspect | **Partial** | MorphBandStrip; policies in snapshot energy |
+| Correspondence strategies | A↔B mapping | **Done** | Rank, greedy, assignment matrix in render |
+| Bark / Mel morph grid | Band assignment | **Done** | kMorphGridType |
+| Classic Both playback | Combined vs sum | **Done** | Synthesis Both playback mode |
+| Smearnov detection overlay | Detector curves | **Done** | Spectrogram overlay |
+| Spectrogram view modes | Seven layouts | **Done** | Combined through Iso Env (RDC); Current/A/B |
+| Per-lane morph controls | Six lanes | **Partial** | UI only; not in main render |
+| Morph amount (macro) | Global blend | **Done** | kMorphAmount; constant morph preview |
+| Morph performance macro | Macro feel | **Partial** | APVTS/preset only; no Session control |
+| Morph control smoothing | De-click | **Partial** | Session slider; not in render |
+| MathExpr offline transforms | Script edits | **Done** | Math tab, worker thread |
+
+---
+
+## Modern extensions
+
+| Feature | Foundation | Status | Evidence |
+| ------- | ---------- | ------ | -------- |
+| AI timbre morphing | Spectral interpolation | **Not started** | Classical recipe only |
+| Neural instrument hybridization | Partial replacement | **Not started** | — |
+| Spectral diffusion models | Noise + partial separation | **Not started** | — |
+| Constraint-based timbre generation | Trajectory rules | **Partial** | Morph recipe + `morph_recipe_test` |
+| Spectral envelope transfer (RDC) | RDC + recipes | **Partial** (worktree) | Main: viz + True Envelope morph; worktree: full estimator — [[Spectral Envelope - PRD Summary]] |
+| Generative spectral composition | Trajectory synthesis | **Not started** | — |
+| Timbre grammars | Harmonic/noise rules | **Not started** | — |
+| Spectral canon generation | Time-shifted structures | **Not started** | — |
+| On-chain spectral NFTs | Compact ATS storage | **Not started** | `.ats` / preset export |
+| Differentiable spectral synthesis | Trajectory representation | **Not started** | — |
+
+---
+
+## Priority queue
+
+Ordered by musical payoff and dependency. Items with UI already present are finishing work, not greenfield.
+
+| Prio | Milestone | Status today |
+| ---- | --------- | ------------ |
+| **P0** | Wire morph lanes + policies into `renderMorphTrajectoryBuffer` | **Partial** |
+| **P0** | Real-time morph preview (no full re-bounce per tweak) | **Partial** |
+| **P0** | Morph fixture audio + metric CI | **Partial** (manifest placeholders) |
+| **P1** | Spectral envelope transfer UX + worktree RDC merge | **Partial** |
+| **P1** | Partial trajectory draw/edit (freq vs time) | **Partial** |
+| **P1** | Spectral freeze + scrub-driven preview | **Not started** / **Partial** |
+| **P2** | Noise redistribution (auto / drag between bands) | **Partial** |
+| **P2** | Partial solo + harmonic group ops | **Partial** |
+| **P2** | Spectral tilt on partial traces | **Partial** |
+| **P2** | Arbitrary spectral-warp maps | **Partial** |
+| **P2** | Morph macro + smoothing in render | **Partial** |
+| **P2** | Multi-source hybrid (>2) | **Not started** |
+| **P3** | Partial cloning | **Not started** |
+| **P3** | Perceptual resynthesis | **Not started** |
+| **P3** | Modern ML extensions | **Not started** |
+
+### Already in good shape
+
+- Dual-source workflow, `.ats` I/O, timeline bounce
+- Nine analysis profiles, SPARAMS + frequency shaping on morph
+- Correspondence strategies + envelope timeline kinds in render
+- Spectrogram (7 modes), Smearnov, Bark residual editor
+- Variation slots, `.atspreset`, MathExpr
+- Tests: `morph_recipe_test`, `frequency_shape_test`, `spectral_envelope_transfer_test`, `ats_transient_smear_*`
+
+---
+
+## Core insight
+
+ATS is a **structured representation** of sound—not a frame-based effect. Partial trajectories, independent noise, and SMR weighting suit morphing, hybrid instruments, generative systems, and (with licensing clarity) compact interchange via `.ats` and presets.

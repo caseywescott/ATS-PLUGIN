@@ -65,6 +65,7 @@ struct SmearnovParams
     double sharpenAmount = 0.0;
     double exaggerateDb = 0.0;
     double maxDb = 12.0;
+    double mix = 1.0; // dry/wet blend of the transformed envelope: 0 = dry, 1 = full effect
     SmearnovTarget targets = SmearnovTarget::Both;
 };
 

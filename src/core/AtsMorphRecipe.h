@@ -779,9 +779,15 @@ struct MorphCompatibilityReport
     const MorphFrequencyGrid& grid,
     const std::vector<MorphPartialTrack>& tracks,
     double silentAmplitudeThreshold = 0.0);
+// amplitudeRankWeight in [0,1] biases the within-band pairing toward amplitude order: 0 pairs
+// purely by frequency rank (the original behavior), 1 pairs loudest source partial with loudest
+// target partial, and intermediate values blend the two rankings. Weighting by amplitude keeps the
+// dominant partials of A and B matched (so the loud, perceptually salient energy glides as one
+// partial) instead of being split across mismatched ranks when the two spectra differ in count.
 [[nodiscard]] std::vector<MorphCorrespondenceRecord> buildFrequencyRankCorrespondence(
     const std::vector<MorphBandAssignment>& sourceAssignments,
-    const std::vector<MorphBandAssignment>& targetAssignments);
+    const std::vector<MorphBandAssignment>& targetAssignments,
+    double amplitudeRankWeight = 0.0);
 [[nodiscard]] std::vector<MorphCorrespondenceRecord> buildGreedyNearestCorrespondence(
     const std::vector<MorphBandAssignment>& sourceAssignments,
     const std::vector<MorphBandAssignment>& targetAssignments,
@@ -790,6 +796,21 @@ struct MorphCompatibilityReport
     const std::vector<MorphBandAssignment>& sourceAssignments,
     const std::vector<MorphBandAssignment>& targetAssignments,
     const MorphAssignmentMatrixOptions& options = {});
+// Re-pair k source partials to k target partials by nearest log-frequency, given each side's
+// instantaneous log-frequencies at one moment in time. This is the per-frame counterpart of the
+// static lifetime-centroid pairing: as partials glide and cross between frames, the correspondence
+// is recomputed so the matched pair always joins the two partials that are actually closest in
+// pitch *now*, rather than by their lifetime-average position. previousAssignment[i] is the target
+// index source i held last frame; keeping it is preferred unless another target is closer by more
+// than hysteresisMargin (in log-Hz), which suppresses frame-to-frame flicker between near-ties.
+// Returns a permutation: result[i] is the target index assigned to source i. Sizes must match and
+// be equal (k==k); on any size mismatch the previous assignment (or identity) is returned so the
+// caller can fall back safely.
+[[nodiscard]] std::vector<int> reassignCorrespondenceByLogFrequency(
+    const std::vector<double>& sourceLogFrequencies,
+    const std::vector<double>& targetLogFrequencies,
+    const std::vector<int>& previousAssignment,
+    double hysteresisMargin);
 [[nodiscard]] MorphFrequencyInterpolationResult interpolateMorphFrequency(
     const MorphFrequencyGrid& grid,
     double sourceFrequencyHz,

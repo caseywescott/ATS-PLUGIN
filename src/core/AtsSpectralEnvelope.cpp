@@ -609,6 +609,50 @@ SpectralEnvelopeTransferResult applySpectralEnvelopeTransfer(double sourceAmplit
     return result;
 }
 
+double softCapEnvelopeBoost(double outputAmplitude,
+                            double sourceAmplitude,
+                            double maxBoostRatio,
+                            double kneeDb)
+{
+    if (!std::isfinite(outputAmplitude) || outputAmplitude <= 0.0)
+        return 0.0;
+    if (!std::isfinite(sourceAmplitude) || sourceAmplitude <= 0.0
+        || !std::isfinite(maxBoostRatio) || maxBoostRatio <= 1.0)
+        return std::max(0.0, outputAmplitude);
+
+    const double ratio = outputAmplitude / sourceAmplitude;
+    if (ratio <= 0.0)
+        return 0.0;
+
+    const double ceilingDb = 20.0 * std::log10(maxBoostRatio);
+    const double xDb = 20.0 * std::log10(ratio);
+    const double w = (std::isfinite(kneeDb) && kneeDb > 0.0) ? kneeDb : 0.0;
+
+    double yDb;
+    if (w <= 0.0)
+    {
+        yDb = std::min(xDb, ceilingDb); // degenerate to a hard limit if no knee width
+    }
+    else if (xDb <= ceilingDb - 0.5 * w)
+    {
+        yDb = xDb; // below the knee: unity gain
+    }
+    else if (xDb >= ceilingDb + 0.5 * w)
+    {
+        yDb = ceilingDb; // above the knee: clamped at the ceiling
+    }
+    else
+    {
+        // Quadratic soft knee (limiter form): value and slope are continuous at both knee edges
+        // and the curve asymptotes flat at the ceiling.
+        const double over = xDb - ceilingDb + 0.5 * w;
+        yDb = xDb - (over * over) / (2.0 * w);
+    }
+
+    const double cappedRatio = std::pow(10.0, yDb / 20.0);
+    return sourceAmplitude * cappedRatio;
+}
+
 HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKind kind,
                                                              double sourceFrequencyHz,
                                                              double sourceAmplitude,
@@ -662,6 +706,149 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
         result.amplitude = 0.0;
     }
     return result;
+}
+
+namespace
+{
+// Bark-scale normalization to [0,1] over [minHz, maxHz]. Mirrors the RDC display fit.
+double rdcBarkNorm(double hz, double minHz, double maxHz)
+{
+    auto bark = [](double f) { return 6.0 * std::asinh(std::max(1.0, f) / 600.0); };
+    const double bMin = bark(std::max(1.0, minHz));
+    const double bMax = bark(std::max(1.0, maxHz));
+    return std::clamp((bark(std::max(1.0, hz)) - bMin) / std::max(1.0e-9, bMax - bMin), 0.0, 1.0);
+}
+
+// Cosine basis row: [1, 2cos(pi*pos), 2cos(2*pi*pos), ..., 2cos(order*pi*pos)].
+void rdcBasisRow(double pos, int order, double* row)
+{
+    row[0] = 1.0;
+    const double theta = M_PI * std::clamp(pos, 0.0, 1.0);
+    for (int k = 1; k <= order; ++k)
+        row[k] = 2.0 * std::cos((double) k * theta);
+}
+
+// Gaussian elimination with partial pivoting for a small n*n system (row-major A, rhs b).
+bool rdcSolve(int n, double* A, double* b, double* x)
+{
+    for (int col = 0; col < n; ++col)
+    {
+        int pivotRow = col;
+        double pivotAbs = std::abs(A[col * n + col]);
+        for (int row = col + 1; row < n; ++row)
+        {
+            const double v = std::abs(A[row * n + col]);
+            if (v > pivotAbs) { pivotAbs = v; pivotRow = row; }
+        }
+        if (pivotAbs < 1.0e-12)
+            return false;
+        if (pivotRow != col)
+        {
+            for (int k = 0; k < n; ++k) std::swap(A[col * n + k], A[pivotRow * n + k]);
+            std::swap(b[col], b[pivotRow]);
+        }
+        const double diag = A[col * n + col];
+        for (int row = col + 1; row < n; ++row)
+        {
+            const double f = A[row * n + col] / diag;
+            for (int k = col; k < n; ++k) A[row * n + k] -= f * A[col * n + k];
+            b[row] -= f * b[col];
+        }
+    }
+    for (int row = n - 1; row >= 0; --row)
+    {
+        x[row] = b[row];
+        for (int k = row + 1; k < n; ++k) x[row] -= A[row * n + k] * x[k];
+        x[row] /= A[row * n + row];
+    }
+    return true;
+}
+} // namespace
+
+bool reimposeRdcEnvelopeFrame(const std::vector<double>& freqsHz,
+                              std::vector<double>& amps,
+                              double smoothness,
+                              double minHz,
+                              double maxHz,
+                              double amplitudeFloor)
+{
+    if (freqsHz.size() != amps.size())
+        return false;
+
+    const double floor = safeFloor(amplitudeFloor);
+
+    // Gather active partials (amp above floor) as (barkPos, dB) with amplitude weighting.
+    std::vector<int> activeIdx;
+    std::vector<double> bark;
+    std::vector<double> dB;
+    std::vector<double> weight;
+    activeIdx.reserve(amps.size());
+    double peak = floor;
+    for (std::size_t i = 0; i < amps.size(); ++i)
+        if (std::isfinite(amps[i]) && amps[i] > floor)
+            peak = std::max(peak, amps[i]);
+
+    for (std::size_t i = 0; i < amps.size(); ++i)
+    {
+        if (!std::isfinite(amps[i]) || amps[i] <= floor || !std::isfinite(freqsHz[i]))
+            continue;
+        activeIdx.push_back((int) i);
+        bark.push_back(rdcBarkNorm(freqsHz[i], minHz, maxHz));
+        dB.push_back(amplitudeToDb(amps[i], floor));
+        weight.push_back(std::max(1.0e-4, amps[i] / peak));
+    }
+
+    if (activeIdx.size() < 3)
+        return false;
+
+    // smoothness -> cosine-series order and Tikhonov lambda. Higher smoothness = lower order
+    // (fewer ripples) and stronger second-derivative penalty.
+    const double s = std::clamp(smoothness, 0.0, 1.0);
+    constexpr int kMaxOrder = 14;
+    int order = (int) std::lround(12.0 - 10.0 * s); // 12 (detailed) .. 2 (smooth)
+    order = std::max(1, std::min(order, (int) activeIdx.size() - 1));
+    order = std::min(order, kMaxOrder);
+    const double reg = 2.0e-3 + 4.8e-2 * s; // 0.002 .. 0.05
+
+    const int n = order + 1;
+    constexpr int kMaxN = kMaxOrder + 1;
+    double A[kMaxN * kMaxN] = {};
+    double rhs[kMaxN] = {};
+    double coeffs[kMaxN] = {};
+    double row[kMaxN];
+
+    for (std::size_t i = 0; i < activeIdx.size(); ++i)
+    {
+        rdcBasisRow(bark[i], order, row);
+        const double w = weight[i];
+        const double y = dB[i];
+        for (int r = 0; r < n; ++r)
+        {
+            rhs[r] += w * row[r] * y;
+            for (int c = 0; c < n; ++c)
+                A[r * n + c] += w * row[r] * row[c];
+        }
+    }
+    // Second-derivative Tikhonov penalty on cosine coefficients: diag [0, 1^4, 2^4, ...].
+    for (int k = 1; k < n; ++k)
+        A[k * n + k] += reg * (double) (k * k * k * k);
+
+    if (!rdcSolve(n, A, rhs, coeffs))
+        return false;
+
+    // Re-impose: set each active partial's amplitude to the fitted envelope at its frequency.
+    for (std::size_t i = 0; i < activeIdx.size(); ++i)
+    {
+        rdcBasisRow(bark[i], order, row);
+        double envDb = 0.0;
+        for (int k = 0; k < n; ++k)
+            envDb += coeffs[k] * row[k];
+        double envAmp = std::pow(10.0, envDb / 20.0);
+        if (!std::isfinite(envAmp) || envAmp < 0.0)
+            envAmp = 0.0;
+        amps[(std::size_t) activeIdx[i]] = envAmp;
+    }
+    return true;
 }
 
 } // namespace ats

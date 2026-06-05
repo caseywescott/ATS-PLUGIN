@@ -106,6 +106,39 @@ struct SpectralEnvelopeTransferResult
     double amount,
     double amplitudeFloor = BarkSpectralEnvelope::kDefaultAmplitudeFloor);
 
+// Fit a Bark-domain Regularized Discrete Cepstrum (cosine-series) envelope to one frame's
+// active partials and re-impose it on their amplitudes, flattening harmonic-specific
+// deviations onto the smooth spectral envelope. This is the destructive counterpart of the
+// RDC envelope display: it edits the polynomial-fitted curve into the stored amplitudes.
+//
+// freqsHz / amps are parallel arrays (one entry per partial in the frame); amps is modified
+// in place. Partials with amplitude <= amplitudeFloor are treated as inactive: they are
+// excluded from the fit and left untouched. smoothness in [0,1] maps to the cosine-series
+// order and second-derivative regularization (0 = most detailed fit, 1 = smoothest).
+// minHz/maxHz set the Bark normalization span; pass the model's frequency range so the
+// basis is identical across frames. Returns false (and leaves amps unchanged) if fewer than
+// three active partials are available to fit.
+bool reimposeRdcEnvelopeFrame(const std::vector<double>& freqsHz,
+                              std::vector<double>& amps,
+                              double smoothness,
+                              double minHz,
+                              double maxHz,
+                              double amplitudeFloor = BarkSpectralEnvelope::kDefaultAmplitudeFloor);
+
+// Soft-knee ceiling on an envelope-transfer boost. The hybrid env transfer can push a partial's
+// amplitude far above its analyzed value when B's envelope is much louder than A's at that
+// frequency; an unbounded boost amplifies analysis noise into audible whistles, so the result is
+// capped at maxBoostRatio times the source amplitude. A hard std::min() clip kinks the gain curve
+// (zero derivative the instant the limit is hit), which clicks when a partial rides the ceiling
+// across chunks. This applies the standard soft-knee limiter law in the dB domain: the boost
+// passes through untouched until kneeDb below the ceiling, then bends smoothly (continuous value
+// and slope) to asymptote at the ceiling. Returns the capped output amplitude. sourceAmplitude<=0
+// or non-finite inputs return a safe 0 / passthrough.
+[[nodiscard]] double softCapEnvelopeBoost(double outputAmplitude,
+                                          double sourceAmplitude,
+                                          double maxBoostRatio,
+                                          double kneeDb = 6.0);
+
 struct HybridizedPartialRenderResult
 {
     double frequencyHz = 0.0;
