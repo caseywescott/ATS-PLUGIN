@@ -3,6 +3,16 @@ target_link_libraries(ats_offline PRIVATE atsa)
 
 add_executable(ats_roundtrip ats_roundtrip.c)
 target_link_libraries(ats_roundtrip PRIVATE atsa)
+
+add_executable(ats_transient_demo ats_transient_demo.cpp
+  ../src/core/AtsTransientLayer.cpp
+  ../src/core/AtsTransientSmear.cpp)
+target_include_directories(ats_transient_demo PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_link_libraries(ats_transient_demo PRIVATE atsa)
+target_compile_features(ats_transient_demo PRIVATE cxx_std_17)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(ats_transient_demo PRIVATE m)
+endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(ats_offline PRIVATE m)
 endif()

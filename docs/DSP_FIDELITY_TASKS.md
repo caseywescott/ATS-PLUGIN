@@ -127,14 +127,31 @@ Implementation note: `ANARGS.multi_res` (default 0) gates a second, longer analy
 
 ## Phase 5 — Sines + Transients + Noise  **[ear]**
 
-### Commit 8 — `feat(atsa): explicit transient layer in the analysis model`
+### Commit 8 — `feat(atsa): explicit transient layer in the analysis model`  **[ear]**
 
 **PRD:** §6.5, §9
 
-- [ ] Reuse energy-flux onset detection (`detectMorphTransients`) to extract a transient layer separate from sinusoids and band noise.
-- [ ] Store transient events additively (time, band/energy descriptor); zero-init backward-readable.
-- [ ] Re-inject transients at synthesis so attacks are preserved rather than smeared.
-- [ ] Onset-time / attack-energy preservation metrics on percussive fixtures; coordinate with Smearnov path.
+Implemented plugin-level on the Smearnov onset machinery (no qatsh-core change),
+in a new pure-core module `src/core/AtsTransientLayer.{h,cpp}`:
+
+- [x] Reuse Smearnov `detectOnsets` (the richer D1..D5 fusion) to extract a
+  transient layer separate from the sinusoids and band noise.
+- [x] Store transient events additively (`AtsTransientEvent`: time, per-Bark band
+  energy + deterministic energy descriptor). All fields zero-init, so a
+  default/legacy model with no transient layer reproduces exactly.
+- [x] Re-inject at synthesis: `renderTransientLayer` emits a critical-band-shaped,
+  energy-normalized burst per onset with a raised-cosine attack + bounded decay
+  (tapers to zero at both edges — no clicks), summed additively into the output.
+- [x] Numerical gates (`tests/ats_transient_layer_test.cpp`): onset-time
+  localization, **dynamic-range boundedness** (each descriptor clamped to the
+  in-window model maximum; rendered energy ≤ extracted energy), gain∝energy²,
+  compact-support continuity, and zero-init passthrough on a steady sound.
+- [x] A/B audition tool `tools/ats_transient_demo` (writes `<stem>_base.wav` and
+  `<stem>_transient.wav`); crotale fixture yields 8 events with attack-localized
+  energy. **[ear — pending audition]**
+
+Follow-up (not in this commit, to avoid the dirty `PluginProcessor`/`SpectrogramPanel`
+working tree): wire the layer into the plugin synthesis path + UI toggle.
 
 ---
 
