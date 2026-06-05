@@ -65,6 +65,15 @@ if(MSVC)
   target_compile_definitions(multires_resolution_test PRIVATE _USE_MATH_DEFINES)
 endif()
 
+add_executable(ifft_synth_test ifft_synth_test.c)
+target_link_libraries(ifft_synth_test PRIVATE atsa)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(ifft_synth_test PRIVATE m)
+endif()
+if(MSVC)
+  target_compile_definitions(ifft_synth_test PRIVATE _USE_MATH_DEFINES)
+endif()
+
 add_test(
   NAME golden_offline
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/golden_compare.py"
@@ -88,6 +97,7 @@ add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTO
 add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME estimator_accuracy_test COMMAND $<TARGET_FILE:estimator_accuracy_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME multires_resolution_test COMMAND $<TARGET_FILE:multires_resolution_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME ifft_synth_test COMMAND $<TARGET_FILE:ifft_synth_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)

@@ -36,6 +36,7 @@ The plug-in UI warns when **`partials × frames` > 2,000,000** (see `BUILDING.md
 
 - Triggered when synthesis parameters change (and after analysis/import). Cost grows with **model size** and **output length** implied by time window / stretch parameters.
 - **256 samples @ 48 kHz** refers to **host block size**, not an internal ATSA block: it affects how often the host calls `processBlock`, not the size of the synthesis FFT.
+- **Synthesis method cost vs. partial count.** The default **oscillator bank** (`do_synthesis`) costs **O(P × T)** — every active partial drives a per-sample interpolated oscillator, so dense models scale linearly with partial count. The opt-in **overlap-add inverse-FFT path** (`do_synthesis_ifft`, `SPARAMS.use_ifft = 1`, Rodet-Depalle) instead deposits each partial as a single Hann main lobe (a handful of bins) into one per-frame spectrum and pays one inverse FFT of size `N = ppp2(2·hop)` per frame. Its per-frame cost is therefore **O(P + N log N)** — the partial term is just the cheap lobe deposit, and the FFT term is **independent of partial count**. So as partials grow the IFFT path flattens toward a fixed per-frame FFT cost, whereas the oscillator bank keeps climbing; for sparse models the oscillator bank can still win because it avoids the FFT overhead. `use_ifft` defaults to `0` (oscillator bank, bit-identical to legacy).
 
 ## Recommended planning table (48 kHz, reference class CPU)
 

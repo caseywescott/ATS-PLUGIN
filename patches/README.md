@@ -150,3 +150,33 @@ window — is preserved. Apply it *after* `qatsh-atsa-ddm.patch`. Touches
 CMake requires it by default (marker `ATSA_MULTIRES` in `tracker.c` and
 `atsa.h`). Use `-DATS_REQUIRE_QATSH_MULTIRES=OFF` to build against unpatched
 Qatsh.
+
+## `qatsh-atsa-ifft.patch`
+
+Adds an opt-in overlap-add inverse-FFT additive synthesis path (Rodet-Depalle,
+PRD 7.x) alongside the existing oscillator bank. `do_synthesis_ifft` deposits
+each partial as a Hann main lobe — `0.5 Dir(x) - 0.25 Dir(x-1) - 0.25 Dir(x+1)`,
+where `Dir` is the normalized Dirichlet (periodic-sinc) kernel — at its
+fractional bin into a single spectrum, inverse-FFTs to one windowed grain, and
+overlap-adds with COLA normalization. Cost is flat in partial count beyond the
+deposit, so dense spectra synthesize in roughly constant time per frame instead
+of scaling with the number of oscillators. The path handles the straight-through
+(no time-warp) deterministic case on a uniform hop grid; the residual reuses the
+existing band-noise generator.
+
+It is gated by the new `SPARAMS.use_ifft` flag, which defaults to `0`. With
+`use_ifft == 0` the oscillator bank runs unchanged and bit-identical (covered by
+`ats_roundtrip`); only `use_ifft == 1` dispatches to the IFFT path. Validated in
+`tests/ifft_synth_test.c`: against a direct time-domain oscillator reference on
+stationary sinusoids, the IFFT path reconstructs amplitude *and* phase in the
+overlap-add-steady interior to `nrmse = 0.0007`. Apply it *after*
+`qatsh-atsa-multires.patch`. Touches `src/atsa/atsa.h`, `synthesis.c`.
+
+```sh
+./scripts/apply_qatsh_ifft.sh apply
+./scripts/apply_qatsh_ifft.sh status
+./scripts/apply_qatsh_ifft.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_IFFT_SYNTH` in `synthesis.c` and
+`atsa.h`). Use `-DATS_REQUIRE_QATSH_IFFT=OFF` to build against unpatched Qatsh.

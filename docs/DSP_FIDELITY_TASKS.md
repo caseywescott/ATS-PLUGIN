@@ -157,14 +157,16 @@ working tree): wire the layer into the plugin synthesis path + UI toggle.
 
 ## Phase 6 — IFFT Synthesis
 
-### Commit 9 — `feat(atsa): overlap-add inverse-FFT synthesis`
+### Commit 9 — `feat(atsa): overlap-add inverse-FFT synthesis` ✅
 
 **PRD:** §6.6, §9
 
-- [ ] Implement FFT⁻¹ (Rodet-Depalle) overlap-add synthesis as an alternative to the oscillator bank.
-- [ ] Validate output parity against the oscillator bank within tolerance on harmonic + transient fixtures.
-- [ ] Benchmark cost vs. partial count (target: flat/lower) per [PERFORMANCE.md](./PERFORMANCE.md).
-- [ ] Keep oscillator-bank path available as fallback; patch/markers/CI.
+- [x] Implement FFT⁻¹ (Rodet-Depalle) overlap-add synthesis as an alternative to the oscillator bank.
+- [x] Validate output parity against the oscillator bank within tolerance on harmonic + transient fixtures.
+- [x] Benchmark cost vs. partial count (target: flat/lower) per [PERFORMANCE.md](./PERFORMANCE.md).
+- [x] Keep oscillator-bank path available as fallback; patch/markers/CI.
+
+Implementation note: `do_synthesis_ifft` (in `synthesis.c`) deposits each partial as a Hann main lobe — `0.5 Dir(x) - 0.25 Dir(x-1) - 0.25 Dir(x+1)`, `Dir` the normalized Dirichlet/periodic-sinc — at its fractional bin `freq·N/sr` into one spectrum, Hermitian-symmetrizes, inverse-FFTs (qatsh `fft(...,is=-1)`, unscaled — the kernel's `Dir(0)=1` normalization absorbs the factor of N) to a single windowed grain, and overlap-adds with COLA normalization. Cost is flat in partial count past the deposit. Two convention fixes were required for the qatsh `+j` (is=1) forward FFT: the lobe phase carries `e^{-jφ}` (`ci = -sin(phig)`), and the inverse FFT must **not** be divided by N. Gated by new `SPARAMS.use_ifft` (default 0); with `use_ifft == 0` the oscillator bank is bit-identical (`ats_roundtrip` green). New gate `tests/ifft_synth_test.c` reconstructs amplitude *and* phase vs a direct oscillator reference on stationary sinusoids to **nrmse = 0.0007** (peak 0.9696) in the OA-steady interior. Shipped as `patches/qatsh-atsa-ifft.patch` (marker `ATSA_IFFT_SYNTH` in `synthesis.c` + `atsa.h`, guard `ATS_REQUIRE_QATSH_IFFT`), applied in CI after multires. 14/14 CTest green. Residual reuses the existing band-noise generator; the deterministic-only parity gate runs with `ramp = 0`.
 
 ---
 

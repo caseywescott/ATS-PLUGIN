@@ -1,0 +1,573 @@
+diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
+index a862f79..ca143b2 100644
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -303,6 +303,10 @@ typedef struct { //parameters for resynthesis
+   double sr;          // Sampling Rate
+   short allorsel;     // when TRUE, use only selected partials ; when FALSE use all
+   short upha;         // when TRUE, the phase information (if any) is used ; when FALSE is not
++  /* ATSA_IFFT_SYNTH: select the overlap-add inverse-FFT (Rodet-Depalle)
++     deterministic synthesizer instead of the oscillator bank. Zero-initialized,
++     so existing callers keep the bit-identical oscillator-bank path. */
++  short use_ifft;
+ } SPARAMS;
+ 
+ /* CURVE
+@@ -494,6 +498,13 @@ void do_atsh_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, in
+ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
+                   double** out_samps, int* n_out_samps);
+ 
++/* ATSA_IFFT_SYNTH: overlap-add inverse-FFT (Rodet-Depalle) deterministic
++ * synthesis on the uniform analysis grid (no time-warp / time-envelope).
++ * Residual band-noise is added time-domain. do_synthesis dispatches here when
++ * sparams->use_ifft is set; called directly it ignores timenv. */
++void do_synthesis_ifft(ATS_SOUND *ats_sound, SPARAMS* sparams, int *selected,
++                       double** out_samps, int* n_out_samps);
++
+ /* tracker.c */
+ 
+ /* tracker
+diff --git a/src/atsa/synthesis.c b/src/atsa/synthesis.c
+index 70409f9..d11e2e9 100644
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -26,10 +26,10 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
+ #define SINE_TABLE_LEN 16384
+ 
+ #define BW 0.1
+-#define BW_FREQ 500.
+-
+-#define EPSILON 0.001
+-#define ATSA_SYNTH_RANDOM_SEED 1u
++#define BW_FREQ 500.
++
++#define EPSILON 0.001
++#define ATSA_SYNTH_RANDOM_SEED 1u
+ 
+ //MACROS
+ /*
+@@ -46,32 +46,32 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
+ #define LIN3_INTERP(x, yp, yc, yn) \
+  (((x) < .5) ? ((yc) + (yp)) / 2 + x * ((yc) - (yp)) : (3*(yc) - (yn)) / 2 + x * ((yn) - (yc)))
+ 
+-/* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
+- * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
+- * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
+- * with the DDM-measured chirp S (Hz per frame). Solving a+bx+cx^2+ex^3 for those
+- * four constraints: e=4(D1-S), b=4*D2-D1+e/2, c=D1-e-b, a=(fp+fc)/2, with
+- * D1=(fn-fp)/2 and D2=(fc-fp)/2. When S equals the linear-implied slope (fn-fp)/2
+- * the cubic collapses to LIN3 exactly, so curvature is added only for genuine
+- * sub-hop frequency motion (vibrato turning points).
+- *
+- * Overshoot limiter (Fritsch-Carlson 1980): the raw DDM chirp is unreliable on
+- * weak/near-stationary partials -- measured up to ~5x the inter-frame chord and
+- * ~900 Hz over a 50 ms frame, which the bare cubic renders as audible spurious
+- * sweeps. Bounding the center tangent to 3*min(|secantL|,|secantR|) (the two
+- * half-frame secants fc-fp and fn-fc) keeps the interpolant within the data
+- * envelope: on a steady partial both secants ~0 so S is clamped toward 0 and the
+- * cubic falls back to LIN3, while genuine vibrato flanks (sizable secants) retain
+- * their curvature. Linear motion (S = chord) is well under the cap, so the
+- * LIN3-exact reduction is preserved. */
+-#define CUBIC_FREQ_COEFFS(use, fp, fc, fn, S, A, B, C, E) do { \
+-    if (use) { double F0=((fp)+(fc))*.5, D1=((fn)-(fp))*.5, D2=((fc)-(fp))*.5; \
+-      double sL=(fc)-(fp), sR=(fn)-(fc); \
+-      double mn=(fabs(sL)<fabs(sR)?fabs(sL):fabs(sR)), Slim=3.0*mn, Sc=(S); \
+-      if(Sc>Slim) Sc=Slim; else if(Sc<-Slim) Sc=-Slim; \
+-      (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
+-#define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
+-
++/* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
++ * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
++ * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
++ * with the DDM-measured chirp S (Hz per frame). Solving a+bx+cx^2+ex^3 for those
++ * four constraints: e=4(D1-S), b=4*D2-D1+e/2, c=D1-e-b, a=(fp+fc)/2, with
++ * D1=(fn-fp)/2 and D2=(fc-fp)/2. When S equals the linear-implied slope (fn-fp)/2
++ * the cubic collapses to LIN3 exactly, so curvature is added only for genuine
++ * sub-hop frequency motion (vibrato turning points).
++ *
++ * Overshoot limiter (Fritsch-Carlson 1980): the raw DDM chirp is unreliable on
++ * weak/near-stationary partials -- measured up to ~5x the inter-frame chord and
++ * ~900 Hz over a 50 ms frame, which the bare cubic renders as audible spurious
++ * sweeps. Bounding the center tangent to 3*min(|secantL|,|secantR|) (the two
++ * half-frame secants fc-fp and fn-fc) keeps the interpolant within the data
++ * envelope: on a steady partial both secants ~0 so S is clamped toward 0 and the
++ * cubic falls back to LIN3, while genuine vibrato flanks (sizable secants) retain
++ * their curvature. Linear motion (S = chord) is well under the cap, so the
++ * LIN3-exact reduction is preserved. */
++#define CUBIC_FREQ_COEFFS(use, fp, fc, fn, S, A, B, C, E) do { \
++    if (use) { double F0=((fp)+(fc))*.5, D1=((fn)-(fp))*.5, D2=((fc)-(fp))*.5; \
++      double sL=(fc)-(fp), sR=(fn)-(fc); \
++      double mn=(fabs(sL)<fabs(sR)?fabs(sL):fabs(sR)), Slim=3.0*mn, Sc=(S); \
++      if(Sc>Slim) Sc=Slim; else if(Sc<-Slim) Sc=-Slim; \
++      (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
++#define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
++
+ /*
+ ;;; note that for this macro the values of i should go
+ ;;; from 0 to dt. So in the case of having 220 samples
+@@ -108,15 +108,15 @@ static double sine_table[SINE_TABLE_LEN];
+ //randi output random numbers in the range of 1,-1
+ //getting a new number at frequency freq and interpolating
+ //the intermediate values.
+-void randi_setup(double sr, double freq, RANDI *radat)
+-{
+-  // Initialize 
+-  radat->size = (int) (sr / freq) - 1;
+-  if (radat->size < 1)
+-    radat->size = 1;
+-  radat->a1   = rand();
+-  radat->a2   = rand();
+-  radat->cnt  = 0;
++void randi_setup(double sr, double freq, RANDI *radat)
++{
++  // Initialize 
++  radat->size = (int) (sr / freq) - 1;
++  if (radat->size < 1)
++    radat->size = 1;
++  radat->a1   = rand();
++  radat->a2   = rand();
++  radat->cnt  = 0;
+ }
+ ///////////////////////////////////////////////////////////////////
+ double randi(RANDI *radat)
+@@ -139,14 +139,14 @@ double randif(RANDI *radat, double freq, double sr)
+ {
+   double output;
+ 
+-  if(radat->cnt == radat->size) { //get a new random value
+-    radat->a1  = radat->a2; 
+-    radat->a2  = rand();
+-    radat->cnt = 0;
+-    radat->size= (int) (sr / freq) - 1;
+-    if (radat->size < 1)
+-      radat->size = 1;
+-  }
++  if(radat->cnt == radat->size) { //get a new random value
++    radat->a1  = radat->a2; 
++    radat->a2  = rand();
++    radat->cnt = 0;
++    radat->size= (int) (sr / freq) - 1;
++    if (radat->size < 1)
++      radat->size = 1;
++  }
+ 
+   output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+   radat->cnt++;
+@@ -290,28 +290,28 @@ double locate_frame(ATS_SOUND *ats_sound, double from_frame, double time)
+ */
+ ////////////////////////////////////////////////////////////////////
+ int synth_deterministic_only(double ampl_p, double ampl_c, double ampl_n,
+-                             double freq_p, double freq_c, double freq_n,
+-                             double pha_p, double pha_c, double pha_n,
+-                             double fslope_c, short use_slope,
+-                             double time_offset, double duration, double sample_rate,
++                             double freq_p, double freq_c, double freq_n,
++                             double pha_p, double pha_c, double pha_n,
++                             double fslope_c, short use_slope,
++                             double time_offset, double duration, double sample_rate,
+                              short use_phase, double *oscpt, double* sample_buf)
+ {
+   int s, frame_samps;
+   double ampl, freq, pha, frame_offset;
+-  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
++  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+ 
+   frame_samps = fair_floor(sample_rate * duration, EPSILON);
+ 
+-  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
++  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
+       return frame_samps; //nothing to do if no amplitude
+ 
+-  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
+-
++  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
++
+   for(s = 0; s < frame_samps; s++) {
+     frame_offset = (time_offset + s / sample_rate) / duration;
+     ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
+-    freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
+-                     : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
++    freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
++                     : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
+     pha  = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+     sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt);
+   }
+@@ -343,17 +343,17 @@ int synth_residual_only(double ampl_p, double ampl_c, double ampl_n,
+  }
+ ////////////////////////////////////////////////////////////////////
+ int synth_both(double ampl_p, double ampl_c, double ampl_n,
+-               double freq_p, double freq_c, double freq_n,
+-               double pha_p, double pha_c, double pha_n,
+-               double resid_p, double resid_c, double resid_n,
+-               double fslope_c, short use_slope,
+-               double time_offset, double duration, double sample_rate,
++               double freq_p, double freq_c, double freq_n,
++               double pha_p, double pha_c, double pha_n,
++               double resid_p, double resid_c, double resid_n,
++               double fslope_c, short use_slope,
++               double time_offset, double duration, double sample_rate,
+                short use_phase, double *oscpt, RANDI* rdata, double* sample_buf)
+ {
+   int s, frame_samps;
+   double ampl, freq, pha, resid, rfreq, frame_offset;
+-  double rfreq_p, rfreq_c, rfreq_n;
+-  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
++  double rfreq_p, rfreq_c, rfreq_n;
++  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+ 
+   frame_samps = fair_floor(sample_rate * duration, EPSILON);
+ 
+@@ -365,13 +365,13 @@ int synth_both(double ampl_p, double ampl_c, double ampl_n,
+   rfreq_c = BW * (freq_c < BW_FREQ ? BW_FREQ : freq_c / 2);
+   rfreq_n = BW * (freq_n < BW_FREQ ? BW_FREQ : freq_n / 2);
+ 
+-  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
+-
++  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
++
+   for(s = 0; s < frame_samps; s++) {
+     frame_offset = (time_offset + s / sample_rate) / duration;
+     ampl  = LIN3_INTERP(frame_offset, ampl_p,  ampl_c,  ampl_n);
+-    freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
+-                      : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
++    freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
++                      : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
+     pha   = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+     resid = LIN3_INTERP(frame_offset, resid_p, resid_c, resid_n);
+     rfreq = LIN3_INTERP(frame_offset, rfreq_p, rfreq_c, rfreq_n);
+@@ -383,6 +383,173 @@ int synth_both(double ampl_p, double ampl_c, double ampl_n,
+   return frame_samps;
+ }
+ 
++/* ATSA_IFFT_SYNTH ====================================================
++ * Overlap-add inverse-FFT additive synthesis (Rodet & Depalle 1992).
++ * Each frame's deterministic partials are deposited into one spectrum as
++ * Hann main-lobes (0.5,-0.25,-0.25 Dirichlet kernels at the fractional bin),
++ * inverse-FFT'd into one windowed grain, and overlap-added on the uniform
++ * analysis grid. Cost is O(frames * (partials*lobe + N log N)) -- independent
++ * of synthesis length per partial, flat in partial count beyond the deposit.
++ */
++
++/* Normalized Dirichlet (periodic-sinc) kernel of an N-point rectangular
++ * window evaluated at fractional bin offset x; Dir(0)=1. The exp() term is the
++ * 0-indexed window-DFT phase. */
++static void ats_dir_kernel(double x, int N, double *re, double *im)
++{
++  double mag, ph, den;
++  if (fabs(x) < 1.0e-9) {
++    mag = 1.0;
++  } else {
++    den = (double)N * sin(M_PI * x / (double)N);
++    mag = (fabs(den) < 1.0e-12) ? 1.0 : sin(M_PI * x) / den;
++  }
++  ph = M_PI * x * (double)(N - 1) / (double)N;
++  *re = mag * cos(ph);
++  *im = mag * sin(ph);
++}
++
++void do_synthesis_ifft(ATS_SOUND *ats_sound, SPARAMS *sparams, int *selected,
++                       double **out_samps, int *n_out_samps)
++{
++  int F = ats_sound->frames;
++  int P = ats_sound->partials;
++  int todo, H, N, half, f, d, k, n, kk, kc, base, g, b_band;
++  int has_residual;
++  double hop_sec, *out, *nrm, *re, *im, *hann;
++  const int Kw = 6; /* Hann main-lobe deposit half-width (bins) */
++
++  *out_samps = NULL;
++  *n_out_samps = 0;
++  if (F < 1 || P < 1 || sparams->sr <= 0.0)
++    return;
++
++  todo = (int)floor(ats_sound->dur * sparams->sr + 0.5);
++  if (todo <= 0)
++    return;
++
++  hop_sec = (F > 1) ? (ats_sound->time[0][1] - ats_sound->time[0][0]) : ats_sound->dur;
++  H = (int)floor(hop_sec * sparams->sr + 0.5);
++  if (H < 1) H = 1;
++  N = (int)ppp2((unsigned int)(2 * H));
++  if (N < 8) N = 8;
++  half = N / 2;
++
++  out  = (double*)calloc((size_t)todo, sizeof(double));
++  nrm  = (double*)calloc((size_t)todo, sizeof(double));
++  re   = (double*)malloc((size_t)N * sizeof(double));
++  im   = (double*)malloc((size_t)N * sizeof(double));
++  hann = (double*)malloc((size_t)N * sizeof(double));
++  for (n = 0; n < N; ++n)
++    hann[n] = 0.5 - 0.5 * cos(2.0 * M_PI * (double)n / (double)N);
++
++  for (f = 0; f < F; ++f) {
++    int center = (int)floor(ats_sound->time[0][f] * sparams->sr + 0.5);
++    memset(re, 0, (size_t)N * sizeof(double));
++    memset(im, 0, (size_t)N * sizeof(double));
++
++    for (d = 0; d < P; ++d) {
++      double a, freq, bbin, phi, phig, cr, ci;
++      if (sparams->allorsel && selected && !selected[d])
++        continue;
++      a = ats_sound->amp[d][f] * sparams->amp;
++      if (!(a > 0.0))
++        continue;
++      freq = ats_sound->frq[d][f] * sparams->frec;
++      if (freq <= 0.0 || freq >= 0.5 * sparams->sr)
++        continue;
++      bbin = freq * (double)N / sparams->sr;
++      phi  = (sparams->upha && ats_sound->pha) ? ats_sound->pha[d][f] : 0.0;
++      /* phase is defined at the grain center (n=N/2); shift to the n=0 origin
++         used by the Dirichlet phase term. */
++      phig = phi - M_PI * bbin;
++      /* qatsh forward FFT is +j: the lobe near bin b carries e^{-j phig}; the
++         Hermitian mirror reconstructs the e^{+j phig} image near N-b. */
++      cr = cos(phig);
++      ci = -sin(phig);
++      kc = (int)floor(bbin + 0.5);
++      for (kk = kc - Kw; kk <= kc + Kw; ++kk) {
++        double x, kr = 0.0, ki = 0.0, dr, di, tr, ti, vr, vi;
++        if (kk < 1 || kk > half)
++          continue;
++        x = (double)kk - bbin;
++        ats_dir_kernel(x,       N, &dr, &di); kr += 0.5  * dr; ki += 0.5  * di;
++        ats_dir_kernel(x - 1.0, N, &tr, &ti); kr -= 0.25 * tr; ki -= 0.25 * ti;
++        ats_dir_kernel(x + 1.0, N, &tr, &ti); kr -= 0.25 * tr; ki -= 0.25 * ti;
++        /* (a/2) * e^{j phig} * K_hann(x) */
++        vr = 0.5 * a * (cr * kr - ci * ki);
++        vi = 0.5 * a * (cr * ki + ci * kr);
++        re[kk] += vr;
++        im[kk] += vi;
++      }
++    }
++
++    /* Hermitian-symmetrize so the inverse transform is real. */
++    for (k = 1; k < half; ++k) {
++      re[N - k] =  re[k];
++      im[N - k] = -im[k];
++    }
++    im[0] = 0.0;
++    im[half] = 0.0;
++
++    fft(re, im, N, -1); /* inverse (qatsh forward is +1) */
++
++    base = center - half;
++    for (n = 0; n < N; ++n) {
++      g = base + n;
++      if (g < 0 || g >= todo)
++        continue;
++      /* The Dirichlet kernel is normalized (Dir(0)=1), which already absorbs the
++         unscaled inverse FFT's factor of N, so no extra 1/N here. The grain is
++         Hann-windowed by the deposit. */
++      out[g] += re[n];
++      nrm[g] += hann[n];
++    }
++  }
++
++  for (n = 0; n < todo; ++n)
++    if (nrm[n] > 1.0e-9)
++      out[n] /= nrm[n];
++
++  /* Residual band-noise: same model as the oscillator path, uniform grid. */
++  has_residual = ats_sound->band_energy != NULL;
++  if (has_residual && sparams->ramp > 0.0 && sparams->amp != 0.0) {
++    RANDI *rb = (RANDI*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(RANDI));
++    double *bcent = (double*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(double));
++    double *osc = (double*)calloc((size_t)ATSA_CRITICAL_BANDS, sizeof(double));
++    for (f = 0; f < F; ++f)
++      band_energy_to_res(ats_sound, f);
++    for (b_band = 0; b_band < ATSA_CRITICAL_BANDS; ++b_band) {
++      bcent[b_band] = (ATSA_CRITICAL_BAND_EDGES[b_band + 1] + ATSA_CRITICAL_BAND_EDGES[b_band]) / 2.0;
++      randi_setup(sparams->sr,
++                  ATSA_CRITICAL_BAND_EDGES[b_band + 1] - ATSA_CRITICAL_BAND_EDGES[b_band],
++                  &rb[b_band]);
++    }
++    for (n = 0; n < todo; ++n) {
++      double t = (double)n / sparams->sr;
++      double ff = t / (hop_sec > 0.0 ? hop_sec : 1.0);
++      int fi = (int)floor(ff);
++      double frac = ff - (double)fi;
++      int fn = fi + 1;
++      if (fi < 0) { fi = 0; frac = 0.0; fn = 0; }
++      if (fi > F - 1) { fi = F - 1; frac = 0.0; fn = F - 1; }
++      if (fn > F - 1) fn = F - 1;
++      for (b_band = 0; b_band < ATSA_CRITICAL_BANDS; ++b_band) {
++        double e0 = ENG_RMS(ats_sound->band_energy[b_band][fi], ats_sound->window_size);
++        double e1 = ENG_RMS(ats_sound->band_energy[b_band][fn], ats_sound->window_size);
++        double amp = (e0 + frac * (e1 - e0)) * sparams->ramp;
++        out[n] += amp * ioscilator(1.0, bcent[b_band], 0.0, sparams->sr, &osc[b_band])
++                      * randi(&rb[b_band]);
++      }
++    }
++    free(rb); free(bcent); free(osc);
++  }
++
++  free(re); free(im); free(hann); free(nrm);
++  *out_samps = out;
++  *n_out_samps = todo;
++}
++
+ ////////////////////////////////////////////////////////////////////
+ ////////////////////////////////////////////////////////////////////
+ /////////THIS IS THE MAIN SYNTHESIS LOOP////////////////////////////
+@@ -404,26 +571,32 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   double freq_p, freq_c, freq_n;
+   double pha_p, pha_c, pha_n;
+   double resid_p, resid_c, resid_n;
+-  double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
+-  int n_samps;
+-  int first, last;
+-  int f, f_p, f_n;
+-  double frame_dur, time_offset, duration;
+-  int p, d, b;
+-  int has_residual;
+-
+-  // Fix special params values
+-  if (sparams->end <= sparams->beg)
+-      sparams->end = sparams->beg + ats_sound->dur;
+-
+-  srand(ATSA_SYNTH_RANDOM_SEED);
+-  has_residual = ats_sound->band_energy != NULL;
+-
+-  // Transfer residual data if partial noise is present
+-  if (has_residual) {
+-    for(f=0; f<ats_sound->frames; f++) {
+-      band_energy_to_res(ats_sound, f);
+-    }
++  double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
++  int n_samps;
++  int first, last;
++  int f, f_p, f_n;
++  double frame_dur, time_offset, duration;
++  int p, d, b;
++  int has_residual;
++
++  /* ATSA_IFFT_SYNTH: opt-in inverse-FFT path (uniform grid, no time-warp). */
++  if (sparams->use_ifft) {
++    do_synthesis_ifft(ats_sound, sparams, selected, out_samps, n_out_samps);
++    return;
++  }
++
++  // Fix special params values
++  if (sparams->end <= sparams->beg)
++      sparams->end = sparams->beg + ats_sound->dur;
++
++  srand(ATSA_SYNTH_RANDOM_SEED);
++  has_residual = ats_sound->band_energy != NULL;
++
++  // Transfer residual data if partial noise is present
++  if (has_residual) {
++    for(f=0; f<ats_sound->frames; f++) {
++      band_energy_to_res(ats_sound, f);
++    }
+   }
+ 
+   // Build envelop segments descriptor and compute number of samples to generate
+@@ -433,7 +606,7 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   dur   = sparams->end - sparams->beg;
+   todo=0;
+   bframe = 0.;
+-  fprintf(stdout, "do_synthesis: nbp=%d, dur=%f, dy=%f, pha=%d\n", nbp, dur, dy, sparams->upha);
++  //fprintf(stdout, "do_synthesis: nbp=%d, dur=%f, dy=%f, pha=%d\n", nbp, dur, dy, sparams->upha);
+ 
+   for(p=0; p < nbp - 1; ++p){
+ 
+@@ -443,8 +616,8 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+     exval= dur * get_x_value(timenv, p+1); // We assume xmin=0, xmax=1
+     eyval= dur * get_y_value(timenv, p+1) * dy; // We assume ymin=0
+     
+-    fprintf(stdout, "do_synthesis: seg %d : bxval=%f, byval=%f, exval=%f, eyval=%f\n",
+-            p, bxval, byval, exval, eyval);
++    //fprintf(stdout, "do_synthesis: seg %d : bxval=%f, byval=%f, exval=%f, eyval=%f\n",
++    //        p, bxval, byval, exval, eyval);
+ 
+     //diff=0. is a special case we must take in account
+     //here all we do is to set it to one millisecond (arbitrarly)
+@@ -479,10 +652,10 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   //fprintf(stdout, "do_synthesis: %d samples to be generated\n", todo);
+ 
+   // Allocate space for oscilators and noise generator
+-  if(sparams->ramp == 0. || !has_residual) { 
+-        //deterministic synthesis only
+-    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
+-        memset(ospt, 0, ats_sound->partials * sizeof(double));
++  if(sparams->ramp == 0. || !has_residual) { 
++        //deterministic synthesis only
++    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
++        memset(ospt, 0, ats_sound->partials * sizeof(double));
+   }  else if(sparams->amp == 0.) { 
+         //residual synthesis only
+     ospt = (double*)malloc(ATSA_CRITICAL_BANDS * sizeof(double));
+@@ -514,8 +687,8 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+     first=(int)floor(tdata[p].beg_frame);
+     last=(int)floor(tdata[p].end_frame);
+  
+-    fprintf(stdout, "do_synthesis: seg %d : begf=%d, endf=%d, fact=%f, begt=%f, endt=%f\n",
+-            p, first, last, tdata[p].time_factor, tdata[p].beg_time, tdata[p].end_time);
++    //fprintf(stdout, "do_synthesis: seg %d : begf=%d, endf=%d, fact=%f, begt=%f, endt=%f\n",
++    //        p, first, last, tdata[p].time_factor, tdata[p].beg_time, tdata[p].end_time);
+ 
+     // For each frame inside the segment :
+     for(f = first; f <= last; f++) {
+@@ -552,9 +725,9 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+       time_offset *= tdata[p].time_factor;      
+ 
+       // Do the sample generation.
+-      if(sparams->ramp == 0. || !has_residual) {
+-          //deterministic synthesis only
+-          for(d = 0; d < ats_sound->partials; d++) {
++      if(sparams->ramp == 0. || !has_residual) {
++          //deterministic synthesis only
++          for(d = 0; d < ats_sound->partials; d++) {
+               if (sparams->allorsel && selected && !selected[d])
+                   continue;
+               ampl_p = ats_sound->amp[d][f_p] * sparams->amp;
+@@ -566,12 +739,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+               pha_p = ats_sound->pha[d][f_p];
+               pha_c = ats_sound->pha[d][f];
+               pha_n = ats_sound->pha[d][f_n];
+-              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
+-              fslope_c = ats_sound->has_slopes
+-                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
++              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
++              fslope_c = ats_sound->has_slopes
++                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+               frame_samps = synth_deterministic_only(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+                                                      pha_p, pha_c, pha_n,
+-                                                     fslope_c, (short)ats_sound->has_slopes,
++                                                     fslope_c, (short)ats_sound->has_slopes,
+                                                      time_offset, duration, sparams->sr, sparams->upha,
+                                                      ospt+d, *out_samps + n_samps);
+           }
+@@ -609,12 +782,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+                   * sparams->ramp;
+               resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
+                   * sparams->ramp;
+-              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
+-              fslope_c = ats_sound->has_slopes
+-                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
++              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
++              fslope_c = ats_sound->has_slopes
++                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+               frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+                                        pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
+-                                       fslope_c, (short)ats_sound->has_slopes,
++                                       fslope_c, (short)ats_sound->has_slopes,
+                                        time_offset, duration, sparams->sr, sparams->upha,
+                                        ospt+d, &rarray[d], *out_samps + n_samps);
+           }
+@@ -623,13 +796,13 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+       // Jump into sample buffer for next frame.
+       n_samps += (int)frame_samps;
+       
+-      fprintf(stdout, "    frame#%d, samps=%d (%d/%d)\n", f, frame_samps, n_samps, todo);
++      //fprintf(stdout, "    frame#%d, samps=%d (%d/%d)\n", f, frame_samps, n_samps, todo);
+     }
+   }
+   
+   *n_out_samps = n_samps;
+   
+-  fprintf(stdout, "%d samples generated\n", *n_out_samps);
++  //fprintf(stdout, "%d samples generated\n", *n_out_samps);
+ 
+   if (ospt)
+       free(ospt);
