@@ -117,3 +117,36 @@ keep their curvature. Apply it *after* `qatsh-atsa-qifft.patch`. Touches
 CMake requires it by default (marker `ATSA_DDM_SLOPES` in `tracker.c` and
 `synthesis.c`). Use `-DATS_REQUIRE_QATSH_DDM=OFF` to build against unpatched
 Qatsh.
+
+## `qatsh-atsa-multires.patch`
+
+Adds an optional multi-resolution analysis front-end (PRD 6.4). A single
+analysis window forces one time/frequency compromise: long enough to resolve
+closely-spaced bass partials smears high-frequency attacks, and vice versa.
+When `ANARGS.multi_res` is set, `tracker.c` runs a second, longer window
+(`mr_win_mult x win_size`, default 2x) centered on the same frame midpoint and
+detects peaks only in the low band `[lowest_bin, crossover_bin]` (crossover
+default 500 Hz); the default window keeps the high band `(crossover_bin,
+highest_bin]`. The two bands are disjoint by FFT bin, so the merge is a plain
+`push_peak` concatenation with no extra de-duplication. The long pass carries
+its own window, derivative window, norm, main-lobe gain table and DDM slope fit,
+so QIFFT amplitudes and within-frame slopes stay correct across the crossover.
+
+`multi_res == 0` is the default and leaves every downstream value untouched
+(bit-identical to single-resolution; covered by `ats_roundtrip`). Validated in
+`tests/multires_resolution_test.c`: a long window resolves two tones 45 Hz apart
+that a short window merges, and end-to-end the front-end recovers both low tones
+cleanly (200 / 245 Hz at full coverage) where single-resolution settles on a
+blended-centroid track, while the high partial — riding the unchanged default
+window — is preserved. Apply it *after* `qatsh-atsa-ddm.patch`. Touches
+`src/atsa/atsa.h`, `tracker.c`.
+
+```sh
+./scripts/apply_qatsh_multires.sh apply
+./scripts/apply_qatsh_multires.sh status
+./scripts/apply_qatsh_multires.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_MULTIRES` in `tracker.c` and
+`atsa.h`). Use `-DATS_REQUIRE_QATSH_MULTIRES=OFF` to build against unpatched
+Qatsh.

@@ -1,0 +1,187 @@
+diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
+index 0040815..a862f79 100644
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -45,6 +45,19 @@ extern "C" {
+ /* hop size proportional to window size (ratio) */
+ #define  ATSA_HSIZE 0.25
+ 
++/* ATSA_MULTIRES: multi-resolution analysis front-end.
++ * 0 = single-resolution (default, bit-identical to legacy). When enabled, a
++ * second, longer analysis window resolves the low band (better frequency
++ * resolution for closely-spaced bass partials) while the default window keeps
++ * its time resolution on the high band (sharper attacks). Peaks below the
++ * crossover come from the long window, peaks above from the default window;
++ * the bands are disjoint by FFT bin so the merge needs no extra de-duplication. */
++#define  ATSA_MULTIRES 0
++/* long-window size multiplier (relative to win_size) for the low band */
++#define  ATSA_MRWINMULT 2.0
++/* crossover frequency (Hz): below -> long window, above -> default window */
++#define  ATSA_MRCROSS 500.0
++
+ /* lowest magnitude for peaks (amp) */
+ #define  ATSA_LMAG  -60.0
+ 
+@@ -128,6 +141,10 @@ typedef struct {
+   double SMR_cont;
+   double SMR_thres;
+   double min_seg_SMR;
++  /* ATSA_MULTIRES: multi-resolution analysis front-end (0 = off, legacy) */
++  int multi_res;
++  double mr_win_mult;
++  double mr_crossover;
+   /* parameters computed from command line */
+   int first_smp;
+   int cycle_smp;
+diff --git a/src/atsa/tracker.c b/src/atsa/tracker.c
+index 3e1fe5b..a90e619 100644
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
+@@ -109,6 +109,11 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   double *mlobe_gain; /* ATSA_QIFFT_AMP: window main-lobe gain table */
+   const int mlobe_res = 1025; /* G(delta) samples over [-0.5, 0.5] */
+   double *fsamps; /* ATSA_DDM_SLOPES: per-frame raw windowed-segment samples */
++  /* ATSA_MULTIRES: long-window low-band analysis (NULL/0 when single-resolution) */
++  double *lwindow = NULL, *ldwindow = NULL, *lmlobe_gain = NULL, *lfsamps = NULL;
++  double lnorm = 0.0;
++  int lwin_size = 0, lM_2 = 0, lfirst_point = 0, crossover_bin = 0;
++  ATS_FFT lfft_struct, ldfft_struct;
+   /* declare structures and buffers */
+   ATS_SOUND *sound = NULL;
+   ATS_FFT fft_struct;
+@@ -241,8 +246,16 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+     anargs->SMR_cont = ATSA_SMRCONT;
+   }
+   /* continue computing parameters */
+-  /* fft size */
+-  anargs->fft_size = ppp2(2*anargs->win_size);
++  /* ATSA_MULTIRES: derive the long low-band window size (odd, like win_size).
++     Disabled (multi_res == 0) leaves every downstream value untouched. */
++  if (anargs->multi_res) {
++    if (!(anargs->mr_win_mult > 1.0)) anargs->mr_win_mult = ATSA_MRWINMULT;
++    if (!(anargs->mr_crossover > 0.0)) anargs->mr_crossover = ATSA_MRCROSS;
++    lwin_size = (int)floor(anargs->mr_win_mult * anargs->win_size);
++    if (lwin_size % 2 == 0) lwin_size += 1;
++  }
++  /* fft size (sized for the longer of the two windows when multi-resolution) */
++  anargs->fft_size = ppp2(2 * (lwin_size > anargs->win_size ? lwin_size : anargs->win_size));
+   /* make our fft-struct */
+   fft_struct.size = anargs->fft_size;
+   fft_struct.rate = anargs->srate;
+@@ -284,11 +297,42 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   /* alocate memory to store mid-point window sample numbers */
+   win_samps = (int *)malloc(anargs->frames * sizeof(int));
+   /* center point of window */
+-  M_2 = (int)floor(((double)anargs->win_size - 1) / 2); 
++  M_2 = (int)floor(((double)anargs->win_size - 1) / 2);
+   /* first point in fft buffer to write */
+-  first_point = anargs->fft_size - M_2;  
++  first_point = anargs->fft_size - M_2;
+   /* half a window from first sample */
+   filptr = anargs->first_smp - M_2;
++  /* ATSA_MULTIRES: build the long low-band window and its companions (its own
++     window, derivative window, norm, main-lobe gain table, FFT scratch and raw
++     sample buffer), all centered on the same frame midpoint as the default
++     window so frame times stay aligned. The crossover bin splits the spectrum:
++     [lowest_bin, crossover_bin] is resolved by the long window, the default
++     window keeps (crossover_bin, highest_bin]. */
++  if (anargs->multi_res) {
++    lwindow = make_window(anargs->win_type, lwin_size);
++    lnorm = window_norm(lwindow, lwin_size);
++    ldwindow = (double *)malloc(lwin_size * sizeof(double));
++    for (k=0; k<lwin_size; k++) {
++      double hp = lwindow[(k+1 < lwin_size) ? k+1 : k];
++      double hm = lwindow[(k-1 >= 0) ? k-1 : k];
++      double span = (k+1 < lwin_size && k-1 >= 0) ? 0.5 : 1.0;
++      ldwindow[k] = (hp - hm) * span;
++    }
++    lmlobe_gain = (double *)malloc(mlobe_res * sizeof(double));
++    build_mainlobe_gain(lwindow, lwin_size, anargs->fft_size, lmlobe_gain, mlobe_res);
++    lfsamps = (double *)malloc(lwin_size * sizeof(double));
++    lfft_struct.size = ldfft_struct.size = anargs->fft_size;
++    lfft_struct.rate = ldfft_struct.rate = anargs->srate;
++    lfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
++    lfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
++    ldfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
++    ldfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
++    lM_2 = (int)floor(((double)lwin_size - 1) / 2);
++    lfirst_point = anargs->fft_size - lM_2;
++    crossover_bin = (int)floor(anargs->mr_crossover / anargs->fft_mag);
++    if (crossover_bin < anargs->lowest_bin) crossover_bin = anargs->lowest_bin;
++    if (crossover_bin > anargs->highest_bin) crossover_bin = anargs->highest_bin;
++  }
+   /* ATSA_QIFFT_AMP: install the main-lobe gain table for the frame loop */
+   set_mainlobe_gain(mlobe_gain, mlobe_res);
+   /* main loop */
+@@ -325,7 +369,12 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+     fft(dfft_struct.fdr, dfft_struct.fdi, dfft_struct.size, 1);
+     /* peak detection */
+     peaks_size = 0;
+-    peaks = peak_detection(&fft_struct, &dfft_struct, anargs->lowest_bin, anargs->highest_bin, anargs->lowest_mag, norm, &peaks_size);
++    /* ATSA_MULTIRES: in multi-resolution mode the default window only owns the
++       high band above the crossover; the long window owns everything below. */
++    {
++      int def_low = anargs->multi_res ? crossover_bin + 1 : anargs->lowest_bin;
++      peaks = peak_detection(&fft_struct, &dfft_struct, def_low, anargs->highest_bin, anargs->lowest_mag, norm, &peaks_size);
++    }
+     /* ATSA_DDM_SLOPES: fit within-frame frequency/amplitude slopes per peak from
+        the raw windowed segment, before tracking reorders/augments the array */
+     if (peaks != NULL) {
+@@ -333,6 +382,39 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+         ddm_slopes(fsamps, window, dwindow, anargs->win_size, anargs->srate,
+                    peaks[k].frq, (double)M_2, &peaks[k].frq_slope, &peaks[k].amp_slope);
+     }
++    /* ATSA_MULTIRES: long-window low-band pass, centered on the same midpoint,
++       detecting peaks in [lowest_bin, crossover_bin]. Disjoint bins from the
++       default pass, so the merge is a plain concatenation (push_peak). */
++    if (anargs->multi_res && crossover_bin >= anargs->lowest_bin) {
++      int lfilptr = win_samps[frame_n] - lM_2;
++      ATS_PEAK *lpeaks = NULL;
++      int lpeaks_size = 0;
++      for (k=0; k<anargs->fft_size; k++) lfft_struct.fdr[k] = lfft_struct.fdi[k] = 0.0f;
++      for (k=0; k<anargs->fft_size; k++) ldfft_struct.fdr[k] = ldfft_struct.fdi[k] = 0.0f;
++      for (k=0; k<lwin_size; k++) {
++        if ((lfilptr >= 0) && (lfilptr < sflen)) {
++          lfft_struct.fdr[(k+lfirst_point)%anargs->fft_size] = lwindow[k] * in_samps[lfilptr];
++          ldfft_struct.fdr[(k+lfirst_point)%anargs->fft_size] = ldwindow[k] * in_samps[lfilptr];
++          lfsamps[k] = in_samps[lfilptr];
++        } else {
++          lfsamps[k] = 0.0;
++        }
++        lfilptr++;
++      }
++      fft(lfft_struct.fdr, lfft_struct.fdi, lfft_struct.size, 1);
++      fft(ldfft_struct.fdr, ldfft_struct.fdi, ldfft_struct.size, 1);
++      set_mainlobe_gain(lmlobe_gain, mlobe_res);
++      lpeaks = peak_detection(&lfft_struct, &ldfft_struct, anargs->lowest_bin, crossover_bin, anargs->lowest_mag, lnorm, &lpeaks_size);
++      set_mainlobe_gain(mlobe_gain, mlobe_res);
++      if (lpeaks != NULL) {
++        for (k=0; k<lpeaks_size; k++)
++          ddm_slopes(lfsamps, lwindow, ldwindow, lwin_size, anargs->srate,
++                     lpeaks[k].frq, (double)lM_2, &lpeaks[k].frq_slope, &lpeaks[k].amp_slope);
++        for (k=0; k<lpeaks_size; k++)
++          peaks = push_peak(&lpeaks[k], peaks, &peaks_size);
++        free(lpeaks);
++      }
++    }
+     /* peak tracking */
+     if (peaks != NULL) {
+       /* evaluate peaks SMR (masking curves) */
+@@ -398,6 +480,17 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   free(dfft_struct.fdi);
+   free(dwindow);
+   free(window);
++  /* ATSA_MULTIRES: release long-window scratch (no-op when single-resolution) */
++  if (anargs->multi_res) {
++    free(lfft_struct.fdr);
++    free(lfft_struct.fdi);
++    free(ldfft_struct.fdr);
++    free(ldfft_struct.fdi);
++    free(ldwindow);
++    free(lwindow);
++    free(lmlobe_gain);
++    free(lfsamps);
++  }
+   free(tracks);
+ 
+   /* init sound */

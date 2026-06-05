@@ -21,6 +21,7 @@ option(ATS_REQUIRE_QATSH_PROGRESS "Require local Qatsh ATSA analysis-progress pa
 option(ATS_REQUIRE_QATSH_REASSIGNMENT "Require local Qatsh ATSA frequency-reassignment patch before building" ON)
 option(ATS_REQUIRE_QATSH_QIFFT "Require local Qatsh ATSA QIFFT amplitude patch before building" ON)
 option(ATS_REQUIRE_QATSH_DDM "Require local Qatsh ATSA DDM within-frame slopes patch before building" ON)
+option(ATS_REQUIRE_QATSH_MULTIRES "Require local Qatsh ATSA multi-resolution analysis patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -96,6 +97,20 @@ if(ATS_REQUIRE_QATSH_DDM)
   unset(_atsa_ddm_synth_source)
   unset(_atsa_ddm_tracker_marker)
   unset(_atsa_ddm_synth_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_MULTIRES)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/tracker.c" _atsa_mr_tracker_source)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/atsa.h" _atsa_mr_header_source)
+  string(FIND "${_atsa_mr_tracker_source}" "ATSA_MULTIRES" _atsa_mr_tracker_marker)
+  string(FIND "${_atsa_mr_header_source}" "ATSA_MULTIRES" _atsa_mr_header_marker)
+  if(_atsa_mr_tracker_marker EQUAL -1 OR _atsa_mr_header_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA multi-resolution analysis patch is not applied. Run scripts/apply_qatsh_multires.sh apply, or configure with -DATS_REQUIRE_QATSH_MULTIRES=OFF to bypass.")
+  endif()
+  unset(_atsa_mr_tracker_source)
+  unset(_atsa_mr_header_source)
+  unset(_atsa_mr_tracker_marker)
+  unset(_atsa_mr_header_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

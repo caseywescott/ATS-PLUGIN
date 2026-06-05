@@ -112,14 +112,16 @@ Implementation note: `tracker.c` solves an order-2 DDM 2×2 complex system per p
 
 ## Phase 4 — Multi-Resolution Analysis Front-End
 
-### Commit 7 — `feat(atsa): multi-window peak analysis and cross-resolution merge`
+### Commit 7 — `feat(atsa): multi-window peak analysis and cross-resolution merge` ✅
 
 **PRD:** §6.4, §9
 
-- [ ] Add a multi-window (or constant-Q / Gabor) analysis pass: long windows low, short windows high.
-- [ ] Merge peaks across resolutions before tracking, with a de-duplication/selection rule.
-- [ ] Parameterize so single-resolution remains the default/fallback.
-- [ ] Harness: improved resolution of closely-spaced low partials without smearing highs; patch/markers/CI.
+- [x] Add a multi-window (or constant-Q / Gabor) analysis pass: long windows low, short windows high.
+- [x] Merge peaks across resolutions before tracking, with a de-duplication/selection rule.
+- [x] Parameterize so single-resolution remains the default/fallback.
+- [x] Harness: improved resolution of closely-spaced low partials without smearing highs; patch/markers/CI.
+
+Implementation note: `ANARGS.multi_res` (default 0) gates a second, longer analysis window (`mr_win_mult x win_size`, default 2x) centered on the same frame midpoint. The long window resolves the low band `[lowest_bin, crossover_bin]` (crossover default 500 Hz); the default window keeps the highs `(crossover_bin, highest_bin]`. Disjoint FFT bins make the merge a plain `push_peak` concatenation — the de-dup rule is the band split itself. The long pass carries its own window/derivative/norm/main-lobe-gain/DDM-slope machinery so QIFFT amplitudes and within-frame slopes stay correct across the crossover. `multi_res == 0` is bit-identical to legacy (verified: all prior CTests green incl. `ats_roundtrip`). New gate `tests/multires_resolution_test.c`: a 3x window resolves two tones 45 Hz apart that the short window merges (1→2 peaks), and end-to-end the front-end recovers both low tones at full coverage (200/245 Hz) where single-resolution lands a blended-centroid track, with the high partial preserved. Shipped as `patches/qatsh-atsa-multires.patch` (marker `ATSA_MULTIRES`), applied in CI after DDM. `ats_offline` gains `--multi-res`. 12/12 CTest green.
 
 ---
 

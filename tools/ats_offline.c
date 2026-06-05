@@ -17,9 +17,10 @@
 static void usage(const char *prog)
 {
   fprintf(stderr,
-          "Usage: %s [--type <1-4>] [--no-slopes] <input.wav> <output.wav>\n"
+          "Usage: %s [--type <1-4>] [--no-slopes] [--multi-res] <input.wav> <output.wav>\n"
           "  Analysis type matches ATSA/Qatsh (default %d).\n"
-          "  --no-slopes: force legacy LIN3 synthesis (DDM A/B baseline).\n",
+          "  --no-slopes: force legacy LIN3 synthesis (DDM A/B baseline).\n"
+          "  --multi-res: enable the multi-resolution analysis front-end.\n",
           prog, ATSA_TYPE);
 }
 
@@ -156,6 +157,7 @@ int main(int argc, char **argv)
   const char *out_path = NULL;
   int analysis_type = ATSA_TYPE;
   int no_slopes = 0; /* ATSA_DDM_SLOPES: force legacy LIN3 synthesis for A/B */
+  int multi_res = 0; /* ATSA_MULTIRES: enable multi-resolution analysis front-end */
   int i = 1;
 
   while (i < argc) {
@@ -170,6 +172,11 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[i], "--no-slopes") == 0) {
       no_slopes = 1;
+      i += 1;
+      continue;
+    }
+    if (strcmp(argv[i], "--multi-res") == 0) {
+      multi_res = 1;
       i += 1;
       continue;
     }
@@ -201,6 +208,11 @@ int main(int argc, char **argv)
   ANARGS anargs;
   default_anargs(&anargs);
   anargs.type = analysis_type;
+  if (multi_res) {
+    anargs.multi_res = 1; /* ATSA_MULTIRES: long low-band window + default highs */
+    anargs.mr_win_mult = ATSA_MRWINMULT;
+    anargs.mr_crossover = ATSA_MRCROSS;
+  }
 
   double **residual = NULL;
   int res_len = 0;
