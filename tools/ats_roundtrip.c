@@ -117,6 +117,12 @@ int main(void)
     return 1;
   }
 
+  /* ATSA_DDM_SLOPES: within-frame slopes are an in-memory-only refinement and
+     are intentionally NOT written to the .ats file (format unchanged). This test
+     checks the on-disk roundtrip, so synthesize the direct reference from the
+     same persisted model the reloaded sound carries (slopes off on both sides). */
+  sound->has_slopes = 0;
+
   double *direct = NULL;
   int n_direct = 0;
   if (synth_to_buffer(sound, sr, &direct, &n_direct) != 0) {

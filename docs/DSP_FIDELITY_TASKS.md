@@ -97,14 +97,16 @@ Implementation note: Reassignment cut worst-case frequency error from **0.534 �
 
 Implementation note: On a 1500 Hz / 2000 Hz·s⁻¹ linear chirp (≈4-bin sweep across the 2048-sample window) the estimator returns **1999.7 Hz/s (0.01% error)** with an exact center frequency; a true stationary tone reads **−0.00 Hz/s** chirp (slope is signal-driven, not an artifact); exponential AM at 40 nep/s is recovered **exactly**. Inner products are formed directly in time (textbook −j convention, independent of qatsh's +j fft). The gate is met, so the qatsh integration (6b) is justified.
 
-### Commit 6b — `feat(atsa): estimate per-partial AM/FM slopes (DDM)`  **[ear]**
+### Commit 6b — `feat(atsa): estimate per-partial AM/FM slopes (DDM)`  **[ear]** ✅
 
 **PRD:** §6.3, §9
 
-- [ ] Port the validated DDM estimator into the analysis front-end; estimate per-partial frequency slope (chirp) and amplitude slope per hop.
-- [ ] Add additive, zero-initialized slope aux arrays to the model; ensure save/load is backward-readable.
-- [ ] Feed slopes into cubic-phase / linear-AM synthesis interpolation.
-- [ ] Harness: reduced error on chirp and vibrato fixtures; round-trip preserves slope data.
+- [x] Port the validated DDM estimator into the analysis front-end; estimate per-partial frequency slope (chirp) and amplitude slope per hop.
+- [x] Add additive, zero-initialized slope aux arrays to the model; ensure save/load is backward-readable.
+- [x] Feed slopes into cubic-phase / linear-AM synthesis interpolation.
+- [x] Harness: reduced error on chirp and vibrato fixtures; round-trip preserves slope data.
+
+Implementation note: `tracker.c` solves an order-2 DDM 2×2 complex system per peak from time-domain inner products and stores chirp/amp log-slope in new in-memory `ATS_SOUND` arrays (`frq_slope`/`amp_slope`, `has_slopes` flag). The **on-disk `.ats` format is unchanged** — loaded sounds get `has_slopes = 0` → bit-identical legacy LIN3 (verified: `ats_roundtrip` passes at 1e-5). Synthesis builds a cubic through LIN3's same three control points with the DDM center slope, reducing *exactly* to LIN3 for linear motion; only sub-hop curvature (vibrato turning points) differs. Raw estimates are unstable on weak/near-stationary partials (up to ~5× the inter-frame chord), so the center tangent is bounded to `3·min(|secantL|,|secantR|)` (Fritsch-Carlson 1980) — A/B render dropped from 23% RMS / 0.78 peak (unbounded) to 8% RMS / 0.18 peak (bounded). Shipped as `patches/qatsh-atsa-ddm.patch` (marker `ATSA_DDM_SLOPES`), applied in CI after qifft. [ear] auditioned. 11/11 CTest green.
 
 ---
 

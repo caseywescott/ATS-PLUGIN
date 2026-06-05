@@ -1,0 +1,431 @@
+diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
+index f97600f..0040815 100644
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -160,11 +160,17 @@ typedef struct {
+  * spectral peak data
+  */
+ typedef struct {
+-  double amp; 
+-  double frq; 
++  double amp;
++  double frq;
+   double pha;
+   double smr;
+   int track;
++  /* ATSA_DDM_SLOPES: within-frame slopes from the order-2 Distribution
++     Derivative Method. frq_slope is the instantaneous frequency rate (Hz/s,
++     chirp); amp_slope is the amplitude log-slope (nepers/s). Zero when DDM is
++     not run, so peaks degrade to the stationary model. */
++  double frq_slope;
++  double amp_slope;
+ } ATS_PEAK;
+ 
+ /* ATS_FRAME
+@@ -250,6 +256,14 @@ typedef struct {
+   double **pha;  /* Phase (radian ?) */
+   double **smr;  /* Signal to Mask Ratio */
+ 
++  /* ATSA_DDM_SLOPES: per-[partial][frame] within-frame slopes (additive,
++     zero-initialized; not persisted to .ats). frq_slope in Hz/s, amp_slope in
++     nepers/s. has_slopes is set only by a fresh DDM analysis; a loaded sound
++     leaves it 0 so synthesis uses the legacy stationary interpolation. */
++  double **frq_slope;
++  double **amp_slope;
++  int has_slopes;
++
+   /* noise data */
+   double **res; /* Noise energy for each [partial][frame] */
+   double **band_energy; /* Noise energy for each [critical band][frame] */
+diff --git a/src/atsa/peak-detection.c b/src/atsa/peak-detection.c
+index 114cfe2..47bd5f6 100644
+--- a/src/atsa/peak-detection.c
++++ b/src/atsa/peak-detection.c
+@@ -50,10 +50,12 @@ ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int hi
+   lowest_mag  = (double)db2amp(lowest_mag);
+ 
+   // init peak
+-  ats_peak.amp = 0.0; 
+-  ats_peak.frq = 0.0; 
++  ats_peak.amp = 0.0;
++  ats_peak.frq = 0.0;
+   ats_peak.pha = 0.0;
+   ats_peak.smr = 0.0;
++  ats_peak.frq_slope = 0.0; /* ATSA_DDM_SLOPES: stationary unless DDM fills it */
++  ats_peak.amp_slope = 0.0;
+ 
+   fftmags = (double *)malloc(N * sizeof(double));
+   fftphase = (double *)malloc(N * sizeof(double));
+diff --git a/src/atsa/tracker.c b/src/atsa/tracker.c
+index b3bf36e..3e1fe5b 100644
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
+@@ -11,6 +11,67 @@
+ 
+ /* private function prototypes */
+ int compute_frames(ANARGS *anargs);
++/* ATSA_DDM_SLOPES: order-2 Distribution Derivative Method slope estimator */
++static void ddm_slopes(const double *samps, const double *window, const double *dwindow,
++                       int win_size, int srate, double f0, double n_c,
++                       double *frq_slope, double *amp_slope);
++
++/* ddm_slopes
++ * ==========
++ * ATSA_DDM_SLOPES: estimate the within-frame frequency slope (chirp, Hz/s) and
++ * amplitude log-slope (nepers/s) of the partial near f0, by fitting the windowed
++ * segment to s(tau) = exp(b0 + b1*tau + b2*tau^2) (tau = sample offset from the
++ * window center n_c). Solves the 2x2 complex DDM system from time-domain inner
++ * products with {h, tau h, tau^2 h, h', tau h'}; chirp = Im(b2)*sr^2/pi,
++ * amp-slope = Re(b1)*sr. Validated against the harness prototype
++ * (tests/estimator_accuracy_test.c): 0.01% chirp-rate error on a linear chirp,
++ * exact AM-slope recovery. Inner products use the textbook -j convention
++ * (self-contained; independent of qatsh's +j fft). */
++static void ddm_slopes(const double *samps, const double *window, const double *dwindow,
++                       int win_size, int srate, double f0, double n_c,
++                       double *frq_slope, double *amp_slope)
++{
++  int n;
++  double w0 = TWOPI * f0 / (double)srate;
++  double p0r=0,p0i=0,p1r=0,p1i=0,p2r=0,p2i=0,dr=0,di=0,dtr=0,dti=0;
++  *frq_slope = 0.0;
++  *amp_slope = 0.0;
++  for (n=0; n<win_size; n++) {
++    double tau = (double)n - n_c;
++    double ph = -w0 * tau;
++    double c = cos(ph), sn = sin(ph);   /* e^{-j w0 tau} = c + j sn */
++    double sh = samps[n] * window[n];   /* s * h  */
++    double sdh = samps[n] * dwindow[n]; /* s * h' */
++    p0r += sh*c;          p0i += sh*sn;
++    p1r += sh*tau*c;      p1i += sh*tau*sn;
++    p2r += sh*tau*tau*c;  p2i += sh*tau*tau*sn;
++    dr  += sdh*c;         di  += sdh*sn;
++    dtr += sdh*tau*c;     dti += sdh*tau*sn;
++  }
++  {
++    /* [a b; c d][b1;b2] = [e;f], a=P0,b=2P1,c=P1,d=2P2,
++       e=-D + j w0 P0, f=-P0 - DT + j w0 P1 */
++    double ar=p0r, ai=p0i, br=2*p1r, bi=2*p1i, cr=p1r, ci=p1i, dr2=2*p2r, di2=2*p2i;
++    double er=-dr - w0*p0i, ei=-di + w0*p0r;
++    double fr=-p0r - dtr - w0*p1i, fi=-p0i - dti + w0*p1r;
++    double detr=(ar*dr2 - ai*di2) - (br*cr - bi*ci);
++    double deti=(ar*di2 + ai*dr2) - (br*ci + bi*cr);
++    double detm=detr*detr + deti*deti;
++    if (detm > 0.0) {
++      double edr=er*dr2 - ei*di2, edi=er*di2 + ei*dr2;       /* e*d */
++      double bfr=br*fr - bi*fi, bfi=br*fi + bi*fr;           /* b*f */
++      double n1r=edr - bfr, n1i=edi - bfi;                   /* e*d - b*f */
++      double afr=ar*fr - ai*fi, afi=ar*fi + ai*fr;           /* a*f */
++      double ecr=er*cr - ei*ci, eci=er*ci + ei*cr;           /* e*c */
++      double n2r=afr - ecr, n2i=afi - eci;                   /* a*f - e*c */
++      double b1r=(n1r*detr + n1i*deti) / detm;               /* Re(b1) */
++      double b2i=(n2i*detr - n2r*deti) / detm;               /* Im(b2) */
++      double sr=(double)srate;
++      *frq_slope = b2i * sr * sr / PI;   /* 2*Im(b2)/(2pi) * sr^2 -> Hz/s */
++      *amp_slope = b1r * sr;             /* Re(b1) 1/sample -> nepers/s */
++    }
++  }
++}
+ 
+ /* int compute_frames(ANARGS *anargs)
+  * computes number of analysis frames from the user's parameters 
+@@ -47,6 +108,7 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   double *dwindow; /* derivative of analysis window for freq reassignment */
+   double *mlobe_gain; /* ATSA_QIFFT_AMP: window main-lobe gain table */
+   const int mlobe_res = 1025; /* G(delta) samples over [-0.5, 0.5] */
++  double *fsamps; /* ATSA_DDM_SLOPES: per-frame raw windowed-segment samples */
+   /* declare structures and buffers */
+   ATS_SOUND *sound = NULL;
+   ATS_FFT fft_struct;
+@@ -209,6 +271,8 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+      amplitude correction in peak_detection (installed before the frame loop) */
+   mlobe_gain = (double *)malloc(mlobe_res * sizeof(double));
+   build_mainlobe_gain(window, anargs->win_size, anargs->fft_size, mlobe_gain, mlobe_res);
++  /* ATSA_DDM_SLOPES: per-frame raw sample buffer (natural order) for slopes */
++  fsamps = (double *)malloc(anargs->win_size * sizeof(double));
+   /* fft mag for computing frequencies */
+   anargs->fft_mag = (double)anargs->srate / (double)anargs->fft_size;
+   /* lowest fft bin for analysis */
+@@ -245,6 +309,9 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+       if ((filptr >= 0) && (filptr < sflen)) {
+         fft_struct.fdr[(k+first_point)%anargs->fft_size] = window[k] * in_samps[filptr];
+         dfft_struct.fdr[(k+first_point)%anargs->fft_size] = dwindow[k] * in_samps[filptr];
++        fsamps[k] = in_samps[filptr]; /* ATSA_DDM_SLOPES: raw sample for slope fit */
++      } else {
++        fsamps[k] = 0.0;
+       }
+       filptr++;
+     }
+@@ -259,6 +326,13 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+     /* peak detection */
+     peaks_size = 0;
+     peaks = peak_detection(&fft_struct, &dfft_struct, anargs->lowest_bin, anargs->highest_bin, anargs->lowest_mag, norm, &peaks_size);
++    /* ATSA_DDM_SLOPES: fit within-frame frequency/amplitude slopes per peak from
++       the raw windowed segment, before tracking reorders/augments the array */
++    if (peaks != NULL) {
++      for (k=0; k<peaks_size; k++)
++        ddm_slopes(fsamps, window, dwindow, anargs->win_size, anargs->srate,
++                   peaks[k].frq, (double)M_2, &peaks[k].frq_slope, &peaks[k].amp_slope);
++    }
+     /* peak tracking */
+     if (peaks != NULL) {
+       /* evaluate peaks SMR (masking curves) */
+@@ -317,6 +391,7 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+   /* ATSA_QIFFT_AMP: uninstall and free the main-lobe gain table */
+   set_mainlobe_gain(NULL, 0);
+   free(mlobe_gain);
++  free(fsamps); /* ATSA_DDM_SLOPES */
+   free(fft_struct.fdr);
+   free(fft_struct.fdi);
+   free(dfft_struct.fdr);
+@@ -342,10 +417,16 @@ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames,
+           sound->frq[k][frame] = ana_frames[frame].peaks[i].frq;
+           sound->pha[k][frame] = ana_frames[frame].peaks[i].pha;
+           sound->smr[k][frame] = ana_frames[frame].peaks[i].smr;
++          /* ATSA_DDM_SLOPES: carry within-frame slopes into the sound */
++          sound->frq_slope[k][frame] = ana_frames[frame].peaks[i].frq_slope;
++          sound->amp_slope[k][frame] = ana_frames[frame].peaks[i].amp_slope;
+         }
+     }
+   }
+ 
++  /* ATSA_DDM_SLOPES: fresh analysis carries valid within-frame slopes */
++  sound->has_slopes = 1;
++
+   /* free up ana_frames memory */
+   /* first, free all peaks in each slot of ana_frames... */
+   for (k=0; k<anargs->frames; k++) free(ana_frames[k].peaks);  
+diff --git a/src/atsa/utilities.c b/src/atsa/utilities.c
+index 4ca1b16..981b4f8 100644
+--- a/src/atsa/utilities.c
++++ b/src/atsa/utilities.c
+@@ -336,6 +336,10 @@ void init_sound(ATS_SOUND *sound, int sampling_rate, int frame_size, int window_
+   sound->pha = (double **)malloc(partials * sizeof(double *));
+   sound->smr = (double **)malloc(partials * sizeof(double *));
+   sound->res = (double **)malloc(partials * sizeof(double *));
++  /* ATSA_DDM_SLOPES: additive within-frame slope arrays (zero-initialized) */
++  sound->frq_slope = (double **)malloc(partials * sizeof(double *));
++  sound->amp_slope = (double **)malloc(partials * sizeof(double *));
++  sound->has_slopes = 0; /* legacy LIN3 unless fresh DDM analysis sets it to 1 */
+ 
+   /* allocate memory for time, amp, frq, smr, and res data */
+   for(k=0; k<partials; k++) {
+@@ -345,6 +349,8 @@ void init_sound(ATS_SOUND *sound, int sampling_rate, int frame_size, int window_
+     sound->pha[k] = (double *)malloc(frames * sizeof(double));
+     sound->smr[k] = (double *)malloc(frames * sizeof(double));
+     sound->res[k] = (double *)malloc(frames * sizeof(double));
++    sound->frq_slope[k] = (double *)malloc(frames * sizeof(double));
++    sound->amp_slope[k] = (double *)malloc(frames * sizeof(double));
+   }
+ 
+   /* init all array values with 0.0 */
+@@ -355,6 +361,8 @@ void init_sound(ATS_SOUND *sound, int sampling_rate, int frame_size, int window_
+       sound->pha[i][j] = (double)0.0;
+       sound->smr[i][j] = (double)0.0;
+       sound->res[i][j] = (double)0.0;
++      sound->frq_slope[i][j] = (double)0.0;
++      sound->amp_slope[i][j] = (double)0.0;
+     }
+   }
+ 
+@@ -387,6 +395,7 @@ ATS_SOUND *copy_sound(ATS_SOUND *sound)
+   sound_copy->optimized = sound->optimized;
+   sound_copy->ampmax = sound->ampmax;
+   sound_copy->frqmax = sound->frqmax;
++  sound_copy->has_slopes = sound->has_slopes; /* ATSA_DDM_SLOPES */
+ 
+   memcpy(sound_copy->av, sound->av, sound->partials * sizeof(ATS_PEAK));
+ 
+@@ -397,6 +406,8 @@ ATS_SOUND *copy_sound(ATS_SOUND *sound)
+     memcpy(sound_copy->pha[k], sound->pha[k], sound->frames * sizeof(double));
+     memcpy(sound_copy->smr[k], sound->smr[k], sound->frames * sizeof(double));
+     memcpy(sound_copy->res[k], sound->res[k], sound->frames * sizeof(double));
++    memcpy(sound_copy->frq_slope[k], sound->frq_slope[k], sound->frames * sizeof(double));
++    memcpy(sound_copy->amp_slope[k], sound->amp_slope[k], sound->frames * sizeof(double));
+   }
+ 
+   if(sound->band_energy)
+@@ -431,6 +442,9 @@ void increase_max_partials(ATS_SOUND *sound, unsigned int offset)
+   sound->smr = (double **)realloc(sound->smr, new_max_partials * sizeof(double *));
+ 
+   sound->res = (double **)realloc(sound->res, new_max_partials * sizeof(double *));
++  /* ATSA_DDM_SLOPES */
++  sound->frq_slope = (double **)realloc(sound->frq_slope, new_max_partials * sizeof(double *));
++  sound->amp_slope = (double **)realloc(sound->amp_slope, new_max_partials * sizeof(double *));
+ 
+   /* allocate memory for time, amp, frq, smr, and res data for new possible partials */
+   for(k=sound->max_partials; k<new_max_partials; k++) {
+@@ -440,6 +454,13 @@ void increase_max_partials(ATS_SOUND *sound, unsigned int offset)
+     sound->pha[k] = (double *)malloc(sound->frames * sizeof(double));
+     sound->smr[k] = (double *)malloc(sound->frames * sizeof(double));
+     sound->res[k] = (double *)malloc(sound->frames * sizeof(double));
++    sound->frq_slope[k] = (double *)malloc(sound->frames * sizeof(double));
++    sound->amp_slope[k] = (double *)malloc(sound->frames * sizeof(double));
++    /* zero-init the new partial's slope rows (additive default) */
++    for (int j = 0; j < sound->frames; ++j) {
++      sound->frq_slope[k][j] = 0.0;
++      sound->amp_slope[k][j] = 0.0;
++    }
+   }
+ 
+   /* save new max number of partials */
+@@ -464,6 +485,8 @@ void free_sound(ATS_SOUND *sound)
+     freez(sound->pha[k]);
+     freez(sound->smr[k]);
+     freez(sound->res[k]);
++    freez(sound->frq_slope[k]); /* ATSA_DDM_SLOPES */
++    freez(sound->amp_slope[k]);
+   }
+ 
+   /* pointers to data */
+@@ -473,6 +496,8 @@ void free_sound(ATS_SOUND *sound)
+   freez(sound->pha);
+   freez(sound->smr);
+   freez(sound->res);
++  freez(sound->frq_slope); /* ATSA_DDM_SLOPES */
++  freez(sound->amp_slope);
+ 
+   /* check if we have residual data and free its memory up */
+   if(sound->band_energy){
+diff --git a/src/atsa/synthesis.c b/src/atsa/synthesis.c
+index 8144102..a13f061 100644
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -46,6 +46,32 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
+ #define LIN3_INTERP(x, yp, yc, yn) \
+  (((x) < .5) ? ((yc) + (yp)) / 2 + x * ((yc) - (yp)) : (3*(yc) - (yn)) / 2 + x * ((yn) - (yc)))
+ 
++/* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
++ * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
++ * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
++ * with the DDM-measured chirp S (Hz per frame). Solving a+bx+cx^2+ex^3 for those
++ * four constraints: e=4(D1-S), b=4*D2-D1+e/2, c=D1-e-b, a=(fp+fc)/2, with
++ * D1=(fn-fp)/2 and D2=(fc-fp)/2. When S equals the linear-implied slope (fn-fp)/2
++ * the cubic collapses to LIN3 exactly, so curvature is added only for genuine
++ * sub-hop frequency motion (vibrato turning points).
++ *
++ * Overshoot limiter (Fritsch-Carlson 1980): the raw DDM chirp is unreliable on
++ * weak/near-stationary partials -- measured up to ~5x the inter-frame chord and
++ * ~900 Hz over a 50 ms frame, which the bare cubic renders as audible spurious
++ * sweeps. Bounding the center tangent to 3*min(|secantL|,|secantR|) (the two
++ * half-frame secants fc-fp and fn-fc) keeps the interpolant within the data
++ * envelope: on a steady partial both secants ~0 so S is clamped toward 0 and the
++ * cubic falls back to LIN3, while genuine vibrato flanks (sizable secants) retain
++ * their curvature. Linear motion (S = chord) is well under the cap, so the
++ * LIN3-exact reduction is preserved. */
++#define CUBIC_FREQ_COEFFS(use, fp, fc, fn, S, A, B, C, E) do { \
++    if (use) { double F0=((fp)+(fc))*.5, D1=((fn)-(fp))*.5, D2=((fc)-(fp))*.5; \
++      double sL=(fc)-(fp), sR=(fn)-(fc); \
++      double mn=(fabs(sL)<fabs(sR)?fabs(sL):fabs(sR)), Slim=3.0*mn, Sc=(S); \
++      if(Sc>Slim) Sc=Slim; else if(Sc<-Slim) Sc=-Slim; \
++      (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
++#define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
++
+ /*
+ ;;; note that for this macro the values of i should go
+ ;;; from 0 to dt. So in the case of having 220 samples
+@@ -264,23 +290,28 @@ double locate_frame(ATS_SOUND *ats_sound, double from_frame, double time)
+ */
+ ////////////////////////////////////////////////////////////////////
+ int synth_deterministic_only(double ampl_p, double ampl_c, double ampl_n,
+-                             double freq_p, double freq_c, double freq_n, 
+-                             double pha_p, double pha_c, double pha_n, 
+-                             double time_offset, double duration, double sample_rate, 
++                             double freq_p, double freq_c, double freq_n,
++                             double pha_p, double pha_c, double pha_n,
++                             double fslope_c, short use_slope,
++                             double time_offset, double duration, double sample_rate,
+                              short use_phase, double *oscpt, double* sample_buf)
+ {
+   int s, frame_samps;
+   double ampl, freq, pha, frame_offset;
++  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+ 
+   frame_samps = fair_floor(sample_rate * duration, EPSILON);
+ 
+-  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.) 
++  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
+       return frame_samps; //nothing to do if no amplitude
+ 
++  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
++
+   for(s = 0; s < frame_samps; s++) {
+     frame_offset = (time_offset + s / sample_rate) / duration;
+     ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
+-    freq = LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
++    freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
++                     : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
+     pha  = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+     sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt);
+   }
+@@ -312,15 +343,17 @@ int synth_residual_only(double ampl_p, double ampl_c, double ampl_n,
+  }
+ ////////////////////////////////////////////////////////////////////
+ int synth_both(double ampl_p, double ampl_c, double ampl_n,
+-               double freq_p, double freq_c, double freq_n, 
+-               double pha_p, double pha_c, double pha_n, 
+-               double resid_p, double resid_c, double resid_n, 
+-               double time_offset, double duration, double sample_rate, 
++               double freq_p, double freq_c, double freq_n,
++               double pha_p, double pha_c, double pha_n,
++               double resid_p, double resid_c, double resid_n,
++               double fslope_c, short use_slope,
++               double time_offset, double duration, double sample_rate,
+                short use_phase, double *oscpt, RANDI* rdata, double* sample_buf)
+ {
+   int s, frame_samps;
+   double ampl, freq, pha, resid, rfreq, frame_offset;
+-  double rfreq_p, rfreq_c, rfreq_n; 
++  double rfreq_p, rfreq_c, rfreq_n;
++  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+ 
+   frame_samps = fair_floor(sample_rate * duration, EPSILON);
+ 
+@@ -332,10 +365,13 @@ int synth_both(double ampl_p, double ampl_c, double ampl_n,
+   rfreq_c = BW * (freq_c < BW_FREQ ? BW_FREQ : freq_c / 2);
+   rfreq_n = BW * (freq_n < BW_FREQ ? BW_FREQ : freq_n / 2);
+ 
++  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
++
+   for(s = 0; s < frame_samps; s++) {
+     frame_offset = (time_offset + s / sample_rate) / duration;
+     ampl  = LIN3_INTERP(frame_offset, ampl_p,  ampl_c,  ampl_n);
+-    freq  = LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
++    freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
++                      : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
+     pha   = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+     resid = LIN3_INTERP(frame_offset, resid_p, resid_c, resid_n);
+     rfreq = LIN3_INTERP(frame_offset, rfreq_p, rfreq_c, rfreq_n);
+@@ -368,6 +404,7 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+   double freq_p, freq_c, freq_n;
+   double pha_p, pha_c, pha_n;
+   double resid_p, resid_c, resid_n;
++  double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
+   int n_samps;
+   int first, last;
+   int f, f_p, f_n;
+@@ -529,8 +566,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+               pha_p = ats_sound->pha[d][f_p];
+               pha_c = ats_sound->pha[d][f];
+               pha_n = ats_sound->pha[d][f_n];
++              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
++              fslope_c = ats_sound->has_slopes
++                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+               frame_samps = synth_deterministic_only(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+                                                      pha_p, pha_c, pha_n,
++                                                     fslope_c, (short)ats_sound->has_slopes,
+                                                      time_offset, duration, sparams->sr, sparams->upha,
+                                                      ospt+d, *out_samps + n_samps);
+           }
+@@ -568,8 +609,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+                   * sparams->ramp;
+               resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
+                   * sparams->ramp;
++              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
++              fslope_c = ats_sound->has_slopes
++                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+               frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+                                        pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
++                                       fslope_c, (short)ats_sound->has_slopes,
+                                        time_offset, duration, sparams->sr, sparams->upha,
+                                        ospt+d, &rarray[d], *out_samps + n_samps);
+           }

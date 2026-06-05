@@ -17,8 +17,9 @@
 static void usage(const char *prog)
 {
   fprintf(stderr,
-          "Usage: %s [--type <1-4>] <input.wav> <output.wav>\n"
-          "  Analysis type matches ATSA/Qatsh (default %d).\n",
+          "Usage: %s [--type <1-4>] [--no-slopes] <input.wav> <output.wav>\n"
+          "  Analysis type matches ATSA/Qatsh (default %d).\n"
+          "  --no-slopes: force legacy LIN3 synthesis (DDM A/B baseline).\n",
           prog, ATSA_TYPE);
 }
 
@@ -154,6 +155,7 @@ int main(int argc, char **argv)
   const char *in_path = NULL;
   const char *out_path = NULL;
   int analysis_type = ATSA_TYPE;
+  int no_slopes = 0; /* ATSA_DDM_SLOPES: force legacy LIN3 synthesis for A/B */
   int i = 1;
 
   while (i < argc) {
@@ -164,6 +166,11 @@ int main(int argc, char **argv)
       }
       analysis_type = atoi(argv[i + 1]);
       i += 2;
+      continue;
+    }
+    if (strcmp(argv[i], "--no-slopes") == 0) {
+      no_slopes = 1;
+      i += 1;
       continue;
     }
     if (argv[i][0] == '-') {
@@ -205,6 +212,9 @@ int main(int argc, char **argv)
     fprintf(stderr, "Analysis failed.\n");
     return 1;
   }
+
+  if (no_slopes)
+    sound->has_slopes = 0; /* ATSA_DDM_SLOPES: legacy LIN3 baseline */
 
   SPARAMS sp;
   default_sparams(&sp, sr, sound->dur);

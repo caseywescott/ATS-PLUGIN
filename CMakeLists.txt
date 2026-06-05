@@ -20,6 +20,7 @@ option(ATS_REQUIRE_QATSH_RESIDUAL_FIXES "Require local Qatsh ATSA residual fixes
 option(ATS_REQUIRE_QATSH_PROGRESS "Require local Qatsh ATSA analysis-progress patch before building" ON)
 option(ATS_REQUIRE_QATSH_REASSIGNMENT "Require local Qatsh ATSA frequency-reassignment patch before building" ON)
 option(ATS_REQUIRE_QATSH_QIFFT "Require local Qatsh ATSA QIFFT amplitude patch before building" ON)
+option(ATS_REQUIRE_QATSH_DDM "Require local Qatsh ATSA DDM within-frame slopes patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -81,6 +82,20 @@ if(ATS_REQUIRE_QATSH_QIFFT)
   unset(_atsa_qifft_tracker_source)
   unset(_atsa_qifft_peak_marker)
   unset(_atsa_qifft_tracker_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_DDM)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/tracker.c" _atsa_ddm_tracker_source)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/synthesis.c" _atsa_ddm_synth_source)
+  string(FIND "${_atsa_ddm_tracker_source}" "ATSA_DDM_SLOPES" _atsa_ddm_tracker_marker)
+  string(FIND "${_atsa_ddm_synth_source}" "ATSA_DDM_SLOPES" _atsa_ddm_synth_marker)
+  if(_atsa_ddm_tracker_marker EQUAL -1 OR _atsa_ddm_synth_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA DDM within-frame slopes patch is not applied. Run scripts/apply_qatsh_ddm.sh apply, or configure with -DATS_REQUIRE_QATSH_DDM=OFF to bypass.")
+  endif()
+  unset(_atsa_ddm_tracker_source)
+  unset(_atsa_ddm_synth_source)
+  unset(_atsa_ddm_tracker_marker)
+  unset(_atsa_ddm_synth_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h
