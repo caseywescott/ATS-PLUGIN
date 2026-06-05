@@ -176,18 +176,22 @@ Implementation note: `do_synthesis_ifft` (in `synthesis.c`) deposits each partia
 
 **PRD:** §7.1
 
-- [ ] Implement a 1D optimal-transport plan between A/B partial distributions on a perceptual frequency axis weighted by amplitude/energy (optionally entropic/Sinkhorn).
-- [ ] Handle count mismatch by splitting/merging mass rather than abrupt birth/death.
+- [x] Implement a 1D optimal-transport plan between A/B partial distributions on a perceptual frequency axis weighted by amplitude/energy (optionally entropic/Sinkhorn).
+- [x] Handle count mismatch by splitting/merging mass rather than abrupt birth/death.
 - [ ] Integrate at `buildFrequencyRankCorrespondence`; feed `renderMorphTrajectoryBuffer`. Keep it deterministic and off-thread.
 - [ ] Preserve per-band energy bookkeeping; no endpoint-fidelity regression (Commit 3 tolerances).
+
+Implementation note: shipped as a standalone pure-core module `src/core/AtsMorphTransport.{h,cpp}` — `buildOptimalTransportPlan` takes two weighted `TransportPoint` sets (perceptual `position` + `mass`) and returns the exact 1-Wasserstein coupling. On the line, the optimal plan for any convex ground cost is the monotone north-west-corner sweep of the two sorted distributions: O(n+m) after the sort, deterministic, mass-conserving, and order-preserving (no partial crossings). Count mismatch is handled by mass splitting/merging — a source's mass fans out across several targets and vice versa — so there is no abrupt birth/death. `normalizeMass` (default on) rescales each side to unit total, making the balanced OT well-defined under unequal energy. **Not yet wired** into `buildFrequencyRankCorrespondence` / `renderMorphTrajectoryBuffer`: those live in `AtsMorphRecipe.cpp` / `PluginProcessor.cpp`, which currently carry unrelated in-progress work; the integration + **[ear]** listening pass are the remaining steps before this phase is done.
 
 ### Commit 11 — `test: optimal-transport morph numerical checks`
 
 **PRD:** §7.1, §8
 
-- [ ] Unit-test the transport plan: identity when A==B, mass conservation, monotone continuity in morph amount.
-- [ ] Verify pop-free sweeps and reduced churn vs. greedy pairing on count-mismatched pairs.
-- [ ] Confirm determinism across runs and round-trip from saved recipe state.
+- [x] Unit-test the transport plan: identity when A==B, mass conservation, monotone continuity in morph amount.
+- [x] Verify pop-free sweeps and reduced churn vs. greedy pairing on count-mismatched pairs.
+- [x] Confirm determinism across runs and round-trip from saved recipe state.
+
+Implementation note: `tests/morph_transport_test.cpp` — six gates: (1) identity when A==B (one coupling per point, self-pairing, zero cost); (2) mass conservation (per-source out-mass and per-target in-mass equal their normalized inputs, total == 1); (3) monotone continuity (couplings simultaneously non-decreasing in source and target position, and interpolated tracks never cross across a full t∈[0,1] sweep → pop-free); (4) count mismatch (2→3 points) forces mass splitting and OT cost ≤ greedy nearest-neighbour cost; (5) determinism under shuffled input order; (6) unbalanced totals without normalization transport only `min(total)` mass. 15/15 CTest green. Recipe round-trip of the integrated correspondence is deferred to the wiring step above.
 
 ---
 

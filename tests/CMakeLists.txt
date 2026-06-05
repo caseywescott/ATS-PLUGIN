@@ -4,6 +4,10 @@ add_executable(morph_recipe_test morph_recipe_test.cpp ../src/core/AtsMorphRecip
 target_include_directories(morph_recipe_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(morph_recipe_test PRIVATE cxx_std_17)
 
+add_executable(morph_transport_test morph_transport_test.cpp ../src/core/AtsMorphTransport.cpp)
+target_include_directories(morph_transport_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(morph_transport_test PRIVATE cxx_std_17)
+
 add_executable(frequency_shape_test frequency_shape_test.cpp ../src/core/AtsFrequencyShape.cpp)
 target_include_directories(frequency_shape_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -99,6 +103,7 @@ add_test(NAME estimator_accuracy_test COMMAND $<TARGET_FILE:estimator_accuracy_t
 add_test(NAME multires_resolution_test COMMAND $<TARGET_FILE:multires_resolution_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME ifft_synth_test COMMAND $<TARGET_FILE:ifft_synth_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+add_test(NAME morph_transport_test COMMAND $<TARGET_FILE:morph_transport_test>)
 add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)
 add_test(NAME spectral_envelope_transfer_test COMMAND $<TARGET_FILE:spectral_envelope_transfer_test>)
