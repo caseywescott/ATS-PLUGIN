@@ -27,6 +27,7 @@ option(ATS_REQUIRE_QATSH_RFFT_PACK "Require local Qatsh ATSA real-FFT packing pa
 option(ATS_REQUIRE_QATSH_VDSP_FFT "Require local Qatsh ATSA vDSP FFT backend patch before building" ON)
 option(ATS_REQUIRE_QATSH_PARALLEL "Require local Qatsh ATSA parallel frame-loop patch before building" ON)
 option(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL "Require local Qatsh ATSA parallel residual-stage patch before building" ON)
+option(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL "Require local Qatsh ATSA parallel main-lobe-gain patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -178,6 +179,16 @@ if(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL)
   unset(_atsa_rpar_ana_source)
   unset(_atsa_rpar_res_marker)
   unset(_atsa_rpar_ana_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/peak-detection.c" _atsa_mlobe_source)
+  string(FIND "${_atsa_mlobe_source}" "mainlobe_worker" _atsa_mlobe_marker)
+  if(_atsa_mlobe_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA parallel main-lobe-gain patch is not applied. Run scripts/apply_qatsh_mainlobe_parallel.sh apply, or configure with -DATS_REQUIRE_QATSH_MAINLOBE_PARALLEL=OFF to bypass.")
+  endif()
+  unset(_atsa_mlobe_source)
+  unset(_atsa_mlobe_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

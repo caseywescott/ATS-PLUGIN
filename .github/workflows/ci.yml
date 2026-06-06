@@ -38,6 +38,7 @@ jobs:
           ./scripts/apply_qatsh_vdsp_fft.sh apply
           ./scripts/apply_qatsh_parallel.sh apply
           ./scripts/apply_qatsh_residual_parallel.sh apply
+          ./scripts/apply_qatsh_mainlobe_parallel.sh apply
 
       - name: Install libsndfile (Linux)
         if: runner.os == 'Linux'

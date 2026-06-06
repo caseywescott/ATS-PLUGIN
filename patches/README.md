@@ -304,3 +304,30 @@ original two-FFT scalar baseline). Touches `src/atsa/residual.c` and
 CMake requires it by default (marker `ATSA_PARALLEL` in `residual.c` and
 `residual-analysis.c`). Use `-DATS_REQUIRE_QATSH_RESIDUAL_PARALLEL=OFF` to build
 against unpatched Qatsh.
+
+## `qatsh-atsa-mainlobe-parallel.patch`
+
+Analysis speedup, behavior-preserving. With the frame and residual stages
+parallelized, `build_mainlobe_gain` becomes the single largest *serial* stage of
+`tracker()` (~33% of warm runtime). It tabulates the window main-lobe gain
+`G(delta)` at `res` (1025) evenly spaced offsets, each a full DTFT sum over the
+analysis window — `res * win_size` `cos`/`sin` evaluations (~4.5M for a 2205-tap
+window, and ~4x that for the long multi-resolution window). Each table entry is
+independent, so the `res` loop is split across cores. The per-index arithmetic is
+factored out unchanged (`mainlobe_gain_range`) and called from one thread per
+contiguous index range, so the table is bit-for-bit identical to the serial
+build. POSIX threads where available; Windows builds (`_WIN32`) fall back to the
+serial path. `golden_offline` (the bit-exact full-analysis oracle), the
+window-gain amplitude check in `estimator_accuracy_test`, and all 16 CTest stay
+green. Measured ~38 ms -> ~5 ms for the default-window table on a 10-core native
+arm64 build (a larger absolute win with multi-resolution analysis, where the long
+window's table dominates). Touches `src/atsa/peak-detection.c` only.
+
+```sh
+./scripts/apply_qatsh_mainlobe_parallel.sh apply
+./scripts/apply_qatsh_mainlobe_parallel.sh status
+./scripts/apply_qatsh_mainlobe_parallel.sh reverse-check
+```
+
+CMake requires it by default (marker `mainlobe_worker` in `peak-detection.c`).
+Use `-DATS_REQUIRE_QATSH_MAINLOBE_PARALLEL=OFF` to build against unpatched Qatsh.
