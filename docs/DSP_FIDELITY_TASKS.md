@@ -148,10 +148,21 @@ in a new pure-core module `src/core/AtsTransientLayer.{h,cpp}`:
   compact-support continuity, and zero-init passthrough on a steady sound.
 - [x] A/B audition tool `tools/ats_transient_demo` (writes `<stem>_base.wav` and
   `<stem>_transient.wav`); crotale fixture yields 8 events with attack-localized
-  energy. **[ear — pending audition]**
-
-Follow-up (not in this commit, to avoid the dirty `PluginProcessor`/`SpectrogramPanel`
-working tree): wire the layer into the plugin synthesis path + UI toggle.
+  energy.
+- [x] **[ear] auditioned 2026-06-06 — layer NOT wired into the live plugin (decision).**
+  A/B renders in `Testing/transient_audition/` (Splice pluck one-shot + Tech-House
+  perc loop). At the design ceiling (`gain` is clamped to `[0,1]` in
+  `renderTransientLayer` — the dynamic-range bound: never inject more than the
+  extracted attack energy) the effect is *marginal*: ~−9.7 dB diff peak / −39.8 dB
+  RMS on the perc loop (a subtle attack sharpening), and a **bit-identical no-op**
+  on the decaying pluck (no post-onset energy *rise* to reinforce; first hit at
+  frame 0 has no pre-window). Because gain can't exceed 1.0, this is the strongest
+  it gets. Root cause it's marginal: the Phase 3 DDM slopes + Phase 6 IFFT synthesis
+  already sharpen attacks at the source, leaving little smeared attack energy for an
+  explicit layer to recover. Decision (user, 2026-06-06): keep it as the tested core
+  module (`src/core/AtsTransientLayer.{h,cpp}`, `ats_transient_layer_test`) + offline
+  `ats_transient_demo` tool; do **not** thread a new param/UI/state-version through
+  the live synthesis path for a barely-audible, can't-turn-up effect.
 
 ---
 
@@ -200,4 +211,6 @@ Implementation note: `tests/morph_transport_test.cpp` — six gates: (1) identit
 - [ ] All 10 existing CTest targets stay green at every commit; new targets added per phase.
 - [ ] Determinism and `ats_roundtrip` guarantees intact; all new aux data is additive and zero-initialized.
 - [ ] Every C-core change is patch-delivered, marker-guarded in CMake, and enforced on a fresh `qatsh/` clone in CI.
-- [ ] **[ear]**-flagged commits (6, 8, 10) get listening validation before being called done.
+- [x] **[ear]**-flagged commits (6, 8, 10) get listening validation. Commit 6 (DDM)
+  auditioned 2026-06-05; Commit 10 (OT morph) auditioned and made default 2026-06-06;
+  Commit 8 (transient layer) auditioned 2026-06-06 — kept offline-only by decision (see above).
