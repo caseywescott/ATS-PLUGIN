@@ -59,7 +59,7 @@ static void atsPlayLog(const juce::String& msg)
     f.appendText(juce::Time::getCurrentTime().toString(true, true, true, true) + "  " + msg + "\n");
 }
 
-constexpr int kStateVersion = 16;
+constexpr int kStateVersion = 17;
 constexpr int kMinReadableStateVersion = 2;
 constexpr float kDefaultMorphPerformanceMacro = 0.5f;
 constexpr float kDefaultMorphSmoothingMs = 40.0f;
@@ -5523,6 +5523,40 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (kStateVersion >= 16)
         mos.writeInt(getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality));
 
+    if (kStateVersion >= 17)
+    {
+        // Persist per-frame ATS data for both morph source slots so the spectral
+        // envelope / RDC trace displays restore without forcing a re-analysis.
+        const juce::ScopedLock ml(morphRecipeLock);
+        for (size_t slot = 0; slot < morphSourceSounds.size(); ++slot)
+        {
+            juce::MemoryBlock blob;
+            if (auto* s = morphSourceSounds[slot].get())
+            {
+                // Derive the file type from what the sound actually carries so we
+                // never read a null phase/noise array during the save.
+                const int sType = (s->pha != nullptr && s->band_energy != nullptr) ? 4
+                                : (s->pha != nullptr)                              ? 2
+                                : (s->band_energy != nullptr)                      ? 3
+                                                                                   : 1;
+                juce::File tmp = juce::File::createTempFile("atsmorphstate");
+                tmp.deleteFile();
+                const juce::String path = tmp.getFullPathName();
+                if (ats_save(s, path.toUTF8(), 0.0, sType) >= 0
+                    && tmp.existsAsFile() && tmp.getSize() > 0)
+                {
+                    juce::FileInputStream fis(path);
+                    juce::MemoryOutputStream chunk;
+                    chunk.writeFromInputStream(fis, fis.getTotalLength());
+                    blob = chunk.getMemoryBlock();
+                }
+                tmp.deleteFile();
+            }
+            mos.writeInt64((juce::int64) blob.getSize());
+            mos.write(blob.getData(), blob.getSize());
+        }
+    }
+
     destData = mos.getMemoryBlock();
 }
 
@@ -5775,6 +5809,23 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     if (ver >= 16 && mis.getNumBytesRemaining() >= (juce::int64) sizeof(int))
         morphQuality = mis.readInt();
 
+    std::array<juce::MemoryBlock, 2> loadedMorphSoundData;
+    if (ver >= 17)
+    {
+        for (auto& blob : loadedMorphSoundData)
+        {
+            if (mis.getNumBytesRemaining() < (juce::int64) sizeof(juce::int64))
+                break;
+            const juce::int64 blobSize = mis.readInt64();
+            if (blobSize <= 0)
+                continue;
+            if (mis.getNumBytesRemaining() < blobSize)
+                break;
+            blob.setSize((size_t) blobSize);
+            mis.read(blob.getData(), (size_t) blobSize);
+        }
+    }
+
     setChoiceParameter(apvts, ats_param::kAnalysisType, juce::jlimit(1, 4, ap.type) - 1);
     setParameterValue(apvts, ats_param::kAnalysisStart, (float) ap.start);
     setParameterValue(apvts, ats_param::kAnalysisDuration, (float) ap.duration);
@@ -5975,12 +6026,33 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         const juce::ScopedLock sl(sourceLock);
         morphSourceFiles = loadedMorphSourceFiles;
     }
+    // Decode any persisted per-frame morph source ATS data (state ver >= 17) so the
+    // spectral envelope / RDC trace displays restore without forcing a re-analysis.
+    // Done outside morphRecipeLock since ats_load touches the filesystem.
+    std::array<ats::AtsSoundPtr, 2> restoredMorphSounds;
+    for (size_t slot = 0; slot < loadedMorphSoundData.size(); ++slot)
+    {
+        auto& blob = loadedMorphSoundData[slot];
+        if (blob.getSize() == 0)
+            continue;
+        juce::File tmp = juce::File::createTempFile("atsmorphload");
+        tmp.replaceWithData(blob.getData(), blob.getSize());
+        auto* raw = (ATS_SOUND*) std::calloc(1, sizeof(ATS_SOUND));
+        int st = 0;
+        if (ats_load(raw, tmp.getFullPathName().toUTF8(), &st) >= 0)
+            restoredMorphSounds[slot].reset(raw);
+        else
+            std::free(raw);
+        tmp.deleteFile();
+    }
+
     {
         const juce::ScopedLock ml(morphRecipeLock);
-        // Per-frame ATS data for morph sources is not persisted in state; clear so
-        // the trajectory renderer falls back to static snapshots until re-analyzed.
-        morphSourceSounds[0] = ats::AtsSoundPtr{};
-        morphSourceSounds[1] = ats::AtsSoundPtr{};
+        // Restore per-frame morph source data when the preset carried it; otherwise
+        // clear so the trajectory renderer falls back to static snapshots until
+        // re-analyzed (older presets, or sources that failed to decode).
+        morphSourceSounds[0] = std::move(restoredMorphSounds[0]);
+        morphSourceSounds[1] = std::move(restoredMorphSounds[1]);
         if (hasExplicitResidualState)
         {
             morphSourceDiagnostics = loadedMorphSourceDiagnostics;
