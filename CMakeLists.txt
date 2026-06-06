@@ -26,6 +26,7 @@ option(ATS_REQUIRE_QATSH_IFFT "Require local Qatsh ATSA overlap-add IFFT synthes
 option(ATS_REQUIRE_QATSH_RFFT_PACK "Require local Qatsh ATSA real-FFT packing patch before building" ON)
 option(ATS_REQUIRE_QATSH_VDSP_FFT "Require local Qatsh ATSA vDSP FFT backend patch before building" ON)
 option(ATS_REQUIRE_QATSH_PARALLEL "Require local Qatsh ATSA parallel frame-loop patch before building" ON)
+option(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL "Require local Qatsh ATSA parallel residual-stage patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -163,6 +164,20 @@ if(ATS_REQUIRE_QATSH_PARALLEL)
   unset(_atsa_par_peak_source)
   unset(_atsa_par_tracker_marker)
   unset(_atsa_par_peak_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/residual.c" _atsa_rpar_res_source)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/residual-analysis.c" _atsa_rpar_ana_source)
+  string(FIND "${_atsa_rpar_res_source}" "ATSA_PARALLEL" _atsa_rpar_res_marker)
+  string(FIND "${_atsa_rpar_ana_source}" "ATSA_PARALLEL" _atsa_rpar_ana_marker)
+  if(_atsa_rpar_res_marker EQUAL -1 OR _atsa_rpar_ana_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA parallel residual-stage patch is not applied. Run scripts/apply_qatsh_residual_parallel.sh apply, or configure with -DATS_REQUIRE_QATSH_RESIDUAL_PARALLEL=OFF to bypass.")
+  endif()
+  unset(_atsa_rpar_res_source)
+  unset(_atsa_rpar_ana_source)
+  unset(_atsa_rpar_res_marker)
+  unset(_atsa_rpar_ana_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

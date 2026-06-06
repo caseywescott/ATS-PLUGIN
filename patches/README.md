@@ -271,3 +271,36 @@ still-serial residual/synthesis stages). Touches `src/atsa/tracker.c` and
 CMake requires it by default (marker `ATSA_PARALLEL` in `tracker.c` and
 `peak-detection.c`). Use `-DATS_REQUIRE_QATSH_PARALLEL=OFF` to build against
 unpatched Qatsh.
+
+## `qatsh-atsa-residual-parallel.patch`
+
+Analysis speedup, behavior-preserving. After the frame-tracking stage the two
+serial residual stages dominate `tracker()` wall time: `compute_residual`
+(partial resynthesis subtracted from the original — millions of `cos()` calls)
+and `residual_analysis` (one windowed FFT per frame plus critical-band energy).
+The residual FFT size is `2*window_size` (e.g. 4410), which is **not** a power of
+two, so it does not benefit from the vDSP FFT patch and runs the scalar
+mixed-radix transform — making `residual_analysis` the single largest serial
+cost. Rather than change the FFT size (which would alter the stored band
+energies), both stages are parallelized across frames. Each frame is fully
+independent: `compute_residual` writes a disjoint output slice
+`[(frm-1)*frame_size, frm*frame_size)` and reads only read-only partial/input
+data; `residual_analysis` windows a disjoint span (closed-form position
+`frame_n*hop - M_2`), runs its own per-worker FFT scratch and writes only its own
+column of `band_arr`. Output is therefore bit-for-bit identical to the serial
+pass. POSIX threads where available; Windows builds (`_WIN32`) fall back to the
+serial path. `golden_offline` (the bit-exact full-analysis oracle) and all 16
+CTest stay green. Measured ~2.5x faster `tracker()` on a 10-core native arm64
+build on top of the frame-loop parallel patch (~270 ms -> ~110 ms; ~11x vs the
+original two-FFT scalar baseline). Touches `src/atsa/residual.c` and
+`src/atsa/residual-analysis.c`.
+
+```sh
+./scripts/apply_qatsh_residual_parallel.sh apply
+./scripts/apply_qatsh_residual_parallel.sh status
+./scripts/apply_qatsh_residual_parallel.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_PARALLEL` in `residual.c` and
+`residual-analysis.c`). Use `-DATS_REQUIRE_QATSH_RESIDUAL_PARALLEL=OFF` to build
+against unpatched Qatsh.
