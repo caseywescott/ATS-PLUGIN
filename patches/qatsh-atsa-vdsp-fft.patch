@@ -1,0 +1,95 @@
+--- a/src/atsa/other-utils.c	2026-06-06 12:09:16
++++ b/src/atsa/other-utils.c	2026-06-06 12:09:16
+@@ -8,8 +8,23 @@
+ #include <math.h>
+ #include <stdlib.h>
+ 
++/* ATSA_VDSP_FFT: on Apple platforms route fft() through Accelerate's
++ * NEON-vectorized double-precision FFT (vDSP_fft_zipD), which is far faster
++ * than the scalar radix-2 transform below. The scalar implementation is kept
++ * as fft_scalar() and used as a fallback for non-power-of-two sizes and on
++ * non-Apple builds. The two backends are numerically equivalent (verified to
++ * machine epsilon): qatsh fft(is=1) maps to vDSP's Inverse direction (both use
++ * the +j convention, consistent with to_polar's atan2(-y,x)), fft(is=-1) maps
++ * to vDSP's Forward direction; both vDSP directions are unnormalized, matching
++ * the scalar transform (no factor-of-2 for the complex zipD routine). */
++#ifdef __APPLE__
++#include <Accelerate/Accelerate.h>
++#include <pthread.h>
++#endif
++
+ /* private function prototypes */
+ void fft_bit_reversal(double* rl, double* im, int n);
++static void fft_scalar(double *rl, double *im, int n, int is);
+ 
+ /* make_window
+  * ===========
+@@ -103,16 +118,66 @@
+   return (pb->smr < pa->smr ? -1 : (pb->smr > pa->smr ? 1 : 0));
+ }
+ 
++#ifdef __APPLE__
++/* ATSA_VDSP_FFT: cached vDSP double-precision radix-2 setups, one per log2(n).
++ * Setup creation is relatively expensive, so it is memoized; the mutex makes
++ * lazy creation safe when the analysis frame loop is parallelized. */
++#define ATSA_VDSP_MAXLOG2 28
++static FFTSetupD atsa_vdsp_setups[ATSA_VDSP_MAXLOG2 + 1];
++static pthread_mutex_t atsa_vdsp_mtx = PTHREAD_MUTEX_INITIALIZER;
++
++static FFTSetupD atsa_vdsp_get_setup(int log2n)
++{
++  FFTSetupD s;
++  if (log2n < 1 || log2n > ATSA_VDSP_MAXLOG2) return NULL;
++  s = atsa_vdsp_setups[log2n];
++  if (s != NULL) return s;
++  pthread_mutex_lock(&atsa_vdsp_mtx);
++  s = atsa_vdsp_setups[log2n];
++  if (s == NULL) {
++    s = vDSP_create_fftsetupD((vDSP_Length)log2n, kFFTRadix2);
++    atsa_vdsp_setups[log2n] = s;
++  }
++  pthread_mutex_unlock(&atsa_vdsp_mtx);
++  return s;
++}
++#endif
++
+ /* fft
+  * ===
+- * standard fft based on simplfft by Joerg Arndt.
+- * rl: pointer to real part data 
++ * Complex in-place FFT. On Apple platforms this dispatches to Accelerate/vDSP
++ * for power-of-two sizes (see ATSA_VDSP_FFT note above); otherwise it falls
++ * back to the scalar radix-2 transform.
++ * rl: pointer to real part data
+  * im: pointer to imaginary part data
+  * n: size of data
+  * is: 1=forward trasnform -1=backward transform
+  */
+ void fft(double *rl, double *im, int n, int is)
+ {
++#ifdef __APPLE__
++  if (n > 0 && (n & (n - 1)) == 0) { /* power of two */
++    int log2n = (int)(log((double)n) / log(2.0) + 0.5);
++    FFTSetupD setup = atsa_vdsp_get_setup(log2n);
++    if (setup != NULL) {
++      DSPDoubleSplitComplex z;
++      z.realp = rl;
++      z.imagp = im;
++      vDSP_fft_zipD(setup, &z, 1, (vDSP_Length)log2n,
++                    (is == 1) ? kFFTDirection_Inverse : kFFTDirection_Forward);
++      return;
++    }
++  }
++#endif
++  fft_scalar(rl, im, n, is);
++}
++
++/* fft_scalar
++ * ==========
++ * standard fft based on simplfft by Joerg Arndt.
++ */
++static void fft_scalar(double *rl, double *im, int n, int is)
++{
+   int m, j, mh, ldm, lg, i, i2, j2, imh;
+   double ur, ui, u, vr, vi, angle, c, s;
+   imh = (int)(log(n + 1) / log(2.0));

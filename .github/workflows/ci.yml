@@ -35,6 +35,7 @@ jobs:
           ./scripts/apply_qatsh_multires.sh apply
           ./scripts/apply_qatsh_ifft.sh apply
           ./scripts/apply_qatsh_rfft_pack.sh apply
+          ./scripts/apply_qatsh_vdsp_fft.sh apply
 
       - name: Install libsndfile (Linux)
         if: runner.os == 'Linux'

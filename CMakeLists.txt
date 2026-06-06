@@ -24,6 +24,7 @@ option(ATS_REQUIRE_QATSH_DDM "Require local Qatsh ATSA DDM within-frame slopes p
 option(ATS_REQUIRE_QATSH_MULTIRES "Require local Qatsh ATSA multi-resolution analysis patch before building" ON)
 option(ATS_REQUIRE_QATSH_IFFT "Require local Qatsh ATSA overlap-add IFFT synthesis patch before building" ON)
 option(ATS_REQUIRE_QATSH_RFFT_PACK "Require local Qatsh ATSA real-FFT packing patch before building" ON)
+option(ATS_REQUIRE_QATSH_VDSP_FFT "Require local Qatsh ATSA vDSP FFT backend patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -139,6 +140,16 @@ if(ATS_REQUIRE_QATSH_RFFT_PACK)
   unset(_atsa_rfft_tracker_marker)
 endif()
 
+if(ATS_REQUIRE_QATSH_VDSP_FFT)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/other-utils.c" _atsa_vdsp_source)
+  string(FIND "${_atsa_vdsp_source}" "ATSA_VDSP_FFT" _atsa_vdsp_marker)
+  if(_atsa_vdsp_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA vDSP FFT backend patch is not applied. Run scripts/apply_qatsh_vdsp_fft.sh apply, or configure with -DATS_REQUIRE_QATSH_VDSP_FFT=OFF to bypass.")
+  endif()
+  unset(_atsa_vdsp_source)
+  unset(_atsa_vdsp_marker)
+endif()
+
 find_path(SNDFILE_INCLUDE_DIR sndfile.h
   PATHS
     "${CMAKE_PREFIX_PATH}"
@@ -188,6 +199,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(atsa PRIVATE -Wno-unused-parameter -Wno-sign-compare)
 endif()
 target_link_libraries(atsa PUBLIC SndFile::sndfile)
+if(APPLE)
+  # ATSA_VDSP_FFT: Accelerate provides the vDSP double-precision FFT backend
+  target_link_libraries(atsa PUBLIC "-framework Accelerate")
+endif()
 
 add_subdirectory(tools)
 

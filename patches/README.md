@@ -206,3 +206,33 @@ only (adds the `rfft_unpack` helper plus packed-buffer scratch). Apply it
 
 CMake requires it by default (marker `ATSA_RFFT_PACK` in `tracker.c`). Use
 `-DATS_REQUIRE_QATSH_RFFT_PACK=OFF` to build against unpatched Qatsh.
+
+## `qatsh-atsa-vdsp-fft.patch`
+
+Analysis speedup, exact (no behavioral change). On Apple platforms `fft()` is
+routed through Accelerate's NEON-vectorized double-precision FFT
+(`vDSP_fft_zipD`) instead of the scalar radix-2 transform, which dominates
+analysis time. The scalar code is preserved as `fft_scalar()` and used as a
+fallback for non-power-of-two sizes and on non-Apple builds (guarded by
+`#ifdef __APPLE__`), so the patch is portable. `fft()` already stores real and
+imaginary parts in separate arrays, which maps directly onto vDSP's
+`DSPDoubleSplitComplex` with no interleaving. The direction mapping was verified
+to machine epsilon: qatsh `fft(is=1)` equals vDSP's Inverse direction (both use
+the `+j` convention, consistent with `to_polar`'s `atan2(-y,x)`), `fft(is=-1)`
+equals vDSP's Forward direction; both vDSP directions are unnormalized like the
+scalar transform (the complex `zipD` routine applies no factor-of-2). vDSP
+setups are memoized per `log2(n)` behind a mutex so lazy creation stays safe
+once the frame loop is parallelized. `estimator_accuracy_test` is unchanged and
+all 16 CTest stay green. Measured ~1.65x faster `tracker()` on native arm64 on
+top of the real-FFT packing patch (~849 ms -> ~513 ms; ~2.34x vs the original
+two-FFT scalar baseline). Touches `src/atsa/other-utils.c` only; the build links
+`-framework Accelerate` on Apple.
+
+```sh
+./scripts/apply_qatsh_vdsp_fft.sh apply
+./scripts/apply_qatsh_vdsp_fft.sh status
+./scripts/apply_qatsh_vdsp_fft.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_VDSP_FFT` in `other-utils.c`). Use
+`-DATS_REQUIRE_QATSH_VDSP_FFT=OFF` to build against unpatched Qatsh.
