@@ -191,6 +191,7 @@ private:
     juce::Label morphPolicyLabel;
     juce::ComboBox morphGridTypeCombo;
     juce::ComboBox morphCorrespondenceCombo;
+    juce::ComboBox morphQualityCombo;
     juce::ComboBox morphSourcePolicyCombo;
     juce::ComboBox morphTargetPolicyCombo;
     juce::ComboBox morphFrequencyDomainCombo;
@@ -275,6 +276,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphSmoothingAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphGridTypeAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphCorrespondenceAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphQualityAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphSourcePolicyAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphTargetPolicyAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphFrequencyDomainAttach;

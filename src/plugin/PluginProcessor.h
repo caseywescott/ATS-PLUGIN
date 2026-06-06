@@ -27,6 +27,7 @@ inline constexpr const char* kMorphPerformanceMacro = "morphPerformanceMacro";
 inline constexpr const char* kMorphSmoothingMs = "morphSmoothingMs";
 inline constexpr const char* kMorphGridType = "morphGridType";
 inline constexpr const char* kMorphCorrespondenceStrategy = "morphCorrespondenceStrategy";
+inline constexpr const char* kMorphQuality = "morphQuality";
 inline constexpr const char* kMorphUnmatchedSourcePolicy = "morphUnmatchedSourcePolicy";
 inline constexpr const char* kMorphUnmatchedTargetPolicy = "morphUnmatchedTargetPolicy";
 inline constexpr const char* kMorphDiscardOptIn = "morphDiscardOptIn";
@@ -793,6 +794,7 @@ private:
         uint64_t revB = 0;
         size_t paramHash = 0;
         int strategy = -1;
+        int quality = -1;
         bool valid = false;
     };
     mutable juce::CriticalSection smearedCacheLock;

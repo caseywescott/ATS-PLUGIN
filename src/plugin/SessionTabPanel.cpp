@@ -959,6 +959,10 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     setupPolicyCombo(morphCorrespondenceCombo,
                      { "Freq rank", "Greedy", "Assign", "Transport" },
                      "Partial correspondence strategy.");
+    setupPolicyCombo(morphQualityCombo,
+                     { "Max", "Default", "Economy" },
+                     "Optimal-transport quality: Max keeps all partials, Economy "
+                     "drops the quietest split partials for lower CPU.");
     setupPolicyCombo(morphSourcePolicyCombo,
                      { "Src fade", "Src in", "Src hold", "Src residual", "Src discard" },
                      "Policy for source-only partials.");
@@ -985,6 +989,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, ats_param::kMorphGridType, morphGridTypeCombo);
     morphCorrespondenceAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, ats_param::kMorphCorrespondenceStrategy, morphCorrespondenceCombo);
+    morphQualityAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.apvts, ats_param::kMorphQuality, morphQualityCombo);
     morphSourcePolicyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, ats_param::kMorphUnmatchedSourcePolicy, morphSourcePolicyCombo);
     morphTargetPolicyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -1709,15 +1715,16 @@ void SessionTabPanel::resized()
         }
         body.removeFromTop(sc(4));
 
-        auto policyArea = body.removeFromTop(juce::jmin(sc(96), juce::jmax(sc(64), body.getHeight() / 2)));
+        auto policyArea = body.removeFromTop(juce::jmin(sc(128), juce::jmax(sc(94), body.getHeight() / 2)));
         auto policyHeader = policyArea.removeFromTop(sc(20));
         morphPolicyLabel.setBounds(policyHeader.removeFromLeft(sc(54)));
         morphDiscardOptInButton.setBounds(policyHeader.removeFromLeft(sc(96)));
         policyArea.removeFromTop(sc(2));
 
-        std::array<juce::ComboBox*, 8> policyCombos {
+        std::array<juce::ComboBox*, 9> policyCombos {
             &morphGridTypeCombo,
             &morphCorrespondenceCombo,
+            &morphQualityCombo,
             &morphSourcePolicyCombo,
             &morphTargetPolicyCombo,
             &morphFrequencyDomainCombo,
@@ -1725,13 +1732,16 @@ void SessionTabPanel::resized()
             &morphPhaseStrategyCombo,
             &morphTransientPolicyCombo,
         };
-        for (size_t row = 0; row < 2; ++row)
+        const size_t numPolicyCombos = policyCombos.size();
+        const size_t numPolicyRows = (numPolicyCombos + 3) / 4;
+        for (size_t row = 0; row < numPolicyRows; ++row)
         {
             auto comboRow = policyArea.removeFromTop(sc(30));
-            for (size_t col = 0; col < 4; ++col)
+            const size_t colsThisRow = juce::jmin<size_t>(4, numPolicyCombos - row * 4);
+            for (size_t col = 0; col < colsThisRow; ++col)
             {
                 const size_t index = row * 4 + col;
-                policyCombos[index]->setBounds(comboRow.removeFromLeft(comboRow.getWidth() / (int) (4 - col))
+                policyCombos[index]->setBounds(comboRow.removeFromLeft(comboRow.getWidth() / (int) (colsThisRow - col))
                                                    .reduced(sc(2)));
             }
         }
@@ -1782,9 +1792,9 @@ void SessionTabPanel::hideMorphCluster()
     }
     morphPolicyLabel.setBounds({});
     morphDiscardOptInButton.setBounds({});
-    for (auto* combo : { &morphGridTypeCombo, &morphCorrespondenceCombo, &morphSourcePolicyCombo,
-                         &morphTargetPolicyCombo, &morphFrequencyDomainCombo, &morphAmplitudeDomainCombo,
-                         &morphPhaseStrategyCombo, &morphTransientPolicyCombo })
+    for (auto* combo : { &morphGridTypeCombo, &morphCorrespondenceCombo, &morphQualityCombo,
+                         &morphSourcePolicyCombo, &morphTargetPolicyCombo, &morphFrequencyDomainCombo,
+                         &morphAmplitudeDomainCombo, &morphPhaseStrategyCombo, &morphTransientPolicyCombo })
         combo->setBounds({});
     morphBandLabel.setBounds({});
     morphBandStrip.setBounds({});

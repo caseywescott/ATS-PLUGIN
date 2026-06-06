@@ -40,12 +40,13 @@ static void atsPlayLog(const juce::String& msg)
     f.appendText(juce::Time::getCurrentTime().toString(true, true, true, true) + "  " + msg + "\n");
 }
 
-constexpr int kStateVersion = 15;
+constexpr int kStateVersion = 16;
 constexpr int kMinReadableStateVersion = 2;
 constexpr float kDefaultMorphPerformanceMacro = 0.5f;
 constexpr float kDefaultMorphSmoothingMs = 40.0f;
 constexpr int kDefaultMorphGridType = 0;
 constexpr int kDefaultMorphCorrespondenceStrategy = 3; // optimal transport
+constexpr int kDefaultMorphQuality = 1; // 0=Max, 1=Default, 2=Economy
 constexpr int kDefaultMorphUnmatchedSourcePolicy = 0;
 constexpr int kDefaultMorphUnmatchedTargetPolicy = 1;
 constexpr int kDefaultMorphFrequencyDomain = 0;
@@ -217,12 +218,29 @@ AtsResidualDiagnostics makeResidualDiagnostics(const ATS_SOUND* sound)
 
 // Correspondence-strategy dispatch shared by rebuildMorphCorrespondenceIfReady (which writes
 // member state) and the live-smear timeline path (which builds into a local recipe copy).
+// Maps the morph-quality choice (0=Max, 1=Default, 2=Economy) to the
+// optimal-transport minMassFraction: higher fraction drops more negligible
+// split edges, trading a little morph accuracy for fewer synth partials. Values
+// from the /tmp minMassFraction sweep on real Splice material: the knee is ~1e-5,
+// 1e-3 is inaudible (<-50 dB dropped), 1e-2 halves edge count and stays <-40 dB.
+double morphQualityToMinMassFraction(int quality)
+{
+    switch (quality)
+    {
+        case 0: return 1e-5; // Max quality: keep all but the denormal tail.
+        case 2: return 1e-2; // Economy: fewest partials, still inaudible loss.
+        case 1:
+        default: return 1e-3; // Default: safe, slightly fewer partials.
+    }
+}
+
 // strategy: 1 = greedy nearest, 2 = assignment matrix, 3 = optimal transport,
-// otherwise frequency-rank.
+// otherwise frequency-rank. minMassFraction tunes the OT path only.
 std::vector<ats::MorphCorrespondenceRecord> buildMorphCorrespondence(
     const std::vector<ats::MorphBandAssignment>& asgA,
     const std::vector<ats::MorphBandAssignment>& asgB,
-    int strategy)
+    int strategy,
+    double minMassFraction = 1e-3)
 {
     if (asgA.empty() || asgB.empty())
         return {};
@@ -231,7 +249,7 @@ std::vector<ats::MorphCorrespondenceRecord> buildMorphCorrespondence(
         return ats::buildGreedyNearestCorrespondence(asgA, asgB);
 
     if (strategy == 3)
-        return ats::buildOptimalTransportRecords(asgA, asgB);
+        return ats::buildOptimalTransportRecords(asgA, asgB, { minMassFraction });
 
     if (strategy == 2)
     {
@@ -802,6 +820,7 @@ bool isMorphSnapshotParameter(const juce::String& parameterID)
         || parameterID == ats_param::kMorphSmoothingMs
         || parameterID == ats_param::kMorphGridType
         || parameterID == ats_param::kMorphCorrespondenceStrategy
+        || parameterID == ats_param::kMorphQuality
         || parameterID == ats_param::kMorphUnmatchedSourcePolicy
         || parameterID == ats_param::kMorphUnmatchedTargetPolicy
         || parameterID == ats_param::kMorphDiscardOptIn
@@ -1406,6 +1425,7 @@ AtsAudioProcessor::AtsAudioProcessor()
     apvts.addParameterListener(ats_param::kMorphSmoothingMs, this);
     apvts.addParameterListener(ats_param::kMorphGridType, this);
     apvts.addParameterListener(ats_param::kMorphCorrespondenceStrategy, this);
+    apvts.addParameterListener(ats_param::kMorphQuality, this);
     apvts.addParameterListener(ats_param::kMorphUnmatchedSourcePolicy, this);
     apvts.addParameterListener(ats_param::kMorphUnmatchedTargetPolicy, this);
     apvts.addParameterListener(ats_param::kMorphDiscardOptIn, this);
@@ -1448,6 +1468,7 @@ AtsAudioProcessor::~AtsAudioProcessor()
     apvts.removeParameterListener(ats_param::kMorphSmoothingMs, this);
     apvts.removeParameterListener(ats_param::kMorphGridType, this);
     apvts.removeParameterListener(ats_param::kMorphCorrespondenceStrategy, this);
+    apvts.removeParameterListener(ats_param::kMorphQuality, this);
     apvts.removeParameterListener(ats_param::kMorphUnmatchedSourcePolicy, this);
     apvts.removeParameterListener(ats_param::kMorphUnmatchedTargetPolicy, this);
     apvts.removeParameterListener(ats_param::kMorphDiscardOptIn, this);
@@ -1552,6 +1573,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         "Morph correspondence strategy",
         juce::StringArray { "Frequency rank", "Greedy nearest", "Assignment matrix", "Optimal transport" },
         kDefaultMorphCorrespondenceStrategy));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        ats_param::kMorphQuality,
+        "Morph quality",
+        juce::StringArray { "Max", "Default", "Economy" },
+        kDefaultMorphQuality));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         ats_param::kMorphUnmatchedSourcePolicy,
         "Source-only partial policy",
@@ -3993,11 +4019,13 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
     const int strategy = getRawChoiceValue(apvts,
                                            ats_param::kMorphCorrespondenceStrategy,
                                            kDefaultMorphCorrespondenceStrategy);
+    const int quality = getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
+    const double minMassFraction = morphQualityToMinMassFraction(quality);
     const uint64_t gen = jobGeneration.load(std::memory_order_acquire);
     morphSnapshotState.store((int) AtsMorphSnapshotUiState::Rebuilding, std::memory_order_release);
     transformThreadRunning.store(true, std::memory_order_release);
 
-    transformThread = std::thread([this, recipe, timelinePoints, options, sA, sB, core, renderSampleRate, duration, gen, mode, liveSmear, strategy]() mutable {
+    transformThread = std::thread([this, recipe, timelinePoints, options, sA, sB, core, renderSampleRate, duration, gen, mode, liveSmear, strategy, quality, minMassFraction]() mutable {
         try
         {
             juce::AudioBuffer<float> timelineBuffer;
@@ -4023,20 +4051,22 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                     {
                         const juce::ScopedLock cl(smearedCacheLock);
                         if (smearedTimeline.valid && smearedTimeline.revA == rev && smearedTimeline.revB == rev
-                            && smearedTimeline.paramHash == ph && smearedTimeline.strategy == strategy)
+                            && smearedTimeline.paramHash == ph && smearedTimeline.strategy == strategy
+                            && smearedTimeline.quality == quality)
                             records = smearedTimeline.records;
                     }
                     if (records.empty())
                     {
                         const auto asgA = makeMorphAssignmentsFromSound(useA, recipe.frequencyGrid);
                         const auto asgB = makeMorphAssignmentsFromSound(useB, recipe.frequencyGrid);
-                        records = buildMorphCorrespondence(asgA, asgB, strategy);
+                        records = buildMorphCorrespondence(asgA, asgB, strategy, minMassFraction);
                         const juce::ScopedLock cl(smearedCacheLock);
                         smearedTimeline.records = records;
                         smearedTimeline.revA = rev;
                         smearedTimeline.revB = rev;
                         smearedTimeline.paramHash = ph;
                         smearedTimeline.strategy = strategy;
+                        smearedTimeline.quality = quality;
                         smearedTimeline.valid = true;
                     }
                     if (!records.empty())
@@ -4823,8 +4853,10 @@ void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady()
     const int strategy = getRawChoiceValue(apvts,
                                            ats_param::kMorphCorrespondenceStrategy,
                                            kDefaultMorphCorrespondenceStrategy);
+    const int quality = getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
     morphRecipe.correspondenceRecords =
-        buildMorphCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], strategy);
+        buildMorphCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], strategy,
+                                 morphQualityToMinMassFraction(quality));
 }
 
 bool AtsAudioProcessor::getMorphSourceSlotInfo(int slotIndex, AtsMorphSourceSlotInfo& out) const
@@ -5409,6 +5441,9 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (kStateVersion >= 15)
         mos.writeDouble((double) getRawParamValue(apvts, ats_param::kSmearnovMix, 100.0f));
 
+    if (kStateVersion >= 16)
+        mos.writeInt(getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality));
+
     destData = mos.getMemoryBlock();
 }
 
@@ -5504,6 +5539,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 
     int morphGridType = kDefaultMorphGridType;
     int morphCorrespondenceStrategy = kDefaultMorphCorrespondenceStrategy;
+    int morphQuality = kDefaultMorphQuality;
     int morphUnmatchedSourcePolicy = kDefaultMorphUnmatchedSourcePolicy;
     int morphUnmatchedTargetPolicy = kDefaultMorphUnmatchedTargetPolicy;
     bool morphDiscardOptIn = false;
@@ -5656,6 +5692,9 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         if (ver >= 15 && mis.getNumBytesRemaining() >= (juce::int64) sizeof(double))
             smearnov.mix = mis.readDouble();
     }
+
+    if (ver >= 16 && mis.getNumBytesRemaining() >= (juce::int64) sizeof(int))
+        morphQuality = mis.readInt();
 
     setChoiceParameter(apvts, ats_param::kAnalysisType, juce::jlimit(1, 4, ap.type) - 1);
     setParameterValue(apvts, ats_param::kAnalysisStart, (float) ap.start);
@@ -5838,6 +5877,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     }
     setChoiceParameter(apvts, ats_param::kMorphGridType, morphGridType);
     setChoiceParameter(apvts, ats_param::kMorphCorrespondenceStrategy, morphCorrespondenceStrategy);
+    setChoiceParameter(apvts, ats_param::kMorphQuality, morphQuality);
     setChoiceParameter(apvts, ats_param::kMorphUnmatchedSourcePolicy, morphUnmatchedSourcePolicy);
     setChoiceParameter(apvts, ats_param::kMorphUnmatchedTargetPolicy, morphUnmatchedTargetPolicy);
     setParameterBool(apvts, ats_param::kMorphDiscardOptIn, morphDiscardOptIn);
