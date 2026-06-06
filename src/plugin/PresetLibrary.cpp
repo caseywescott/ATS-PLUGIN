@@ -123,7 +123,7 @@ static void applyMorphPresetBase(AtsAudioProcessor& proc,
     setPlain(apvts, ats_param::kMorphPerformanceMacro, performanceMacro);
     setPlain(apvts, ats_param::kMorphSmoothingMs, smoothingMs);
     setChoice(apvts, ats_param::kMorphGridType, 0);
-    setChoice(apvts, ats_param::kMorphCorrespondenceStrategy, 0);
+    setChoice(apvts, ats_param::kMorphCorrespondenceStrategy, 3); // optimal transport
     setChoice(apvts, ats_param::kMorphUnmatchedSourcePolicy, 0);
     setChoice(apvts, ats_param::kMorphUnmatchedTargetPolicy, 1);
     setBool(apvts, ats_param::kMorphDiscardOptIn, false);
