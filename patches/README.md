@@ -180,3 +180,29 @@ overlap-add-steady interior to `nrmse = 0.0007`. Apply it *after*
 
 CMake requires it by default (marker `ATSA_IFFT_SYNTH` in `synthesis.c` and
 `atsa.h`). Use `-DATS_REQUIRE_QATSH_IFFT=OFF` to build against unpatched Qatsh.
+
+## `qatsh-atsa-rfft-pack.patch`
+
+Analysis speedup, exact (no behavioral change). Each frame ran two real-input
+FFTs — one on the windowed signal, one on the derivative-windowed signal (the
+latter feeds frequency reassignment). Since both transform the *same* real
+samples, they are packed into one complex FFT `Z = FFT(main + j*deriv)` and
+recovered by Hermitian symmetry (`FFT(main)[k] = (Z[k]+conj(Z[N-k]))/2`,
+`FFT(deriv)[k] = (Z[k]-conj(Z[N-k]))/(2j)`), halving the per-frame FFT count.
+The same packing is applied to the multi-resolution long-window pass. The
+recombination is mathematically exact and independent of the FFT sign
+convention; it differs from two separate FFTs only in floating-point rounding,
+so `tests/estimator_accuracy_test.c` is bit-for-bit unchanged and all 16 CTest
+targets stay green. Measured ~1.42x faster `tracker()` on a native arm64 build
+(7.8 s, 20-partial tone: ~1198 ms -> ~843 ms). Touches `src/atsa/tracker.c`
+only (adds the `rfft_unpack` helper plus packed-buffer scratch). Apply it
+*after* `qatsh-atsa-multires.patch`.
+
+```sh
+./scripts/apply_qatsh_rfft_pack.sh apply
+./scripts/apply_qatsh_rfft_pack.sh status
+./scripts/apply_qatsh_rfft_pack.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_RFFT_PACK` in `tracker.c`). Use
+`-DATS_REQUIRE_QATSH_RFFT_PACK=OFF` to build against unpatched Qatsh.

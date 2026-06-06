@@ -1,0 +1,152 @@
+--- a/src/atsa/tracker.c	2026-06-06 12:04:40
++++ b/src/atsa/tracker.c	2026-06-06 12:04:40
+@@ -88,6 +88,35 @@
+   return(n_frames);
+ }
+ 
++/* ATSA_RFFT_PACK: split one packed complex spectrum into two real-input spectra.
++ * The analysis window FFT and the derivative-window FFT operate on the SAME real
++ * samples; instead of two real FFTs we pack them into one complex transform
++ *   Z = FFT(main + j*deriv)
++ * and recover each via Hermitian symmetry. For a real sequence x, FFT(x) is
++ * conjugate-symmetric (X[N-k] = conj(X[k])) under either +-j convention, so
++ *   FFT(main)[k]  = (Z[k] + conj(Z[N-k])) / 2
++ *   FFT(deriv)[k] = (Z[k] - conj(Z[N-k])) / (2j)
++ * with N-k taken mod fft_size. This is mathematically exact (no approximation);
++ * it differs from two separate FFTs only in floating-point rounding. out_a
++ * receives FFT(main), out_b receives FFT(deriv); all `size` bins are filled so
++ * downstream bin/pair reads (peak_detection, reassign_frq) are unaffected. */
++static void rfft_unpack(const double *zr, const double *zi, int size,
++                        ATS_FFT *out_a, ATS_FFT *out_b)
++{
++  int k;
++  for (k = 0; k < size; k++) {
++    int m = (size - k) % size;
++    double zkr = zr[k], zki = zi[k];
++    double zmr = zr[m], zmi = zi[m];
++    /* (Z[k] + conj(Z[m]))/2 */
++    out_a->fdr[k] = 0.5 * (zkr + zmr);
++    out_a->fdi[k] = 0.5 * (zki - zmi);
++    /* (Z[k] - conj(Z[m]))/(2j) = (1/2)( (zki+zmi) + j(zmr-zkr) ) */
++    out_b->fdr[k] = 0.5 * (zki + zmi);
++    out_b->fdi[k] = 0.5 * (zmr - zkr);
++  }
++}
++
+ /* tracker:
+  * partial tracking function 
+  * returns an ATS_SOUND with data issued from analysis
+@@ -109,8 +138,10 @@
+   double *mlobe_gain; /* ATSA_QIFFT_AMP: window main-lobe gain table */
+   const int mlobe_res = 1025; /* G(delta) samples over [-0.5, 0.5] */
+   double *fsamps; /* ATSA_DDM_SLOPES: per-frame raw windowed-segment samples */
++  double *packr, *packi; /* ATSA_RFFT_PACK: packed complex FFT scratch (main+j*deriv) */
+   /* ATSA_MULTIRES: long-window low-band analysis (NULL/0 when single-resolution) */
+   double *lwindow = NULL, *ldwindow = NULL, *lmlobe_gain = NULL, *lfsamps = NULL;
++  double *lpackr = NULL, *lpacki = NULL; /* ATSA_RFFT_PACK: multi-res packed FFT scratch */
+   double lnorm = 0.0;
+   int lwin_size = 0, lM_2 = 0, lfirst_point = 0, crossover_bin = 0;
+   ATS_FFT lfft_struct, ldfft_struct;
+@@ -266,6 +297,9 @@
+   dfft_struct.rate = anargs->srate;
+   dfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+   dfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
++  /* ATSA_RFFT_PACK: scratch for the packed (main + j*deriv) complex FFT */
++  packr = (double *)malloc(anargs->fft_size * sizeof(double));
++  packi = (double *)malloc(anargs->fft_size * sizeof(double));
+   /* make our window */
+   window = make_window(anargs->win_type, anargs->win_size);
+   /* get window norm */
+@@ -327,6 +361,8 @@
+     lfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
+     ldfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+     ldfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
++    lpackr = (double *)malloc(anargs->fft_size * sizeof(double));
++    lpacki = (double *)malloc(anargs->fft_size * sizeof(double));
+     lM_2 = (int)floor(((double)lwin_size - 1) / 2);
+     lfirst_point = anargs->fft_size - lM_2;
+     crossover_bin = (int)floor(anargs->mr_crossover / anargs->fft_mag);
+@@ -345,14 +381,15 @@
+         anargs->progress_cb(anargs->progress_user,
+                             0.75 * (double)frame_n / (double)anargs->frames);
+     }
+-    /* clear fft arrays */
+-    for(k=0; k<anargs->fft_size; k++) fft_struct.fdr[k] = fft_struct.fdi[k] = 0.0f;
+-    for(k=0; k<anargs->fft_size; k++) dfft_struct.fdr[k] = dfft_struct.fdi[k] = 0.0f;
+-    /* multiply by analysis window and derivative window (aligned placement) */
++    /* ATSA_RFFT_PACK: clear the packed FFT scratch (real=main, imag=deriv) */
++    for(k=0; k<anargs->fft_size; k++) packr[k] = packi[k] = 0.0;
++    /* multiply by analysis window and derivative window (aligned placement),
++       packing the two real inputs into one complex buffer */
+     for (k=0; k<anargs->win_size; k++) {
+       if ((filptr >= 0) && (filptr < sflen)) {
+-        fft_struct.fdr[(k+first_point)%anargs->fft_size] = window[k] * in_samps[filptr];
+-        dfft_struct.fdr[(k+first_point)%anargs->fft_size] = dwindow[k] * in_samps[filptr];
++        int idx = (k+first_point)%anargs->fft_size;
++        packr[idx] = window[k] * in_samps[filptr];
++        packi[idx] = dwindow[k] * in_samps[filptr];
+         fsamps[k] = in_samps[filptr]; /* ATSA_DDM_SLOPES: raw sample for slope fit */
+       } else {
+         fsamps[k] = 0.0;
+@@ -363,10 +400,10 @@
+     win_samps[frame_n] = filptr - M_2 - 1;
+     /* move file pointer back */
+     filptr = filptr - anargs->win_size + anargs->hop_smp;
+-    /* take the fft */
+-    fft(fft_struct.fdr, fft_struct.fdi, fft_struct.size, 1);
+-    /* take the derivative-window fft (for frequency reassignment) */
+-    fft(dfft_struct.fdr, dfft_struct.fdi, dfft_struct.size, 1);
++    /* ATSA_RFFT_PACK: one complex FFT, then Hermitian-split into the analysis
++       spectrum (fft_struct) and the derivative spectrum (dfft_struct) */
++    fft(packr, packi, fft_struct.size, 1);
++    rfft_unpack(packr, packi, fft_struct.size, &fft_struct, &dfft_struct);
+     /* peak detection */
+     peaks_size = 0;
+     /* ATSA_MULTIRES: in multi-resolution mode the default window only owns the
+@@ -389,20 +426,22 @@
+       int lfilptr = win_samps[frame_n] - lM_2;
+       ATS_PEAK *lpeaks = NULL;
+       int lpeaks_size = 0;
+-      for (k=0; k<anargs->fft_size; k++) lfft_struct.fdr[k] = lfft_struct.fdi[k] = 0.0f;
+-      for (k=0; k<anargs->fft_size; k++) ldfft_struct.fdr[k] = ldfft_struct.fdi[k] = 0.0f;
++      for (k=0; k<anargs->fft_size; k++) lpackr[k] = lpacki[k] = 0.0;
+       for (k=0; k<lwin_size; k++) {
+         if ((lfilptr >= 0) && (lfilptr < sflen)) {
+-          lfft_struct.fdr[(k+lfirst_point)%anargs->fft_size] = lwindow[k] * in_samps[lfilptr];
+-          ldfft_struct.fdr[(k+lfirst_point)%anargs->fft_size] = ldwindow[k] * in_samps[lfilptr];
++          int lidx = (k+lfirst_point)%anargs->fft_size;
++          lpackr[lidx] = lwindow[k] * in_samps[lfilptr];
++          lpacki[lidx] = ldwindow[k] * in_samps[lfilptr];
+           lfsamps[k] = in_samps[lfilptr];
+         } else {
+           lfsamps[k] = 0.0;
+         }
+         lfilptr++;
+       }
+-      fft(lfft_struct.fdr, lfft_struct.fdi, lfft_struct.size, 1);
+-      fft(ldfft_struct.fdr, ldfft_struct.fdi, ldfft_struct.size, 1);
++      /* ATSA_RFFT_PACK: one complex FFT split into long-window analysis and
++         derivative spectra */
++      fft(lpackr, lpacki, lfft_struct.size, 1);
++      rfft_unpack(lpackr, lpacki, lfft_struct.size, &lfft_struct, &ldfft_struct);
+       set_mainlobe_gain(lmlobe_gain, mlobe_res);
+       lpeaks = peak_detection(&lfft_struct, &ldfft_struct, anargs->lowest_bin, crossover_bin, anargs->lowest_mag, lnorm, &lpeaks_size);
+       set_mainlobe_gain(mlobe_gain, mlobe_res);
+@@ -478,6 +517,8 @@
+   free(fft_struct.fdi);
+   free(dfft_struct.fdr);
+   free(dfft_struct.fdi);
++  free(packr); /* ATSA_RFFT_PACK */
++  free(packi);
+   free(dwindow);
+   free(window);
+   /* ATSA_MULTIRES: release long-window scratch (no-op when single-resolution) */
+@@ -486,6 +527,8 @@
+     free(lfft_struct.fdi);
+     free(ldfft_struct.fdr);
+     free(ldfft_struct.fdi);
++    free(lpackr); /* ATSA_RFFT_PACK */
++    free(lpacki);
+     free(ldwindow);
+     free(lwindow);
+     free(lmlobe_gain);

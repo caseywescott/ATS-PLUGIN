@@ -23,6 +23,7 @@ option(ATS_REQUIRE_QATSH_QIFFT "Require local Qatsh ATSA QIFFT amplitude patch b
 option(ATS_REQUIRE_QATSH_DDM "Require local Qatsh ATSA DDM within-frame slopes patch before building" ON)
 option(ATS_REQUIRE_QATSH_MULTIRES "Require local Qatsh ATSA multi-resolution analysis patch before building" ON)
 option(ATS_REQUIRE_QATSH_IFFT "Require local Qatsh ATSA overlap-add IFFT synthesis patch before building" ON)
+option(ATS_REQUIRE_QATSH_RFFT_PACK "Require local Qatsh ATSA real-FFT packing patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -126,6 +127,16 @@ if(ATS_REQUIRE_QATSH_IFFT)
   unset(_atsa_ifft_header_source)
   unset(_atsa_ifft_synth_marker)
   unset(_atsa_ifft_header_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_RFFT_PACK)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/tracker.c" _atsa_rfft_tracker_source)
+  string(FIND "${_atsa_rfft_tracker_source}" "ATSA_RFFT_PACK" _atsa_rfft_tracker_marker)
+  if(_atsa_rfft_tracker_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA real-FFT packing patch is not applied. Run scripts/apply_qatsh_rfft_pack.sh apply, or configure with -DATS_REQUIRE_QATSH_RFFT_PACK=OFF to bypass.")
+  endif()
+  unset(_atsa_rfft_tracker_source)
+  unset(_atsa_rfft_tracker_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h
