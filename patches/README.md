@@ -236,3 +236,38 @@ two-FFT scalar baseline). Touches `src/atsa/other-utils.c` only; the build links
 
 CMake requires it by default (marker `ATSA_VDSP_FFT` in `other-utils.c`). Use
 `-DATS_REQUIRE_QATSH_VDSP_FFT=OFF` to build against unpatched Qatsh.
+
+## `qatsh-atsa-parallel.patch`
+
+Analysis speedup, behavior-preserving. The per-frame analysis work (windowing,
+packed FFT, peak detection, DDM slopes, the multi-resolution long-window pass and
+SMR evaluation) is independent across frames, so it is split into two phases.
+Phase A runs every frame's peak extraction in parallel across the available cores
+(one POSIX thread per core, each with its own FFT scratch), writing each frame's
+peaks into its own slot. Phase B then walks the frames in order and does the
+serial, order-dependent peak tracking exactly as before. Because each Phase A
+frame writes only its own slot and reads only read-only context, the per-frame
+peaks are identical to the serial pass, so Phase B — and thus the whole analysis
+— is deterministic and bit-for-bit unchanged. The window-midpoint sample numbers
+(`win_samps`), which the old loop accumulated from a running file pointer, are
+precomputed from their closed form so the stage needs no shared running state.
+The only shared mutable state in the frame path was the installed main-lobe gain
+table (file-static in `peak-detection.c`); it is made `_Thread_local` so each
+worker installs the default or long-window table around its own `peak_detection`
+calls. POSIX threads are used where available; Windows builds (`_WIN32`) fall
+back to the serial path. `estimator_accuracy_test` is bit-identical and all 16
+CTest stay green (including the `golden_offline` full-analysis determinism
+oracle). Measured ~1.9x faster `tracker()` on a 10-core native arm64 build on top
+of the vDSP patch (~513 ms -> ~270 ms warm; the speedup is Amdahl-limited by the
+still-serial residual/synthesis stages). Touches `src/atsa/tracker.c` and
+`src/atsa/peak-detection.c`.
+
+```sh
+./scripts/apply_qatsh_parallel.sh apply
+./scripts/apply_qatsh_parallel.sh status
+./scripts/apply_qatsh_parallel.sh reverse-check
+```
+
+CMake requires it by default (marker `ATSA_PARALLEL` in `tracker.c` and
+`peak-detection.c`). Use `-DATS_REQUIRE_QATSH_PARALLEL=OFF` to build against
+unpatched Qatsh.

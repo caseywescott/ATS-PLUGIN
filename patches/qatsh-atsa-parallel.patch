@@ -1,0 +1,544 @@
+--- a/src/atsa/tracker.c	2026-06-06 12:24:10
++++ b/src/atsa/tracker.c	2026-06-06 12:23:04
+@@ -9,6 +9,18 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++/* ATSA_PARALLEL: the per-frame analysis stage (windowing, FFT, peak detection,
++ * DDM slopes, SMR) is independent across frames, so it is parallelized across
++ * cores; only the subsequent peak-tracking stage is order-dependent and stays
++ * serial. POSIX threads are used where available; Windows builds fall back to
++ * the serial path. */
++#if !defined(_WIN32)
++#define ATSA_HAVE_THREADS 1
++#include <pthread.h>
++#include <unistd.h>
++#include <stdatomic.h>
++#endif
++
+ /* private function prototypes */
+ int compute_frames(ANARGS *anargs);
+ /* ATSA_DDM_SLOPES: order-2 Distribution Derivative Method slope estimator */
+@@ -117,8 +129,223 @@
+   }
+ }
+ 
++/* ATSA_PARALLEL: read-only analysis context shared by every frame worker. */
++typedef struct {
++  ANARGS *anargs;
++  double *in_samps;
++  int sflen;
++  double *window, *dwindow, norm;
++  int M_2, first_point;
++  const double *mlobe_gain;
++  int mlobe_res;
++  /* multi-resolution long-window context (valid only when anargs->multi_res) */
++  double *lwindow, *ldwindow, lnorm;
++  const double *lmlobe_gain;
++  int lwin_size, lM_2, lfirst_point, crossover_bin;
++  int *win_samps;
++  /* outputs, one slot per frame */
++  ATS_PEAK **frame_peaks;
++  int *frame_npeaks;
++} FrameCtx;
++
++/* ATSA_PARALLEL: per-worker FFT scratch (one set per thread). */
++typedef struct {
++  ATS_FFT fft, dfft;
++  double *packr, *packi, *fsamps;
++  ATS_FFT lfft, ldfft;
++  double *lpackr, *lpacki, *lfsamps;
++} FrameScratch;
++
++static void frame_scratch_alloc(FrameScratch *s, const FrameCtx *c)
++{
++  int fft_size = c->anargs->fft_size;
++  s->fft.size = s->dfft.size = fft_size;
++  s->fft.rate = s->dfft.rate = c->anargs->srate;
++  s->fft.fdr  = (double *)malloc(fft_size * sizeof(double));
++  s->fft.fdi  = (double *)malloc(fft_size * sizeof(double));
++  s->dfft.fdr = (double *)malloc(fft_size * sizeof(double));
++  s->dfft.fdi = (double *)malloc(fft_size * sizeof(double));
++  s->packr    = (double *)malloc(fft_size * sizeof(double));
++  s->packi    = (double *)malloc(fft_size * sizeof(double));
++  s->fsamps   = (double *)malloc(c->anargs->win_size * sizeof(double));
++  s->lpackr = s->lpacki = s->lfsamps = NULL;
++  s->lfft.fdr = s->lfft.fdi = s->ldfft.fdr = s->ldfft.fdi = NULL;
++  if (c->anargs->multi_res) {
++    s->lfft.size = s->ldfft.size = fft_size;
++    s->lfft.rate = s->ldfft.rate = c->anargs->srate;
++    s->lfft.fdr  = (double *)malloc(fft_size * sizeof(double));
++    s->lfft.fdi  = (double *)malloc(fft_size * sizeof(double));
++    s->ldfft.fdr = (double *)malloc(fft_size * sizeof(double));
++    s->ldfft.fdi = (double *)malloc(fft_size * sizeof(double));
++    s->lpackr  = (double *)malloc(fft_size * sizeof(double));
++    s->lpacki  = (double *)malloc(fft_size * sizeof(double));
++    s->lfsamps = (double *)malloc(c->lwin_size * sizeof(double));
++  }
++}
++
++static void frame_scratch_free(FrameScratch *s)
++{
++  free(s->fft.fdr);  free(s->fft.fdi);
++  free(s->dfft.fdr); free(s->dfft.fdi);
++  free(s->packr);    free(s->packi);   free(s->fsamps);
++  free(s->lfft.fdr);  free(s->lfft.fdi);
++  free(s->ldfft.fdr); free(s->ldfft.fdi);
++  free(s->lpackr);    free(s->lpacki);  free(s->lfsamps);
++}
++
++/* ATSA_PARALLEL: independent per-frame work — windowing, packed FFT, peak
++ * detection, DDM slopes, multi-res long-window pass and SMR. Writes only this
++ * frame's slot in frame_peaks/frame_npeaks, so frames may run concurrently. */
++static void process_one_frame(const FrameCtx *c, FrameScratch *s, int frame_n)
++{
++  ANARGS *anargs = c->anargs;
++  int k, fft_size = anargs->fft_size, win_size = anargs->win_size;
++  int filptr = (anargs->first_smp - c->M_2) + frame_n * anargs->hop_smp;
++  int peaks_size = 0;
++  ATS_PEAK *peaks = NULL;
++  /* install this thread's main-lobe gain table (thread-local) */
++  set_mainlobe_gain(c->mlobe_gain, c->mlobe_res);
++  for (k = 0; k < fft_size; k++) s->packr[k] = s->packi[k] = 0.0;
++  for (k = 0; k < win_size; k++) {
++    if ((filptr >= 0) && (filptr < c->sflen)) {
++      int idx = (k + c->first_point) % fft_size;
++      s->packr[idx] = c->window[k]  * c->in_samps[filptr];
++      s->packi[idx] = c->dwindow[k] * c->in_samps[filptr];
++      s->fsamps[k]  = c->in_samps[filptr];
++    } else {
++      s->fsamps[k] = 0.0;
++    }
++    filptr++;
++  }
++  fft(s->packr, s->packi, fft_size, 1);
++  rfft_unpack(s->packr, s->packi, fft_size, &s->fft, &s->dfft);
++  {
++    int def_low = anargs->multi_res ? c->crossover_bin + 1 : anargs->lowest_bin;
++    peaks = peak_detection(&s->fft, &s->dfft, def_low, anargs->highest_bin,
++                           anargs->lowest_mag, c->norm, &peaks_size);
++  }
++  if (peaks != NULL)
++    for (k = 0; k < peaks_size; k++)
++      ddm_slopes(s->fsamps, c->window, c->dwindow, win_size, anargs->srate,
++                 peaks[k].frq, (double)c->M_2, &peaks[k].frq_slope, &peaks[k].amp_slope);
++  if (anargs->multi_res && c->crossover_bin >= anargs->lowest_bin) {
++    int lfilptr = c->win_samps[frame_n] - c->lM_2;
++    ATS_PEAK *lpeaks = NULL;
++    int lpeaks_size = 0;
++    for (k = 0; k < fft_size; k++) s->lpackr[k] = s->lpacki[k] = 0.0;
++    for (k = 0; k < c->lwin_size; k++) {
++      if ((lfilptr >= 0) && (lfilptr < c->sflen)) {
++        int lidx = (k + c->lfirst_point) % fft_size;
++        s->lpackr[lidx] = c->lwindow[k]  * c->in_samps[lfilptr];
++        s->lpacki[lidx] = c->ldwindow[k] * c->in_samps[lfilptr];
++        s->lfsamps[k]   = c->in_samps[lfilptr];
++      } else {
++        s->lfsamps[k] = 0.0;
++      }
++      lfilptr++;
++    }
++    fft(s->lpackr, s->lpacki, fft_size, 1);
++    rfft_unpack(s->lpackr, s->lpacki, fft_size, &s->lfft, &s->ldfft);
++    set_mainlobe_gain(c->lmlobe_gain, c->mlobe_res);
++    lpeaks = peak_detection(&s->lfft, &s->ldfft, anargs->lowest_bin,
++                            c->crossover_bin, anargs->lowest_mag, c->lnorm, &lpeaks_size);
++    set_mainlobe_gain(c->mlobe_gain, c->mlobe_res);
++    if (lpeaks != NULL) {
++      for (k = 0; k < lpeaks_size; k++)
++        ddm_slopes(s->lfsamps, c->lwindow, c->ldwindow, c->lwin_size, anargs->srate,
++                   lpeaks[k].frq, (double)c->lM_2, &lpeaks[k].frq_slope, &lpeaks[k].amp_slope);
++      for (k = 0; k < lpeaks_size; k++)
++        peaks = push_peak(&lpeaks[k], peaks, &peaks_size);
++      free(lpeaks);
++    }
++  }
++  if (peaks != NULL) evaluate_smr(peaks, peaks_size);
++  c->frame_peaks[frame_n] = peaks;
++  c->frame_npeaks[frame_n] = peaks_size;
++}
++
++#ifdef ATSA_HAVE_THREADS
++/* ATSA_PARALLEL: a contiguous frame range assigned to one worker thread. */
++typedef struct {
++  const FrameCtx *ctx;
++  FrameScratch *scratch;
++  int start, end;
++  atomic_int *done;
++} FrameJob;
++
++static void *frame_worker(void *arg)
++{
++  FrameJob *j = (FrameJob *)arg;
++  ANARGS *anargs = j->ctx->anargs;
++  int throttle = anargs->frames / 200;
++  int f;
++  if (throttle < 1) throttle = 1;
++  for (f = j->start; f < j->end; f++) {
++    process_one_frame(j->ctx, j->scratch, f);
++    if (anargs->progress_cb != NULL) {
++      int n = atomic_fetch_add(j->done, 1) + 1;
++      if (n % throttle == 0)
++        anargs->progress_cb(anargs->progress_user,
++                            0.75 * (double)n / (double)anargs->frames);
++    }
++  }
++  return NULL;
++}
++#endif
++
++/* ATSA_PARALLEL: run the independent per-frame stage over all frames, using as
++ * many worker threads as there are cores (serial when threads are unavailable
++ * or only one frame's worth of work). Fills c->frame_peaks / c->frame_npeaks. */
++static void run_frame_stage(const FrameCtx *c)
++{
++  int frames = c->anargs->frames;
++#ifdef ATSA_HAVE_THREADS
++  long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
++  int nthreads = (ncpu > 1) ? (int)ncpu : 1;
++  if (nthreads > frames) nthreads = frames;
++  if (nthreads > 32) nthreads = 32;
++  if (nthreads > 1) {
++    pthread_t *tids = (pthread_t *)malloc(nthreads * sizeof(pthread_t));
++    FrameJob *jobs = (FrameJob *)malloc(nthreads * sizeof(FrameJob));
++    FrameScratch *scratch = (FrameScratch *)malloc(nthreads * sizeof(FrameScratch));
++    atomic_int done;
++    int t, base = frames / nthreads, rem = frames % nthreads, next = 0;
++    atomic_init(&done, 0);
++    for (t = 0; t < nthreads; t++) {
++      int cnt = base + (t < rem ? 1 : 0);
++      frame_scratch_alloc(&scratch[t], c);
++      jobs[t].ctx = c;
++      jobs[t].scratch = &scratch[t];
++      jobs[t].start = next;
++      jobs[t].end = next + cnt;
++      jobs[t].done = &done;
++      next += cnt;
++    }
++    for (t = 0; t < nthreads; t++) pthread_create(&tids[t], NULL, frame_worker, &jobs[t]);
++    for (t = 0; t < nthreads; t++) pthread_join(tids[t], NULL);
++    for (t = 0; t < nthreads; t++) frame_scratch_free(&scratch[t]);
++    free(scratch); free(jobs); free(tids);
++    return;
++  }
++#endif
++  {
++    /* serial fallback */
++    FrameScratch scratch;
++    int f, throttle = frames / 200;
++    if (throttle < 1) throttle = 1;
++    frame_scratch_alloc(&scratch, c);
++    for (f = 0; f < frames; f++) {
++      process_one_frame(c, &scratch, f);
++      if (c->anargs->progress_cb != NULL && f % throttle == 0)
++        c->anargs->progress_cb(c->anargs->progress_user,
++                               0.75 * (double)f / (double)frames);
++    }
++    frame_scratch_free(&scratch);
++  }
++}
++
+ /* tracker:
+- * partial tracking function 
++ * partial tracking function
+  * returns an ATS_SOUND with data issued from analysis
+  * anargs: pointer to analysis parameters
+  * in_samps: monophonic input samples
+@@ -130,25 +357,23 @@
+ ATS_SOUND *tracker (ANARGS *anargs, double* in_samps, int s_rate, int n_frames, 
+ 		    double ***res, int* res_len)
+ {
+-  int M_2, first_point, filptr, n_partials = 0;
++  int M_2, first_point, n_partials = 0;
+   int frame_n, k, sflen, *win_samps, peaks_size, tracks_size = 0;
+   int i, frame, i_tmp;
+   double *window, norm, sfdur, f_tmp;
+   double *dwindow; /* derivative of analysis window for freq reassignment */
+   double *mlobe_gain; /* ATSA_QIFFT_AMP: window main-lobe gain table */
+   const int mlobe_res = 1025; /* G(delta) samples over [-0.5, 0.5] */
+-  double *fsamps; /* ATSA_DDM_SLOPES: per-frame raw windowed-segment samples */
+-  double *packr, *packi; /* ATSA_RFFT_PACK: packed complex FFT scratch (main+j*deriv) */
+   /* ATSA_MULTIRES: long-window low-band analysis (NULL/0 when single-resolution) */
+-  double *lwindow = NULL, *ldwindow = NULL, *lmlobe_gain = NULL, *lfsamps = NULL;
+-  double *lpackr = NULL, *lpacki = NULL; /* ATSA_RFFT_PACK: multi-res packed FFT scratch */
++  double *lwindow = NULL, *ldwindow = NULL, *lmlobe_gain = NULL;
+   double lnorm = 0.0;
+   int lwin_size = 0, lM_2 = 0, lfirst_point = 0, crossover_bin = 0;
+-  ATS_FFT lfft_struct, ldfft_struct;
++  /* ATSA_PARALLEL: per-frame peak arrays produced by the parallel stage */
++  FrameCtx frame_ctx;
++  ATS_PEAK **frame_peaks = NULL;
++  int *frame_npeaks = NULL;
+   /* declare structures and buffers */
+   ATS_SOUND *sound = NULL;
+-  ATS_FFT fft_struct;
+-  ATS_FFT dfft_struct; /* derivative-window spectrum */
+   ATS_PEAK *peaks, *tracks = NULL, cpy_peak;
+   ATS_FRAME *ana_frames = NULL, *unmatched_peaks = NULL;
+ 
+@@ -287,19 +512,8 @@
+   }
+   /* fft size (sized for the longer of the two windows when multi-resolution) */
+   anargs->fft_size = ppp2(2 * (lwin_size > anargs->win_size ? lwin_size : anargs->win_size));
+-  /* make our fft-struct */
+-  fft_struct.size = anargs->fft_size;
+-  fft_struct.rate = anargs->srate;
+-  fft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+-  fft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
+-  /* derivative-window fft-struct, used for frequency reassignment */
+-  dfft_struct.size = anargs->fft_size;
+-  dfft_struct.rate = anargs->srate;
+-  dfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+-  dfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
+-  /* ATSA_RFFT_PACK: scratch for the packed (main + j*deriv) complex FFT */
+-  packr = (double *)malloc(anargs->fft_size * sizeof(double));
+-  packi = (double *)malloc(anargs->fft_size * sizeof(double));
++  /* ATSA_PARALLEL: per-frame FFT scratch is allocated per worker in
++     run_frame_stage; only read-only windows/tables are built here. */
+   /* make our window */
+   window = make_window(anargs->win_type, anargs->win_size);
+   /* get window norm */
+@@ -318,8 +532,6 @@
+      amplitude correction in peak_detection (installed before the frame loop) */
+   mlobe_gain = (double *)malloc(mlobe_res * sizeof(double));
+   build_mainlobe_gain(window, anargs->win_size, anargs->fft_size, mlobe_gain, mlobe_res);
+-  /* ATSA_DDM_SLOPES: per-frame raw sample buffer (natural order) for slopes */
+-  fsamps = (double *)malloc(anargs->win_size * sizeof(double));
+   /* fft mag for computing frequencies */
+   anargs->fft_mag = (double)anargs->srate / (double)anargs->fft_size;
+   /* lowest fft bin for analysis */
+@@ -334,12 +546,11 @@
+   M_2 = (int)floor(((double)anargs->win_size - 1) / 2);
+   /* first point in fft buffer to write */
+   first_point = anargs->fft_size - M_2;
+-  /* half a window from first sample */
+-  filptr = anargs->first_smp - M_2;
+   /* ATSA_MULTIRES: build the long low-band window and its companions (its own
+-     window, derivative window, norm, main-lobe gain table, FFT scratch and raw
+-     sample buffer), all centered on the same frame midpoint as the default
+-     window so frame times stay aligned. The crossover bin splits the spectrum:
++     window, derivative window, norm and main-lobe gain table), all centered on
++     the same frame midpoint as the default window so frame times stay aligned;
++     per-frame FFT scratch is allocated per worker in run_frame_stage. The
++     crossover bin splits the spectrum:
+      [lowest_bin, crossover_bin] is resolved by the long window, the default
+      window keeps (crossover_bin, highest_bin]. */
+   if (anargs->multi_res) {
+@@ -354,115 +565,63 @@
+     }
+     lmlobe_gain = (double *)malloc(mlobe_res * sizeof(double));
+     build_mainlobe_gain(lwindow, lwin_size, anargs->fft_size, lmlobe_gain, mlobe_res);
+-    lfsamps = (double *)malloc(lwin_size * sizeof(double));
+-    lfft_struct.size = ldfft_struct.size = anargs->fft_size;
+-    lfft_struct.rate = ldfft_struct.rate = anargs->srate;
+-    lfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+-    lfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
+-    ldfft_struct.fdr = (double *)malloc(anargs->fft_size * sizeof(double));
+-    ldfft_struct.fdi = (double *)malloc(anargs->fft_size * sizeof(double));
+-    lpackr = (double *)malloc(anargs->fft_size * sizeof(double));
+-    lpacki = (double *)malloc(anargs->fft_size * sizeof(double));
+     lM_2 = (int)floor(((double)lwin_size - 1) / 2);
+     lfirst_point = anargs->fft_size - lM_2;
+     crossover_bin = (int)floor(anargs->mr_crossover / anargs->fft_mag);
+     if (crossover_bin < anargs->lowest_bin) crossover_bin = anargs->lowest_bin;
+     if (crossover_bin > anargs->highest_bin) crossover_bin = anargs->highest_bin;
+   }
+-  /* ATSA_QIFFT_AMP: install the main-lobe gain table for the frame loop */
+-  set_mainlobe_gain(mlobe_gain, mlobe_res);
+-  /* main loop */
++  /* ATSA_PARALLEL: window midpoints have a closed form (the running file pointer
++     of the old serial loop), so precompute them up front. The multi-res low-band
++     pass reads win_samps for its own placement, so this must precede the stage. */
++  for (frame_n=0; frame_n<anargs->frames; frame_n++)
++    win_samps[frame_n] = (anargs->first_smp - M_2) + frame_n * anargs->hop_smp
++                         + anargs->win_size - M_2 - 1;
++
++  /* ATSA_PARALLEL: per-frame peak arrays, one slot per frame, filled by the
++     order-independent analysis stage below. */
++  frame_peaks  = (ATS_PEAK **)malloc(anargs->frames * sizeof(ATS_PEAK *));
++  frame_npeaks = (int *)malloc(anargs->frames * sizeof(int));
++
++  frame_ctx.anargs        = anargs;
++  frame_ctx.in_samps      = in_samps;
++  frame_ctx.sflen         = sflen;
++  frame_ctx.window        = window;
++  frame_ctx.dwindow       = dwindow;
++  frame_ctx.norm          = norm;
++  frame_ctx.M_2           = M_2;
++  frame_ctx.first_point   = first_point;
++  frame_ctx.mlobe_gain    = mlobe_gain;
++  frame_ctx.mlobe_res     = mlobe_res;
++  frame_ctx.lwindow       = lwindow;
++  frame_ctx.ldwindow      = ldwindow;
++  frame_ctx.lnorm         = lnorm;
++  frame_ctx.lmlobe_gain   = lmlobe_gain;
++  frame_ctx.lwin_size     = lwin_size;
++  frame_ctx.lM_2          = lM_2;
++  frame_ctx.lfirst_point  = lfirst_point;
++  frame_ctx.crossover_bin = crossover_bin;
++  frame_ctx.win_samps     = win_samps;
++  frame_ctx.frame_peaks   = frame_peaks;
++  frame_ctx.frame_npeaks  = frame_npeaks;
++
++  /* ATSA_PARALLEL: Phase A — independent per-frame peak extraction (windowing,
++     FFT, peak detection, DDM slopes, multi-res pass, SMR). Runs in parallel; the
++     result is identical to the serial pass because each frame writes only its own
++     slot and reads only read-only context. */
++  run_frame_stage(&frame_ctx);
++
++  /* ATSA_PARALLEL: Phase B — serial, order-dependent peak tracking. Consumes the
++     per-frame peaks from Phase A in frame order; identical to the original serial
++     tracking (SMR was already evaluated inside the stage). */
+   for (frame_n=0; frame_n<anargs->frames; frame_n++) {
+-    /* report frame-tracking progress (throttled), mapped into [0, 0.75] */
+-    if (anargs->progress_cb != NULL) {
+-      int throttle = anargs->frames / 200;
+-      if (throttle < 1) throttle = 1;
+-      if (frame_n % throttle == 0)
+-        anargs->progress_cb(anargs->progress_user,
+-                            0.75 * (double)frame_n / (double)anargs->frames);
+-    }
+-    /* ATSA_RFFT_PACK: clear the packed FFT scratch (real=main, imag=deriv) */
+-    for(k=0; k<anargs->fft_size; k++) packr[k] = packi[k] = 0.0;
+-    /* multiply by analysis window and derivative window (aligned placement),
+-       packing the two real inputs into one complex buffer */
+-    for (k=0; k<anargs->win_size; k++) {
+-      if ((filptr >= 0) && (filptr < sflen)) {
+-        int idx = (k+first_point)%anargs->fft_size;
+-        packr[idx] = window[k] * in_samps[filptr];
+-        packi[idx] = dwindow[k] * in_samps[filptr];
+-        fsamps[k] = in_samps[filptr]; /* ATSA_DDM_SLOPES: raw sample for slope fit */
+-      } else {
+-        fsamps[k] = 0.0;
+-      }
+-      filptr++;
+-    }
+-    /* we keep sample numbers of window midpoints in win_samps array */
+-    win_samps[frame_n] = filptr - M_2 - 1;
+-    /* move file pointer back */
+-    filptr = filptr - anargs->win_size + anargs->hop_smp;
+-    /* ATSA_RFFT_PACK: one complex FFT, then Hermitian-split into the analysis
+-       spectrum (fft_struct) and the derivative spectrum (dfft_struct) */
+-    fft(packr, packi, fft_struct.size, 1);
+-    rfft_unpack(packr, packi, fft_struct.size, &fft_struct, &dfft_struct);
+-    /* peak detection */
+-    peaks_size = 0;
+-    /* ATSA_MULTIRES: in multi-resolution mode the default window only owns the
+-       high band above the crossover; the long window owns everything below. */
+-    {
+-      int def_low = anargs->multi_res ? crossover_bin + 1 : anargs->lowest_bin;
+-      peaks = peak_detection(&fft_struct, &dfft_struct, def_low, anargs->highest_bin, anargs->lowest_mag, norm, &peaks_size);
+-    }
+-    /* ATSA_DDM_SLOPES: fit within-frame frequency/amplitude slopes per peak from
+-       the raw windowed segment, before tracking reorders/augments the array */
++    peaks = frame_peaks[frame_n];
++    peaks_size = frame_npeaks[frame_n];
+     if (peaks != NULL) {
+-      for (k=0; k<peaks_size; k++)
+-        ddm_slopes(fsamps, window, dwindow, anargs->win_size, anargs->srate,
+-                   peaks[k].frq, (double)M_2, &peaks[k].frq_slope, &peaks[k].amp_slope);
+-    }
+-    /* ATSA_MULTIRES: long-window low-band pass, centered on the same midpoint,
+-       detecting peaks in [lowest_bin, crossover_bin]. Disjoint bins from the
+-       default pass, so the merge is a plain concatenation (push_peak). */
+-    if (anargs->multi_res && crossover_bin >= anargs->lowest_bin) {
+-      int lfilptr = win_samps[frame_n] - lM_2;
+-      ATS_PEAK *lpeaks = NULL;
+-      int lpeaks_size = 0;
+-      for (k=0; k<anargs->fft_size; k++) lpackr[k] = lpacki[k] = 0.0;
+-      for (k=0; k<lwin_size; k++) {
+-        if ((lfilptr >= 0) && (lfilptr < sflen)) {
+-          int lidx = (k+lfirst_point)%anargs->fft_size;
+-          lpackr[lidx] = lwindow[k] * in_samps[lfilptr];
+-          lpacki[lidx] = ldwindow[k] * in_samps[lfilptr];
+-          lfsamps[k] = in_samps[lfilptr];
+-        } else {
+-          lfsamps[k] = 0.0;
+-        }
+-        lfilptr++;
+-      }
+-      /* ATSA_RFFT_PACK: one complex FFT split into long-window analysis and
+-         derivative spectra */
+-      fft(lpackr, lpacki, lfft_struct.size, 1);
+-      rfft_unpack(lpackr, lpacki, lfft_struct.size, &lfft_struct, &ldfft_struct);
+-      set_mainlobe_gain(lmlobe_gain, mlobe_res);
+-      lpeaks = peak_detection(&lfft_struct, &ldfft_struct, anargs->lowest_bin, crossover_bin, anargs->lowest_mag, lnorm, &lpeaks_size);
+-      set_mainlobe_gain(mlobe_gain, mlobe_res);
+-      if (lpeaks != NULL) {
+-        for (k=0; k<lpeaks_size; k++)
+-          ddm_slopes(lfsamps, lwindow, ldwindow, lwin_size, anargs->srate,
+-                     lpeaks[k].frq, (double)lM_2, &lpeaks[k].frq_slope, &lpeaks[k].amp_slope);
+-        for (k=0; k<lpeaks_size; k++)
+-          peaks = push_peak(&lpeaks[k], peaks, &peaks_size);
+-        free(lpeaks);
+-      }
+-    }
+-    /* peak tracking */
+-    if (peaks != NULL) {
+-      /* evaluate peaks SMR (masking curves) */
+-      evaluate_smr(peaks, peaks_size);
+       if (frame_n) {
+ 	/* initialize or update tracks */
+ 	if ((tracks = update_tracks(tracks, &tracks_size, anargs->track_len, frame_n, ana_frames, anargs->last_peak_cont)) != NULL) {
+ 	  /* track peaks and get leftover */
+-	  //           qsort(tracks, tracks_size, sizeof(ATS_PEAK), peak_smr_dec);
+           qsort(tracks, tracks_size, sizeof(ATS_PEAK), peak_frq_inc);
+           unmatched_peaks = NULL;
+ 	  /* do peak matching */
+@@ -512,27 +671,17 @@
+   /* ATSA_QIFFT_AMP: uninstall and free the main-lobe gain table */
+   set_mainlobe_gain(NULL, 0);
+   free(mlobe_gain);
+-  free(fsamps); /* ATSA_DDM_SLOPES */
+-  free(fft_struct.fdr);
+-  free(fft_struct.fdi);
+-  free(dfft_struct.fdr);
+-  free(dfft_struct.fdi);
+-  free(packr); /* ATSA_RFFT_PACK */
+-  free(packi);
++  /* ATSA_PARALLEL: per-frame FFT scratch is owned by the workers; only the
++     per-frame peak-array slots remain to release here. */
++  free(frame_peaks);
++  free(frame_npeaks);
+   free(dwindow);
+   free(window);
+-  /* ATSA_MULTIRES: release long-window scratch (no-op when single-resolution) */
++  /* ATSA_MULTIRES: release long-window read-only context (no-op when single-res) */
+   if (anargs->multi_res) {
+-    free(lfft_struct.fdr);
+-    free(lfft_struct.fdi);
+-    free(ldfft_struct.fdr);
+-    free(ldfft_struct.fdi);
+-    free(lpackr); /* ATSA_RFFT_PACK */
+-    free(lpacki);
+     free(ldwindow);
+     free(lwindow);
+     free(lmlobe_gain);
+-    free(lfsamps);
+   }
+   free(tracks);
+ 
+--- a/src/atsa/peak-detection.c	2026-06-06 12:23:13
++++ b/src/atsa/peak-detection.c	2026-06-06 12:23:04
+@@ -21,9 +21,18 @@
+  * by the analytic window main-lobe gain G(delta) at the sub-bin offset delta.
+  * The tracker precomputes G over delta in [-0.5, 0.5] into a file-static table
+  * (so peak_detection keeps its signature) and installs it before the frame
+- * loop. When the table is absent the legacy parabolic amplitude is kept. */
+-static const double *qifft_mlobe_gain = NULL; /* table over delta in [-0.5,0.5] */
+-static int qifft_mlobe_res = 0;               /* number of table samples */
++ * loop. When the table is absent the legacy parabolic amplitude is kept.
++ *
++ * ATSA_PARALLEL: the analysis frame loop runs frames on multiple threads, so the
++ * installed table must be per-thread — each worker installs the (default or long)
++ * window's table around its own peak_detection calls. Marked thread-local. */
++#if defined(_WIN32)
++#  define ATSA_TLS __declspec(thread)
++#else
++#  define ATSA_TLS _Thread_local
++#endif
++static ATSA_TLS const double *qifft_mlobe_gain = NULL; /* table over delta in [-0.5,0.5] */
++static ATSA_TLS int qifft_mlobe_res = 0;               /* number of table samples */
+ void set_mainlobe_gain(const double *table, int res);
+ void build_mainlobe_gain(const double *window, int win_size, int fft_size, double *table, int res);
+ static double mlobe_lookup(double delta);

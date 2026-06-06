@@ -25,6 +25,7 @@ option(ATS_REQUIRE_QATSH_MULTIRES "Require local Qatsh ATSA multi-resolution ana
 option(ATS_REQUIRE_QATSH_IFFT "Require local Qatsh ATSA overlap-add IFFT synthesis patch before building" ON)
 option(ATS_REQUIRE_QATSH_RFFT_PACK "Require local Qatsh ATSA real-FFT packing patch before building" ON)
 option(ATS_REQUIRE_QATSH_VDSP_FFT "Require local Qatsh ATSA vDSP FFT backend patch before building" ON)
+option(ATS_REQUIRE_QATSH_PARALLEL "Require local Qatsh ATSA parallel frame-loop patch before building" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -148,6 +149,20 @@ if(ATS_REQUIRE_QATSH_VDSP_FFT)
   endif()
   unset(_atsa_vdsp_source)
   unset(_atsa_vdsp_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_PARALLEL)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/tracker.c" _atsa_par_tracker_source)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/peak-detection.c" _atsa_par_peak_source)
+  string(FIND "${_atsa_par_tracker_source}" "ATSA_PARALLEL" _atsa_par_tracker_marker)
+  string(FIND "${_atsa_par_peak_source}" "ATSA_PARALLEL" _atsa_par_peak_marker)
+  if(_atsa_par_tracker_marker EQUAL -1 OR _atsa_par_peak_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA parallel frame-loop patch is not applied. Run scripts/apply_qatsh_parallel.sh apply, or configure with -DATS_REQUIRE_QATSH_PARALLEL=OFF to bypass.")
+  endif()
+  unset(_atsa_par_tracker_source)
+  unset(_atsa_par_peak_source)
+  unset(_atsa_par_tracker_marker)
+  unset(_atsa_par_peak_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h
