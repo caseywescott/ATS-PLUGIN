@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <tuple>
 
 #include "AtsFrequencyShape.h"
 #include "AtsMathExpr.h"
@@ -27,6 +28,24 @@
 extern "C" {
 #include "atsa.h"
 }
+
+// Bit-identical cross-render cache for the per-frame Bark (True-Envelope) builds that feed the
+// Hybrid envelope-transfer and EnvelopeMorph lanes. The envelope at (sound, frame0, frame1, frac)
+// is a pure function of those inputs, so when a replay reruns the morph after a change that does
+// not touch the source partials (morph amount, timeline edits, env-transfer amount), the same
+// envelopes are requested again and served from here instead of rebuilt with the iterative DCT.
+// Keyed by source pointer (a rebuilt source gets a fresh pointer, evicting the stale slot) plus a
+// coarse source revision as insurance against any in-place mutation; frac is compared bit-for-bit,
+// so a hit is identical to a fresh build.
+struct MorphEnvelopeCache
+{
+    juce::CriticalSection lock;
+    uint64_t revision = ~0ull;
+    const ATS_SOUND* keyA = nullptr;
+    const ATS_SOUND* keyB = nullptr;
+    std::map<std::tuple<int, int, uint64_t>, ats::BarkSpectralEnvelope> mapA;
+    std::map<std::tuple<int, int, uint64_t>, ats::BarkSpectralEnvelope> mapB;
+};
 
 namespace
 {
@@ -1411,6 +1430,7 @@ AtsAudioProcessor::AtsAudioProcessor()
     // the most recent 8 transactions even if that exceeds the byte budget (a
     // single large model can be tens of MB, so keep this floor low).
     undoManager.setMaxNumberOfStoredUnits(256 * 1024, 8);
+    morphEnvelopeCache = std::make_unique<MorphEnvelopeCache>();
     apvts.addParameterListener("freq", this);
     apvts.addParameterListener("timeStretch", this);
     apvts.addParameterListener("synStart", this);
@@ -3136,6 +3156,57 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
     return envelope;
 }
 
+// Cache wrapper around buildBarkEnvelopeForFrame (see MorphEnvelopeCache). Returns a bit-identical
+// result to the uncached build: hits are exact (frame indices and frac matched bit-for-bit) and a
+// pointer/revision change rotates the relevant slot before any stale envelope can be served. The
+// heavy build runs outside the lock; a second check guards against a concurrent cache rotation.
+ats::BarkSpectralEnvelope buildBarkEnvelopeCached(MorphEnvelopeCache* cache, bool isSourceA,
+                                                  const ATS_SOUND* sound, int frame0, int frame1,
+                                                  double frac, uint64_t sourcesRevision)
+{
+    if (cache == nullptr)
+        return buildBarkEnvelopeForFrame(sound, frame0, frame1, frac);
+
+    uint64_t fracBits = 0;
+    std::memcpy(&fracBits, &frac, sizeof fracBits);
+    const auto key = std::make_tuple(frame0, frame1, fracBits);
+
+    {
+        const juce::ScopedLock sl(cache->lock);
+        if (cache->revision != sourcesRevision)
+        {
+            cache->revision = sourcesRevision;
+            cache->keyA = cache->keyB = nullptr;
+            cache->mapA.clear();
+            cache->mapB.clear();
+        }
+        const ATS_SOUND*& keyPtr = isSourceA ? cache->keyA : cache->keyB;
+        auto& map = isSourceA ? cache->mapA : cache->mapB;
+        if (keyPtr != sound)
+        {
+            keyPtr = sound;
+            map.clear();
+        }
+        const auto it = map.find(key);
+        if (it != map.end())
+            return it->second;
+    }
+
+    ats::BarkSpectralEnvelope env = buildBarkEnvelopeForFrame(sound, frame0, frame1, frac);
+
+    {
+        const juce::ScopedLock sl(cache->lock);
+        if (cache->revision == sourcesRevision)
+        {
+            const ATS_SOUND* keyPtr = isSourceA ? cache->keyA : cache->keyB;
+            auto& map = isSourceA ? cache->mapA : cache->mapB;
+            if (keyPtr == sound)
+                map.emplace(key, env);
+        }
+    }
+    return env;
+}
+
 ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind kind)
 {
     switch (kind)
@@ -3166,7 +3237,9 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const std::vector<AtsMorphTimelinePoint>& timelinePoints,
     double fixedMorphAmount,
     double sampleRate,
-    double durationSeconds)
+    double durationSeconds,
+    MorphEnvelopeCache* envCache = nullptr,
+    uint64_t sourcesRevision = 0)
 {
     const int totalSamples = juce::jmax(1, (int) std::llround(sampleRate * durationSeconds));
     juce::AudioBuffer<float> out(2, totalSamples);
@@ -3517,8 +3590,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         ats::BarkSpectralEnvelope barkA, barkB;
         if (effectiveEnvTransfer > 1.0e-9 || envMorphAmount > 1.0e-9)
         {
-            barkA = buildBarkEnvelopeForFrame(soundA, fA0, fA1, fracA);
-            barkB = buildBarkEnvelopeForFrame(soundB, fB0, fB1, fracB);
+            barkA = buildBarkEnvelopeCached(envCache, true, soundA, fA0, fA1, fracA, sourcesRevision);
+            barkB = buildBarkEnvelopeCached(envCache, false, soundB, fB0, fB1, fracB, sourcesRevision);
         }
 
         // For the EnvelopeMorph lane, align the two envelopes' formants and warp the Bark axis
@@ -3902,7 +3975,9 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
         ats::AtsSoundPtr shapedB;
         const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, frequencyShape, shapedA);
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
-        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, {}, morphAmount, renderSampleRate, duration);
+        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, {}, morphAmount, renderSampleRate, duration,
+                                                    morphEnvelopeCache.get(),
+                                                    morphSourcesRevision.load(std::memory_order_acquire));
         const int totalSamples = rendered.getNumSamples();
         if (totalSamples <= 0)
         {
@@ -4098,7 +4173,9 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
                 const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
                 timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
-                                                            0.5, renderSampleRate, duration);
+                                                            0.5, renderSampleRate, duration,
+                                                            morphEnvelopeCache.get(),
+                                                            morphSourcesRevision.load(std::memory_order_acquire));
             }
             else
             {
@@ -4299,7 +4376,9 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
         const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
         timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
-                                                     0.5, renderSampleRate, duration);
+                                                     0.5, renderSampleRate, duration,
+                                                     morphEnvelopeCache.get(),
+                                                     morphSourcesRevision.load(std::memory_order_acquire));
     }
     else
     {

@@ -291,6 +291,10 @@ struct AtsSpectralTraceDisplayReference
     double residualPeak = 0.0;
 };
 
+// Defined in PluginProcessor.cpp: cross-render cache of per-frame Bark (True-Envelope) builds for
+// the Hybrid envelope-transfer / EnvelopeMorph lanes (held by pointer so the header stays light).
+struct MorphEnvelopeCache;
+
 class AtsAudioProcessor : public juce::AudioProcessor,
                           private juce::AudioProcessorValueTreeState::Listener,
                           private juce::AsyncUpdater,
@@ -805,6 +809,12 @@ private:
     /** Bumped by markMorphSnapshotStale whenever Source A/B state changes; keys the A/B and
      *  timeline live-smear caches (coarse: any source change invalidates both slots). */
     std::atomic<uint64_t> morphSourcesRevision { 0 };
+
+    /** Cross-render memo of the per-frame Bark envelope builds in renderMorphTrajectoryBuffer, so a
+     *  morph replay after a non-source change (morph amount, timeline edit) skips the iterative
+     *  True-Envelope rebuilds. Keyed on source pointer + morphSourcesRevision; results are
+     *  bit-identical to a fresh build. */
+    std::unique_ptr<MorphEnvelopeCache> morphEnvelopeCache;
 
     // Debounce for freq-shape resynth: avoid spawning a thread on every drag tick.
     std::atomic<bool> freqShapePendingResynth { false };
