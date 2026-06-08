@@ -574,4 +574,306 @@ void analyzeCentroidMomentsDescriptors(
     }
 }
 
+namespace
+{
+
+// Geometric mean of positive bins only. Skipping zero bins keeps flatness
+// invariant to uniform gain (an additive floor would dominate small bins and
+// break invariance) while still producing a finite value when at least one
+// bin carries energy. Bins == 0 do not contribute to either mean.
+double geometricMean(const std::vector<double>& bins, double /*floor*/)
+{
+    if (bins.empty())
+        return 0.0;
+    double logSum = 0.0;
+    int count = 0;
+    for (const auto value : bins)
+    {
+        if (value <= 0.0)
+            continue;
+        logSum += std::log(value);
+        ++count;
+    }
+    if (count == 0)
+        return 0.0;
+    return std::exp(logSum / static_cast<double>(count));
+}
+
+double arithmeticMean(const std::vector<double>& bins, double /*floor*/)
+{
+    if (bins.empty())
+        return 0.0;
+    double sum = 0.0;
+    int count = 0;
+    for (const auto value : bins)
+    {
+        if (value <= 0.0)
+            continue;
+        sum += value;
+        ++count;
+    }
+    if (count == 0)
+        return 0.0;
+    return sum / static_cast<double>(count);
+}
+
+double normalizedEntropy(const std::vector<double>& bins, double total)
+{
+    if (bins.empty() || total <= 0.0)
+        return 0.0;
+    double entropy = 0.0;
+    for (const auto value : bins)
+    {
+        if (value <= 0.0)
+            continue;
+        const double probability = value / total;
+        entropy -= probability * std::log(probability);
+    }
+    const double normalizer = std::log(static_cast<double>(bins.size()));
+    if (normalizer <= 0.0)
+        return 0.0;
+    return std::clamp(entropy / normalizer, 0.0, 1.0);
+}
+
+double spectralDecreaseStatistic(const std::vector<double>& bins)
+{
+    if (bins.size() < 2)
+        return 0.0;
+    // Anchor on the first non-zero bin so sparse leading bins from a Bark
+    // projection cannot zero-out an otherwise informative decrease.
+    std::size_t anchor = 0;
+    while (anchor < bins.size() && bins[anchor] <= 0.0)
+        ++anchor;
+    if (anchor + 1 >= bins.size())
+        return 0.0;
+    const double first = bins[anchor];
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (std::size_t k = anchor + 1; k < bins.size(); ++k)
+    {
+        const double diff = bins[k] - first;
+        const double step = static_cast<double>(k - anchor);
+        numerator += diff / step;
+        denominator += bins[k];
+    }
+    if (denominator <= 0.0)
+        return 0.0;
+    return numerator / denominator;
+}
+
+double strongPeakRatioStatistic(const std::vector<double>& bins, double total)
+{
+    if (bins.empty() || total <= 0.0)
+        return 0.0;
+    double peak = 0.0;
+    for (const auto value : bins)
+        peak = std::max(peak, value);
+    if (peak <= 0.0)
+        return 0.0;
+    return std::clamp(peak / total, 0.0, 1.0);
+}
+
+int countDominantBins(const std::vector<double>& bins, double thresholdRatio)
+{
+    if (bins.empty())
+        return 0;
+    double peak = 0.0;
+    for (const auto value : bins)
+        peak = std::max(peak, value);
+    if (peak <= 0.0)
+        return 0;
+    const double threshold = peak * thresholdRatio;
+    int count = 0;
+    for (const auto value : bins)
+    {
+        if (value >= threshold && value > 0.0)
+            ++count;
+    }
+    return count;
+}
+
+std::vector<double> spectrumFlatnessVector(
+    const std::vector<double>& bins,
+    int bandCount,
+    double floor)
+{
+    std::vector<double> out;
+    if (bins.empty() || bandCount <= 0)
+        return out;
+    const int effectiveBands = std::min<int>(bandCount, static_cast<int>(bins.size()));
+    out.assign(static_cast<std::size_t>(effectiveBands), 0.0);
+    const double total = static_cast<double>(bins.size());
+    for (int band = 0; band < effectiveBands; ++band)
+    {
+        const std::size_t start = static_cast<std::size_t>(
+            (static_cast<double>(band) * total) / static_cast<double>(effectiveBands));
+        std::size_t end = static_cast<std::size_t>(
+            (static_cast<double>(band + 1) * total) / static_cast<double>(effectiveBands));
+        if (end <= start)
+            end = start + 1;
+        end = std::min(end, bins.size());
+
+        std::vector<double> slice(bins.begin() + static_cast<std::ptrdiff_t>(start),
+                                  bins.begin() + static_cast<std::ptrdiff_t>(end));
+        const double gm = geometricMean(slice, floor);
+        const double am = arithmeticMean(slice, floor);
+        out[static_cast<std::size_t>(band)] = am > 0.0 ? std::clamp(gm / am, 0.0, 1.0) : 0.0;
+    }
+    return out;
+}
+
+} // namespace
+
+void analyzeGridShapeDescriptors(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    const GridShapeOptions& shapeOptions,
+    TimbreDescriptorFrame& frame)
+{
+    const int gridSize = std::max(options.comparisonGridSize, 2);
+    const auto distribution = buildCombinedEnergyDistribution(
+        samples.partials, samples.residualBands, options.comparisonAxis);
+    const auto grid = projectEnergyOntoUniformGrid(
+        distribution, options.comparisonAxis, gridSize);
+
+    const auto setEmpty = [](TimbreDescriptorValue& value,
+                              TimbreDescriptorDomain domain) {
+        value.value = 0.0;
+        value.domain = domain;
+        value.status = TimbreDescriptorStatus::EmptyInput;
+        value.confidence = 0.0;
+    };
+
+    const auto setTooSparse = [](TimbreDescriptorValue& value,
+                                  TimbreDescriptorDomain domain) {
+        value.value = 0.0;
+        value.domain = domain;
+        value.status = TimbreDescriptorStatus::TooSparse;
+        value.confidence = 0.0;
+    };
+
+    if (grid.status != TimbreDescriptorStatus::Available
+        || grid.totalEnergyAfter <= 0.0)
+    {
+        setEmpty(frame.flatness, TimbreDescriptorDomain::Combined);
+        setEmpty(frame.crest, TimbreDescriptorDomain::Combined);
+        setEmpty(frame.entropyNormalized, TimbreDescriptorDomain::Combined);
+        setEmpty(frame.spectralDecrease, TimbreDescriptorDomain::Combined);
+        setEmpty(frame.strongPeakRatio, TimbreDescriptorDomain::Combined);
+        setEmpty(frame.spectralComplexity, TimbreDescriptorDomain::Combined);
+
+        frame.spectrumFlatnessVector.values.clear();
+        frame.spectrumFlatnessVector.domain = TimbreDescriptorDomain::Combined;
+        frame.spectrumFlatnessVector.status = TimbreDescriptorStatus::EmptyInput;
+        frame.spectrumFlatnessVector.confidence = 0.0;
+        return;
+    }
+
+    const auto& bins = grid.bins;
+    const double floor = std::max(shapeOptions.binFloor, 0.0);
+    const double total = grid.totalEnergyAfter;
+    const double am = arithmeticMean(bins, floor);
+    const double gm = geometricMean(bins, floor);
+
+    // flatness = geometric_mean / arithmetic_mean (in [0, 1] post-clamp).
+    {
+        auto& d = frame.flatness;
+        d.domain = TimbreDescriptorDomain::Combined;
+        if (am > 0.0)
+        {
+            d.value = std::clamp(gm / am, 0.0, 1.0);
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+            d.coverage.activePointCount = grid.activeBinCount;
+            d.coverage.representedEnergyRatio = grid.representedEnergyRatio;
+            d.coverage.supportedFrequencySpanHz =
+                distribution.maxFrequencyHz - distribution.minFrequencyHz;
+        }
+        else
+        {
+            setTooSparse(d, TimbreDescriptorDomain::Combined);
+        }
+    }
+
+    // crest = max / arithmetic_mean (>= 1 except when bins are all floor).
+    {
+        auto& d = frame.crest;
+        d.domain = TimbreDescriptorDomain::Combined;
+        if (am > 0.0)
+        {
+            double peak = 0.0;
+            for (const auto value : bins)
+                peak = std::max(peak, value);
+            d.value = std::max(peak / am, 1.0);
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+            d.coverage = frame.flatness.coverage;
+        }
+        else
+        {
+            setTooSparse(d, TimbreDescriptorDomain::Combined);
+        }
+    }
+
+    // entropy = -sum(p log p) / log(K)
+    {
+        auto& d = frame.entropyNormalized;
+        d.domain = TimbreDescriptorDomain::Combined;
+        d.value = normalizedEntropy(bins, total);
+        d.status = TimbreDescriptorStatus::Available;
+        d.confidence = 1.0;
+        d.coverage = frame.flatness.coverage;
+    }
+
+    // spectral_decrease (Peeters)
+    {
+        auto& d = frame.spectralDecrease;
+        d.domain = TimbreDescriptorDomain::Combined;
+        if (grid.activeBinCount >= 2)
+        {
+            d.value = spectralDecreaseStatistic(bins);
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+            d.coverage = frame.flatness.coverage;
+        }
+        else
+        {
+            setTooSparse(d, TimbreDescriptorDomain::Combined);
+        }
+    }
+
+    // strong_peak_ratio = max(bin) / total
+    {
+        auto& d = frame.strongPeakRatio;
+        d.domain = TimbreDescriptorDomain::Combined;
+        d.value = strongPeakRatioStatistic(bins, total);
+        d.status = TimbreDescriptorStatus::Available;
+        d.confidence = 1.0;
+        d.coverage = frame.flatness.coverage;
+    }
+
+    // spectral_complexity = number of bins above relative threshold
+    {
+        auto& d = frame.spectralComplexity;
+        d.domain = TimbreDescriptorDomain::Combined;
+        d.value = static_cast<double>(
+            countDominantBins(bins, shapeOptions.complexityThresholdRatio));
+        d.status = TimbreDescriptorStatus::Available;
+        d.confidence = 1.0;
+        d.coverage = frame.flatness.coverage;
+    }
+
+    // spectrum_flatness_vector (MPEG-7-style per-band flatness)
+    {
+        auto& d = frame.spectrumFlatnessVector;
+        d.domain = TimbreDescriptorDomain::Combined;
+        d.values = spectrumFlatnessVector(bins, shapeOptions.flatnessVectorBands, floor);
+        d.status = d.values.empty()
+            ? TimbreDescriptorStatus::EmptyInput
+            : TimbreDescriptorStatus::Available;
+        d.confidence = d.values.empty() ? 0.0 : 1.0;
+        d.coverage = frame.flatness.coverage;
+    }
+}
+
 } // namespace ats

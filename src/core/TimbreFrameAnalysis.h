@@ -55,4 +55,38 @@ void analyzeCentroidMomentsDescriptors(
     const TimbreDescriptorOptions& options,
     TimbreDescriptorFrame& frame);
 
+// Grid-shape policy used by analyzeGridShapeDescriptors. The defaults match
+// the values serialized in the report schema; callers may override per call
+// when running comparison sweeps.
+struct GridShapeOptions
+{
+    // Floor added to grid bins before geometric/arithmetic mean computation
+    // so flatness/crest/entropy are well-defined for sparse bins.
+    double binFloor = 1.0e-12;
+    // Threshold for the strong-peak / complexity counters. Bins whose energy
+    // is at least `complexityThresholdRatio` times the maximum bin contribute
+    // to the count.
+    double complexityThresholdRatio = 0.1;
+    // Maximum number of frequency bins used for the spectrum_flatness_vector
+    // descriptor. The vector is built by grouping the comparison grid into
+    // approximately equal sub-bands.
+    int flatnessVectorBands = 8;
+};
+
+// Compute the grid-shape per-frame descriptors on the combined (partial +
+// residual) energy distribution projected onto the configured comparison
+// grid. The flatness, crest, entropy, decrease, strong_peak_ratio, and
+// spectral_complexity descriptors live in the combined domain; the per-band
+// spectrum_flatness_vector mirrors the MPEG-7 audio spectrum flatness shape.
+//
+// All normalized descriptors are invariant to uniform gain. Sparse grids
+// report TooSparse rather than emitting an undefined zero. Floors,
+// thresholds, and grid policy are serialized via the descriptor manifest
+// units and the surrounding TimbreDescriptorOptions.
+void analyzeGridShapeDescriptors(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    const GridShapeOptions& shapeOptions,
+    TimbreDescriptorFrame& frame);
+
 } // namespace ats
