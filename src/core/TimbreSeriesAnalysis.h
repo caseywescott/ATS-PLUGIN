@@ -226,4 +226,52 @@ TemporalEnvelopeDiagnostics analyzeTemporalEnvelopeShape(
     const TemporalEnvelopeOptions& temporalOptions,
     TimbreDescriptorSeries& series);
 
+// Options for the partial-track lifecycle analyzer. Onset and release
+// boundaries are inferred from per-track amplitude crossings relative to
+// each track's peak; the resulting offsets are weighted by track energy.
+struct PartialLifecycleOptions
+{
+    // Amplitude threshold (linear amplitude, relative to the track peak) used
+    // to mark onset and release for each track.
+    double trackOnsetThresholdRatio = 0.1;
+    double trackReleaseThresholdRatio = 0.1;
+    // Minimum number of qualifying tracks required for the descriptor to
+    // report Available. Below this, status is TooSparse.
+    int minimumTrackCount = 2;
+    // Minimum integrated amplitude on a track before it qualifies; tiny
+    // tracks contribute nothing and are excluded from the energy-weighted
+    // statistic.
+    double minimumTrackAmplitudeIntegral = 1.0e-6;
+};
+
+// Diagnostics describing the inferred event onset/release references and
+// the per-track sample counts that contributed.
+struct PartialLifecycleDiagnostics
+{
+    double eventOnsetSeconds = 0.0;
+    double eventReleaseSeconds = 0.0;
+    int qualifyingTrackCount = 0;
+    int onsetReferenceTrackId = -1;
+    int releaseReferenceTrackId = -1;
+};
+
+// Compute partial_onset_asynchrony_seconds and
+// partial_release_asynchrony_seconds. The analyzer:
+//   1. Derives per-track peak amplitudes and onset/release times via the
+//      configured thresholds (interpolated between adjacent track samples).
+//   2. Picks the earliest onset time as the event onset reference and the
+//      latest release time as the event release reference.
+//   3. Computes the energy-weighted standard deviation of each track's
+//      onset_offset_i = t_onset_i - t_event_onset (and similarly for
+//      release), per master spec section 5.11.
+//
+// Tracks shorter than two valid samples, or with integrated amplitude below
+// minimumTrackAmplitudeIntegral, are excluded. When fewer than
+// minimumTrackCount tracks qualify, both descriptors report TooSparse.
+// When no tracks are available, the analyzer reports EmptyInput.
+PartialLifecycleDiagnostics analyzePartialTrackLifecycle(
+    const std::vector<PartialTrack>& tracks,
+    const PartialLifecycleOptions& lifecycleOptions,
+    TimbreDescriptorSeries& series);
+
 } // namespace ats

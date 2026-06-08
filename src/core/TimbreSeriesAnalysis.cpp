@@ -578,6 +578,220 @@ TemporalEnvelopeDiagnostics analyzeTemporalEnvelopeShape(
     return diagnostics;
 }
 
+namespace
+{
+
+struct TrackSummary
+{
+    std::uint64_t trackId = 0;
+    double peakAmplitude = 0.0;
+    double integratedAmplitude = 0.0;
+    double onsetSeconds = 0.0;
+    double releaseSeconds = 0.0;
+    bool valid = false;
+};
+
+double interpolateAmplitudeCrossing(
+    const std::vector<PartialTrackSample>& samples,
+    std::size_t leftIndex,
+    std::size_t rightIndex,
+    double targetAmplitude)
+{
+    const auto& left = samples[leftIndex];
+    const auto& right = samples[rightIndex];
+    if (right.amplitude == left.amplitude)
+        return right.timeSeconds;
+    const double fraction = (targetAmplitude - left.amplitude)
+        / (right.amplitude - left.amplitude);
+    const double clamped = std::clamp(fraction, 0.0, 1.0);
+    return left.timeSeconds + clamped * (right.timeSeconds - left.timeSeconds);
+}
+
+TrackSummary summarizeTrack(
+    const PartialTrack& track,
+    const PartialLifecycleOptions& options)
+{
+    TrackSummary summary;
+    summary.trackId = track.trackId;
+    if (track.samples.size() < 2)
+        return summary;
+
+    std::size_t peakIndex = 0;
+    for (std::size_t i = 0; i < track.samples.size(); ++i)
+    {
+        const auto& sample = track.samples[i];
+        if (sample.present && sample.amplitude > summary.peakAmplitude)
+        {
+            summary.peakAmplitude = sample.amplitude;
+            peakIndex = i;
+        }
+        if (sample.present && sample.amplitude > 0.0)
+            summary.integratedAmplitude += sample.amplitude;
+    }
+    if (summary.peakAmplitude <= 0.0
+        || summary.integratedAmplitude < options.minimumTrackAmplitudeIntegral)
+    {
+        return summary;
+    }
+
+    const double onsetThreshold = summary.peakAmplitude
+        * std::clamp(options.trackOnsetThresholdRatio, 0.0, 1.0);
+    const double releaseThreshold = summary.peakAmplitude
+        * std::clamp(options.trackReleaseThresholdRatio, 0.0, 1.0);
+
+    // Onset: walk from first sample to the peak; report the first crossing of
+    // onsetThreshold. Interpolate from the predecessor when available.
+    summary.onsetSeconds = track.samples.front().timeSeconds;
+    for (std::size_t i = 0; i <= peakIndex; ++i)
+    {
+        if (track.samples[i].amplitude >= onsetThreshold)
+        {
+            if (i == 0)
+            {
+                summary.onsetSeconds = track.samples[i].timeSeconds;
+            }
+            else
+            {
+                summary.onsetSeconds = interpolateAmplitudeCrossing(
+                    track.samples, i - 1, i, onsetThreshold);
+            }
+            break;
+        }
+    }
+
+    // Release: walk after the peak; the first crossing below releaseThreshold.
+    summary.releaseSeconds = track.samples.back().timeSeconds;
+    for (std::size_t i = peakIndex + 1; i < track.samples.size(); ++i)
+    {
+        if (track.samples[i].amplitude <= releaseThreshold)
+        {
+            summary.releaseSeconds = interpolateAmplitudeCrossing(
+                track.samples, i - 1, i, releaseThreshold);
+            break;
+        }
+    }
+    summary.valid = true;
+    return summary;
+}
+
+double weightedStandardDeviation(
+    const std::vector<std::pair<double, double>>& offsetsAndWeights)
+{
+    double weightTotal = 0.0;
+    double mean = 0.0;
+    for (const auto& [offset, weight] : offsetsAndWeights)
+    {
+        weightTotal += weight;
+        mean += offset * weight;
+    }
+    if (weightTotal <= 0.0)
+        return 0.0;
+    mean /= weightTotal;
+    double variance = 0.0;
+    for (const auto& [offset, weight] : offsetsAndWeights)
+    {
+        const double delta = offset - mean;
+        variance += weight * delta * delta;
+    }
+    return std::sqrt(variance / weightTotal);
+}
+
+} // namespace
+
+PartialLifecycleDiagnostics analyzePartialTrackLifecycle(
+    const std::vector<PartialTrack>& tracks,
+    const PartialLifecycleOptions& lifecycleOptions,
+    TimbreDescriptorSeries& series)
+{
+    PartialLifecycleDiagnostics diagnostics;
+
+    auto markStatus = [&](TimbreDescriptorStatus status) {
+        const auto reset = [status](TimbreDescriptorValue& value) {
+            value.value = 0.0;
+            value.domain = TimbreDescriptorDomain::TemporalSeries;
+            value.status = status;
+            value.confidence = 0.0;
+        };
+        reset(series.partialOnsetAsynchronySeconds);
+        reset(series.partialReleaseAsynchronySeconds);
+    };
+
+    if (tracks.empty())
+    {
+        markStatus(TimbreDescriptorStatus::EmptyInput);
+        return diagnostics;
+    }
+
+    std::vector<TrackSummary> summaries;
+    summaries.reserve(tracks.size());
+    for (const auto& track : tracks)
+    {
+        const auto summary = summarizeTrack(track, lifecycleOptions);
+        if (summary.valid)
+            summaries.push_back(summary);
+    }
+    diagnostics.qualifyingTrackCount = static_cast<int>(summaries.size());
+
+    if (static_cast<int>(summaries.size()) < lifecycleOptions.minimumTrackCount)
+    {
+        markStatus(TimbreDescriptorStatus::TooSparse);
+        return diagnostics;
+    }
+
+    diagnostics.eventOnsetSeconds = summaries.front().onsetSeconds;
+    diagnostics.eventReleaseSeconds = summaries.front().releaseSeconds;
+    diagnostics.onsetReferenceTrackId = static_cast<int>(summaries.front().trackId);
+    diagnostics.releaseReferenceTrackId = diagnostics.onsetReferenceTrackId;
+    for (const auto& summary : summaries)
+    {
+        if (summary.onsetSeconds < diagnostics.eventOnsetSeconds)
+        {
+            diagnostics.eventOnsetSeconds = summary.onsetSeconds;
+            diagnostics.onsetReferenceTrackId = static_cast<int>(summary.trackId);
+        }
+        if (summary.releaseSeconds > diagnostics.eventReleaseSeconds)
+        {
+            diagnostics.eventReleaseSeconds = summary.releaseSeconds;
+            diagnostics.releaseReferenceTrackId = static_cast<int>(summary.trackId);
+        }
+    }
+
+    std::vector<std::pair<double, double>> onsetOffsets;
+    std::vector<std::pair<double, double>> releaseOffsets;
+    onsetOffsets.reserve(summaries.size());
+    releaseOffsets.reserve(summaries.size());
+    for (const auto& summary : summaries)
+    {
+        const double weight = summary.integratedAmplitude * summary.integratedAmplitude;
+        onsetOffsets.emplace_back(
+            summary.onsetSeconds - diagnostics.eventOnsetSeconds, weight);
+        releaseOffsets.emplace_back(
+            summary.releaseSeconds - diagnostics.eventReleaseSeconds, weight);
+    }
+
+    const double onsetStddev = weightedStandardDeviation(onsetOffsets);
+    const double releaseStddev = weightedStandardDeviation(releaseOffsets);
+
+    {
+        auto& d = series.partialOnsetAsynchronySeconds;
+        d.value = onsetStddev;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        d.status = TimbreDescriptorStatus::Available;
+        d.confidence = 1.0;
+        d.coverage.activePointCount = diagnostics.qualifyingTrackCount;
+    }
+    {
+        auto& d = series.partialReleaseAsynchronySeconds;
+        d.value = releaseStddev;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        d.status = TimbreDescriptorStatus::Available;
+        d.confidence = 1.0;
+        d.coverage.activePointCount = diagnostics.qualifyingTrackCount;
+    }
+
+    return diagnostics;
+}
+
 void computeFluxAndVariationTrajectories(
     const std::vector<SeriesFrameContext>& frames,
     const TimbreDescriptorOptions& options,
