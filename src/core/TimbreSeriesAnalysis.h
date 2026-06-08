@@ -146,4 +146,30 @@ SeriesAlignmentReport analyzeTimbreDescriptorSeries(
     const TimbreSeriesAlignmentOptions& alignmentOptions,
     TimbreDescriptorSeries& output);
 
+// Compute positive_flux and spectral_variation trajectories for the chosen
+// domain (Partials / ResidualBands / Combined). The output trajectories have
+// the same length as `frames`; entry [0] always has status TooSparse since
+// flux is undefined without a predecessor, and any frame immediately after a
+// transient boundary also reports TooSparse so flux is gated at marked
+// boundaries.
+//
+// Trajectories follow the formulas in master spec section 5.7:
+//
+//     positive_flux_t = sqrt(sum(max(0, E_t[k] - E_(t-1)[k])^2))
+//     spectral_variation_t =
+//         1 - dot(E_t, E_(t-1)) / (norm(E_t) * norm(E_(t-1)))
+//
+// E_t is the per-frame grid after applying alignmentOptions.frameNormalization
+// (so spectral_variation is shape-only when L1 / L2 normalization is used).
+//
+// Both vectors are written into `outFlux` and `outVariation` directly.
+// status / confidence per entry follow the standard descriptor contract.
+void computeFluxAndVariationTrajectories(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TimbreSeriesAlignmentOptions& alignmentOptions,
+    TimbreDescriptorDomain domain,
+    std::vector<TimbreDescriptorValue>& outFlux,
+    std::vector<TimbreDescriptorValue>& outVariation);
+
 } // namespace ats

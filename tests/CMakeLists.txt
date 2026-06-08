@@ -140,6 +140,18 @@ target_include_directories(timbre_series_alignment_test PRIVATE ../src/core)
 target_compile_features(timbre_series_alignment_test PRIVATE cxx_std_17)
 add_test(NAME timbre_series_alignment_test COMMAND timbre_series_alignment_test)
 
+add_executable(timbre_flux_variation_test
+  timbre_flux_variation_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/TimbreDescriptors.cpp
+  ../src/core/TimbreFrameAdapter.cpp
+  ../src/core/TimbreEnergyDistribution.cpp
+  ../src/core/TimbreSeriesAnalysis.cpp)
+target_include_directories(timbre_flux_variation_test PRIVATE ../src/core)
+target_compile_features(timbre_flux_variation_test PRIVATE cxx_std_17)
+add_test(NAME timbre_flux_variation_test COMMAND timbre_flux_variation_test)
+
 add_executable(timbre_descriptor_serialization_test
   timbre_descriptor_serialization_test.cpp
   ../src/core/SpectralEnvelope.cpp

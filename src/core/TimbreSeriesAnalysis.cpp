@@ -258,4 +258,93 @@ SeriesAlignmentReport analyzeTimbreDescriptorSeries(
     return alignment;
 }
 
+void computeFluxAndVariationTrajectories(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TimbreSeriesAlignmentOptions& alignmentOptions,
+    TimbreDescriptorDomain domain,
+    std::vector<TimbreDescriptorValue>& outFlux,
+    std::vector<TimbreDescriptorValue>& outVariation)
+{
+    outFlux.assign(frames.size(), {});
+    outVariation.assign(frames.size(), {});
+    if (frames.empty())
+        return;
+
+    const auto stack = buildSeriesGridStack(
+        frames, options, alignmentOptions, domain);
+    if (stack.grids.size() != frames.size() || stack.gridSize <= 0)
+    {
+        for (auto& v : outFlux) v.status = TimbreDescriptorStatus::EmptyInput;
+        for (auto& v : outVariation) v.status = TimbreDescriptorStatus::EmptyInput;
+        return;
+    }
+
+    for (std::size_t i = 0; i < frames.size(); ++i)
+    {
+        auto& flux = outFlux[i];
+        auto& variation = outVariation[i];
+        flux.domain = TimbreDescriptorDomain::TemporalSeries;
+        variation.domain = TimbreDescriptorDomain::TemporalSeries;
+        flux.value = 0.0;
+        variation.value = 0.0;
+
+        if (i == 0)
+        {
+            flux.status = TimbreDescriptorStatus::TooSparse;
+            variation.status = TimbreDescriptorStatus::TooSparse;
+            continue;
+        }
+        if (alignmentOptions.resetAtTransientBoundaries
+            && frames[i].transientBoundary)
+        {
+            flux.status = TimbreDescriptorStatus::TooSparse;
+            variation.status = TimbreDescriptorStatus::TooSparse;
+            continue;
+        }
+
+        const auto& current = stack.grids[i];
+        const auto& previous = stack.grids[i - 1];
+        if (current.size() != previous.size() || current.empty())
+        {
+            flux.status = TimbreDescriptorStatus::EmptyInput;
+            variation.status = TimbreDescriptorStatus::EmptyInput;
+            continue;
+        }
+
+        double positiveFluxAccum = 0.0;
+        double dot = 0.0;
+        double normCurrent = 0.0;
+        double normPrevious = 0.0;
+        for (std::size_t k = 0; k < current.size(); ++k)
+        {
+            const double diff = current[k] - previous[k];
+            const double positive = diff > 0.0 ? diff : 0.0;
+            positiveFluxAccum += positive * positive;
+            dot += current[k] * previous[k];
+            normCurrent += current[k] * current[k];
+            normPrevious += previous[k] * previous[k];
+        }
+        flux.value = std::sqrt(positiveFluxAccum);
+        flux.status = TimbreDescriptorStatus::Available;
+        flux.confidence = 1.0;
+        flux.coverage.activePointCount = static_cast<int>(current.size());
+
+        const double normProduct = std::sqrt(normCurrent) * std::sqrt(normPrevious);
+        if (normProduct > 0.0)
+        {
+            const double similarity = dot / normProduct;
+            variation.value = 1.0 - std::clamp(similarity, -1.0, 1.0);
+            variation.status = TimbreDescriptorStatus::Available;
+            variation.confidence = 1.0;
+            variation.coverage.activePointCount = static_cast<int>(current.size());
+        }
+        else
+        {
+            variation.status = TimbreDescriptorStatus::EmptyInput;
+            variation.confidence = 0.0;
+        }
+    }
+}
+
 } // namespace ats
