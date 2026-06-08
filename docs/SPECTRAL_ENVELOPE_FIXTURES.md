@@ -139,6 +139,47 @@ These currently live in:
 
 ---
 
+## Timbre Descriptor Analytical Fixtures
+
+Analytical timbre-descriptor fixtures live in
+`tests/fixtures/timbre_descriptor_analytical_fixtures.json` and are materialized
+deterministically by `tests/timbre_descriptor_analytical_fixtures.py`. Their
+purpose is different from the envelope-fit fixtures above: they exercise
+*descriptor correctness* against synthetic inputs whose analytical values are
+known. Recorded ATSA references remain regression gates; these are the
+correctness gates.
+
+Provenance rules for descriptor analytical fixtures:
+
+- Every fixture has a stable id and a category that appears in
+  `tests/fixtures/timbre_descriptor_manifest.json` (`$fixture_categories`).
+- Partial amplitudes are linear unless an `amplitude_db` field is provided, in
+  which case the builder converts via `10^(db / 20)`.
+- Residual bands carry an optional `orphan` flag so the orphan-residual ratio
+  has a known target.
+- Fitted envelopes are generated from one of `constant_db`, `log_log_line`, or
+  `two_raised_cosine_peaks` shapes with documented parameters; the grid is
+  always uniform in Hz.
+- Waveform spectra use a documented synthetic recipe so cepstral peak
+  prominence and high-frequency-content checks have a known floor and harmonic
+  layout.
+- Series fixtures specify `frame_hop_seconds` and either explicit per-frame
+  data, a `generator` block (e.g. AM modulation), or a `tracks` block (per
+  track amplitude curve with documented start/end frames).
+- Expected analytical values appear under the fixture's `expected` field;
+  bounded expectations (low/high bound) are explicit so estimator differences
+  do not require the builder to know the implementation.
+
+Tolerances live in the JSON file under `tolerances` so the analytical test
+suite (C++ and Python) uses one shared, versioned set.
+
+The Python self-test
+(`tests/timbre_descriptor_analytical_fixtures.py`) is registered as
+`timbre_descriptor_analytical_fixtures_check` in CTest and verifies that the
+builder loads, is deterministic, produces unique ids, and recovers the spot-
+check analytical values for the two-partial centroid, the partial/residual
+split, and the AM amplitude trajectory.
+
 ## Acceptance Mapping
 
 | PRD acceptance item | Fixture coverage |
