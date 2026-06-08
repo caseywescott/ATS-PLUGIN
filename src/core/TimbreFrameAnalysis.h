@@ -40,4 +40,19 @@ EnergyAnalysisResult analyzeEnergyAndNoisinessDescriptors(
     const TimbreDescriptorOptions& options,
     TimbreDescriptorFrame& frame);
 
+// Compute centroid, spread, skewness, kurtosis, and rolloff descriptors on
+// the partial, residual, and combined energy distributions. Uses the shared
+// energy distribution helpers from TimbreEnergyDistribution.
+//
+// Sparse domains (fewer than two energy-bearing samples) report TooSparse
+// for the higher-order moments; centroid and rolloff are still emitted in
+// that case when at least one sample is present.
+//
+// All normalized moments are invariant to uniform gain. Hz-domain centroids,
+// spreads, and rolloffs scale linearly with frequency, never with amplitude.
+void analyzeCentroidMomentsDescriptors(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    TimbreDescriptorFrame& frame);
+
 } // namespace ats

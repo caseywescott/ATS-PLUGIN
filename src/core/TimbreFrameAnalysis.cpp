@@ -1,5 +1,7 @@
 #include "TimbreFrameAnalysis.h"
 
+#include "FrequencyWarp.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -292,6 +294,284 @@ EnergyAnalysisResult analyzeEnergyAndNoisinessDescriptors(
     frame.frameIndex = samples.frameIndex;
 
     return result;
+}
+
+namespace
+{
+
+struct MomentResult
+{
+    double centroidHz = 0.0;
+    double spreadHz = 0.0;
+    double skewness = 0.0;
+    double kurtosis = 0.0;
+    int activeCount = 0;
+    double totalEnergy = 0.0;
+    bool centroidAvailable = false;
+    bool spreadAvailable = false;
+    bool higherOrderAvailable = false;
+};
+
+MomentResult computeMoments(const EnergyDistribution& distribution)
+{
+    MomentResult out;
+    if (distribution.samples.empty() || distribution.totalEnergy <= 0.0)
+        return out;
+
+    double weightedFreq = 0.0;
+    int active = 0;
+    for (const auto& sample : distribution.samples)
+    {
+        if (sample.energy <= 0.0)
+            continue;
+        weightedFreq += sample.frequencyHz * sample.energy;
+        ++active;
+    }
+    if (active == 0)
+        return out;
+
+    const double total = distribution.totalEnergy;
+    out.totalEnergy = total;
+    out.centroidHz = weightedFreq / total;
+    out.activeCount = active;
+    out.centroidAvailable = true;
+
+    if (active < 2)
+        return out;
+
+    double secondMoment = 0.0;
+    double thirdMoment = 0.0;
+    double fourthMoment = 0.0;
+    for (const auto& sample : distribution.samples)
+    {
+        if (sample.energy <= 0.0)
+            continue;
+        const double delta = sample.frequencyHz - out.centroidHz;
+        const double d2 = delta * delta;
+        const double weight = sample.energy / total;
+        secondMoment += weight * d2;
+        thirdMoment += weight * d2 * delta;
+        fourthMoment += weight * d2 * d2;
+    }
+
+    if (secondMoment <= 0.0)
+    {
+        out.spreadHz = 0.0;
+        return out;
+    }
+    out.spreadHz = std::sqrt(secondMoment);
+    out.spreadAvailable = true;
+
+    const double sigma3 = out.spreadHz * out.spreadHz * out.spreadHz;
+    const double sigma4 = sigma3 * out.spreadHz;
+    if (sigma3 > 0.0 && sigma4 > 0.0)
+    {
+        out.skewness = thirdMoment / sigma3;
+        out.kurtosis = fourthMoment / sigma4;
+        out.higherOrderAvailable = true;
+    }
+    return out;
+}
+
+double computeAxisCentroid(const EnergyDistribution& distribution)
+{
+    if (distribution.totalEnergy <= 0.0)
+        return 0.0;
+    double weighted = 0.0;
+    for (const auto& sample : distribution.samples)
+    {
+        if (sample.energy <= 0.0)
+            continue;
+        weighted += sample.axisPosition * sample.energy;
+    }
+    return weighted / distribution.totalEnergy;
+}
+
+double computeRolloff(const EnergyDistribution& distribution, double fraction)
+{
+    if (distribution.samples.empty() || distribution.totalEnergy <= 0.0)
+        return 0.0;
+    if (fraction <= 0.0)
+        return distribution.samples.front().frequencyHz;
+    if (fraction >= 1.0)
+        return distribution.samples.back().frequencyHz;
+
+    const double target = fraction * distribution.totalEnergy;
+    double cumulative = 0.0;
+    // samples are sorted by frequency ascending.
+    for (const auto& sample : distribution.samples)
+    {
+        if (sample.energy <= 0.0)
+            continue;
+        cumulative += sample.energy;
+        if (cumulative >= target)
+            return sample.frequencyHz;
+    }
+    return distribution.samples.back().frequencyHz;
+}
+
+void writeCentroidHz(
+    TimbreDescriptorValue& value,
+    const TimbreDescriptorDomain domain,
+    const EnergyDistribution& distribution,
+    const ValidatedFrameSamples& samples,
+    const std::vector<PartialEnergySample>& partialContrib,
+    const std::vector<ResidualEnergySample>& residualContrib,
+    const TimbreDescriptorStatus emptyStatus)
+{
+    value.domain = domain;
+    if (distribution.totalEnergy <= 0.0)
+    {
+        value.value = 0.0;
+        value.status = emptyStatus;
+        value.confidence = 0.0;
+        return;
+    }
+    const auto moments = computeMoments(distribution);
+    value.value = moments.centroidHz;
+    value.status = TimbreDescriptorStatus::Available;
+
+    double confidenceSum = 0.0;
+    for (const auto& sample : partialContrib)
+        confidenceSum += sample.energy * sample.confidence;
+    for (const auto& band : residualContrib)
+        confidenceSum += band.energy * band.confidence;
+    value.confidence = std::clamp(confidenceSum / distribution.totalEnergy, 0.0, 1.0);
+    value.coverage.activePointCount = moments.activeCount;
+    value.coverage.supportedFrequencySpanHz =
+        distribution.maxFrequencyHz - distribution.minFrequencyHz;
+    value.coverage.representedEnergyRatio = distribution.representedEnergyRatio;
+    (void) samples;
+}
+
+} // namespace
+
+void analyzeCentroidMomentsDescriptors(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    TimbreDescriptorFrame& frame)
+{
+    const auto partialDistribution =
+        buildPartialEnergyDistribution(samples.partials, options.comparisonAxis);
+    const auto residualDistribution =
+        buildResidualEnergyDistribution(samples.residualBands, options.comparisonAxis);
+    const auto combinedDistribution = buildCombinedEnergyDistribution(
+        samples.partials, samples.residualBands, options.comparisonAxis);
+
+    writeCentroidHz(frame.partialCentroidHz, TimbreDescriptorDomain::Partials,
+                    partialDistribution, samples, samples.partials, {},
+                    TimbreDescriptorStatus::EmptyInput);
+    writeCentroidHz(frame.residualCentroidHz, TimbreDescriptorDomain::ResidualBands,
+                    residualDistribution, samples, {}, samples.residualBands,
+                    samples.residualBandsPresent
+                        ? TimbreDescriptorStatus::EmptyInput
+                        : TimbreDescriptorStatus::MissingResidual);
+    writeCentroidHz(frame.combinedCentroidHz, TimbreDescriptorDomain::Combined,
+                    combinedDistribution, samples, samples.partials,
+                    samples.residualBands, TimbreDescriptorStatus::EmptyInput);
+
+    // Axis-coordinate centroid (Bark/Mel/ERB/Linear depending on options).
+    {
+        auto& d = frame.combinedCentroidAxis;
+        d.domain = TimbreDescriptorDomain::Combined;
+        if (combinedDistribution.totalEnergy <= 0.0)
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::EmptyInput;
+            d.confidence = 0.0;
+        }
+        else
+        {
+            d.value = computeAxisCentroid(combinedDistribution);
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = frame.combinedCentroidHz.confidence;
+            d.coverage.activePointCount = frame.combinedCentroidHz.coverage.activePointCount;
+            d.coverage.representedEnergyRatio = combinedDistribution.representedEnergyRatio;
+            d.coverage.supportedFrequencySpanHz =
+                combinedDistribution.maxFrequencyHz - combinedDistribution.minFrequencyHz;
+        }
+    }
+
+    // Spread / skewness / kurtosis on the combined distribution. Sparse
+    // distributions report TooSparse rather than emitting a 0/0 moment.
+    {
+        const auto moments = computeMoments(combinedDistribution);
+        auto& spread = frame.combinedSpreadHz;
+        auto& skew = frame.combinedSkewness;
+        auto& kurt = frame.combinedKurtosis;
+        spread.domain = TimbreDescriptorDomain::Combined;
+        skew.domain = TimbreDescriptorDomain::Combined;
+        kurt.domain = TimbreDescriptorDomain::Combined;
+
+        if (combinedDistribution.totalEnergy <= 0.0)
+        {
+            spread.value = 0.0;
+            spread.status = TimbreDescriptorStatus::EmptyInput;
+            skew = spread;
+            kurt = spread;
+        }
+        else if (!moments.spreadAvailable)
+        {
+            spread.value = 0.0;
+            spread.status = TimbreDescriptorStatus::TooSparse;
+            spread.confidence = frame.combinedCentroidHz.confidence;
+            skew = spread;
+            kurt = spread;
+        }
+        else
+        {
+            spread.value = moments.spreadHz;
+            spread.status = TimbreDescriptorStatus::Available;
+            spread.confidence = frame.combinedCentroidHz.confidence;
+            spread.coverage = frame.combinedCentroidHz.coverage;
+
+            if (moments.higherOrderAvailable)
+            {
+                skew.value = moments.skewness;
+                skew.status = TimbreDescriptorStatus::Available;
+                skew.confidence = spread.confidence;
+                skew.coverage = spread.coverage;
+
+                kurt.value = moments.kurtosis;
+                kurt.status = TimbreDescriptorStatus::Available;
+                kurt.confidence = spread.confidence;
+                kurt.coverage = spread.coverage;
+            }
+            else
+            {
+                skew.value = 0.0;
+                skew.status = TimbreDescriptorStatus::TooSparse;
+                kurt = skew;
+            }
+        }
+    }
+
+    // Configurable rolloff. Default fractions are 0.85 and 0.95.
+    {
+        auto& low = frame.rolloff85Hz;
+        auto& high = frame.rolloff95Hz;
+        low.domain = TimbreDescriptorDomain::Combined;
+        high.domain = TimbreDescriptorDomain::Combined;
+        if (combinedDistribution.totalEnergy <= 0.0)
+        {
+            low.value = 0.0;
+            low.status = TimbreDescriptorStatus::EmptyInput;
+            low.confidence = 0.0;
+            high = low;
+        }
+        else
+        {
+            low.value = computeRolloff(combinedDistribution, options.rolloffLowFraction);
+            low.status = TimbreDescriptorStatus::Available;
+            low.confidence = frame.combinedCentroidHz.confidence;
+            low.coverage = frame.combinedCentroidHz.coverage;
+
+            high.value = computeRolloff(combinedDistribution, options.rolloffHighFraction);
+            high.status = TimbreDescriptorStatus::Available;
+            high.confidence = low.confidence;
+            high.coverage = low.coverage;
+        }
+    }
 }
 
 } // namespace ats
