@@ -61,6 +61,8 @@ target_sources(
           ../core/SpectralEnvelope.cpp
           ../core/SpectralEnvelopeEstimator.cpp
           ../core/ResampleLinear.cpp
+          ../core/TimbreDescriptors.cpp
+          ../core/TimbreFrameAdapter.cpp
           ../core/AtsMathExpr.cpp)
 
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"

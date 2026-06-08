@@ -30,6 +30,21 @@ target_include_directories(timbre_descriptors_model_test PRIVATE ../src/core)
 target_compile_features(timbre_descriptors_model_test PRIVATE cxx_std_17)
 add_test(NAME timbre_descriptors_model_test COMMAND timbre_descriptors_model_test)
 
+add_executable(timbre_frame_adapter_test
+  timbre_frame_adapter_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/SpectralEnvelopeEstimator.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/F0AdaptiveEnvelope.cpp
+  ../src/core/LpcEnvelope.cpp
+  ../src/core/RegularizedCepstrum.cpp
+  ../src/core/TrueEnvelope.cpp
+  ../src/core/TimbreDescriptors.cpp
+  ../src/core/TimbreFrameAdapter.cpp)
+target_include_directories(timbre_frame_adapter_test PRIVATE ../src/core)
+target_compile_features(timbre_frame_adapter_test PRIVATE cxx_std_17)
+add_test(NAME timbre_frame_adapter_test COMMAND timbre_frame_adapter_test)
+
 add_executable(spectral_envelope_model_test
   spectral_envelope_model_test.cpp
   ../src/core/SpectralEnvelope.cpp)

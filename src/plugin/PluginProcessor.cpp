@@ -16,6 +16,7 @@
 #include "RegularizedCepstrum.h"
 #include "PluginEditor.h"
 #include "SpectralEnvelopeEstimator.h"
+#include "TimbreFrameAdapter.h"
 #include "TrueEnvelope.h"
 
 #include "ResampleLinear.h"
@@ -1439,42 +1440,40 @@ bool AtsAudioProcessor::buildEnvelopeOverlayData(int gridSize, ats::EnvelopeOver
             targetFrameIndex = (sourceFrameIndex + 1) % s->frames;
         double maxFreq = 0.0;
         const auto collectFrame = [&](const int frameIndex, ats::EnvelopeFrameInput& frame) {
-            for (int p = 0; p < s->partials; ++p)
-            {
-                const double amp = s->amp[p][frameIndex];
-                const double freq = s->frq[p][frameIndex];
-                if (!std::isfinite(amp) || !std::isfinite(freq) || amp <= 0.0 || freq <= 0.0)
-                    continue;
+            ats::PartialExtractionInput partialInput;
+            partialInput.frameIndex = frameIndex;
+            partialInput.partialCount = s->partials;
+            partialInput.amplitudeByPartial = s->amp;
+            partialInput.frequencyByPartial = s->frq;
+            partialInput.defaultConfidence = 1.0;
+            partialInput.defaultSmr = 20.0;
 
-                ats::EnvelopePartialPoint point;
-                point.frequencyHz = freq;
-                point.amplitude = amp;
-                point.smr = 20.0;
-                point.confidence = 1.0;
-                point.selected = true;
-                frame.partials.push_back(point);
-                maxFreq = std::max(maxFreq, freq);
+            ats::ResidualExtractionInput residualInput;
+            const bool hasResidual = (s->band_energy != nullptr);
+            if (hasResidual)
+            {
+                residualInput.frameIndex = frameIndex;
+                residualInput.bandCount = ATSA_CRITICAL_BANDS;
+                residualInput.energyByBand = s->band_energy;
+                residualInput.bandCenterFrequencyHz = [sampleRate](int bandIndex) {
+                    return residualBandCenterFrequency(bandIndex, sampleRate);
+                };
+                residualInput.defaultConfidence = 1.0;
             }
 
-            frame.sourceModelId = "active-model";
-            frame.frameIndex = static_cast<std::uint64_t>(frameIndex);
-            frame.sampleRate = sampleRate;
-            if (s->band_energy != nullptr)
-            {
-                for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
-                {
-                    const double energy = s->band_energy[band][frameIndex];
-                    const double frequencyHz = residualBandCenterFrequency(band, sampleRate);
-                    if (!std::isfinite(energy) || energy <= 0.0 || frequencyHz <= 0.0)
-                        continue;
+            ats::populateEnvelopeFrameInput(
+                partialInput,
+                hasResidual ? &residualInput : nullptr,
+                sampleRate,
+                "active-model",
+                false,
+                0.0,
+                0.0,
+                1.0e-12,
+                frame);
 
-                    ats::EnvelopeResidualBandPoint residual;
-                    residual.frequencyHz = frequencyHz;
-                    residual.energy = energy;
-                    residual.confidence = 1.0;
-                    frame.residualBands.push_back(residual);
-                }
-            }
+            for (const auto& partial : frame.partials)
+                maxFreq = std::max(maxFreq, partial.frequencyHz);
         };
         collectFrame(sourceFrameIndex, sourceFrame);
         collectFrame(targetFrameIndex, targetFrame);
