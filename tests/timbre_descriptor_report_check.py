@@ -136,6 +136,33 @@ def _check_descriptor_value(
                 f"{where}: descriptor '{descriptor_id}' has status 'available'"
                 f" but value is null"
             )
+        elif descriptor_id == "resonance_peaks":
+            # resonance_peaks is a list of objects (frequency_hz,
+            # axis_position, prominence_db, bandwidth_axis), not a flat
+            # numeric vector.
+            if not isinstance(value, list):
+                failures.append(
+                    f"{where}: descriptor '{descriptor_id}' must be a list"
+                )
+            else:
+                for index, peak in enumerate(value):
+                    if not isinstance(peak, dict):
+                        failures.append(
+                            f"{where}: descriptor '{descriptor_id}' peak "
+                            f"{index} must be an object"
+                        )
+                        continue
+                    for required_field in (
+                        "frequency_hz",
+                        "axis_position",
+                        "prominence_db",
+                        "bandwidth_axis",
+                    ):
+                        if not _is_finite_number(peak.get(required_field)):
+                            failures.append(
+                                f"{where}: descriptor '{descriptor_id}' peak "
+                                f"{index} field '{required_field}' is non-finite"
+                            )
         elif isinstance(value, list):
             for index, sub in enumerate(value):
                 if not _is_finite_number(sub):

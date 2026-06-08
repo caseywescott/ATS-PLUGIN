@@ -62,6 +62,7 @@ target_sources(
           ../core/SpectralEnvelopeEstimator.cpp
           ../core/ResampleLinear.cpp
           ../core/TimbreDescriptors.cpp
+          ../core/TimbreDescriptorSerialization.cpp
           ../core/TimbreFrameAdapter.cpp
           ../core/TimbreEnergyDistribution.cpp
           ../core/AtsMathExpr.cpp)
