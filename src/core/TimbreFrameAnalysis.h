@@ -175,4 +175,40 @@ void analyzeEnvelopeDeviationAndIrregularity(
     const EnvelopeSamplerFn& sampler,
     TimbreDescriptorFrame& frame);
 
+// Options for the spectral-contrast / resonance-peak analyzer. Floors,
+// thresholds, bandwidth policy, subband grid, and axis are explicit so
+// downstream serialization records the policy used.
+struct SpectralContrastOptions
+{
+    // Minimum dB above the local valley a bin must reach to qualify as a peak.
+    double minimumProminenceDb = 3.0;
+    // Minimum axis-coordinate separation between adjacent reported peaks.
+    double minimumSeparationAxis = 0.05;
+    // Maximum number of peaks returned in TimbreDescriptorFrame::resonancePeaks.
+    int maximumPeakCount = 8;
+    // Bandwidth threshold used for the prominence drop (in dB below peak).
+    double bandwidthDropDb = 6.0;
+    // Number of equal-axis sub-bands for the subband centroid vector.
+    int subbandCount = 4;
+    // Amplitude floor used during dB conversion.
+    double amplitudeFloor = 1.0e-9;
+    // Minimum number of usable grid bins before status becomes Available.
+    int minSampleCount = 4;
+};
+
+// Compute resonance peaks (frequency_hz, axis_position, prominence_db,
+// bandwidth_axis), the global spectral_contrast_db (mean peak prominence
+// across detected peaks), the peak count above the prominence threshold,
+// and a subband centroid vector. The analyzer is estimator-independent:
+// it reads only the sampler-returned envelope amplitudes.
+//
+// Returns TooSparse on flat or sparse envelopes, MissingEnvelope when the
+// sampler/envelope is unavailable, and Available otherwise.
+void analyzeSpectralContrastAndResonancePeaks(
+    const FrameEnvelope& envelope,
+    const TimbreDescriptorOptions& options,
+    const SpectralContrastOptions& contrastOptions,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame);
+
 } // namespace ats

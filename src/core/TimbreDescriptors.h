@@ -128,6 +128,9 @@ struct TimbreDescriptorFrame
     std::vector<TimbreResonancePeak> resonancePeaks{};
     TimbreDescriptorStatus resonancePeaksStatus = TimbreDescriptorStatus::EmptyInput;
     double resonancePeaksConfidence = 0.0;
+    // Subband centroid vector (one value per spectral_contrast_db sub-band).
+    // Same status / confidence semantics as TimbreDescriptorVector.
+    TimbreDescriptorVector subbandCentroidsHz{};
 
     // Relative diagnostics
     TimbreDescriptorValue partialVsResidualCentroidOffsetHz{};

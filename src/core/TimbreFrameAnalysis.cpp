@@ -1158,4 +1158,297 @@ void analyzeEnvelopeDeviationAndIrregularity(
     }
 }
 
+namespace
+{
+
+struct EnvelopeGridDb
+{
+    std::vector<double> dbValues;
+    std::vector<double> linearValues;
+    std::vector<double> binCenterHz;
+    std::vector<double> binAxisPosition;
+    int activeBinCount = 0;
+};
+
+bool buildEnvelopeGridDb(
+    const FrameEnvelope& envelope,
+    const TimbreDescriptorOptions& options,
+    const SpectralContrastOptions& contrastOptions,
+    const EnvelopeSamplerFn& sampler,
+    EnvelopeGridDb& out)
+{
+    if (!sampler || envelope.values.empty()
+        || !isValidFrequencyAxis(options.comparisonAxis))
+        return false;
+
+    const int gridSize = std::max(options.comparisonGridSize,
+                                   contrastOptions.minSampleCount);
+    const auto grid = sampleFittedEnvelopeOntoGrid(
+        envelope, options.comparisonAxis, gridSize,
+        contrastOptions.amplitudeFloor, sampler);
+    if (grid.status != TimbreDescriptorStatus::Available)
+        return false;
+
+    out.dbValues.assign(grid.values.size(), 0.0);
+    out.linearValues = grid.values;
+    out.binCenterHz = grid.binCenterHz;
+    out.binAxisPosition.assign(grid.values.size(), 0.0);
+    const double floor = std::max(contrastOptions.amplitudeFloor, 1.0e-30);
+    const double scale = static_cast<double>(grid.values.size());
+    for (std::size_t i = 0; i < grid.values.size(); ++i)
+    {
+        out.dbValues[i] = 20.0 * std::log10(std::max(grid.values[i], floor));
+        out.binAxisPosition[i] = (static_cast<double>(i) + 0.5) / scale;
+    }
+    out.activeBinCount = grid.activeBinCount;
+    return true;
+}
+
+struct DetectedPeak
+{
+    std::size_t binIndex = 0;
+    double frequencyHz = 0.0;
+    double axisPosition = 0.0;
+    double valueDb = 0.0;
+    double prominenceDb = 0.0;
+    double bandwidthAxis = 0.0;
+};
+
+double leftValleyDb(const std::vector<double>& dbValues, std::size_t index)
+{
+    if (index == 0)
+        return dbValues.front();
+    double valley = dbValues[index];
+    for (std::size_t i = index; i > 0; --i)
+    {
+        valley = std::min(valley, dbValues[i - 1]);
+        if (i - 1 < dbValues.size() - 1 && dbValues[i - 1] > dbValues[i])
+        {
+            // ascending into a new peak: stop search
+            break;
+        }
+    }
+    return valley;
+}
+
+double rightValleyDb(const std::vector<double>& dbValues, std::size_t index)
+{
+    if (index >= dbValues.size())
+        return 0.0;
+    double valley = dbValues[index];
+    for (std::size_t i = index; i + 1 < dbValues.size(); ++i)
+    {
+        valley = std::min(valley, dbValues[i + 1]);
+        if (dbValues[i + 1] > dbValues[i])
+            break;
+    }
+    return valley;
+}
+
+double bandwidthAtDrop(
+    const std::vector<double>& dbValues,
+    const std::vector<double>& axisPositions,
+    std::size_t index,
+    double dropDb)
+{
+    if (dbValues.empty() || index >= dbValues.size())
+        return 0.0;
+    const double peakDb = dbValues[index];
+    const double threshold = peakDb - dropDb;
+    std::size_t leftIndex = index;
+    while (leftIndex > 0 && dbValues[leftIndex - 1] >= threshold)
+        --leftIndex;
+    std::size_t rightIndex = index;
+    while (rightIndex + 1 < dbValues.size()
+           && dbValues[rightIndex + 1] >= threshold)
+        ++rightIndex;
+    if (rightIndex <= leftIndex)
+        return 0.0;
+    return axisPositions[rightIndex] - axisPositions[leftIndex];
+}
+
+std::vector<DetectedPeak> detectPeaks(
+    const EnvelopeGridDb& grid,
+    const SpectralContrastOptions& contrastOptions)
+{
+    std::vector<DetectedPeak> peaks;
+    const auto& db = grid.dbValues;
+    if (db.size() < 3)
+        return peaks;
+
+    for (std::size_t i = 1; i + 1 < db.size(); ++i)
+    {
+        if (db[i] <= db[i - 1] || db[i] <= db[i + 1])
+            continue;
+        const double left = leftValleyDb(db, i);
+        const double right = rightValleyDb(db, i);
+        const double valley = std::min(left, right);
+        const double prominence = db[i] - valley;
+        if (prominence < contrastOptions.minimumProminenceDb)
+            continue;
+
+        DetectedPeak peak;
+        peak.binIndex = i;
+        peak.frequencyHz = grid.binCenterHz[i];
+        peak.axisPosition = grid.binAxisPosition[i];
+        peak.valueDb = db[i];
+        peak.prominenceDb = prominence;
+        peak.bandwidthAxis = bandwidthAtDrop(
+            db, grid.binAxisPosition, i, contrastOptions.bandwidthDropDb);
+
+        if (!peaks.empty())
+        {
+            auto& previous = peaks.back();
+            if (peak.axisPosition - previous.axisPosition
+                < contrastOptions.minimumSeparationAxis)
+            {
+                if (peak.prominenceDb > previous.prominenceDb)
+                    previous = peak;
+                continue;
+            }
+        }
+        peaks.push_back(peak);
+        if (static_cast<int>(peaks.size()) >= contrastOptions.maximumPeakCount)
+            break;
+    }
+    return peaks;
+}
+
+double subbandCentroidHz(
+    const std::vector<double>& linear,
+    const std::vector<double>& binCenterHz,
+    std::size_t startBin,
+    std::size_t endBin)
+{
+    double weightedSum = 0.0;
+    double weightTotal = 0.0;
+    for (std::size_t i = startBin; i < endBin && i < linear.size(); ++i)
+    {
+        const double energy = linear[i] * linear[i];
+        weightedSum += binCenterHz[i] * energy;
+        weightTotal += energy;
+    }
+    if (weightTotal <= 0.0)
+        return 0.0;
+    return weightedSum / weightTotal;
+}
+
+} // namespace
+
+void analyzeSpectralContrastAndResonancePeaks(
+    const FrameEnvelope& envelope,
+    const TimbreDescriptorOptions& options,
+    const SpectralContrastOptions& contrastOptions,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame)
+{
+    auto& contrast = frame.spectralContrastDb;
+    contrast.domain = TimbreDescriptorDomain::FittedEnvelope;
+
+    auto& subband = frame.subbandCentroidsHz;
+    subband.values.clear();
+    subband.domain = TimbreDescriptorDomain::FittedEnvelope;
+    subband.status = TimbreDescriptorStatus::EmptyInput;
+    subband.confidence = 0.0;
+
+    frame.resonancePeaks.clear();
+    frame.resonancePeaksStatus = TimbreDescriptorStatus::EmptyInput;
+    frame.resonancePeaksConfidence = 0.0;
+
+    EnvelopeGridDb grid;
+    if (!buildEnvelopeGridDb(envelope, options, contrastOptions, sampler, grid))
+    {
+        contrast.value = 0.0;
+        contrast.status = TimbreDescriptorStatus::MissingEnvelope;
+        contrast.confidence = 0.0;
+        frame.resonancePeaksStatus = TimbreDescriptorStatus::MissingEnvelope;
+        subband.status = TimbreDescriptorStatus::MissingEnvelope;
+        return;
+    }
+    if (grid.activeBinCount < contrastOptions.minSampleCount
+        || grid.dbValues.size() < 3)
+    {
+        contrast.value = 0.0;
+        contrast.status = TimbreDescriptorStatus::TooSparse;
+        contrast.confidence = 0.0;
+        frame.resonancePeaksStatus = TimbreDescriptorStatus::TooSparse;
+        subband.status = TimbreDescriptorStatus::TooSparse;
+        return;
+    }
+
+    // Subband centroids: split the grid into contrastOptions.subbandCount
+    // equal-axis sub-bands and report the energy-weighted centroid Hz of each.
+    if (contrastOptions.subbandCount > 0)
+    {
+        const std::size_t total = grid.linearValues.size();
+        const int subCount = std::max(contrastOptions.subbandCount, 1);
+        subband.values.assign(static_cast<std::size_t>(subCount), 0.0);
+        int activeSubbands = 0;
+        for (int band = 0; band < subCount; ++band)
+        {
+            const std::size_t start = static_cast<std::size_t>(
+                (static_cast<double>(band) * static_cast<double>(total))
+                / static_cast<double>(subCount));
+            std::size_t end = static_cast<std::size_t>(
+                (static_cast<double>(band + 1) * static_cast<double>(total))
+                / static_cast<double>(subCount));
+            if (end <= start)
+                end = start + 1;
+            end = std::min(end, total);
+            const double centroid = subbandCentroidHz(
+                grid.linearValues, grid.binCenterHz, start, end);
+            subband.values[static_cast<std::size_t>(band)] = centroid;
+            if (centroid > 0.0)
+                ++activeSubbands;
+        }
+        subband.status = activeSubbands > 0
+            ? TimbreDescriptorStatus::Available
+            : TimbreDescriptorStatus::EmptyInput;
+        subband.confidence = activeSubbands > 0 ? 1.0 : 0.0;
+        subband.coverage.activePointCount = activeSubbands;
+    }
+
+    const auto peaks = detectPeaks(grid, contrastOptions);
+    double meanProminence = 0.0;
+    for (const auto& peak : peaks)
+        meanProminence += peak.prominenceDb;
+    if (!peaks.empty())
+        meanProminence /= static_cast<double>(peaks.size());
+
+    contrast.value = meanProminence;
+    contrast.status = peaks.empty()
+        ? TimbreDescriptorStatus::TooSparse
+        : TimbreDescriptorStatus::Available;
+    contrast.confidence = peaks.empty() ? 0.0 : 1.0;
+    contrast.coverage.activePointCount = static_cast<int>(peaks.size());
+
+    frame.resonancePeaks.reserve(peaks.size());
+    for (const auto& peak : peaks)
+    {
+        TimbreResonancePeak record;
+        record.frequencyHz = peak.frequencyHz;
+        record.axisPosition = peak.axisPosition;
+        record.prominenceDb = peak.prominenceDb;
+        record.bandwidthAxis = peak.bandwidthAxis;
+        frame.resonancePeaks.push_back(record);
+    }
+    frame.resonancePeaksStatus = peaks.empty()
+        ? TimbreDescriptorStatus::TooSparse
+        : TimbreDescriptorStatus::Available;
+    frame.resonancePeaksConfidence = peaks.empty() ? 0.0 : 1.0;
+
+    // spectral_complexity already exists in the grid-shape analyzer; the
+    // contrast analyzer reports peak count above prominence via the
+    // resonance_peaks list length above. Keep these synchronized here by
+    // also writing into spectralComplexity if the grid-shape analyzer has
+    // not populated it.
+    if (frame.spectralComplexity.status == TimbreDescriptorStatus::EmptyInput)
+    {
+        frame.spectralComplexity.domain = TimbreDescriptorDomain::Combined;
+        frame.spectralComplexity.value = static_cast<double>(peaks.size());
+        frame.spectralComplexity.status = TimbreDescriptorStatus::Available;
+        frame.spectralComplexity.confidence = 1.0;
+    }
+}
+
 } // namespace ats
