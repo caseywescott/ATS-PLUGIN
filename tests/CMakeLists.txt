@@ -10,6 +10,10 @@ add_test(
   NAME spectral_envelope_baselines
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/spectral_envelope_baselines.py")
 
+add_test(
+  NAME timbre_descriptor_manifest_check
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/timbre_descriptor_manifest_check.py")
+
 add_executable(spectral_envelope_model_test
   spectral_envelope_model_test.cpp
   ../src/core/SpectralEnvelope.cpp)
