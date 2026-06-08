@@ -792,6 +792,183 @@ PartialLifecycleDiagnostics analyzePartialTrackLifecycle(
     return diagnostics;
 }
 
+namespace
+{
+
+struct ModulationSummary
+{
+    double rateHz = 0.0;
+    double depthOrExtent = 0.0;
+    double weight = 0.0;
+    bool valid = false;
+};
+
+ModulationSummary estimateRateFromSeries(
+    const std::vector<double>& times,
+    const std::vector<double>& values,
+    double nyquistHz)
+{
+    ModulationSummary summary;
+    if (values.size() < 4 || times.size() != values.size())
+        return summary;
+
+    double mean = 0.0;
+    for (const double v : values)
+        mean += v;
+    mean /= static_cast<double>(values.size());
+
+    std::vector<double> detrended(values.size());
+    double minDetrended = 0.0;
+    double maxDetrended = 0.0;
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+        detrended[i] = values[i] - mean;
+        if (detrended[i] < minDetrended) minDetrended = detrended[i];
+        if (detrended[i] > maxDetrended) maxDetrended = detrended[i];
+    }
+    summary.depthOrExtent = maxDetrended - minDetrended;
+
+    int zeroCrossings = 0;
+    for (std::size_t i = 1; i < detrended.size(); ++i)
+    {
+        const double prev = detrended[i - 1];
+        const double cur = detrended[i];
+        if ((prev <= 0.0 && cur > 0.0) || (prev >= 0.0 && cur < 0.0))
+            ++zeroCrossings;
+    }
+    const double duration = times.back() - times.front();
+    if (duration <= 0.0 || zeroCrossings == 0)
+        return summary;
+
+    summary.rateHz = static_cast<double>(zeroCrossings) / (2.0 * duration);
+    if (nyquistHz > 0.0)
+        summary.rateHz = std::min(summary.rateHz, nyquistHz);
+    summary.weight = mean > 0.0 ? mean * mean : 0.0;
+    summary.valid = true;
+    return summary;
+}
+
+} // namespace
+
+PartialModulationDiagnostics analyzePartialModulation(
+    const std::vector<PartialTrack>& tracks,
+    const PartialModulationOptions& modulationOptions,
+    TimbreDescriptorSeries& series)
+{
+    PartialModulationDiagnostics diagnostics;
+    diagnostics.seriesNyquistHz = modulationOptions.trajectoryRateHz > 0.0
+        ? modulationOptions.trajectoryRateHz * 0.5
+        : 0.0;
+
+    auto markStatus = [&](TimbreDescriptorStatus status) {
+        const auto reset = [status](TimbreDescriptorValue& value) {
+            value.value = 0.0;
+            value.domain = TimbreDescriptorDomain::TemporalSeries;
+            value.status = status;
+            value.confidence = 0.0;
+        };
+        reset(series.partialAmRateHz);
+        reset(series.partialFmRateHz);
+    };
+
+    if (tracks.empty())
+    {
+        markStatus(TimbreDescriptorStatus::EmptyInput);
+        return diagnostics;
+    }
+    if (modulationOptions.trajectoryRateHz <= 0.0)
+    {
+        markStatus(TimbreDescriptorStatus::TooSparse);
+        return diagnostics;
+    }
+
+    double amRateNumerator = 0.0;
+    double amWeightTotal = 0.0;
+    double amDepthAccum = 0.0;
+    double fmRateNumerator = 0.0;
+    double fmWeightTotal = 0.0;
+    double fmExtentAccum = 0.0;
+
+    for (const auto& track : tracks)
+    {
+        std::vector<double> times;
+        std::vector<double> amplitudes;
+        std::vector<double> frequencies;
+        times.reserve(track.samples.size());
+        amplitudes.reserve(track.samples.size());
+        frequencies.reserve(track.samples.size());
+        for (const auto& sample : track.samples)
+        {
+            if (!sample.present)
+                continue;
+            if (!std::isfinite(sample.amplitude) || !std::isfinite(sample.frequencyHz))
+                continue;
+            times.push_back(sample.timeSeconds);
+            amplitudes.push_back(sample.amplitude);
+            frequencies.push_back(sample.frequencyHz);
+        }
+        if (static_cast<int>(amplitudes.size()) < modulationOptions.minimumSampleCount)
+            continue;
+
+        const auto am = estimateRateFromSeries(times, amplitudes, diagnostics.seriesNyquistHz);
+        if (am.valid)
+        {
+            double meanAmp = 0.0;
+            for (const double v : amplitudes)
+                meanAmp += v;
+            meanAmp /= static_cast<double>(amplitudes.size());
+            const double relativeDepth = meanAmp > 0.0
+                ? (am.depthOrExtent * 0.5) / meanAmp
+                : 0.0;
+            if (relativeDepth >= modulationOptions.minimumAmDepth)
+            {
+                amRateNumerator += am.rateHz * am.weight;
+                amWeightTotal += am.weight;
+                amDepthAccum += relativeDepth * am.weight;
+                ++diagnostics.qualifyingAmTrackCount;
+            }
+        }
+        const auto fm = estimateRateFromSeries(times, frequencies, diagnostics.seriesNyquistHz);
+        if (fm.valid && fm.depthOrExtent >= modulationOptions.minimumFmExtentHz)
+        {
+            fmRateNumerator += fm.rateHz * fm.weight;
+            fmWeightTotal += fm.weight;
+            fmExtentAccum += fm.depthOrExtent * fm.weight;
+            ++diagnostics.qualifyingFmTrackCount;
+        }
+    }
+
+    auto reportRate = [&](TimbreDescriptorValue& value, double numerator,
+                            double weightTotal, int qualifying)
+    {
+        value.domain = TimbreDescriptorDomain::TemporalSeries;
+        if (qualifying < modulationOptions.minimumTrackCount || weightTotal <= 0.0)
+        {
+            value.value = 0.0;
+            value.status = TimbreDescriptorStatus::TooSparse;
+            value.confidence = 0.0;
+        }
+        else
+        {
+            value.value = numerator / weightTotal;
+            value.status = TimbreDescriptorStatus::Available;
+            value.confidence = 1.0;
+            value.coverage.activePointCount = qualifying;
+        }
+    };
+    reportRate(series.partialAmRateHz, amRateNumerator, amWeightTotal,
+                diagnostics.qualifyingAmTrackCount);
+    reportRate(series.partialFmRateHz, fmRateNumerator, fmWeightTotal,
+                diagnostics.qualifyingFmTrackCount);
+
+    if (amWeightTotal > 0.0)
+        diagnostics.weightedAmDepth = amDepthAccum / amWeightTotal;
+    if (fmWeightTotal > 0.0)
+        diagnostics.weightedFmExtentHz = fmExtentAccum / fmWeightTotal;
+
+    return diagnostics;
+}
+
 void computeFluxAndVariationTrajectories(
     const std::vector<SeriesFrameContext>& frames,
     const TimbreDescriptorOptions& options,

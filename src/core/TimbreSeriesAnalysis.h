@@ -274,4 +274,55 @@ PartialLifecycleDiagnostics analyzePartialTrackLifecycle(
     const PartialLifecycleOptions& lifecycleOptions,
     TimbreDescriptorSeries& series);
 
+// Options for the partial modulation analyzer. Rate estimation uses zero-
+// crossing analysis of each track's detrended trajectory; the operations
+// remain bounded and JUCE-independent.
+struct PartialModulationOptions
+{
+    // Sample-rate of the per-frame trajectory in Hz (1 / frameHopSeconds).
+    // Set explicitly so the analyzer can clamp reported rates to the series
+    // Nyquist.
+    double trajectoryRateHz = 0.0;
+    // Minimum number of valid track samples before a track contributes.
+    int minimumSampleCount = 6;
+    // Minimum number of qualifying tracks before the descriptor reports
+    // Available; below this, the descriptor reports TooSparse.
+    int minimumTrackCount = 1;
+    // Minimum AM depth (relative to mean amplitude) before a track is
+    // considered to carry modulation. Tracks with depth below this are
+    // excluded from the energy-weighted mean.
+    double minimumAmDepth = 0.05;
+    // Minimum FM extent (Hz) before a track contributes to the FM rate.
+    double minimumFmExtentHz = 1.0;
+};
+
+// Diagnostics for the modulation analyzer; useful for UI / report inspection.
+struct PartialModulationDiagnostics
+{
+    int qualifyingAmTrackCount = 0;
+    int qualifyingFmTrackCount = 0;
+    double seriesNyquistHz = 0.0;
+    double weightedAmDepth = 0.0;
+    double weightedFmExtentHz = 0.0;
+};
+
+// Compute partial_am_rate_hz and partial_fm_rate_hz from track amplitude /
+// frequency trajectories. The analyzer:
+//   1. Detrends each track's amplitude trajectory by subtracting its mean.
+//   2. Counts zero-crossings to estimate the dominant modulation rate; the
+//      rate equals zero_crossings / (2 * duration).
+//   3. Repeats step 2 on the frequency trajectory after subtracting its
+//      mean to estimate the FM rate.
+//   4. Reports the energy-weighted mean across qualifying tracks, clamped
+//      to the series Nyquist rate.
+//
+// The analyzer reports TooSparse when no track has enough samples or when
+// no track exceeds the configured modulation depth / extent gates. Tracks
+// without meaningful modulation contribute zero to the weighted mean rather
+// than corrupting it.
+PartialModulationDiagnostics analyzePartialModulation(
+    const std::vector<PartialTrack>& tracks,
+    const PartialModulationOptions& modulationOptions,
+    TimbreDescriptorSeries& series);
+
 } // namespace ats
