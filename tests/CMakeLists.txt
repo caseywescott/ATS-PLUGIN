@@ -18,6 +18,10 @@ add_test(
   NAME timbre_descriptor_analytical_fixtures_check
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/timbre_descriptor_analytical_fixtures.py")
 
+add_test(
+  NAME timbre_descriptor_report_schema_check
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/timbre_descriptor_report_check.py")
+
 add_executable(spectral_envelope_model_test
   spectral_envelope_model_test.cpp
   ../src/core/SpectralEnvelope.cpp)

@@ -1,0 +1,118 @@
+{
+  "$schema_version": 1,
+  "$generated_for": "docs/TIMBRE_DESCRIPTOR_BUNDLE_MASTER_SPEC.md",
+  "$notes": [
+    "Versioned descriptor-report schema. A descriptor report is the export form",
+    "of TimbreDescriptorFrame and TimbreDescriptorSeries values produced by the",
+    "C++ core. The schema below is a JSON-Schema-like structure: it is",
+    "intentionally lightweight so that we can lint reports in CI without pulling",
+    "in a full JSON-Schema validator. tests/timbre_descriptor_report_check.py",
+    "implements the validation logic.",
+    "Tolerance groups are advisory and shared with the analytical fixture file."
+  ],
+  "report": {
+    "required_top_level": [
+      "schema_version",
+      "source_model_id",
+      "weighting",
+      "comparison_axis",
+      "comparison_grid_size",
+      "frames"
+    ],
+    "optional_top_level": [
+      "series",
+      "tolerance_group",
+      "options",
+      "produced_by_id",
+      "produced_by_version",
+      "platform_tag"
+    ],
+    "weighting_allowed_values": [
+      "energy",
+      "energy_residual_band",
+      "energy_combined",
+      "uniform_grid",
+      "uniform_envelope_grid",
+      "harmonic_energy",
+      "amplitude_linear",
+      "amplitude_db",
+      "track_energy_weighted",
+      "frame_energy_weighted",
+      "none"
+    ],
+    "comparison_axis_allowed_values": [
+      "linear_hz",
+      "bark",
+      "mel",
+      "erb",
+      "normalized_nyquist",
+      "custom_normalized"
+    ]
+  },
+  "frame": {
+    "required": ["frame_index", "descriptors"],
+    "optional": ["source_model_id", "tolerance_group", "options_hash"]
+  },
+  "descriptor_value": {
+    "required": ["value", "domain", "status", "confidence", "formula_version"],
+    "optional": [
+      "units",
+      "axis",
+      "floors",
+      "weighting",
+      "options",
+      "coverage",
+      "supported_frequency_span_hz",
+      "represented_energy_ratio",
+      "components"
+    ],
+    "domain_allowed_values": [
+      "partials",
+      "residual_bands",
+      "combined",
+      "fitted_envelope",
+      "waveform_spectrum",
+      "temporal_series"
+    ],
+    "status_allowed_values": [
+      "available",
+      "empty_input",
+      "too_sparse",
+      "missing_residual",
+      "missing_envelope",
+      "missing_reliable_f0",
+      "missing_waveform",
+      "undefined",
+      "unsupported"
+    ],
+    "value_rules": {
+      "available_must_be_finite": true,
+      "non_available_value_may_be_null": true,
+      "confidence_range": [0.0, 1.0]
+    }
+  },
+  "tolerance_groups": {
+    "analytical_correctness": {
+      "description": "Synthetic fixtures with closed-form expected values.",
+      "tolerances_ref": "tests/fixtures/timbre_descriptor_analytical_fixtures.json#tolerances"
+    },
+    "recorded_regression": {
+      "description": "Recorded fixtures; toolchain-tolerant regression bands.",
+      "centroid_hz_relative": 0.02,
+      "tilt_db_per_octave_absolute": 1.0,
+      "noisiness_absolute": 0.05,
+      "rolloff_hz_relative": 0.05
+    },
+    "series_trajectory": {
+      "description": "Series-level descriptor trajectories.",
+      "positive_flux_relative": 0.1,
+      "spectral_variation_absolute": 0.05
+    },
+    "endpoint_fidelity": {
+      "description": "Descriptor values at morph endpoints 0/1.",
+      "centroid_hz_relative": 0.005,
+      "noisiness_absolute": 0.01,
+      "tilt_db_per_octave_absolute": 0.25
+    }
+  }
+}
