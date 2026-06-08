@@ -969,6 +969,158 @@ PartialModulationDiagnostics analyzePartialModulation(
     return diagnostics;
 }
 
+ResidualMotionDiagnostics analyzeResidualMotion(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TimbreSeriesAlignmentOptions& alignmentOptions,
+    const ResidualMotionOptions& motionOptions,
+    TimbreDescriptorSeries& series)
+{
+    ResidualMotionDiagnostics diagnostics;
+    auto& variation = series.residualSpectralVariation;
+    auto& stationarity = series.residualStationarity;
+    variation.domain = TimbreDescriptorDomain::TemporalSeries;
+    stationarity.domain = TimbreDescriptorDomain::TemporalSeries;
+
+    auto markStatus = [&](TimbreDescriptorStatus status) {
+        variation.value = 0.0;
+        variation.status = status;
+        variation.confidence = 0.0;
+        stationarity.value = 0.0;
+        stationarity.status = status;
+        stationarity.confidence = 0.0;
+    };
+
+    if (static_cast<int>(frames.size()) < motionOptions.minimumFrameCount)
+    {
+        markStatus(TimbreDescriptorStatus::TooSparse);
+        return diagnostics;
+    }
+
+    // Detect whether any frame has residual bands.
+    bool anyResidual = false;
+    for (const auto& frame : frames)
+    {
+        if (frame.samples.residualBandsPresent)
+        {
+            anyResidual = true;
+            break;
+        }
+    }
+    if (!anyResidual)
+    {
+        markStatus(TimbreDescriptorStatus::MissingResidual);
+        return diagnostics;
+    }
+
+    const auto stack = buildSeriesGridStack(
+        frames, options, alignmentOptions, TimbreDescriptorDomain::ResidualBands);
+    if (stack.grids.empty())
+    {
+        markStatus(TimbreDescriptorStatus::EmptyInput);
+        return diagnostics;
+    }
+
+    // Per-frame variation -> series-level mean.
+    double variationAccum = 0.0;
+    int variationCount = 0;
+    for (std::size_t i = 1; i < stack.grids.size(); ++i)
+    {
+        if (alignmentOptions.resetAtTransientBoundaries
+            && frames[i].transientBoundary)
+            continue;
+        const auto& current = stack.grids[i];
+        const auto& previous = stack.grids[i - 1];
+        double dot = 0.0;
+        double normCur = 0.0;
+        double normPrev = 0.0;
+        for (std::size_t k = 0; k < current.size(); ++k)
+        {
+            dot += current[k] * previous[k];
+            normCur += current[k] * current[k];
+            normPrev += previous[k] * previous[k];
+        }
+        const double normProduct = std::sqrt(normCur) * std::sqrt(normPrev);
+        if (normProduct <= 0.0)
+            continue;
+        const double similarity = dot / normProduct;
+        variationAccum += 1.0 - std::clamp(similarity, -1.0, 1.0);
+        ++variationCount;
+    }
+
+    if (variationCount > 0)
+    {
+        variation.value = variationAccum / static_cast<double>(variationCount);
+        variation.status = TimbreDescriptorStatus::Available;
+        variation.confidence = 1.0;
+        variation.coverage.activePointCount = variationCount;
+    }
+    else
+    {
+        variation.status = TimbreDescriptorStatus::EmptyInput;
+        variation.confidence = 0.0;
+    }
+    diagnostics.meanVariation = variation.value;
+
+    // Stationarity: lagged cosine similarity.
+    const int lag = std::max(motionOptions.stationarityLagFrames, 1);
+    double similarityAccum = 0.0;
+    int similarityCount = 0;
+    int totalPairs = 0;
+    for (std::size_t i = static_cast<std::size_t>(lag); i < stack.grids.size(); ++i)
+    {
+        ++totalPairs;
+        if (motionOptions.resetAtTransientBoundaries)
+        {
+            bool boundaryCrossed = false;
+            for (std::size_t j = i + 1 - static_cast<std::size_t>(lag); j <= i; ++j)
+            {
+                if (frames[j].transientBoundary)
+                {
+                    boundaryCrossed = true;
+                    break;
+                }
+            }
+            if (boundaryCrossed)
+                continue;
+        }
+        const auto& current = stack.grids[i];
+        const auto& lagged = stack.grids[i - static_cast<std::size_t>(lag)];
+        double dot = 0.0;
+        double normCur = 0.0;
+        double normLagged = 0.0;
+        for (std::size_t k = 0; k < current.size(); ++k)
+        {
+            dot += current[k] * lagged[k];
+            normCur += current[k] * current[k];
+            normLagged += lagged[k] * lagged[k];
+        }
+        const double normProduct = std::sqrt(normCur) * std::sqrt(normLagged);
+        if (normProduct <= 0.0)
+            continue;
+        similarityAccum += std::clamp(dot / normProduct, -1.0, 1.0);
+        ++similarityCount;
+    }
+
+    diagnostics.contributingPairs = similarityCount;
+    diagnostics.totalPairs = totalPairs;
+
+    if (similarityCount > 0)
+    {
+        stationarity.value = similarityAccum / static_cast<double>(similarityCount);
+        stationarity.status = TimbreDescriptorStatus::Available;
+        stationarity.confidence = 1.0;
+        stationarity.coverage.activePointCount = similarityCount;
+    }
+    else
+    {
+        stationarity.status = TimbreDescriptorStatus::EmptyInput;
+        stationarity.confidence = 0.0;
+    }
+
+    return diagnostics;
+}
+
 void computeFluxAndVariationTrajectories(
     const std::vector<SeriesFrameContext>& frames,
     const TimbreDescriptorOptions& options,

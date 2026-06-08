@@ -188,6 +188,18 @@ target_include_directories(timbre_partial_modulation_test PRIVATE ../src/core)
 target_compile_features(timbre_partial_modulation_test PRIVATE cxx_std_17)
 add_test(NAME timbre_partial_modulation_test COMMAND timbre_partial_modulation_test)
 
+add_executable(timbre_residual_motion_test
+  timbre_residual_motion_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/TimbreDescriptors.cpp
+  ../src/core/TimbreFrameAdapter.cpp
+  ../src/core/TimbreEnergyDistribution.cpp
+  ../src/core/TimbreSeriesAnalysis.cpp)
+target_include_directories(timbre_residual_motion_test PRIVATE ../src/core)
+target_compile_features(timbre_residual_motion_test PRIVATE cxx_std_17)
+add_test(NAME timbre_residual_motion_test COMMAND timbre_residual_motion_test)
+
 add_executable(timbre_descriptor_serialization_test
   timbre_descriptor_serialization_test.cpp
   ../src/core/SpectralEnvelope.cpp

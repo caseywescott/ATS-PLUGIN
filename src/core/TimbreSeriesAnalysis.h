@@ -325,4 +325,49 @@ PartialModulationDiagnostics analyzePartialModulation(
     const PartialModulationOptions& modulationOptions,
     TimbreDescriptorSeries& series);
 
+// Options for the residual-motion analyzer. Stationarity is computed as a
+// lagged self-similarity: the mean cosine similarity between residual grid
+// vectors offset by `stationarityLagFrames` frames. A residual texture that
+// drifts slowly returns high stationarity (~1); a fast-evolving texture
+// returns low stationarity (~0).
+struct ResidualMotionOptions
+{
+    // Lag (in frames) used for the self-similarity statistic. Must be >= 1.
+    int stationarityLagFrames = 1;
+    // Minimum frames after lag-aware pairing before status becomes Available.
+    int minimumFrameCount = 4;
+    // Whether to gate self-similarity across transient boundaries (matches the
+    // flux/variation reset policy in TimbreSeriesAlignmentOptions).
+    bool resetAtTransientBoundaries = true;
+};
+
+// Diagnostics returned with the residual analyzer.
+struct ResidualMotionDiagnostics
+{
+    int contributingPairs = 0;
+    int totalPairs = 0;
+    double meanVariation = 0.0;
+};
+
+// Compute residual_spectral_variation and residual_stationarity from the
+// residual-band trajectories produced by buildSeriesGridStack.
+//
+// residual_spectral_variation: mean of the per-frame spectral_variation
+// trajectory restricted to the residual-only domain. This is a series-level
+// summary distinct from the per-frame variation trajectory.
+//
+// residual_stationarity: mean cosine similarity between residual grid
+// vectors separated by stationarityLagFrames. The metric uses the same
+// frameNormalization policy as flux/variation; transient boundaries reset
+// the lag pairing when resetAtTransientBoundaries is true.
+//
+// The analyzer never invents waveform-level statistics; it only consumes
+// residual-band energy, matching the spec's repo-fit input contract.
+ResidualMotionDiagnostics analyzeResidualMotion(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TimbreSeriesAlignmentOptions& alignmentOptions,
+    const ResidualMotionOptions& motionOptions,
+    TimbreDescriptorSeries& series);
+
 } // namespace ats
