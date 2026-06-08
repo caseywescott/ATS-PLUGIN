@@ -296,7 +296,7 @@ EnvelopeGridSamples sampleFittedEnvelopeOntoGrid(
     const EnvelopeAxisSpec& axis,
     int binCount,
     double amplitudeFloor,
-    EnvelopeSamplerFn sampler)
+    const EnvelopeSamplerFn& sampler)
 {
     EnvelopeGridSamples out;
 
@@ -305,7 +305,7 @@ EnvelopeGridSamples sampleFittedEnvelopeOntoGrid(
         out.status = TimbreDescriptorStatus::MissingEnvelope;
         return out;
     }
-    if (envelope.values.empty() || sampler == nullptr)
+    if (envelope.values.empty() || !sampler)
     {
         out.status = TimbreDescriptorStatus::MissingEnvelope;
         return out;

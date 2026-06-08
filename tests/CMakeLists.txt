@@ -92,6 +92,18 @@ target_include_directories(timbre_grid_shape_test PRIVATE ../src/core)
 target_compile_features(timbre_grid_shape_test PRIVATE cxx_std_17)
 add_test(NAME timbre_grid_shape_test COMMAND timbre_grid_shape_test)
 
+add_executable(timbre_envelope_tilt_test
+  timbre_envelope_tilt_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/TimbreDescriptors.cpp
+  ../src/core/TimbreFrameAdapter.cpp
+  ../src/core/TimbreEnergyDistribution.cpp
+  ../src/core/TimbreFrameAnalysis.cpp)
+target_include_directories(timbre_envelope_tilt_test PRIVATE ../src/core)
+target_compile_features(timbre_envelope_tilt_test PRIVATE cxx_std_17)
+add_test(NAME timbre_envelope_tilt_test COMMAND timbre_envelope_tilt_test)
+
 add_executable(timbre_descriptor_serialization_test
   timbre_descriptor_serialization_test.cpp
   ../src/core/SpectralEnvelope.cpp

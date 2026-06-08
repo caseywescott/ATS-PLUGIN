@@ -5,6 +5,7 @@
 #include "TimbreFrameAdapter.h"
 
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 namespace ats
@@ -104,18 +105,18 @@ struct EnvelopeGridSamples
 // Forward-declared estimator type from SpectralEnvelopeEstimator.h is used at
 // call sites; this helper takes a callable so the descriptor core does not
 // depend on the estimator registry.
-using EnvelopeSamplerFn = double (*)(const FrameEnvelope&, double, bool*);
+using EnvelopeSamplerFn = std::function<double(const FrameEnvelope&, double, bool*)>;
 
 // Sample the envelope onto a uniform grid. The sampler may be any callable
 // matching evaluate(envelope, frequencyHz, &ok) and is expected to return a
-// linear amplitude. The default of nullptr falls back to a no-op grid (only
+// linear amplitude. An empty std::function falls back to a no-op grid (only
 // useful when the caller plans to populate amplitudes itself).
 EnvelopeGridSamples sampleFittedEnvelopeOntoGrid(
     const FrameEnvelope& envelope,
     const EnvelopeAxisSpec& axis,
     int binCount,
     double amplitudeFloor,
-    EnvelopeSamplerFn sampler);
+    const EnvelopeSamplerFn& sampler);
 
 // Convert a linear amplitude value to its energy weight using the canonical
 // energy model (energy = amplitude^2). The helper is exposed so caller code

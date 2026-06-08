@@ -89,4 +89,51 @@ void analyzeGridShapeDescriptors(
     const GridShapeOptions& shapeOptions,
     TimbreDescriptorFrame& frame);
 
+// Options for the fitted-envelope tilt analyzer. The formula is named and
+// versioned via TimbreDescriptorMetadata; no silent formula substitution.
+struct EnvelopeTiltOptions
+{
+    // dB-floor below which an envelope amplitude is treated as the floor; the
+    // analyzer converts amplitudes to dB via 20 * log10(max(amplitude, floor))
+    double amplitudeFloor = 1.0e-9;
+    // Reference frequency in Hz used as the regression pivot (log2 axis).
+    double referenceHz = 1000.0;
+    // Minimum number of usable envelope samples before reporting Available.
+    int minSampleCount = 4;
+    // Maximum frequency span (octaves) used in the fit. The fit considers the
+    // intersection of the configured comparison axis range and any reliable
+    // span reported by the envelope diagnostics.
+    double maxOctaves = 12.0;
+};
+
+// Output diagnostics for the tilt analyzer. The descriptor itself goes into
+// frame.tiltDbPerOctave; this struct exposes the auxiliary regression
+// metadata so callers can route it into reports/UI without re-running the
+// regression.
+struct EnvelopeTiltDiagnostics
+{
+    double referenceHz = 0.0;
+    double fitSpanOctaves = 0.0;
+    double interceptDb = 0.0;
+    double residualRmsDb = 0.0;
+    int usedSampleCount = 0;
+};
+
+// Compute fitted-envelope tilt in dB-per-octave via robust least-squares
+// regression on the uniformly sampled envelope. `sampler` is the same
+// evaluator function used by sampleFittedEnvelopeOntoGrid (typically
+// SpectralEnvelopeEstimator::evaluate); pass nullptr to fall back to
+// MissingEnvelope.
+//
+// Returns MissingEnvelope when the envelope is unreliable or sparser than
+// minSampleCount; returns TooSparse when sample selection yields fewer than
+// two usable points; otherwise returns Available with regression confidence
+// derived from the residual fit error.
+EnvelopeTiltDiagnostics analyzeFittedEnvelopeTilt(
+    const FrameEnvelope& envelope,
+    const TimbreDescriptorOptions& options,
+    const EnvelopeTiltOptions& tiltOptions,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame);
+
 } // namespace ats

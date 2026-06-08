@@ -876,4 +876,136 @@ void analyzeGridShapeDescriptors(
     }
 }
 
+EnvelopeTiltDiagnostics analyzeFittedEnvelopeTilt(
+    const FrameEnvelope& envelope,
+    const TimbreDescriptorOptions& options,
+    const EnvelopeTiltOptions& tiltOptions,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame)
+{
+    EnvelopeTiltDiagnostics diagnostics;
+    auto& d = frame.tiltDbPerOctave;
+    d.domain = TimbreDescriptorDomain::FittedEnvelope;
+
+    if (!sampler || envelope.values.empty()
+        || !isValidFrequencyAxis(options.comparisonAxis))
+    {
+        d.value = 0.0;
+        d.status = TimbreDescriptorStatus::MissingEnvelope;
+        d.confidence = 0.0;
+        return diagnostics;
+    }
+
+    const int gridSize = std::max(options.comparisonGridSize, tiltOptions.minSampleCount);
+    const auto grid = sampleFittedEnvelopeOntoGrid(
+        envelope, options.comparisonAxis, gridSize,
+        tiltOptions.amplitudeFloor, sampler);
+
+    if (grid.status != TimbreDescriptorStatus::Available
+        || grid.activeBinCount < tiltOptions.minSampleCount)
+    {
+        d.value = 0.0;
+        d.status = TimbreDescriptorStatus::MissingEnvelope;
+        d.confidence = 0.0;
+        return diagnostics;
+    }
+
+    const double floor = std::max(tiltOptions.amplitudeFloor, 1.0e-30);
+    const double reference = std::max(tiltOptions.referenceHz, 1.0e-6);
+
+    std::vector<double> xs;
+    std::vector<double> ys;
+    xs.reserve(static_cast<std::size_t>(grid.activeBinCount));
+    ys.reserve(static_cast<std::size_t>(grid.activeBinCount));
+
+    for (std::size_t bin = 0; bin < grid.values.size(); ++bin)
+    {
+        const double frequency = grid.binCenterHz[bin];
+        const double amplitude = grid.values[bin];
+        if (!std::isfinite(frequency) || frequency <= 0.0)
+            continue;
+        const double amp = std::max(amplitude, floor);
+        const double db = 20.0 * std::log10(amp);
+        if (!std::isfinite(db))
+            continue;
+        xs.push_back(std::log2(frequency / reference));
+        ys.push_back(db);
+    }
+
+    if (xs.size() < static_cast<std::size_t>(tiltOptions.minSampleCount))
+    {
+        d.value = 0.0;
+        d.status = TimbreDescriptorStatus::TooSparse;
+        d.confidence = 0.0;
+        return diagnostics;
+    }
+
+    // Closed-form ordinary least squares for y = a + b*x.
+    double meanX = 0.0;
+    double meanY = 0.0;
+    for (std::size_t i = 0; i < xs.size(); ++i)
+    {
+        meanX += xs[i];
+        meanY += ys[i];
+    }
+    meanX /= static_cast<double>(xs.size());
+    meanY /= static_cast<double>(xs.size());
+
+    double sxx = 0.0;
+    double sxy = 0.0;
+    for (std::size_t i = 0; i < xs.size(); ++i)
+    {
+        const double dx = xs[i] - meanX;
+        sxx += dx * dx;
+        sxy += dx * (ys[i] - meanY);
+    }
+    if (sxx <= 0.0)
+    {
+        d.value = 0.0;
+        d.status = TimbreDescriptorStatus::TooSparse;
+        d.confidence = 0.0;
+        return diagnostics;
+    }
+    const double slope = sxy / sxx;
+    const double intercept = meanY - slope * meanX;
+
+    double residualSumSquares = 0.0;
+    for (std::size_t i = 0; i < xs.size(); ++i)
+    {
+        const double prediction = intercept + slope * xs[i];
+        const double residual = ys[i] - prediction;
+        residualSumSquares += residual * residual;
+    }
+    const double residualRms = std::sqrt(residualSumSquares
+                                          / static_cast<double>(xs.size()));
+
+    // Confidence collapses to 0 for residuals comparable to the dynamic range
+    // and saturates at 1 for tiny residuals. The cap is intentionally lenient
+    // (24 dB RMS = 0 confidence) so well-fit envelopes report near-1 even with
+    // some noise.
+    const double residualCapDb = 24.0;
+    const double confidence = std::clamp(
+        1.0 - std::min(residualRms, residualCapDb) / residualCapDb,
+        0.0, 1.0);
+
+    d.value = slope;
+    d.status = TimbreDescriptorStatus::Available;
+    d.confidence = confidence;
+    d.coverage.activePointCount = static_cast<int>(xs.size());
+    d.coverage.supportedFrequencySpanHz = grid.maxBinHz - grid.minBinHz;
+    d.coverage.representedEnergyRatio = 1.0;
+
+    diagnostics.referenceHz = reference;
+    diagnostics.interceptDb = intercept;
+    diagnostics.residualRmsDb = residualRms;
+    diagnostics.usedSampleCount = static_cast<int>(xs.size());
+    diagnostics.fitSpanOctaves = grid.maxBinHz > 0.0 && grid.minBinHz > 0.0
+        ? std::log2(grid.maxBinHz / grid.minBinHz)
+        : 0.0;
+    diagnostics.fitSpanOctaves = std::min(diagnostics.fitSpanOctaves,
+                                           tiltOptions.maxOctaves);
+
+    return diagnostics;
+}
+
 } // namespace ats
