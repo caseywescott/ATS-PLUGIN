@@ -56,6 +56,18 @@ target_include_directories(timbre_energy_distribution_test PRIVATE ../src/core)
 target_compile_features(timbre_energy_distribution_test PRIVATE cxx_std_17)
 add_test(NAME timbre_energy_distribution_test COMMAND timbre_energy_distribution_test)
 
+add_executable(timbre_energy_noisiness_test
+  timbre_energy_noisiness_test.cpp
+  ../src/core/SpectralEnvelope.cpp
+  ../src/core/FrequencyWarp.cpp
+  ../src/core/TimbreDescriptors.cpp
+  ../src/core/TimbreFrameAdapter.cpp
+  ../src/core/TimbreEnergyDistribution.cpp
+  ../src/core/TimbreFrameAnalysis.cpp)
+target_include_directories(timbre_energy_noisiness_test PRIVATE ../src/core)
+target_compile_features(timbre_energy_noisiness_test PRIVATE cxx_std_17)
+add_test(NAME timbre_energy_noisiness_test COMMAND timbre_energy_noisiness_test)
+
 add_executable(timbre_descriptor_serialization_test
   timbre_descriptor_serialization_test.cpp
   ../src/core/SpectralEnvelope.cpp

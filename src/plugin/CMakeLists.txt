@@ -65,6 +65,7 @@ target_sources(
           ../core/TimbreDescriptorSerialization.cpp
           ../core/TimbreFrameAdapter.cpp
           ../core/TimbreEnergyDistribution.cpp
+          ../core/TimbreFrameAnalysis.cpp
           ../core/AtsMathExpr.cpp)
 
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"
