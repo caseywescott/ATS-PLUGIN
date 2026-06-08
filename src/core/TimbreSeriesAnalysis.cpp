@@ -258,6 +258,326 @@ SeriesAlignmentReport analyzeTimbreDescriptorSeries(
     return alignment;
 }
 
+namespace
+{
+
+double interpolatedCrossing(
+    double targetEnergy,
+    double leftEnergy,
+    double rightEnergy,
+    double leftTime,
+    double rightTime)
+{
+    if (rightEnergy == leftEnergy)
+        return rightTime;
+    const double fraction = (targetEnergy - leftEnergy) / (rightEnergy - leftEnergy);
+    return leftTime + std::clamp(fraction, 0.0, 1.0) * (rightTime - leftTime);
+}
+
+double findRisingCrossing(
+    const std::vector<double>& energies,
+    const std::vector<double>& times,
+    std::size_t startIndex,
+    std::size_t endIndex,
+    double targetEnergy)
+{
+    if (endIndex >= energies.size())
+        endIndex = energies.size() - 1;
+    if (startIndex > endIndex)
+        return times[startIndex];
+
+    // Walk forward from startIndex; report the first sample at or above
+    // targetEnergy. Interpolate from its predecessor when one exists.
+    for (std::size_t i = startIndex; i <= endIndex; ++i)
+    {
+        if (energies[i] >= targetEnergy)
+        {
+            if (i == startIndex || energies[i - 1] >= targetEnergy)
+                return times[i];
+            return interpolatedCrossing(
+                targetEnergy, energies[i - 1], energies[i],
+                times[i - 1], times[i]);
+        }
+    }
+    return times[endIndex];
+}
+
+double findFallingCrossing(
+    const std::vector<double>& energies,
+    const std::vector<double>& times,
+    std::size_t startIndex,
+    double targetEnergy)
+{
+    for (std::size_t i = startIndex + 1; i < energies.size(); ++i)
+    {
+        if (energies[i] <= targetEnergy)
+        {
+            return interpolatedCrossing(
+                targetEnergy, energies[i - 1], energies[i],
+                times[i - 1], times[i]);
+        }
+    }
+    return times.back();
+}
+
+int countIndependentPeaks(
+    const std::vector<double>& energies,
+    double thresholdEnergy)
+{
+    int count = 0;
+    bool inside = false;
+    for (const double value : energies)
+    {
+        if (value > thresholdEnergy)
+        {
+            if (!inside)
+            {
+                ++count;
+                inside = true;
+            }
+        }
+        else
+        {
+            inside = false;
+        }
+    }
+    return count;
+}
+
+double dbDifference(double currentEnergy, double referenceEnergy, double floor)
+{
+    const double safeCurrent = std::max(currentEnergy, floor);
+    const double safeReference = std::max(referenceEnergy, floor);
+    return 10.0 * std::log10(safeCurrent / safeReference);
+}
+
+} // namespace
+
+TemporalEnvelopeDiagnostics analyzeTemporalEnvelopeShape(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TemporalEnvelopeOptions& temporalOptions,
+    TimbreDescriptorSeries& series)
+{
+    (void) options;
+    TemporalEnvelopeDiagnostics diagnostics;
+
+    auto markStatus = [&](TimbreDescriptorStatus status) {
+        const auto reset = [status](TimbreDescriptorValue& value) {
+            value.value = 0.0;
+            value.domain = TimbreDescriptorDomain::TemporalSeries;
+            value.status = status;
+            value.confidence = 0.0;
+        };
+        reset(series.temporalCentroidSeconds);
+        reset(series.logAttackTime);
+        reset(series.attackSlopeDbPerSecond);
+        reset(series.decaySlopeDbPerSecond);
+        reset(series.effectiveDurationSeconds);
+    };
+
+    if (static_cast<int>(frames.size()) < temporalOptions.minimumFrameCount)
+    {
+        markStatus(TimbreDescriptorStatus::TooSparse);
+        return diagnostics;
+    }
+
+    std::vector<double> times;
+    std::vector<double> energies;
+    times.reserve(frames.size());
+    energies.reserve(frames.size());
+    for (const auto& frame : frames)
+    {
+        times.push_back(frame.timeSeconds);
+        const double e = frame.samples.partialEnergyTotal
+                       + frame.samples.residualEnergyTotal;
+        energies.push_back(std::max(e, 0.0));
+    }
+
+    double peakEnergy = 0.0;
+    std::size_t peakIndex = 0;
+    for (std::size_t i = 0; i < energies.size(); ++i)
+    {
+        if (energies[i] > peakEnergy)
+        {
+            peakEnergy = energies[i];
+            peakIndex = i;
+        }
+    }
+    if (peakEnergy <= 0.0)
+    {
+        markStatus(TimbreDescriptorStatus::EmptyInput);
+        return diagnostics;
+    }
+
+    diagnostics.peakEnergy = peakEnergy;
+    diagnostics.peakTimeSeconds = times[peakIndex];
+
+    const double floor = std::max(temporalOptions.energyFloor, 1.0e-30);
+    auto thresholdEnergy = [peakEnergy, floor](double db) {
+        const double linear = std::pow(10.0, db / 10.0);
+        return std::max(peakEnergy * linear, floor);
+    };
+
+    const double effectiveThresholdEnergy =
+        thresholdEnergy(temporalOptions.effectiveDurationThresholdDb);
+    diagnostics.independentPeakCount =
+        countIndependentPeaks(energies, effectiveThresholdEnergy);
+
+    if (diagnostics.independentPeakCount > temporalOptions.maximumIndependentPeaks)
+    {
+        markStatus(TimbreDescriptorStatus::Undefined);
+        return diagnostics;
+    }
+
+    // Effective duration boundaries.
+    double effectiveStart = times.front();
+    for (std::size_t i = 0; i <= peakIndex; ++i)
+    {
+        if (energies[i] >= effectiveThresholdEnergy)
+        {
+            effectiveStart = (i == 0)
+                ? times[i]
+                : interpolatedCrossing(effectiveThresholdEnergy,
+                                        energies[i - 1], energies[i],
+                                        times[i - 1], times[i]);
+            break;
+        }
+    }
+    const double effectiveEnd = findFallingCrossing(
+        energies, times, peakIndex, effectiveThresholdEnergy);
+
+    const double attackStartEnergy =
+        thresholdEnergy(temporalOptions.attackStartThresholdDb);
+    const double attackEndEnergy =
+        thresholdEnergy(temporalOptions.attackEndThresholdDb);
+
+    const double attackStart = findRisingCrossing(
+        energies, times, 0, peakIndex, attackStartEnergy);
+    const double attackEnd = findRisingCrossing(
+        energies, times, 0, peakIndex, attackEndEnergy);
+
+    diagnostics.attackStartSeconds = attackStart;
+    diagnostics.attackEndSeconds = attackEnd;
+    diagnostics.decayStartSeconds = times[peakIndex];
+    diagnostics.decayEndSeconds = effectiveEnd;
+
+    // log_attack_time
+    {
+        auto& d = series.logAttackTime;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        const double attackDuration = attackEnd - attackStart;
+        if (attackDuration > 0.0)
+        {
+            d.value = std::log10(attackDuration);
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+        }
+        else
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::TooSparse;
+            d.confidence = 0.0;
+        }
+    }
+
+    // attack_slope_db_per_second
+    {
+        auto& d = series.attackSlopeDbPerSecond;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        const double attackDuration = attackEnd - attackStart;
+        if (attackDuration > 0.0)
+        {
+            const double startDb = dbDifference(
+                std::max(attackStartEnergy, floor),
+                peakEnergy, floor);
+            const double endDb = dbDifference(
+                std::max(attackEndEnergy, floor),
+                peakEnergy, floor);
+            d.value = (endDb - startDb) / attackDuration;
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+        }
+        else
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::TooSparse;
+            d.confidence = 0.0;
+        }
+    }
+
+    // decay_slope_db_per_second
+    {
+        auto& d = series.decaySlopeDbPerSecond;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        const double decayDuration = effectiveEnd - times[peakIndex];
+        if (decayDuration > 0.0)
+        {
+            const double startDb = 0.0; // peak relative to peak
+            const double endDb = dbDifference(
+                std::max(effectiveThresholdEnergy, floor),
+                peakEnergy, floor);
+            d.value = (endDb - startDb) / decayDuration;
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+        }
+        else
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::TooSparse;
+            d.confidence = 0.0;
+        }
+    }
+
+    // effective_duration_seconds
+    {
+        auto& d = series.effectiveDurationSeconds;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        const double duration = effectiveEnd - effectiveStart;
+        if (duration > 0.0)
+        {
+            d.value = duration;
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+        }
+        else
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::TooSparse;
+            d.confidence = 0.0;
+        }
+    }
+
+    // temporal_centroid_seconds: energy-weighted time centroid relative to the
+    // first frame.
+    {
+        auto& d = series.temporalCentroidSeconds;
+        d.domain = TimbreDescriptorDomain::TemporalSeries;
+        double weightedSum = 0.0;
+        double weightTotal = 0.0;
+        const double baseline = times.front();
+        for (std::size_t i = 0; i < energies.size(); ++i)
+        {
+            weightedSum += (times[i] - baseline) * energies[i];
+            weightTotal += energies[i];
+        }
+        if (weightTotal > 0.0)
+        {
+            d.value = weightedSum / weightTotal;
+            d.status = TimbreDescriptorStatus::Available;
+            d.confidence = 1.0;
+        }
+        else
+        {
+            d.value = 0.0;
+            d.status = TimbreDescriptorStatus::EmptyInput;
+            d.confidence = 0.0;
+        }
+    }
+
+    return diagnostics;
+}
+
 void computeFluxAndVariationTrajectories(
     const std::vector<SeriesFrameContext>& frames,
     const TimbreDescriptorOptions& options,

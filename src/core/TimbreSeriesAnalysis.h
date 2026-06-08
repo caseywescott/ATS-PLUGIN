@@ -172,4 +172,58 @@ void computeFluxAndVariationTrajectories(
     std::vector<TimbreDescriptorValue>& outFlux,
     std::vector<TimbreDescriptorValue>& outVariation);
 
+// Options for the temporal envelope analyzer. Thresholds are absolute dB
+// values referenced against the peak energy in the analysis window.
+struct TemporalEnvelopeOptions
+{
+    // Lower threshold marking the start of the attack (dB below peak).
+    double attackStartThresholdDb = -40.0;
+    // Upper threshold marking the end of the attack (dB below peak).
+    double attackEndThresholdDb = -3.0;
+    // Threshold defining effective_duration / decay search bounds.
+    double effectiveDurationThresholdDb = -40.0;
+    // Minimum number of frames before temporal descriptors are reported.
+    int minimumFrameCount = 3;
+    // Maximum number of independent peaks tolerated. When more than one
+    // peak exceeds the effective-duration threshold, the descriptors report
+    // Undefined (the spec calls this "multi-event rejection").
+    int maximumIndependentPeaks = 1;
+    // Energy floor used when converting frame energy to dB.
+    double energyFloor = 1.0e-18;
+};
+
+// Diagnostics returned alongside the temporal envelope analyzer so callers
+// can inspect the inferred event boundaries without parsing the descriptor
+// values.
+struct TemporalEnvelopeDiagnostics
+{
+    double peakEnergy = 0.0;
+    double peakTimeSeconds = 0.0;
+    double attackStartSeconds = 0.0;
+    double attackEndSeconds = 0.0;
+    double decayStartSeconds = 0.0;
+    double decayEndSeconds = 0.0;
+    int independentPeakCount = 0;
+};
+
+// Compute the per-event temporal descriptors (temporal_centroid_seconds,
+// log_attack_time, attack_slope_db_per_second, decay_slope_db_per_second,
+// effective_duration_seconds) from the per-frame combined energy envelope
+// derived from frames.
+//
+// The frame energy is the L1 norm of the Combined-domain grid (so partial +
+// residual contributions are included), measured before any per-frame
+// normalization. Event boundaries follow the documented threshold policy in
+// TemporalEnvelopeOptions; descriptors return Undefined when multiple
+// independent peaks are detected (multi-event rejection) and TooSparse when
+// the series carries too few frames.
+//
+// Outputs are written directly into the descriptor series fields; the
+// returned diagnostics describe the inferred event boundaries.
+TemporalEnvelopeDiagnostics analyzeTemporalEnvelopeShape(
+    const std::vector<SeriesFrameContext>& frames,
+    const TimbreDescriptorOptions& options,
+    const TemporalEnvelopeOptions& temporalOptions,
+    TimbreDescriptorSeries& series);
+
 } // namespace ats
