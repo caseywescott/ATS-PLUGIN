@@ -136,4 +136,43 @@ EnvelopeTiltDiagnostics analyzeFittedEnvelopeTilt(
     const EnvelopeSamplerFn& sampler,
     TimbreDescriptorFrame& frame);
 
+// Options for envelope deviation / adjacent-partial irregularity. The
+// irregularity formula is named via TimbreDescriptorMetadata's
+// adjacent_partial_irregularity entry; this struct only carries numerical
+// thresholds.
+struct EnvelopeDeviationOptions
+{
+    // Amplitude floor used when computing dB deviations against the envelope.
+    double amplitudeFloor = 1.0e-9;
+    // Minimum number of partials before the deviation RMS is reported as
+    // Available; sparser frames return TooSparse.
+    int minPartialsForDeviation = 3;
+    // Minimum number of partials before adjacent_partial_irregularity is
+    // reported as Available. The named formula requires at least three
+    // partials so the central-bin local mean is well-defined.
+    int minPartialsForIrregularity = 3;
+};
+
+// Compute envelope-deviation RMS in dB for partials against the fitted
+// envelope (sampler evaluates the envelope) and the named
+// adjacent_partial_irregularity descriptor:
+//
+//     local_mean_i = (a_{i-1} + a_i + a_{i+1}) / 3
+//     irregularity = sum |a_i - local_mean_i| / sum a_i
+//
+// (Computed over selected partials sorted by frequency in linear amplitude.)
+// This is intentionally distinct from harmonic spectral deviation, which is
+// not enabled until reliable F0 / harmonic assignment lands in a later
+// commit.
+//
+// dominant_partial_fraction = max(energy_i) / sum(energy_i) is also computed
+// here because it shares the same partial-sort plumbing.
+void analyzeEnvelopeDeviationAndIrregularity(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    const EnvelopeDeviationOptions& deviationOptions,
+    const FrameEnvelope& envelope,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame);
+
 } // namespace ats

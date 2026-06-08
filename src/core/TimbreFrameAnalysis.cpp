@@ -1008,4 +1008,154 @@ EnvelopeTiltDiagnostics analyzeFittedEnvelopeTilt(
     return diagnostics;
 }
 
+void analyzeEnvelopeDeviationAndIrregularity(
+    const ValidatedFrameSamples& samples,
+    const TimbreDescriptorOptions& options,
+    const EnvelopeDeviationOptions& deviationOptions,
+    const FrameEnvelope& envelope,
+    const EnvelopeSamplerFn& sampler,
+    TimbreDescriptorFrame& frame)
+{
+    auto& deviation = frame.envelopeDeviationRmsDb;
+    deviation.domain = TimbreDescriptorDomain::FittedEnvelope;
+
+    auto& irregularity = frame.adjacentPartialIrregularity;
+    irregularity.domain = TimbreDescriptorDomain::Partials;
+
+    auto& dominant = frame.dominantPartialFraction;
+    dominant.domain = TimbreDescriptorDomain::Partials;
+
+    const double floor = std::max(deviationOptions.amplitudeFloor, 1.0e-30);
+
+    // Envelope deviation requires a fitted envelope and a sampler.
+    const bool envelopeAvailable = sampler
+        && !envelope.values.empty()
+        && isValidFrequencyAxis(options.comparisonAxis);
+
+    if (!envelopeAvailable)
+    {
+        deviation.value = 0.0;
+        deviation.status = TimbreDescriptorStatus::MissingEnvelope;
+        deviation.confidence = 0.0;
+    }
+    else if (static_cast<int>(samples.partials.size())
+             < deviationOptions.minPartialsForDeviation)
+    {
+        deviation.value = 0.0;
+        deviation.status = TimbreDescriptorStatus::TooSparse;
+        deviation.confidence = 0.0;
+    }
+    else
+    {
+        double weightedSquaredDb = 0.0;
+        double weightSum = 0.0;
+        for (const auto& partial : samples.partials)
+        {
+            if (partial.energy <= 0.0)
+                continue;
+            bool ok = false;
+            const double envelopeAmplitude = sampler(envelope, partial.frequencyHz, &ok);
+            if (!ok || !std::isfinite(envelopeAmplitude))
+                continue;
+            const double envelopeDb = 20.0 * std::log10(
+                std::max(envelopeAmplitude, floor));
+            const double partialDb = 20.0 * std::log10(
+                std::max(partial.amplitude, floor));
+            const double diff = partialDb - envelopeDb;
+            weightedSquaredDb += partial.energy * diff * diff;
+            weightSum += partial.energy;
+        }
+        if (weightSum > 0.0)
+        {
+            deviation.value = std::sqrt(weightedSquaredDb / weightSum);
+            deviation.status = TimbreDescriptorStatus::Available;
+            deviation.confidence = 1.0;
+            deviation.coverage.activePointCount = static_cast<int>(samples.partials.size());
+            deviation.coverage.supportedFrequencySpanHz =
+                samples.maxPartialFrequencyHz - samples.minPartialFrequencyHz;
+            deviation.coverage.representedEnergyRatio = 1.0;
+        }
+        else
+        {
+            deviation.value = 0.0;
+            deviation.status = TimbreDescriptorStatus::EmptyInput;
+            deviation.confidence = 0.0;
+        }
+    }
+
+    // Adjacent partial irregularity (named formula: local-three-mean,
+    // linear amplitude).
+    if (static_cast<int>(samples.partials.size())
+        < deviationOptions.minPartialsForIrregularity)
+    {
+        irregularity.value = 0.0;
+        irregularity.status = TimbreDescriptorStatus::TooSparse;
+        irregularity.confidence = 0.0;
+    }
+    else
+    {
+        const auto& partials = samples.partials; // sorted ascending by freq
+        double numerator = 0.0;
+        double denominator = 0.0;
+        for (std::size_t i = 0; i < partials.size(); ++i)
+        {
+            const double current = partials[i].amplitude;
+            double localMean = 0.0;
+            int count = 0;
+            if (i > 0)
+            {
+                localMean += partials[i - 1].amplitude;
+                ++count;
+            }
+            localMean += current;
+            ++count;
+            if (i + 1 < partials.size())
+            {
+                localMean += partials[i + 1].amplitude;
+                ++count;
+            }
+            localMean /= static_cast<double>(count);
+            numerator += std::abs(current - localMean);
+            denominator += current;
+        }
+        if (denominator > 0.0)
+        {
+            irregularity.value = numerator / denominator;
+            irregularity.status = TimbreDescriptorStatus::Available;
+            irregularity.confidence = 1.0;
+            irregularity.coverage.activePointCount = static_cast<int>(partials.size());
+            irregularity.coverage.supportedFrequencySpanHz =
+                samples.maxPartialFrequencyHz - samples.minPartialFrequencyHz;
+            irregularity.coverage.representedEnergyRatio = 1.0;
+        }
+        else
+        {
+            irregularity.value = 0.0;
+            irregularity.status = TimbreDescriptorStatus::EmptyInput;
+            irregularity.confidence = 0.0;
+        }
+    }
+
+    // Dominant partial fraction = max(energy) / sum(energy).
+    if (samples.partials.empty() || samples.partialEnergyTotal <= 0.0)
+    {
+        dominant.value = 0.0;
+        dominant.status = TimbreDescriptorStatus::EmptyInput;
+        dominant.confidence = 0.0;
+    }
+    else
+    {
+        double peak = 0.0;
+        for (const auto& partial : samples.partials)
+            peak = std::max(peak, partial.energy);
+        dominant.value = std::clamp(peak / samples.partialEnergyTotal, 0.0, 1.0);
+        dominant.status = TimbreDescriptorStatus::Available;
+        dominant.confidence = 1.0;
+        dominant.coverage.activePointCount = static_cast<int>(samples.partials.size());
+        dominant.coverage.supportedFrequencySpanHz =
+            samples.maxPartialFrequencyHz - samples.minPartialFrequencyHz;
+        dominant.coverage.representedEnergyRatio = 1.0;
+    }
+}
+
 } // namespace ats
