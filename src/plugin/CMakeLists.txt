@@ -45,6 +45,7 @@ target_sources(
           MathExprPanel.cpp
           PresetLibrary.cpp
           SpectrogramPanel.cpp
+          TimbreMotionPanel.cpp
           ../core/AtsFrequencyShape.cpp
           ../core/AtsModel.cpp
           ../core/AtsMorphRecipe.cpp

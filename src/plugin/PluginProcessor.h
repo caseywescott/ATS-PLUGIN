@@ -16,6 +16,7 @@
 #include "AtsMorphRecipe.h"
 #include "AtsParams.h"
 #include "AtsTransientSmear.h"
+#include "TimbreMotionPlan.h"
 
 namespace ats_param
 {
@@ -605,6 +606,10 @@ public:
                                                  juce::String& error);
     std::vector<AtsMorphTimelinePoint> getMorphTimelinePoints() const;
     void setMorphTimelinePoints(const std::vector<AtsMorphTimelinePoint>& points);
+    // Timbre Motion Plan persistence (stored in the morph recipe's timbre_motion_plan field).
+    ats::TimbreMotionPlan getTimbreMotionPlan() const;
+    void setTimbreMotionPlan(const ats::TimbreMotionPlan& plan);
+    void setTimbreMotionPlanUndoable(const ats::TimbreMotionPlan& plan, const juce::String& label);
     bool loadAndAnalyzeMorphSourceSlot(int slotIndex, const juce::File& file, juce::String& error);
     bool reanalyzeMorphSourceSlot(int slotIndex, juce::String& error);
     bool getMorphSourceFile(int slotIndex, juce::File& out) const;
@@ -669,6 +674,7 @@ private:
     std::atomic<bool> asyncUndoCommit { false };
     int undoTransactionTick = 0;
     std::int64_t lastTimelineEditMs = 0; // coalesces a continuous timeline drag
+    std::int64_t lastTimbreMotionEditMs = 0; // coalesces a continuous timbre-motion drag
     bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
     bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
     void rebuildMorphCorrespondenceIfReady();

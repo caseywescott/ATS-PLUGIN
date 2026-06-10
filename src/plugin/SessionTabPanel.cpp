@@ -946,6 +946,13 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     controlsContent.addAndMakeVisible(morphTimelineBounceButton);
     controlsContent.addAndMakeVisible(morphTimelineResetButton);
 
+    timbreMotionPanel.onPlanChanged = [this](const ats::TimbreMotionPlan& plan) {
+        audioProcessor.setTimbreMotionPlanUndoable(plan, "Edit Timbre Motion");
+        refreshMorphSnapshotControls();
+    };
+    timbreMotionPanel.setPlan(audioProcessor.getTimbreMotionPlan());
+    controlsContent.addAndMakeVisible(timbreMotionPanel);
+
     morphSmoothingLabel.setText("Smooth", juce::dontSendNotification);
     morphSmoothingLabel.setJustificationType(juce::Justification::centredLeft);
     morphSmoothingLabel.setFont(juce::Font(11.0f, juce::Font::bold));
@@ -1451,8 +1458,16 @@ void SessionTabPanel::refreshMorphBandDiagnostics()
     }
 }
 
+void SessionTabPanel::refreshTimbreMotionPanel()
+{
+    if (!timbreMotionPanel.isEditing())
+        timbreMotionPanel.setPlan(audioProcessor.getTimbreMotionPlan());
+}
+
 void SessionTabPanel::refreshMorphTimeline()
 {
+    refreshTimbreMotionPanel();
+
     const auto points = audioProcessor.getMorphTimelinePoints();
     if (!morphTimelineEditor.isEditing())
         morphTimelineEditor.setPoints(points);
@@ -1673,12 +1688,15 @@ void SessionTabPanel::resized()
     const int clusterH         = (activeControlTab == 1) ? smearClusterH : morphClusterH;
     const int globalKnobsH     = sc(32) + sc(104) + sc(6);
     const int timbreH          = sc(18) + 3 * sc(22) + 2 * sc(4); // header + 3 slider rows + gaps
+    // Timbre Motion: title + macro rack + gap + editor header + legend + curve editor.
+    const int timbreMotionH    = sc(16) + sc(54) + sc(4) + sc(22) + sc(14) + sc(96);
 
     const int contentH = sc(4)
         + timelineSectionH + sc(4)
         + snapshotH + sc(4)
         + tabBarH + sc(6)
         + clusterH
+        + sc(4) + timbreMotionH + sc(4)
         + sc(4) + timbreH + sc(4)
         + globalKnobsH + sc(4);
 
@@ -1838,6 +1856,13 @@ void SessionTabPanel::resized()
         morphBandLabel.setBounds(bandHeader.removeFromLeft(sc(64)));
         morphBandStrip.setBounds(bandArea.removeFromTop(sc(30)).reduced(sc(2)));
         morphBandInspectorLabel.setBounds(bandArea.reduced(sc(2)));
+        body.removeFromTop(sc(4));
+    }
+
+    // Timbre Motion panel (macro rack + focused curve editor)
+    {
+        auto motionArea = body.removeFromTop(timbreMotionH);
+        timbreMotionPanel.setBounds(motionArea);
         body.removeFromTop(sc(4));
     }
 

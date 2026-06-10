@@ -5127,6 +5127,27 @@ void AtsAudioProcessor::setMorphTimelinePoints(const std::vector<AtsMorphTimelin
     markMorphSnapshotStale();
 }
 
+ats::TimbreMotionPlan AtsAudioProcessor::getTimbreMotionPlan() const
+{
+    const juce::ScopedLock ml(morphRecipeLock);
+    return ats::deserializeTimbreMotionPlan(
+        getRecipeUnknownField(morphRecipe, kTimbreMotionPlanUnknownField));
+}
+
+void AtsAudioProcessor::setTimbreMotionPlan(const ats::TimbreMotionPlan& plan)
+{
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        // An empty plan serializes to a no-op blob that deserializes back to empty (INV-1), so we
+        // can always upsert without a dedicated removal path.
+        upsertRecipeUnknownField(morphRecipe,
+                                 kTimbreMotionPlanUnknownField,
+                                 ats::serializeTimbreMotionPlan(plan));
+        serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
+    }
+    markMorphSnapshotStale();
+}
+
 // ============================================================================
 //  Undo / redo
 // ============================================================================
@@ -5238,6 +5259,42 @@ public:
 private:
     AtsAudioProcessor& proc;
     std::vector<AtsMorphTimelinePoint> beforePts, afterPts;
+    bool firstPerform = true;
+};
+
+/** Undo entry for timbre-motion-plan edits. */
+class TimbreMotionEditAction : public juce::UndoableAction
+{
+public:
+    TimbreMotionEditAction(AtsAudioProcessor& p,
+                           ats::TimbreMotionPlan before,
+                           ats::TimbreMotionPlan after)
+        : proc(p), beforePlan(std::move(before)), afterPlan(std::move(after))
+    {
+    }
+
+    bool perform() override
+    {
+        if (firstPerform)
+        {
+            firstPerform = false;
+            return true;
+        }
+        proc.setTimbreMotionPlan(afterPlan);
+        return true;
+    }
+
+    bool undo() override
+    {
+        proc.setTimbreMotionPlan(beforePlan);
+        return true;
+    }
+
+    int getSizeInUnits() override { return 1; }
+
+private:
+    AtsAudioProcessor& proc;
+    ats::TimbreMotionPlan beforePlan, afterPlan;
     bool firstPerform = true;
 };
 } // namespace
@@ -5356,6 +5413,22 @@ void AtsAudioProcessor::setMorphTimelinePointsUndoable(const std::vector<AtsMorp
     lastTimelineEditMs = nowMs;
 
     undoManager.perform(new TimelineEditAction(*this, std::move(before), std::move(after)));
+}
+
+void AtsAudioProcessor::setTimbreMotionPlanUndoable(const ats::TimbreMotionPlan& plan,
+                                                    const juce::String& label)
+{
+    auto before = getTimbreMotionPlan();
+    setTimbreMotionPlan(plan);
+    auto after = getTimbreMotionPlan();
+
+    // Coalesce continuous drags (curve edits fire on every tick) into one transaction.
+    const auto nowMs = juce::Time::currentTimeMillis();
+    if (nowMs - lastTimbreMotionEditMs > 500)
+        undoManager.beginNewTransaction(label);
+    lastTimbreMotionEditMs = nowMs;
+
+    undoManager.perform(new TimbreMotionEditAction(*this, std::move(before), std::move(after)));
 }
 
 void AtsAudioProcessor::undo()

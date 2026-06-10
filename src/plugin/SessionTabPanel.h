@@ -8,6 +8,7 @@
 
 #include "PluginProcessor.h"
 #include "SpectrogramPanel.h"
+#include "TimbreMotionPanel.h"
 #include "UiConstants.h"
 
 class MorphBandStrip : public juce::Component
@@ -116,6 +117,7 @@ private:
     void refreshMorphSnapshotControls();
     void refreshMorphBandDiagnostics();
     void refreshMorphTimeline();
+    void refreshTimbreMotionPanel();
     void setMorphTimelinePreset(std::vector<AtsMorphTimelinePoint> points);
     void bounceMorphTimeline();
     void transportPlay();
@@ -189,6 +191,7 @@ private:
     MorphTimelineEditor morphTimelineEditor;
     juce::TextButton morphTimelineBounceButton { "Bounce Timeline" };
     juce::TextButton morphTimelineResetButton { "Reset" };
+    TimbreMotionPanel timbreMotionPanel;
     juce::Label morphSmoothingLabel;
     juce::Slider morphSmoothingSlider;
     juce::Label morphMacroLabel;
