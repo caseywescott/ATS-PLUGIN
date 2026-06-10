@@ -1,5 +1,6 @@
 #include "SessionTabPanel.h"
 
+#include "AtsUiHints.h"
 #include "PluginProcessor.h"
 #include "PresetLibrary.h"
 
@@ -257,18 +258,19 @@ MorphTimelineEditor::MorphTimelineEditor()
 
 void MorphTimelineEditor::resized()
 {
-    auto header = getLocalBounds().removeFromTop(kHeaderH).reduced(4, 2);
+    const int hh = scaledUi(kHeaderH);
+    auto header = getLocalBounds().removeFromTop(hh).reduced(scaledUi(4), scaledUi(2));
     // "Add:" label occupies the left ~28px implicitly in paint; buttons go right of it.
-    header.removeFromLeft(28);
-    morphModeBtn.setBounds(header.removeFromLeft(54));
-    hybridModeBtn.setBounds(header.removeFromLeft(58));
-    envMorphModeBtn.setBounds(header.removeFromLeft(48));
+    header.removeFromLeft(scaledUi(28));
+    morphModeBtn.setBounds(header.removeFromLeft(scaledUi(54)));
+    hybridModeBtn.setBounds(header.removeFromLeft(scaledUi(58)));
+    envMorphModeBtn.setBounds(header.removeFromLeft(scaledUi(48)));
 }
 
 juce::Rectangle<float> MorphTimelineEditor::getPlotArea() const
 {
     auto area = getLocalBounds().toFloat().reduced(1.5f);
-    area.removeFromTop((float) kHeaderH);
+    area.removeFromTop((float) scaledUi(kHeaderH));
     return area.reduced(8.0f, 7.0f);
 }
 
@@ -303,7 +305,7 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
     // Header strip label
     g.setFont(juce::Font(10.0f, juce::Font::bold));
     g.setColour(juce::Colour(0xff8899aa));
-    g.drawText("Add:", getLocalBounds().removeFromTop(kHeaderH).withTrimmedLeft(6),
+    g.drawText("Add:", getLocalBounds().removeFromTop(scaledUi(kHeaderH)).withTrimmedLeft(6),
                juce::Justification::centredLeft);
 
     auto plot = getPlotArea();
@@ -348,7 +350,7 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
 void MorphTimelineEditor::mouseDown(const juce::MouseEvent& e)
 {
     // Ignore clicks in the header strip; those are handled by the child buttons.
-    if (e.position.y < (float) kHeaderH)
+    if (e.position.y < (float) scaledUi(kHeaderH))
         return;
 
     if (points.empty())
@@ -743,7 +745,6 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 18);
         s.setName(name);
         s.setExplicitFocusOrder(order);
-        s.setHelpText(name);
     };
     auto setupKnobLabel = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
@@ -753,9 +754,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     setupKnobLabel(partGainLabel, "partGain - Partials (amp)");
     setupKnobLabel(resGainLabel, "resGain - Residual (ramp)");
     setupKnobLabel(outputTrimLabel, "outputTrim - Master level");
-    addAndMakeVisible(partGainLabel);
-    addAndMakeVisible(resGainLabel);
-    addAndMakeVisible(outputTrimLabel);
+    controlsContent.addAndMakeVisible(partGainLabel);
+    controlsContent.addAndMakeVisible(resGainLabel);
+    controlsContent.addAndMakeVisible(outputTrimLabel);
 
     const juce::Colour knobLabCol(0xfff0f0f5);
     partGainLabel.setColour(juce::Label::textColourId, knobLabCol);
@@ -770,14 +771,12 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         "Classic combined Both playback bypasses separate layer gains.";
     const juce::String partialGainHelp = "Partials path gain (SPARAMS amp). " + layerGainHelp;
     const juce::String residualGainHelp = "Residual / noise-band gain (SPARAMS ramp). " + layerGainHelp;
-    partGainSlider.setHelpText(partialGainHelp);
-    partGainSlider.setTooltip(partialGainHelp);
-    resGainSlider.setHelpText(residualGainHelp);
-    resGainSlider.setTooltip(residualGainHelp);
-    outputTrimSlider.setHelpText("Master output trim after partial + residual mix.");
-    addAndMakeVisible(partGainSlider);
-    addAndMakeVisible(resGainSlider);
-    addAndMakeVisible(outputTrimSlider);
+    controlsContent.addAndMakeVisible(partGainSlider);
+    controlsContent.addAndMakeVisible(resGainSlider);
+    controlsContent.addAndMakeVisible(outputTrimSlider);
+    ats_ui::applySliderHint(partGainSlider, partialGainHelp);
+    ats_ui::applySliderHint(resGainSlider, residualGainHelp);
+    ats_ui::applySliderHint(outputTrimSlider, "Master output trim after partial + residual mix.");
 
     partGainAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "partGain", partGainSlider);
@@ -785,6 +784,48 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "resGain", resGainSlider);
     outputTrimAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, "outputTrim", outputTrimSlider);
+
+    // Timbre render controls setup
+    auto setupHSlider = [](juce::Slider& s) {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 52, 18);
+    };
+    auto setupTimbreLabel = [](juce::Label& l, const juce::String& text) {
+        l.setText(text, juce::dontSendNotification);
+        l.setJustificationType(juce::Justification::centredLeft);
+        l.setFont(juce::Font(11.0f, juce::Font::plain));
+    };
+    timbreSectionLabel.setText("Timbre", juce::dontSendNotification);
+    timbreSectionLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    timbreSectionLabel.setJustificationType(juce::Justification::centredLeft);
+    setupTimbreLabel(timbreBrightnessLabel, "Brightness");
+    setupTimbreLabel(timbreTiltLabel, "Warmth / Tilt");
+    setupTimbreLabel(timbreNoiseLabel, "Tonal / Noise");
+    setupHSlider(timbreBrightnessSlider);
+    setupHSlider(timbreTiltSlider);
+    setupHSlider(timbreNoiseSlider);
+    controlsContent.addAndMakeVisible(timbreSectionLabel);
+    controlsContent.addAndMakeVisible(timbreBrightnessLabel);
+    controlsContent.addAndMakeVisible(timbreBrightnessSlider);
+    controlsContent.addAndMakeVisible(timbreTiltLabel);
+    controlsContent.addAndMakeVisible(timbreTiltSlider);
+    controlsContent.addAndMakeVisible(timbreNoiseLabel);
+    controlsContent.addAndMakeVisible(timbreNoiseSlider);
+    ats_ui::applySliderHint(timbreBrightnessSlider,
+                            "Shifts spectral centroid up/down via bounded gain curve. Does not alter pitch.");
+    ats_ui::applySliderHint(timbreTiltSlider,
+                            "Spectral slope: positive = warmer (more bass), negative = brighter (more treble). "
+                            "dB per octave around 1 kHz.");
+    ats_ui::applySliderHint(timbreNoiseSlider,
+                            "Redistributes energy between partials and residual noise. "
+                            "0.5 = neutral, 0 = fully tonal, 1 = fully noisy.");
+
+    timbreBrightnessAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kTimbreBrightnessDb, timbreBrightnessSlider);
+    timbreTiltAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kTimbreTiltDbPerOct, timbreTiltSlider);
+    timbreNoiseAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kTimbreNoiseBalance, timbreNoiseSlider);
 
     auto setupSlotLabel = [](juce::Label& l, const juce::String& text, bool heading) {
         l.setText(text, juce::dontSendNotification);
@@ -860,8 +901,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphSnapshotStatusLabel.setFont(juce::Font(10.5f));
     morphSnapshotStatusLabel.setMinimumHorizontalScale(0.7f);
     morphSnapshotStatusLabel.setHelpText("Shows whether live morph controls match the last prepared snapshot.");
-    addAndMakeVisible(morphSnapshotLabel);
-    addAndMakeVisible(morphSnapshotStatusLabel);
+    controlsContent.addAndMakeVisible(morphSnapshotLabel);
+    controlsContent.addAndMakeVisible(morphSnapshotStatusLabel);
 
     for (size_t i = 0; i < morphVariationRecallButtons.size(); ++i)
     {
@@ -899,11 +940,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphTimelineResetButton.onClick = [this] {
         setMorphTimelinePreset({ { 0.0, 0.0 }, { 1.0, 0.0 } });
     };
-    addAndMakeVisible(morphTimelineLabel);
-    addAndMakeVisible(morphTimelineHintLabel);
-    addAndMakeVisible(morphTimelineEditor);
-    addAndMakeVisible(morphTimelineBounceButton);
-    addAndMakeVisible(morphTimelineResetButton);
+    controlsContent.addAndMakeVisible(morphTimelineLabel);
+    controlsContent.addAndMakeVisible(morphTimelineHintLabel);
+    controlsContent.addAndMakeVisible(morphTimelineEditor);
+    controlsContent.addAndMakeVisible(morphTimelineBounceButton);
+    controlsContent.addAndMakeVisible(morphTimelineResetButton);
 
     morphSmoothingLabel.setText("Smooth", juce::dontSendNotification);
     morphSmoothingLabel.setJustificationType(juce::Justification::centredLeft);
@@ -911,12 +952,13 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphSmoothingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     morphSmoothingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 54, 18);
     morphSmoothingSlider.setName("Morph smoothing");
-    morphSmoothingSlider.setHelpText("Control smoothing time in milliseconds for live morph lanes.");
     resetMorphLanesButton.setHelpText("Link every morph lane to the main morph control.");
     resetMorphLanesButton.onClick = [this] { resetMorphLanesToLinked(); };
-    addAndMakeVisible(morphSmoothingLabel);
-    addAndMakeVisible(morphSmoothingSlider);
-    addAndMakeVisible(resetMorphLanesButton);
+    controlsContent.addAndMakeVisible(morphSmoothingLabel);
+    controlsContent.addAndMakeVisible(morphSmoothingSlider);
+    controlsContent.addAndMakeVisible(resetMorphLanesButton);
+    ats_ui::applySliderHint(morphSmoothingSlider,
+                            "Control smoothing time in milliseconds for live morph lanes.");
     morphSmoothingAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kMorphSmoothingMs, morphSmoothingSlider);
 
@@ -929,12 +971,14 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         morphLaneSliders[i].setSliderStyle(juce::Slider::LinearHorizontal);
         morphLaneSliders[i].setTextBoxStyle(juce::Slider::TextBoxRight, false, 42, 16);
         morphLaneSliders[i].setName(juce::String(ats_param::kMorphLaneDisplayNames[i]) + " lane");
-        morphLaneSliders[i].setHelpText("Independent morph amount for this lane when unlinked.");
         morphLaneLinkedButtons[i].setButtonText("L");
         morphLaneLinkedButtons[i].setHelpText("Link this lane to the main morph amount.");
-        addAndMakeVisible(morphLaneLabels[i]);
-        addAndMakeVisible(morphLaneSliders[i]);
-        addAndMakeVisible(morphLaneLinkedButtons[i]);
+        controlsContent.addAndMakeVisible(morphLaneLabels[i]);
+        controlsContent.addAndMakeVisible(morphLaneSliders[i]);
+        controlsContent.addAndMakeVisible(morphLaneLinkedButtons[i]);
+        ats_ui::applySliderHint(morphLaneSliders[i],
+                                juce::String(ats_param::kMorphLaneDisplayNames[i])
+                                    + ": independent morph amount for this lane when unlinked.");
         morphLaneAmountAttach[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             audioProcessor.apvts, ats_param::kMorphLaneAmountIds[i], morphLaneSliders[i]);
         morphLaneLinkedAttach[i] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
@@ -948,12 +992,12 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
             combo.addItem(items[i], i + 1);
         combo.setTextWhenNothingSelected(items.isEmpty() ? juce::String() : items[0]);
         combo.setHelpText(helpText);
-        addAndMakeVisible(combo);
+        controlsContent.addAndMakeVisible(combo);
     };
     morphPolicyLabel.setText("Policy", juce::dontSendNotification);
     morphPolicyLabel.setJustificationType(juce::Justification::centredLeft);
     morphPolicyLabel.setFont(juce::Font(11.0f, juce::Font::bold));
-    addAndMakeVisible(morphPolicyLabel);
+    controlsContent.addAndMakeVisible(morphPolicyLabel);
 
     setupPolicyCombo(morphGridTypeCombo, { "Bark", "Mel" }, "Perceptual frequency grid.");
     setupPolicyCombo(morphCorrespondenceCombo,
@@ -983,7 +1027,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
                      "Transient handling policy.");
     morphDiscardOptInButton.setButtonText("Discard");
     morphDiscardOptInButton.setHelpText("Explicit opt-in required before discard policies are honored.");
-    addAndMakeVisible(morphDiscardOptInButton);
+    controlsContent.addAndMakeVisible(morphDiscardOptInButton);
 
     morphGridTypeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, ats_param::kMorphGridType, morphGridTypeCombo);
@@ -1019,9 +1063,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         selectedMorphBandIndex = bandIndex;
         refreshMorphBandDiagnostics();
     };
-    addAndMakeVisible(morphBandLabel);
-    addAndMakeVisible(morphBandStrip);
-    addAndMakeVisible(morphBandInspectorLabel);
+    controlsContent.addAndMakeVisible(morphBandLabel);
+    controlsContent.addAndMakeVisible(morphBandStrip);
+    controlsContent.addAndMakeVisible(morphBandInspectorLabel);
 
     // --- Control-cluster tab bar + Smearnov panel (SMEARNOV_SPEC §4) ---
     morphTabButton.setClickingTogglesState(true);
@@ -1035,8 +1079,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     smearnovTabButton.setHelpText("Show the Smearnov attack onset-detection and smear controls.");
     morphTabButton.onClick = [this] { setActiveControlTab(0); };
     smearnovTabButton.onClick = [this] { setActiveControlTab(1); };
-    addAndMakeVisible(morphTabButton);
-    addAndMakeVisible(smearnovTabButton);
+    controlsContent.addAndMakeVisible(morphTabButton);
+    controlsContent.addAndMakeVisible(smearnovTabButton);
 
     auto setupSmearKnob = [this](juce::Label& lab, juce::Slider& sld,
                                  const juce::String& title, const juce::String& help) {
@@ -1047,9 +1091,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         sld.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         sld.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 16);
         sld.setName(title);
-        sld.setHelpText(help);
-        addAndMakeVisible(lab);
-        addAndMakeVisible(sld);
+        controlsContent.addAndMakeVisible(lab);
+        controlsContent.addAndMakeVisible(sld);
+        ats_ui::applySliderHint(sld, help);
     };
     setupSmearKnob(smearMacroLabel, smearBlurSlider, "Smear",
                    "Attack blur time in milliseconds: spreads attack energy forward in time.");
@@ -1082,7 +1126,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         smearKnobsExpanded = smearKnobsDisclosure.getToggleState();
         resized();
     };
-    addAndMakeVisible(smearKnobsDisclosure);
+    controlsContent.addAndMakeVisible(smearKnobsDisclosure);
 
     auto setupSmearCombo = [this](juce::Label& lab, juce::ComboBox& combo,
                                   const juce::String& title, const juce::StringArray& items,
@@ -1093,8 +1137,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         for (int i = 0; i < items.size(); ++i)
             combo.addItem(items[i], i + 1);
         combo.setHelpText(help);
-        addAndMakeVisible(lab);
-        addAndMakeVisible(combo);
+        controlsContent.addAndMakeVisible(lab);
+        controlsContent.addAndMakeVisible(combo);
     };
     setupSmearCombo(smearTargetsLabel, smearTargetsCombo, "Targets",
                     { "Partials", "Residual", "Both" },
@@ -1105,15 +1149,15 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     smearDetectButton.setHelpText("Detect onsets on the current model and pin the markers in the spectrogram overlay.");
     smearDetectButton.onClick = [this] { runSmearnovDetect(); };
-    addAndMakeVisible(smearDetectButton);
+    controlsContent.addAndMakeVisible(smearDetectButton);
     smearApplyButton.setHelpText("Detect attacks (or use edited overlay markers) and apply the smear transform to the current model.");
     smearApplyButton.onClick = [this] { runSmearnovApply(); };
-    addAndMakeVisible(smearApplyButton);
+    controlsContent.addAndMakeVisible(smearApplyButton);
     smearStatusLabel.setJustificationType(juce::Justification::centredLeft);
     smearStatusLabel.setFont(juce::Font(10.5f));
     smearStatusLabel.setMinimumHorizontalScale(0.7f);
     smearStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
-    addAndMakeVisible(smearStatusLabel);
+    controlsContent.addAndMakeVisible(smearStatusLabel);
 
     smearAdvancedDisclosure.setClickingTogglesState(true);
     smearAdvancedDisclosure.setHelpText("Reveal detection-tuning controls.");
@@ -1121,7 +1165,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         smearAdvancedExpanded = smearAdvancedDisclosure.getToggleState();
         resized();
     };
-    addAndMakeVisible(smearAdvancedDisclosure);
+    controlsContent.addAndMakeVisible(smearAdvancedDisclosure);
 
     auto setupAdvSlider = [this](juce::Label& lab, juce::Slider& sld,
                                  const juce::String& title, const juce::String& help) {
@@ -1132,9 +1176,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         sld.setSliderStyle(juce::Slider::LinearHorizontal);
         sld.setTextBoxStyle(juce::Slider::TextBoxRight, false, 46, 16);
         sld.setName(title);
-        sld.setHelpText(help);
-        addAndMakeVisible(lab);
-        addAndMakeVisible(sld);
+        controlsContent.addAndMakeVisible(lab);
+        controlsContent.addAndMakeVisible(sld);
+        ats_ui::applySliderHint(sld, help);
     };
     setupAdvSlider(smearMaxDbLabel, smearMaxDbSlider, "Max dB",
                    "Upper bound on attack-window gain for the Exaggerate stage.");
@@ -1164,8 +1208,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     smearRpcaFallbackButton.setButtonText("RPCA fallback (experimental)");
     smearRpcaFallbackButton.setHelpText("RPCA onset segmentation is not implemented yet; detection always uses flux.");
     smearRpcaFallbackButton.setEnabled(false);
-    addAndMakeVisible(smearUsePhaseDevButton);
-    addAndMakeVisible(smearRpcaFallbackButton);
+    controlsContent.addAndMakeVisible(smearUsePhaseDevButton);
+    controlsContent.addAndMakeVisible(smearRpcaFallbackButton);
 
     smearBlurAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kSmearnovBlurMs, smearBlurSlider);
@@ -1208,6 +1252,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     spectroPanel.setExplicitFocusOrder(14);
     addAndMakeVisible(spectroPanel);
+
+    controlsViewport.setViewedComponent(&controlsContent, false);
+    controlsViewport.setScrollBarsShown(true, true);
+    controlsViewport.setScrollBarThickness(10);
+    addAndMakeVisible(controlsViewport);
 
     rebuildPresetList();
     setActiveControlTab(audioProcessor.getActiveControlTab());
@@ -1577,15 +1626,50 @@ void SessionTabPanel::resized()
     transportPlayButton.setBounds(transportRow.removeFromRight(sc(96)).reduced(sc(1)));
     r.removeFromTop(sc(6));
 
-    const bool narrowSourceCards = r.getWidth() < 680;
-    auto sourceCards = r.removeFromTop(narrowSourceCards ? 232 : 112);
+    const bool narrowSourceCards = r.getWidth() < sc(680);
+    auto sourceCards = r.removeFromTop(narrowSourceCards ? sc(232) : sc(112));
     r.removeFromTop(sc(6));
 
-    auto body = r;
-    const int specW = juce::jmax(sc(280), body.getWidth() / 3);
-    auto specCol = body.removeFromRight(specW);
-    spectroPanel.setBounds(specCol);
+    // Split remaining area: spectrogram on right, scrollable controls viewport on left
+    const int specW = juce::jmax(sc(280), r.getWidth() / 3);
+    spectroPanel.setBounds(r.removeFromRight(specW));
+    controlsViewport.setBounds(r);
 
+    // Compute scrollable content dimensions
+    const int sbW = controlsViewport.getScrollBarThickness();
+    const int contentW = juce::jmax(sc(300), r.getWidth() - sbW);
+
+    // Fixed section heights used in the content layout below
+    const int timelineSectionH = sc(22) + sc(80); // header + editor
+    const int snapshotH        = sc(18);
+    const int tabBarH          = sc(24);
+    const int laneH            = sc(24) + sc(2) + sc(78);   // lane header + gap + grid
+    const int policyH          = sc(20) + sc(2) + sc(90);   // policy header + gap + 3 rows
+    const int bandH            = sc(18) + sc(30) + sc(50);  // band header + strip + inspector
+    const int morphClusterH    = laneH + sc(4) + policyH + sc(4) + bandH + sc(4);
+
+    const int smearKnobH       = sc(86);
+    const int smearCtrlH       = sc(24) + sc(2) + sc(16) + sc(2) + sc(22) + sc(2);
+    const int smearAdvH        = smearAdvancedExpanded
+        ? (6 * sc(20) + sc(2) + sc(20))
+        : 0;
+    const int smearClusterH    = smearKnobH + sc(4) + smearCtrlH + smearAdvH;
+
+    const int clusterH         = (activeControlTab == 1) ? smearClusterH : morphClusterH;
+    const int globalKnobsH     = sc(32) + sc(104) + sc(6);
+    const int timbreH          = sc(18) + 3 * sc(22) + 2 * sc(4); // header + 3 slider rows + gaps
+
+    const int contentH = sc(4)
+        + timelineSectionH + sc(4)
+        + snapshotH + sc(4)
+        + tabBarH + sc(6)
+        + clusterH
+        + sc(4) + timbreH + sc(4)
+        + globalKnobsH + sc(4);
+
+    controlsContent.setSize(contentW, juce::jmax(r.getHeight(), contentH));
+
+    // Place source cards (direct children — they still span their full-width rect)
     auto placeSourceSlot = [&](juce::Rectangle<int> area,
                                juce::GroupComponent& group,
                                juce::Label& heading,
@@ -1610,23 +1694,13 @@ void SessionTabPanel::resized()
 
     if (narrowSourceCards)
     {
-        placeSourceSlot(sourceCards.removeFromTop(112).reduced(0, 1),
-                        sourceAGroup,
-                        sourceALabel,
-                        sourceAMetaLabel,
-                        sourceAOverviewLabel,
-                        sourceALoadAnalyzeButton,
-                        sourceAUseCurrentButton,
-                        exportSourceAButton);
-        sourceCards.removeFromTop(4);
-        placeSourceSlot(sourceCards.removeFromTop(112).reduced(0, 1),
-                        sourceBGroup,
-                        sourceBLabel,
-                        sourceBMetaLabel,
-                        sourceBOverviewLabel,
-                        sourceBLoadAnalyzeButton,
-                        sourceBUseCurrentButton,
-                        exportSourceBButton);
+        placeSourceSlot(sourceCards.removeFromTop(sc(112)).reduced(0, 1),
+                        sourceAGroup, sourceALabel, sourceAMetaLabel, sourceAOverviewLabel,
+                        sourceALoadAnalyzeButton, sourceAUseCurrentButton, exportSourceAButton);
+        sourceCards.removeFromTop(sc(8));
+        placeSourceSlot(sourceCards.removeFromTop(sc(112)).reduced(0, 1),
+                        sourceBGroup, sourceBLabel, sourceBMetaLabel, sourceBOverviewLabel,
+                        sourceBLoadAnalyzeButton, sourceBUseCurrentButton, exportSourceBButton);
     }
     else
     {
@@ -1634,25 +1708,19 @@ void SessionTabPanel::resized()
         sourceCards.removeFromLeft(8);
         auto sourceB = sourceCards.reduced(0, 1);
         placeSourceSlot(sourceA,
-                        sourceAGroup,
-                        sourceALabel,
-                        sourceAMetaLabel,
-                        sourceAOverviewLabel,
-                        sourceALoadAnalyzeButton,
-                        sourceAUseCurrentButton,
-                        exportSourceAButton);
+                        sourceAGroup, sourceALabel, sourceAMetaLabel, sourceAOverviewLabel,
+                        sourceALoadAnalyzeButton, sourceAUseCurrentButton, exportSourceAButton);
         placeSourceSlot(sourceB,
-                        sourceBGroup,
-                        sourceBLabel,
-                        sourceBMetaLabel,
-                        sourceBOverviewLabel,
-                        sourceBLoadAnalyzeButton,
-                        sourceBUseCurrentButton,
-                        exportSourceBButton);
+                        sourceBGroup, sourceBLabel, sourceBMetaLabel, sourceBOverviewLabel,
+                        sourceBLoadAnalyzeButton, sourceBUseCurrentButton, exportSourceBButton);
     }
-    body.removeFromTop(sc(4));
 
-    auto timelineArea = body.removeFromTop(juce::jmin(sc(92), juce::jmax(sc(72), body.getHeight() / 5)));
+    // Layout the scrollable controls content
+    auto body = controlsContent.getLocalBounds();
+    body.removeFromTop(sc(4)); // top padding
+
+    // Morph timeline
+    auto timelineArea = body.removeFromTop(timelineSectionH);
     auto timelineHeader = timelineArea.removeFromTop(sc(22));
     morphTimelineLabel.setBounds(timelineHeader.removeFromLeft(sc(102)));
     morphTimelineBounceButton.setBounds(timelineHeader.removeFromLeft(sc(128)).reduced(sc(1)));
@@ -1662,7 +1730,8 @@ void SessionTabPanel::resized()
     morphTimelineEditor.setBounds(timelineArea.reduced(sc(2)));
     body.removeFromTop(sc(4));
 
-    auto snapshotHeader = body.removeFromTop(sc(18));
+    // Morph snapshot header
+    auto snapshotHeader = body.removeFromTop(snapshotH);
     morphSnapshotLabel.setBounds(snapshotHeader.removeFromLeft(sc(84)));
     morphSnapshotStatusLabel.setBounds(snapshotHeader);
     for (auto& button : morphVariationRecallButtons)
@@ -1671,9 +1740,8 @@ void SessionTabPanel::resized()
         button.setBounds({});
     body.removeFromTop(sc(4));
 
-    // Control-cluster tab bar: [Morph | Smearnov]. The selected tab owns the
-    // cluster region above the global partial/residual/output knob row.
-    auto tabBar = body.removeFromTop(sc(24));
+    // Control-cluster tab bar: [Morph | Smearnov]
+    auto tabBar = body.removeFromTop(tabBarH);
     morphTabButton.setBounds(tabBar.removeFromLeft(sc(88)));
     smearnovTabButton.setBounds(tabBar.removeFromLeft(sc(96)));
     body.removeFromTop(sc(6));
@@ -1681,17 +1749,15 @@ void SessionTabPanel::resized()
     if (activeControlTab == 1)
     {
         hideMorphCluster();
-
-        const int knobBlock = sc(32) + sc(104) + sc(6) + sc(4);
-        auto clusterArea = body.removeFromTop(juce::jmax(sc(0), body.getHeight() - knobBlock));
-        layoutSmearnovPanel(clusterArea);
+        layoutSmearnovPanel(body.removeFromTop(smearClusterH));
         body.removeFromTop(sc(4));
     }
     else
     {
         hideSmearnovPanel();
 
-        auto laneArea = body.removeFromTop(juce::jmin(sc(116), juce::jmax(sc(78), body.getHeight() / 2)));
+        // Morph lanes (2×3 grid)
+        auto laneArea = body.removeFromTop(laneH);
         auto laneHeader = laneArea.removeFromTop(sc(24));
         morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
         morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(160)));
@@ -1715,7 +1781,8 @@ void SessionTabPanel::resized()
         }
         body.removeFromTop(sc(4));
 
-        auto policyArea = body.removeFromTop(juce::jmin(sc(128), juce::jmax(sc(94), body.getHeight() / 2)));
+        // Morph policy combos
+        auto policyArea = body.removeFromTop(policyH);
         auto policyHeader = policyArea.removeFromTop(sc(20));
         morphPolicyLabel.setBounds(policyHeader.removeFromLeft(sc(54)));
         morphDiscardOptInButton.setBounds(policyHeader.removeFromLeft(sc(96)));
@@ -1747,7 +1814,8 @@ void SessionTabPanel::resized()
         }
         body.removeFromTop(sc(4));
 
-        auto bandArea = body.removeFromTop(juce::jmin(sc(112), juce::jmax(sc(64), body.getHeight() / 2)));
+        // Morph band strip + inspector
+        auto bandArea = body.removeFromTop(bandH);
         auto bandHeader = bandArea.removeFromTop(sc(18));
         morphBandLabel.setBounds(bandHeader.removeFromLeft(sc(64)));
         morphBandStrip.setBounds(bandArea.removeFromTop(sc(30)).reduced(sc(2)));
@@ -1755,10 +1823,27 @@ void SessionTabPanel::resized()
         body.removeFromTop(sc(4));
     }
 
-    const int labelH = sc(32);
-    const int knobH = sc(104);
-    auto knobRow = body.removeFromTop(labelH + knobH + sc(6));
+    // Timbre render controls (Brightness, Warmth/Tilt, Tonal/Noise)
+    {
+        auto timbreArea = body.removeFromTop(timbreH);
+        timbreSectionLabel.setBounds(timbreArea.removeFromTop(sc(18)));
+        const int labelW = juce::jmax(sc(90), timbreArea.getWidth() / 3);
+        auto placeRow = [&](juce::Label& lab, juce::Slider& sld) {
+            auto row = timbreArea.removeFromTop(sc(22));
+            timbreArea.removeFromTop(sc(4));
+            lab.setBounds(row.removeFromLeft(labelW));
+            sld.setBounds(row);
+        };
+        placeRow(timbreBrightnessLabel, timbreBrightnessSlider);
+        placeRow(timbreTiltLabel, timbreTiltSlider);
+        placeRow(timbreNoiseLabel, timbreNoiseSlider);
+    }
+    body.removeFromTop(sc(4));
+
+    // Global output knobs (Partials gain, Residual gain, Output trim)
+    auto knobRow = body.removeFromTop(globalKnobsH);
     const int w = juce::jmax(1, knobRow.getWidth() / 3);
+    const int labelH = sc(32);
 
     auto placeColumn = [&](juce::Label& lab, juce::Slider& sld) {
         auto col = knobRow.removeFromLeft(w).reduced(sc(6));

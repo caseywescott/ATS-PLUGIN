@@ -49,12 +49,9 @@ AtsAudioProcessorEditor::AtsAudioProcessorEditor(AtsAudioProcessor& p)
     // Allow Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z to reach keyPressed().
     setWantsKeyboardFocus(true);
 
-    // User request: default window roughly 70% smaller, but resizable.
-    const int defaultW = juce::jmax(300, scaled(276));
-    const int defaultH = juce::jmax(220, scaled(192));
     setResizable(true, true);
-    setResizeLimits(300, 220, scaled(1800), scaled(1200));
-    setSize(defaultW, defaultH);
+    setResizeLimits(scaled(580), scaled(400), scaled(1800), scaled(1200));
+    setSize(scaled(800), scaled(560));
 
     startTimerHz(10);
 }

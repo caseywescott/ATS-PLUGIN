@@ -162,6 +162,10 @@ private:
     SpectrogramPanel spectroPanel;
     MorphBandStrip morphBandStrip;
 
+    // Scrollable left-column controls
+    juce::Viewport controlsViewport;
+    juce::Component controlsContent;
+
     juce::GroupComponent sourceAGroup;
     juce::GroupComponent sourceBGroup;
     juce::Label sourceALabel;
@@ -266,6 +270,15 @@ private:
     juce::Slider resGainSlider;
     juce::Slider outputTrimSlider;
 
+    // Timbre render controls (§8.1–8.3): brightness, tilt, tonal/noise
+    juce::Label timbreSectionLabel;
+    juce::Label timbreBrightnessLabel;
+    juce::Slider timbreBrightnessSlider;
+    juce::Label timbreTiltLabel;
+    juce::Slider timbreTiltSlider;
+    juce::Label timbreNoiseLabel;
+    juce::Slider timbreNoiseSlider;
+
     std::array<juce::Label, kMorphLaneUiCount> morphLaneLabels;
     std::array<juce::Slider, kMorphLaneUiCount> morphLaneSliders;
     std::array<juce::ToggleButton, kMorphLaneUiCount> morphLaneLinkedButtons;
@@ -290,6 +303,10 @@ private:
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>,
                kMorphLaneUiCount>
         morphLaneLinkedAttach;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timbreBrightnessAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timbreTiltAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timbreNoiseAttach;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearBlurAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearMixAttach;

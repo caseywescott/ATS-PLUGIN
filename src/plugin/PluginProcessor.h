@@ -76,6 +76,9 @@ inline constexpr const char* kSmearnovPreMarginMs = "smearnovPreMarginMs";
 inline constexpr const char* kSmearnovMaxAttackFrames = "smearnovMaxAttackFrames";
 inline constexpr const char* kSmearnovUsePhaseDeviation = "smearnovUsePhaseDeviation";
 inline constexpr const char* kSmearnovUseRpcaFallback = "smearnovUseRpcaFallback";
+inline constexpr const char* kTimbreBrightnessDb  = "timbreBrightnessDb";
+inline constexpr const char* kTimbreTiltDbPerOct  = "timbreTiltDbPerOct";
+inline constexpr const char* kTimbreNoiseBalance  = "timbreNoiseBalance";
 inline constexpr std::array<const char*, kMorphLaneCount> kMorphLaneAmountIds = {
     "morphLaneFrequencyAmount",
     "morphLaneAmplitudeAmount",
@@ -659,6 +662,12 @@ private:
     ats::AnalysisParams readAnalysisParamsFromApvts() const;
     ats::SmearnovDetectParams readSmearnovDetectParamsFromApvts() const;
     ats::SmearnovParams readSmearnovParamsFromApvts() const;
+    void getUiOnsetDetection(AtsTraceSource source,
+                             const ATS_SOUND* sound,
+                             uint64_t sourceRevision,
+                             const ats::SmearnovDetectParams& params,
+                             std::vector<ats::AtsOnset>& onsets,
+                             ats::SmearnovDetectionFunctions& functions) const;
     /** Copies the active onset override for `source` into `out`; false if none. */
     bool copySmearnovOnsetOverride(AtsTraceSource source, std::vector<ats::AtsOnset>& out) const;
     /** Drops pinned auto-detected overrides (keeps manual overlay edits). Called
@@ -704,9 +713,9 @@ private:
     int previewLayerCacheRevision = -1;
     double previewLayerCacheHostSr = 0.0;
     ats::SynthParams previewLayerCacheCore {};
-    std::vector<float> previewLayerCachePartials;
-    std::vector<float> previewLayerCacheResidual;
-    std::vector<float> previewLayerCacheCombined;
+    juce::AudioBuffer<float> previewLayerCachePartials;
+    juce::AudioBuffer<float> previewLayerCacheResidual;
+    juce::AudioBuffer<float> previewLayerCacheCombined;
 
     /** Caches the assembled transport-preview render per playback buffer so repeated Play of an
         unchanged source/timeline reuses the audio instead of re-running full additive synthesis.
@@ -780,6 +789,17 @@ private:
     std::array<bool, 3> smearnovOnsetOverrideUserEdited { { false, false, false } };
     std::atomic<uint64_t> smearnovOverlayRevision { 0 };
 
+    struct UiOnsetDetectionCache
+    {
+        std::vector<ats::AtsOnset> onsets;
+        ats::SmearnovDetectionFunctions functions;
+        ats::SmearnovDetectParams params {};
+        uint64_t sourceRevision = 0;
+        bool valid = false;
+    };
+    mutable juce::CriticalSection uiOnsetDetectionCacheLock;
+    mutable std::array<UiOnsetDetectionCache, 3> uiOnsetDetectionCache;
+
     // Live (non-destructive) smear caches. Guarded by smearedCacheLock. `sound` is nullptr
     // when smearing changed nothing (so the caller falls back to the unmodified source).
     struct SmearedSourceCache
@@ -831,6 +851,9 @@ private:
     std::atomic<float>* partGainRaw = nullptr;
     std::atomic<float>* resGainRaw = nullptr;
     std::atomic<float>* classicPreviewModeRaw = nullptr;
+    std::atomic<float>* timbreBrightnessDbRaw = nullptr;
+    std::atomic<float>* timbreTiltDbPerOctRaw = nullptr;
+    std::atomic<float>* timbreNoiseBalanceRaw = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AtsAudioProcessor)
 };
