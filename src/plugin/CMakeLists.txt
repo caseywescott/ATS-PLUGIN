@@ -54,7 +54,8 @@ target_sources(
           ../core/AtsSpectralEnvelope.cpp
           ../core/AtsTransientSmear.cpp
           ../core/ResampleLinear.cpp
-          ../core/AtsMathExpr.cpp)
+          ../core/AtsMathExpr.cpp
+          ../core/TimbreMotionPlan.cpp)
 
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"
                                               "${ATS_ATSA_SOURCE_DIR}")

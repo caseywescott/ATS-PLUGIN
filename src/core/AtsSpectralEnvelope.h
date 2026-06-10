@@ -153,7 +153,21 @@ enum class HybridizedPartialKind
     UnmatchedTarget
 };
 
+// Resolve a single partial's blended frequency and amplitude with independent
+// frequency-lane and amplitude-lane morph amounts.
 [[nodiscard]] HybridizedPartialRenderResult resolveHybridizedPartialRender(
+    HybridizedPartialKind kind,
+    double sourceFrequencyHz,
+    double sourceAmplitude,
+    double targetFrequencyHz,
+    double targetAmplitude,
+    double freqMorphAmount,
+    double ampMorphAmount,
+    double nearestTargetHz = 0.0,
+    double nearestSourceHz = 0.0);
+
+// Convenience overload: same amount for frequency and amplitude (backward compat).
+[[nodiscard]] inline HybridizedPartialRenderResult resolveHybridizedPartialRender(
     HybridizedPartialKind kind,
     double sourceFrequencyHz,
     double sourceAmplitude,
@@ -161,6 +175,12 @@ enum class HybridizedPartialKind
     double targetAmplitude,
     double morphAmount,
     double nearestTargetHz = 0.0,
-    double nearestSourceHz = 0.0);
+    double nearestSourceHz = 0.0)
+{
+    return resolveHybridizedPartialRender(kind, sourceFrequencyHz, sourceAmplitude,
+                                          targetFrequencyHz, targetAmplitude,
+                                          morphAmount, morphAmount,
+                                          nearestTargetHz, nearestSourceHz);
+}
 
 } // namespace ats

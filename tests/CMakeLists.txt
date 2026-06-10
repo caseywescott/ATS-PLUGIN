@@ -48,6 +48,19 @@ target_include_directories(ats_transient_layer_test PRIVATE
   "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_transient_layer_test PRIVATE cxx_std_17)
 
+add_executable(ats_math_expr_test ats_math_expr_test.cpp ../src/core/AtsMathExpr.cpp)
+target_include_directories(ats_math_expr_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_link_libraries(ats_math_expr_test PRIVATE atsa)
+target_compile_features(ats_math_expr_test PRIVATE cxx_std_17)
+
+add_executable(timbre_motion_plan_test timbre_motion_plan_test.cpp
+  ../src/core/TimbreMotionPlan.cpp)
+target_include_directories(timbre_motion_plan_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(timbre_motion_plan_test PRIVATE cxx_std_17)
+
 add_executable(atsa_residual_test atsa_residual_test.c)
 target_link_libraries(atsa_residual_test PRIVATE atsa)
 if(UNIX AND NOT APPLE)
@@ -117,3 +130,5 @@ add_test(NAME spectral_envelope_transfer_test COMMAND $<TARGET_FILE:spectral_env
 add_test(NAME ats_transient_smear_test COMMAND $<TARGET_FILE:ats_transient_smear_test>)
 add_test(NAME ats_transient_smear_accuracy_test COMMAND $<TARGET_FILE:ats_transient_smear_accuracy_test>)
 add_test(NAME ats_transient_layer_test COMMAND $<TARGET_FILE:ats_transient_layer_test>)
+add_test(NAME ats_math_expr_test COMMAND $<TARGET_FILE:ats_math_expr_test>)
+add_test(NAME timbre_motion_plan_test COMMAND $<TARGET_FILE:timbre_motion_plan_test>)

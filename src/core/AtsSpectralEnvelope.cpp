@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <utility>
 
 namespace ats
 {
@@ -30,12 +32,40 @@ double amplitudeToDb(double amplitude, double floor)
 
 constexpr double kPi = 3.14159265358979323846;
 
+struct CepstralWorkspace
+{
+    std::vector<double> cosTable;
+    std::vector<double> cepstrum;
+    std::vector<double> work;
+    std::vector<double> envelope;
+    std::vector<double> smoothed;
+};
+
+CepstralWorkspace& getCepstralWorkspace(int binCount, int order)
+{
+    thread_local std::map<std::pair<int, int>, CepstralWorkspace> workspaces;
+    const auto key = std::make_pair(binCount, order);
+    auto [it, inserted] = workspaces.try_emplace(key);
+    auto& workspace = it->second;
+    if (inserted)
+    {
+        workspace.cosTable.resize(static_cast<size_t>(order + 1) * static_cast<size_t>(binCount));
+        for (int k = 0; k <= order; ++k)
+            for (int b = 0; b < binCount; ++b)
+                workspace.cosTable[static_cast<size_t>(k) * static_cast<size_t>(binCount) + static_cast<size_t>(b)] =
+                    std::cos(kPi * (static_cast<double>(b) + 0.5) * static_cast<double>(k)
+                             / static_cast<double>(binCount));
+    }
+    return workspace;
+}
+
 // Low-quefrency (cepstral) low-pass of a log-grid via a DCT-II / IDCT-II pair, keeping only
 // coefficients 0..order. This is the smoothing kernel of the True Envelope iteration. The
 // cosine table cos(pi*(b+0.5)*k/N) is precomputed by the caller and shared across iterations.
 void cepstralLowpass(const std::vector<double>& in,
                      std::vector<double>& out,
                      const std::vector<double>& cosTab,
+                     std::vector<double>& cep,
                      int order)
 {
     const int n = static_cast<int>(in.size());
@@ -43,7 +73,7 @@ void cepstralLowpass(const std::vector<double>& in,
     if (n <= 0)
         return;
 
-    std::vector<double> cep(static_cast<size_t>(order + 1), 0.0);
+    cep.assign(static_cast<size_t>(order + 1), 0.0);
     for (int k = 0; k <= order; ++k)
     {
         double s = 0.0;
@@ -203,24 +233,23 @@ void BarkSpectralEnvelope::build(const std::vector<SpectralEnvelopePoint>& point
     }
     order = std::clamp(order, 3, std::min(binCount - 1, kMaxLifterOrder));
 
-    // Precompute cos(pi*(b+0.5)*k/N) for the DCT pair, shared across iterations.
-    std::vector<double> cosTab(static_cast<size_t>(order + 1) * static_cast<size_t>(binCount));
-    for (int k = 0; k <= order; ++k)
-        for (int b = 0; b < binCount; ++b)
-            cosTab[static_cast<size_t>(k) * static_cast<size_t>(binCount) + static_cast<size_t>(b)] =
-                std::cos(kPi * (static_cast<double>(b) + 0.5) * static_cast<double>(k)
-                         / static_cast<double>(binCount));
+    // DCT table and iteration scratch are reused by exact (binCount, order) key. Thread-local
+    // storage keeps concurrent envelope builds independent without locks.
+    auto& workspace = getCepstralWorkspace(binCount, order);
+    const auto& cosTab = workspace.cosTable;
 
     // True Envelope iteration: smooth, then lift the working spectrum up to the smoothed
     // envelope where it dipped below. Converges to a smooth curve riding the spectral peaks.
-    std::vector<double> work = logGrid;
-    std::vector<double> env = logGrid;
-    std::vector<double> smoothed;
+    auto& work = workspace.work;
+    auto& env = workspace.envelope;
+    auto& smoothed = workspace.smoothed;
+    work = logGrid;
+    env = logGrid;
     constexpr int kMaxIterations = 32;
     constexpr double kConvergenceTol = 0.02; // ~0.17 dB in log-amplitude
     for (int iter = 0; iter < kMaxIterations; ++iter)
     {
-        cepstralLowpass(work, smoothed, cosTab, order);
+        cepstralLowpass(work, smoothed, cosTab, workspace.cepstrum, order);
         double maxDelta = 0.0;
         for (int b = 0; b < binCount; ++b)
         {
@@ -658,20 +687,23 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
                                                              double sourceAmplitude,
                                                              double targetFrequencyHz,
                                                              double targetAmplitude,
-                                                             double morphAmount,
+                                                             double freqMorphAmount,
+                                                             double ampMorphAmount,
                                                              double nearestTargetHz,
                                                              double nearestSourceHz)
 {
     HybridizedPartialRenderResult result;
-    const double amount = clampUnit(morphAmount);
+    const double fAmt = clampUnit(freqMorphAmount);
+    const double aAmt = clampUnit(ampMorphAmount);
 
     switch (kind)
     {
         case HybridizedPartialKind::Matched:
             // Geometric frequency blend + equal-power amplitude blend so pitch glides track
             // perceived pitch and the morph midpoint holds its loudness.
-            result.frequencyHz = logInterpHz(sourceFrequencyHz, targetFrequencyHz, amount);
-            result.amplitude = equalPowerInterpAmp(sourceAmplitude, targetAmplitude, amount);
+            // Independent lane amounts let users move frequency ahead of or behind amplitude.
+            result.frequencyHz = logInterpHz(sourceFrequencyHz, targetFrequencyHz, fAmt);
+            result.amplitude = equalPowerInterpAmp(sourceAmplitude, targetAmplitude, aAmt);
             break;
 
         case HybridizedPartialKind::UnmatchedSource:
@@ -685,16 +717,16 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
             // smoothing is handled by per-sample amplitude ramping in the renderer, not here.
             (void) nearestTargetHz;
             result.frequencyHz = sourceFrequencyHz;
-            result.amplitude = sourceAmplitude * std::sqrt(1.0 - amount);
+            result.amplitude = sourceAmplitude * std::sqrt(1.0 - aAmt);
             break;
 
         case HybridizedPartialKind::UnmatchedTarget:
             // Glide in from nearest source partial (when one is supplied) while fading in
             // with the equal-power (sqrt) law.
             result.frequencyHz = (nearestSourceHz > 0.0)
-                                     ? logInterpHz(nearestSourceHz, targetFrequencyHz, amount)
+                                     ? logInterpHz(nearestSourceHz, targetFrequencyHz, fAmt)
                                      : targetFrequencyHz;
-            result.amplitude = targetAmplitude * std::sqrt(amount);
+            result.amplitude = targetAmplitude * std::sqrt(aAmt);
             break;
     }
 

@@ -19,6 +19,7 @@
 #include "AtsMorphTransportCorrespondence.h"
 #include "AtsSpectralEnvelope.h"
 #include "AtsTransientSmear.h"
+#include "TimbreMotionPlan.h"
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
@@ -28,6 +29,10 @@
 extern "C" {
 #include "atsa.h"
 }
+
+#ifndef ATS_ENABLE_PLAYBACK_DIAGNOSTICS
+#define ATS_ENABLE_PLAYBACK_DIAGNOSTICS 0
+#endif
 
 // Bit-identical cross-render cache for the per-frame Bark (True-Envelope) builds that feed the
 // Hybrid envelope-transfer and EnvelopeMorph lanes. The envelope at (sound, frame0, frame1, frac)
@@ -49,15 +54,17 @@ struct MorphEnvelopeCache
 
 namespace
 {
-// TEMP diagnostic: appends to ~/ats_play_debug.log so we can capture the
-// playback/render path in the Release standalone (DBG is compiled out there).
-// Remove once the silence root cause is fixed.
+#if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
 static void atsPlayLog(const juce::String& msg)
 {
     auto f = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                  .getChildFile("ats_play_debug.log");
     f.appendText(juce::Time::getCurrentTime().toString(true, true, true, true) + "  " + msg + "\n");
 }
+#define ATS_PLAY_LOG(message) atsPlayLog(message)
+#else
+#define ATS_PLAY_LOG(message) do { } while (false)
+#endif
 
 constexpr int kStateVersion = 17;
 constexpr int kMinReadableStateVersion = 2;
@@ -76,7 +83,8 @@ constexpr int kDefaultClassicPreviewMode = 0;
 constexpr int kSourceAPlaybackBufferIndex = 0;
 constexpr int kSourceBPlaybackBufferIndex = 1;
 constexpr int kMorphPlaybackBufferIndex = 2;
-constexpr const char* kMorphTimelineUnknownField = "ui.morph_timeline_points";
+constexpr const char* kMorphTimelineUnknownField     = "ui.morph_timeline_points";
+constexpr const char* kTimbreMotionPlanUnknownField  = "timbre_motion_plan";
 
 // Smearnov parameters that change *what onsets get detected*. Editing any of
 // these drops a pinned auto-detection so the next Apply re-detects (manual
@@ -441,6 +449,35 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
     return render;
 }
 
+struct PreparedMonoSamples
+{
+    const float* data = nullptr;
+    int frames = 0;
+    std::vector<float> resampled;
+
+    void prepare(const juce::AudioBuffer<float>& input, double inputSampleRate, double outputSampleRate)
+    {
+        frames = input.getNumSamples();
+        if (frames <= 0)
+            return;
+
+        if (std::abs(inputSampleRate - outputSampleRate) < 1.0)
+        {
+            data = input.getReadPointer(0);
+            return;
+        }
+
+        ats::resampleLinearMono(input.getReadPointer(0), frames, inputSampleRate, resampled, outputSampleRate);
+        data = resampled.data();
+        frames = static_cast<int>(resampled.size());
+    }
+
+    [[nodiscard]] float sampleAt(int frame) const noexcept
+    {
+        return frame >= 0 && frame < frames ? data[frame] : 0.0f;
+    }
+};
+
 juce::AudioBuffer<float> makePlaybackBufferFromClassicLayers(const ClassicLayerRender& render,
                                                              double renderSampleRate)
 {
@@ -454,36 +491,30 @@ juce::AudioBuffer<float> makePlaybackBufferFromClassicLayers(const ClassicLayerR
     const double sourceSampleRate = render.modelSampleRate > 0 ? (double) render.modelSampleRate : 44100.0;
     const double targetSampleRate = renderSampleRate > 0.0 ? renderSampleRate : sourceSampleRate;
 
-    std::vector<float> resampledP;
-    std::vector<float> resampledR;
-    std::vector<float> resampledC;
-    if (nP > 0)
-        ats::resampleLinearMono(render.partials.getReadPointer(0), nP, sourceSampleRate, resampledP, targetSampleRate);
-    if (nR > 0)
-        ats::resampleLinearMono(render.residual.getReadPointer(0), nR, sourceSampleRate, resampledR, targetSampleRate);
-    if (nC > 0)
-        ats::resampleLinearMono(render.combined.getReadPointer(0), nC, sourceSampleRate, resampledC, targetSampleRate);
+    PreparedMonoSamples partials;
+    PreparedMonoSamples residual;
+    PreparedMonoSamples combined;
+    partials.prepare(render.partials, sourceSampleRate, targetSampleRate);
+    residual.prepare(render.residual, sourceSampleRate, targetSampleRate);
+    combined.prepare(render.combined, sourceSampleRate, targetSampleRate);
 
-    const size_t outN = std::max(resampledC.size(), std::max(resampledP.size(), resampledR.size()));
-    if (outN == 0)
+    const int outN = std::max(combined.frames, std::max(partials.frames, residual.frames));
+    if (outN <= 0)
         return playback;
 
-    playback.setSize(resampledC.empty() ? 2 : 3, (int) outN);
+    playback.setSize(combined.frames <= 0 ? 2 : 3, outN);
     const bool hasCombined = playback.getNumChannels() > 2;
     float* const dstP = playback.getWritePointer(0);
     float* const dstR = playback.getWritePointer(1);
     float* const dstC = hasCombined ? playback.getWritePointer(2) : nullptr;
-    const int nResP = (int) resampledP.size();
-    const int nResR = (int) resampledR.size();
-    const int nResC = (int) resampledC.size();
-    for (int i = 0; i < (int) outN; ++i)
+    for (int i = 0; i < outN; ++i)
     {
-        const float p = i < nResP ? resampledP[(size_t) i] : 0.0f;
-        const float r = i < nResR ? resampledR[(size_t) i] : 0.0f;
+        const float p = partials.sampleAt(i);
+        const float r = residual.sampleAt(i);
         dstP[i] = p;
         dstR[i] = r;
         if (dstC != nullptr)
-            dstC[i] = i < nResC ? resampledC[(size_t) i] : p + r;
+            dstC[i] = i < combined.frames ? combined.data[i] : p + r;
     }
 
     return playback;
@@ -1181,125 +1212,137 @@ static double applyCurveShape(double t, ats::MorphCurveShape shape) noexcept
     }
 }
 
-double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, double timeNorm)
+struct CompiledMorphTimeline
 {
-    const auto safePoints = sanitizeMorphTimelinePoints(points);
-    const double t = juce::jlimit(0.0, 1.0, timeNorm);
-    // Only Morph-kind breakpoints drive the A/B blend; Hybrid ones are excluded.
-    const AtsMorphTimelinePoint* prev = nullptr;
-    const AtsMorphTimelinePoint* next = nullptr;
-    for (const auto& p : safePoints)
+    explicit CompiledMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points)
+        : safePoints(sanitizeMorphTimelinePoints(points))
     {
-        if (p.kind != MorphTimelinePointKind::Morph)
-            continue;
-        if (p.timeNorm <= t)
-            prev = &p;
-        else if (next == nullptr)
-            next = &p;
+        for (const auto& point : safePoints)
+            lane(point.kind).push_back(point);
     }
-    if (prev == nullptr && next == nullptr) return 0.0;
-    if (prev == nullptr) return next->morphAmount;
-    if (next == nullptr) return prev->morphAmount;
-    const double span = next->timeNorm - prev->timeNorm;
-    if (span <= 1.0e-9) return next->morphAmount;
-    const double shaped = applyCurveShape((t - prev->timeNorm) / span, prev->curve);
-    return prev->morphAmount + shaped * (next->morphAmount - prev->morphAmount);
-}
 
-// Returns the lane amount [0,1] at timeNorm, interpolating only breakpoints of the
-// requested kind. Returns 0.0 when the lane has no breakpoints.
-static double evaluateLaneTimeline(const std::vector<AtsMorphTimelinePoint>& safePoints,
-                                   double timeNorm,
-                                   MorphTimelinePointKind laneKind)
-{
-    std::vector<const AtsMorphTimelinePoint*> lane;
-    for (const auto& p : safePoints)
-        if (p.kind == laneKind)
-            lane.push_back(&p);
-
-    if (lane.empty())
-        return 0.0;
-
-    const double t = juce::jlimit(0.0, 1.0, timeNorm);
-    if (t <= lane.front()->timeNorm)
-        return lane.front()->morphAmount;
-    for (size_t i = 1; i < lane.size(); ++i)
+    [[nodiscard]] double sampleMorph(double timeNorm, bool applyCurves) const
     {
-        if (t <= lane[i]->timeNorm)
+        const double t = juce::jlimit(0.0, 1.0, timeNorm);
+        const auto& points = lane(MorphTimelinePointKind::Morph);
+        const AtsMorphTimelinePoint* prev = nullptr;
+        const AtsMorphTimelinePoint* next = nullptr;
+        for (const auto& point : points)
         {
-            const double span = lane[i]->timeNorm - lane[i - 1]->timeNorm;
-            if (span <= 1.0e-9)
-                return lane[i]->morphAmount;
-            const double shaped = applyCurveShape((t - lane[i - 1]->timeNorm) / span,
-                                                  lane[i - 1]->curve);
-            return lane[i - 1]->morphAmount
-                   + shaped * (lane[i]->morphAmount - lane[i - 1]->morphAmount);
+            if (point.timeNorm <= t)
+                prev = &point;
+            else if (next == nullptr)
+                next = &point;
+        }
+        if (prev == nullptr && next == nullptr) return 0.0;
+        if (prev == nullptr) return next->morphAmount;
+        if (next == nullptr) return prev->morphAmount;
+        const double span = next->timeNorm - prev->timeNorm;
+        if (span <= 1.0e-9) return next->morphAmount;
+        const double amount = (t - prev->timeNorm) / span;
+        const double shaped = applyCurves ? applyCurveShape(amount, prev->curve) : amount;
+        return prev->morphAmount + shaped * (next->morphAmount - prev->morphAmount);
+    }
+
+    // Effect lanes preserve the existing endpoint/interpolation sampling order.
+    [[nodiscard]] double sampleEffect(MorphTimelinePointKind kind, double timeNorm) const
+    {
+        const auto& points = lane(kind);
+        if (points.empty())
+            return 0.0;
+
+        const double t = juce::jlimit(0.0, 1.0, timeNorm);
+        if (t <= points.front().timeNorm)
+            return points.front().morphAmount;
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            if (t <= points[i].timeNorm)
+            {
+                const double span = points[i].timeNorm - points[i - 1].timeNorm;
+                if (span <= 1.0e-9)
+                    return points[i].morphAmount;
+                const double shaped = applyCurveShape((t - points[i - 1].timeNorm) / span,
+                                                      points[i - 1].curve);
+                return points[i - 1].morphAmount
+                       + shaped * (points[i].morphAmount - points[i - 1].morphAmount);
+            }
+        }
+        return points.back().morphAmount;
+    }
+
+    [[nodiscard]] bool constantEndpointSourceIndex(int& sourceIndex) const
+    {
+        constexpr double kEndpointTolerance = 1.0e-6;
+        bool hasMorphPoints = false;
+        bool hasEffectLanePoints = false;
+        bool allSourceA = true;
+        bool allSourceB = true;
+        for (const auto& point : safePoints)
+        {
+            if (point.kind != MorphTimelinePointKind::Morph)
+            {
+                hasEffectLanePoints = true;
+                continue;
+            }
+
+            hasMorphPoints = true;
+            allSourceA = allSourceA && point.morphAmount <= kEndpointTolerance;
+            allSourceB = allSourceB && point.morphAmount >= 1.0 - kEndpointTolerance;
+        }
+
+        if (hasEffectLanePoints || !hasMorphPoints)
+        {
+            sourceIndex = -1;
+            return false;
+        }
+        if (allSourceA)
+        {
+            sourceIndex = 0;
+            return true;
+        }
+        if (allSourceB)
+        {
+            sourceIndex = 1;
+            return true;
+        }
+        sourceIndex = -1;
+        return false;
+    }
+
+private:
+    static size_t laneIndex(MorphTimelinePointKind kind)
+    {
+        switch (kind)
+        {
+            case MorphTimelinePointKind::Hybrid:        return 1;
+            case MorphTimelinePointKind::EnvelopeMorph: return 2;
+            case MorphTimelinePointKind::Morph:
+            default:                                    return 0;
         }
     }
-    return lane.back()->morphAmount;
-}
 
-// Returns the envelope-transfer amount [0,1] at timeNorm, using only Hybrid-kind breakpoints.
-static double evaluateEnvTransferTimeline(const std::vector<AtsMorphTimelinePoint>& safePoints, double timeNorm)
+    std::vector<AtsMorphTimelinePoint>& lane(MorphTimelinePointKind kind)
+    {
+        return lanes[laneIndex(kind)];
+    }
+
+    const std::vector<AtsMorphTimelinePoint>& lane(MorphTimelinePointKind kind) const
+    {
+        return lanes[laneIndex(kind)];
+    }
+
+    std::vector<AtsMorphTimelinePoint> safePoints;
+    std::array<std::vector<AtsMorphTimelinePoint>, 3> lanes;
+};
+
+double evaluateMorphTimeline(const std::vector<AtsMorphTimelinePoint>& points, double timeNorm)
 {
-    return evaluateLaneTimeline(safePoints, timeNorm, MorphTimelinePointKind::Hybrid);
+    return CompiledMorphTimeline(points).sampleMorph(timeNorm, true);
 }
 
 bool getConstantMorphEndpointSourceIndex(const std::vector<AtsMorphTimelinePoint>& points, int& sourceIndex)
 {
-    constexpr double kEndpointTolerance = 1.0e-6;
-    const auto safePoints = sanitizeMorphTimelinePoints(points);
-
-    // Only Morph-kind breakpoints drive the A/B blend.
-    // Hybrid breakpoints must never trigger the "pure source" shortcut path;
-    // they exist to apply Bark envelope transfer, not to suppress rendering.
-    bool hasMorphPoints = false;
-    bool hasEffectLanePoints = false;
-    bool allSourceA = true;
-    bool allSourceB = true;
-    for (const auto& point : safePoints)
-    {
-        // Any non-Morph lane (Hybrid envelope transfer, EnvelopeMorph) needs the full
-        // trajectory render — it must never trigger the "pure source" shortcut path.
-        if (point.kind != MorphTimelinePointKind::Morph)
-        {
-            hasEffectLanePoints = true;
-            continue;
-        }
-
-        hasMorphPoints = true;
-        allSourceA = allSourceA && point.morphAmount <= kEndpointTolerance;
-        allSourceB = allSourceB && point.morphAmount >= 1.0 - kEndpointTolerance;
-    }
-
-    if (hasEffectLanePoints)
-    {
-        sourceIndex = -1;
-        return false;
-    }
-
-    // Defensive fallback for malformed/future point kinds: render the trajectory
-    // path rather than taking a pure-source shortcut.
-    if (!hasMorphPoints)
-    {
-        sourceIndex = -1;
-        return false;
-    }
-
-    if (allSourceA)
-    {
-        sourceIndex = 0;
-        return true;
-    }
-
-    if (allSourceB)
-    {
-        sourceIndex = 1;
-        return true;
-    }
-
-    sourceIndex = -1;
-    return false;
+    return CompiledMorphTimeline(points).constantEndpointSourceIndex(sourceIndex);
 }
 
 const char* correspondenceStrategyName(int index)
@@ -1464,7 +1507,10 @@ AtsAudioProcessor::AtsAudioProcessor()
     outputTrimRaw = apvts.getRawParameterValue("outputTrim");
     partGainRaw   = apvts.getRawParameterValue("partGain");
     resGainRaw    = apvts.getRawParameterValue("resGain");
-    classicPreviewModeRaw = apvts.getRawParameterValue(ats_param::kClassicPreviewMode);
+    classicPreviewModeRaw    = apvts.getRawParameterValue(ats_param::kClassicPreviewMode);
+    timbreBrightnessDbRaw    = apvts.getRawParameterValue(ats_param::kTimbreBrightnessDb);
+    timbreTiltDbPerOctRaw    = apvts.getRawParameterValue(ats_param::kTimbreTiltDbPerOct);
+    timbreNoiseBalanceRaw    = apvts.getRawParameterValue(ats_param::kTimbreNoiseBalance);
 
     startTimerHz(30);
 }
@@ -1739,6 +1785,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         ats_param::kSmearnovUseRpcaFallback,
         "Smearnov RPCA fallback",
         false));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kTimbreBrightnessDb,
+        "Brightness (dB)",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.01f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kTimbreTiltDbPerOct,
+        "Tilt (dB/oct)",
+        juce::NormalisableRange<float>(-6.0f, 6.0f, 0.01f),
+        0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        ats_param::kTimbreNoiseBalance,
+        "Tonal/Noise balance",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
+        0.5f));
     for (size_t i = 0; i < ats_param::kMorphLaneCount; ++i)
     {
         const juce::String laneName(ats_param::kMorphLaneDisplayNames[i]);
@@ -2170,9 +2231,9 @@ void AtsAudioProcessor::clearPreviewLayerCache()
     previewLayerCacheRevision = -1;
     previewLayerCacheHostSr = 0.0;
     previewLayerCacheCore = {};
-    previewLayerCachePartials.clear();
-    previewLayerCacheResidual.clear();
-    previewLayerCacheCombined.clear();
+    previewLayerCachePartials.setSize(0, 0);
+    previewLayerCacheResidual.setSize(0, 0);
+    previewLayerCacheCombined.setSize(0, 0);
 }
 
 void AtsAudioProcessor::cancelJobs()
@@ -2336,8 +2397,9 @@ void AtsAudioProcessor::startResynthWorker()
                             && previewLayerCacheRevision == modelRevSnapshot
                             && (std::abs(previewLayerCacheHostSr - hostSampleRate) < 1e-6)
                             && samePreviewLayerCore(previewLayerCacheCore, core)
-                            && (!previewLayerCachePartials.empty() || !previewLayerCacheResidual.empty()
-                                || !previewLayerCacheCombined.empty());
+                            && (previewLayerCachePartials.getNumSamples() > 0
+                                || previewLayerCacheResidual.getNumSamples() > 0
+                                || previewLayerCacheCombined.getNumSamples() > 0);
 
             if (!useLayerCache)
             {
@@ -2395,26 +2457,49 @@ void AtsAudioProcessor::startResynthWorker()
                 return;
             }
 
-            std::vector<float> resampledP;
-            std::vector<float> resampledR;
-            std::vector<float> resampledC;
-            // Each stream is independent — run in parallel.
-            auto doResampleP = [&] {
-                if (nP > 0)
-                    ats::resampleLinearMono(monoP.getReadPointer(0), nP, (double) modelSr, resampledP, hostSampleRate);
-            };
-            auto doResampleR = [&] {
-                if (nR > 0)
-                    ats::resampleLinearMono(monoR.getReadPointer(0), nR, (double) modelSr, resampledR, hostSampleRate);
-            };
-            auto futureResP = std::async(std::launch::async, doResampleP);
-            auto futureResR = std::async(std::launch::async, doResampleR);
-            if (nC > 0)
-                ats::resampleLinearMono(monoC.getReadPointer(0), nC, (double) modelSr, resampledC, hostSampleRate);
-            futureResP.get();
-            futureResR.get();
+            juce::AudioBuffer<float> preparedP;
+            juce::AudioBuffer<float> preparedR;
+            juce::AudioBuffer<float> preparedC;
+            if (std::abs((double) modelSr - hostSampleRate) < 1.0)
+            {
+                preparedP = std::move(monoP);
+                preparedR = std::move(monoR);
+                preparedC = std::move(monoC);
+            }
+            else
+            {
+                std::vector<float> resampledP;
+                std::vector<float> resampledR;
+                std::vector<float> resampledC;
+                // Each stream is independent — run in parallel.
+                auto doResampleP = [&] {
+                    if (nP > 0)
+                        ats::resampleLinearMono(monoP.getReadPointer(0), nP, (double) modelSr, resampledP, hostSampleRate);
+                };
+                auto doResampleR = [&] {
+                    if (nR > 0)
+                        ats::resampleLinearMono(monoR.getReadPointer(0), nR, (double) modelSr, resampledR, hostSampleRate);
+                };
+                auto futureResP = std::async(std::launch::async, doResampleP);
+                auto futureResR = std::async(std::launch::async, doResampleR);
+                if (nC > 0)
+                    ats::resampleLinearMono(monoC.getReadPointer(0), nC, (double) modelSr, resampledC, hostSampleRate);
+                futureResP.get();
+                futureResR.get();
 
-            if (resampledP.empty() && resampledR.empty() && resampledC.empty())
+                auto copyToCache = [](const std::vector<float>& source, juce::AudioBuffer<float>& destination) {
+                    destination.setSize(source.empty() ? 0 : 1, (int) source.size());
+                    if (!source.empty())
+                        destination.copyFrom(0, 0, source.data(), (int) source.size());
+                };
+                copyToCache(resampledP, preparedP);
+                copyToCache(resampledR, preparedR);
+                copyToCache(resampledC, preparedC);
+            }
+
+            if (preparedP.getNumSamples() <= 0
+                && preparedR.getNumSamples() <= 0
+                && preparedC.getNumSamples() <= 0)
             {
                 setError("Synthesis produced silence.");
                 resynthThreadRunning.store(false);
@@ -2430,18 +2515,19 @@ void AtsAudioProcessor::startResynthWorker()
                 return;
             }
 
-            previewLayerCachePartials = std::move(resampledP);
-            previewLayerCacheResidual = std::move(resampledR);
-            previewLayerCacheCombined = std::move(resampledC);
+            previewLayerCachePartials = std::move(preparedP);
+            previewLayerCacheResidual = std::move(preparedR);
+            previewLayerCacheCombined = std::move(preparedC);
             previewLayerCacheCore = core;
             previewLayerCacheRevision = modelRevSnapshot;
             previewLayerCacheHostSr = hostSampleRate;
             previewLayerCacheValid = true;
         }
 
-        const size_t outN = juce::jmax(previewLayerCacheCombined.size(),
-                                       juce::jmax(previewLayerCachePartials.size(), previewLayerCacheResidual.size()));
-        if (outN == 0)
+        const int outN = juce::jmax(previewLayerCacheCombined.getNumSamples(),
+                                    juce::jmax(previewLayerCachePartials.getNumSamples(),
+                                               previewLayerCacheResidual.getNumSamples()));
+        if (outN <= 0)
         {
             setError("Synthesis produced silence.");
             resynthThreadRunning.store(false);
@@ -2470,23 +2556,26 @@ void AtsAudioProcessor::startResynthWorker()
             std::this_thread::yield();
 
         auto& playback = playbackBuffers[(size_t) kMorphPlaybackBufferIndex];
-        playback.setSize(previewLayerCacheCombined.empty() ? 2 : 3, (int) outN);
+        playback.setSize(previewLayerCacheCombined.getNumSamples() <= 0 ? 2 : 3, outN);
         {
             const bool hasCombined = playback.getNumChannels() > 2;
             float* const dstP = playback.getWritePointer(0);
             float* const dstR = playback.getWritePointer(1);
             float* const dstC = hasCombined ? playback.getWritePointer(2) : nullptr;
-            const int nCacheP = (int) previewLayerCachePartials.size();
-            const int nCacheR = (int) previewLayerCacheResidual.size();
-            const int nCacheC = (int) previewLayerCacheCombined.size();
-            for (int i = 0; i < (int) outN; ++i)
+            const int nCacheP = previewLayerCachePartials.getNumSamples();
+            const int nCacheR = previewLayerCacheResidual.getNumSamples();
+            const int nCacheC = previewLayerCacheCombined.getNumSamples();
+            const float* const srcP = nCacheP > 0 ? previewLayerCachePartials.getReadPointer(0) : nullptr;
+            const float* const srcR = nCacheR > 0 ? previewLayerCacheResidual.getReadPointer(0) : nullptr;
+            const float* const srcC = nCacheC > 0 ? previewLayerCacheCombined.getReadPointer(0) : nullptr;
+            for (int i = 0; i < outN; ++i)
             {
-                const float p = i < nCacheP ? previewLayerCachePartials[(size_t) i] : 0.0f;
-                const float r = i < nCacheR ? previewLayerCacheResidual[(size_t) i] : 0.0f;
+                const float p = i < nCacheP ? srcP[i] : 0.0f;
+                const float r = i < nCacheR ? srcR[i] : 0.0f;
                 dstP[i] = p;
                 dstR[i] = r;
                 if (dstC != nullptr)
-                    dstC[i] = i < nCacheC ? previewLayerCacheCombined[(size_t) i] : p + r;
+                    dstC[i] = i < nCacheC ? srcC[i] : p + r;
             }
         }
 
@@ -2555,6 +2644,8 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         juce::jmax(0, juce::roundToInt(classicPreviewModeRaw->load(std::memory_order_relaxed))) == 0;
 
     const int n = buffer.getNumSamples();
+    const int outputChannelCount = buffer.getNumChannels();
+    float* const* const outputChannels = buffer.getArrayOfWritePointers();
     const int activeIndex = activePlaybackBufferIndex.load(std::memory_order_acquire);
     const bool hasPlayback = activeIndex >= 0 && activeIndex < (int) playbackBuffers.size();
     readingPlaybackBufferIndex.store(hasPlayback ? activeIndex : -1, std::memory_order_release);
@@ -2568,7 +2659,18 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     }
 
     const auto* playback = hasPlayback ? &playbackBuffers[(size_t) activeIndex] : nullptr;
+    const int playbackSampleCount = playback != nullptr ? playback->getNumSamples() : 0;
+    const int playbackChannelCount = playback != nullptr ? playback->getNumChannels() : 0;
+    const float* const playbackPartials =
+        playbackChannelCount > 0 ? playback->getReadPointer(0) : nullptr;
+    const float* const playbackResidual =
+        playbackChannelCount > 1 ? playback->getReadPointer(1) : nullptr;
+    const float* const playbackCombined =
+        playbackChannelCount > 2 ? playback->getReadPointer(2) : nullptr;
     const bool shouldPreview = previewPlaying.load(std::memory_order_acquire);
+    const bool useClassicCombined = auditionMode == AtsSourceAuditionMode::Both
+                                    && playbackCombined != nullptr
+                                    && useClassicBothPlayback;
 
     if (shouldPreview && playback != nullptr)
     {
@@ -2583,27 +2685,23 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         const float pg = partGainSmoothed.getNextValue();
         const float rg = resGainSmoothed.getNextValue();
         float v = 0.0f;
-        if (shouldPreview && playback != nullptr && playbackPosition < playback->getNumSamples())
+        if (shouldPreview && playbackPosition < playbackSampleCount)
         {
-            const int nCh = playback->getNumChannels();
-            const float part = playback->getSample(0, playbackPosition);
-            const float res = nCh > 1 ? playback->getSample(1, playbackPosition) : 0.0f;
-            const bool useClassicCombined = auditionMode == AtsSourceAuditionMode::Both
-                                            && nCh > 2
-                                            && useClassicBothPlayback;
+            const float part = playbackPartials[playbackPosition];
+            const float res = playbackResidual != nullptr ? playbackResidual[playbackPosition] : 0.0f;
             const float mixed = useClassicCombined
-                                    ? playback->getSample(2, playbackPosition)
+                                    ? playbackCombined[playbackPosition]
                                     : ((includePartials ? (part * pg) : 0.0f)
                                        + (includeResidual ? (res * rg) : 0.0f));
             v = softLimitPreviewSample(mixed * trim);
             ++playbackPosition;
         }
 
-        for (int c = 0; c < buffer.getNumChannels(); ++c)
-            buffer.setSample(c, s, v);
+        for (int c = 0; c < outputChannelCount; ++c)
+            outputChannels[c][s] = v;
     }
 
-    if (shouldPreview && (playback == nullptr || playbackPosition >= playback->getNumSamples()))
+    if (shouldPreview && playbackPosition >= playbackSampleCount)
     {
         previewPlaying.store(false, std::memory_order_release);
         previewPlaybackKind.store((int) AtsPreviewPlaybackKind::None, std::memory_order_release);
@@ -2615,10 +2713,12 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
 void AtsAudioProcessor::startPreviewPlayback()
 {
+#if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     const int idx = activePlaybackBufferIndex.load(std::memory_order_acquire);
     const int n = (idx >= 0 && idx < (int) playbackBuffers.size()) ? playbackBuffers[(size_t) idx].getNumSamples() : -1;
     atsPlayLog("startPreviewPlayback activeIdx=" + juce::String(idx) + " n=" + juce::String(n)
                + " hasPreviewAudio=" + juce::String((int) hasPreviewAudio()));
+#endif
     if (!hasPreviewAudio())
         return;
     playbackPosition = 0;
@@ -2714,7 +2814,7 @@ bool AtsAudioProcessor::playCurrentModelPreview(AtsSourceAuditionMode mode, bool
     error.clear();
     if (isWorkerBusy())
     {
-        atsPlayLog("playCurrentModelPreview REJECTED: worker busy");
+        ATS_PLAY_LOG("playCurrentModelPreview REJECTED: worker busy");
         error = "Wait for the current analysis or render to finish before playing.";
         return false;
     }
@@ -2724,14 +2824,14 @@ bool AtsAudioProcessor::playCurrentModelPreview(AtsSourceAuditionMode mode, bool
     bool hasResidual = false;
     if (!getModelFootprint(partials, frames, hasResidual) || partials <= 0 || frames <= 0)
     {
-        atsPlayLog("playCurrentModelPreview REJECTED: empty footprint p=" + juce::String(partials)
-                   + " f=" + juce::String(frames));
+        ATS_PLAY_LOG("playCurrentModelPreview REJECTED: empty footprint p=" + juce::String(partials)
+                     + " f=" + juce::String(frames));
         error = "Analyze or import an ATS model before playing.";
         return false;
     }
-    atsPlayLog("playCurrentModelPreview mode=" + juce::String((int) mode)
-               + " liveSmear=" + juce::String((int) liveSmear)
-               + " p=" + juce::String(partials) + " f=" + juce::String(frames));
+    ATS_PLAY_LOG("playCurrentModelPreview mode=" + juce::String((int) mode)
+                 + " liveSmear=" + juce::String((int) liveSmear)
+                 + " p=" + juce::String(partials) + " f=" + juce::String(frames));
 
     if (mode == AtsSourceAuditionMode::ResidualOnly && !hasResidual)
     {
@@ -2795,12 +2895,14 @@ bool AtsAudioProcessor::transportCacheTryReuse(int bufferIndex, int sourceTag, c
         std::this_thread::yield();
 
     playbackBuffers[(size_t) bufferIndex].makeCopyOf(e.buffer);
+#if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     {
         auto& pb = playbackBuffers[(size_t) bufferIndex];
         atsPlayLog("cacheHIT buf=" + juce::String(bufferIndex) + " tag=" + juce::String(sourceTag)
                    + " n=" + juce::String(pb.getNumSamples()) + " ch=" + juce::String(pb.getNumChannels())
                    + " peak0=" + juce::String(pb.getNumSamples() > 0 ? pb.getMagnitude(0, 0, pb.getNumSamples()) : -1.0f));
     }
+#endif
     return true;
 }
 
@@ -2910,19 +3012,16 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
         return false;
     }
 
-    std::vector<float> resampledP;
-    std::vector<float> resampledR;
-    std::vector<float> resampledC;
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : (double) modelSr;
-    if (nP > 0)
-        ats::resampleLinearMono(monoP.getReadPointer(0), nP, (double) modelSr, resampledP, renderSampleRate);
-    if (nR > 0)
-        ats::resampleLinearMono(monoR.getReadPointer(0), nR, (double) modelSr, resampledR, renderSampleRate);
-    if (nC > 0)
-        ats::resampleLinearMono(monoC.getReadPointer(0), nC, (double) modelSr, resampledC, renderSampleRate);
+    PreparedMonoSamples partials;
+    PreparedMonoSamples residual;
+    PreparedMonoSamples combined;
+    partials.prepare(monoP, (double) modelSr, renderSampleRate);
+    residual.prepare(monoR, (double) modelSr, renderSampleRate);
+    combined.prepare(monoC, (double) modelSr, renderSampleRate);
 
-    const size_t outN = juce::jmax(resampledC.size(), juce::jmax(resampledP.size(), resampledR.size()));
-    if (outN == 0)
+    const int outN = juce::jmax(combined.frames, juce::jmax(partials.frames, residual.frames));
+    if (outN <= 0)
     {
         error = "Synthesis produced silence.";
         return false;
@@ -2936,20 +3035,21 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
         std::this_thread::yield();
 
     auto& playback = playbackBuffers[(size_t) bufferIndex];
-    playback.setSize(resampledC.empty() ? 2 : 3, (int) outN);
-    for (int i = 0; i < (int) outN; ++i)
+    playback.setSize(combined.frames <= 0 ? 2 : 3, outN);
+    for (int i = 0; i < outN; ++i)
     {
-        const float p = i < (int) resampledP.size() ? resampledP[(size_t) i] : 0.0f;
-        const float r = i < (int) resampledR.size() ? resampledR[(size_t) i] : 0.0f;
+        const float p = partials.sampleAt(i);
+        const float r = residual.sampleAt(i);
         playback.setSample(0, i, p);
         playback.setSample(1, i, r);
         if (playback.getNumChannels() > 2)
         {
-            const float c = i < (int) resampledC.size() ? resampledC[(size_t) i] : p + r;
+            const float c = i < combined.frames ? combined.data[i] : p + r;
             playback.setSample(2, i, c);
         }
     }
     transportCacheStore(bufferIndex, kCurrentModelSourceTag, core, liveSmear, smearIsolate, playback);
+#if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     {
         auto peak = [&playback](int ch) {
             if (ch >= playback.getNumChannels()) return -1.0f;
@@ -2964,6 +3064,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                    + " peakP=" + juce::String(peak(0)) + " peakR=" + juce::String(peak(1))
                    + " peakC=" + juce::String(peak(2)));
     }
+#endif
     return true;
 }
 
@@ -3051,19 +3152,16 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
         return false;
     }
 
-    std::vector<float> resampledP;
-    std::vector<float> resampledR;
-    std::vector<float> resampledC;
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : (double) modelSr;
-    if (nP > 0)
-        ats::resampleLinearMono(monoP.getReadPointer(0), nP, (double) modelSr, resampledP, renderSampleRate);
-    if (nR > 0)
-        ats::resampleLinearMono(monoR.getReadPointer(0), nR, (double) modelSr, resampledR, renderSampleRate);
-    if (nC > 0)
-        ats::resampleLinearMono(monoC.getReadPointer(0), nC, (double) modelSr, resampledC, renderSampleRate);
+    PreparedMonoSamples partials;
+    PreparedMonoSamples residual;
+    PreparedMonoSamples combined;
+    partials.prepare(monoP, (double) modelSr, renderSampleRate);
+    residual.prepare(monoR, (double) modelSr, renderSampleRate);
+    combined.prepare(monoC, (double) modelSr, renderSampleRate);
 
-    const size_t outN = juce::jmax(resampledC.size(), juce::jmax(resampledP.size(), resampledR.size()));
-    if (outN == 0)
+    const int outN = juce::jmax(combined.frames, juce::jmax(partials.frames, residual.frames));
+    if (outN <= 0)
     {
         error = "Synthesis produced silence.";
         return false;
@@ -3076,20 +3174,21 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
         std::this_thread::yield();
 
     auto& playback = playbackBuffers[(size_t) bufferIndex];
-    playback.setSize(resampledC.empty() ? 2 : 3, (int) outN);
-    for (int i = 0; i < (int) outN; ++i)
+    playback.setSize(combined.frames <= 0 ? 2 : 3, outN);
+    for (int i = 0; i < outN; ++i)
     {
-        const float p = i < (int) resampledP.size() ? resampledP[(size_t) i] : 0.0f;
-        const float r = i < (int) resampledR.size() ? resampledR[(size_t) i] : 0.0f;
+        const float p = partials.sampleAt(i);
+        const float r = residual.sampleAt(i);
         playback.setSample(0, i, p);
         playback.setSample(1, i, r);
         if (playback.getNumChannels() > 2)
         {
-            const float c = i < (int) resampledC.size() ? resampledC[(size_t) i] : p + r;
+            const float c = i < combined.frames ? combined.data[i] : p + r;
             playback.setSample(2, i, c);
         }
     }
     transportCacheStore(bufferIndex, slotIndex, core, liveSmear, smearIsolate, playback);
+#if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     {
         auto peak = [&playback](int ch) {
             if (ch >= playback.getNumChannels()) return -1.0f;
@@ -3100,6 +3199,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                    + " peakP=" + juce::String(peak(0)) + " peakR=" + juce::String(peak(1))
                    + " peakC=" + juce::String(peak(2)));
     }
+#endif
     return true;
 }
 
@@ -3117,6 +3217,9 @@ static double morphTrajResidualUnitHash(int bandIndex, int componentIndex)
 {
     return static_cast<double>(morphTrajResidualHash(bandIndex, componentIndex)) / 4294967295.0;
 }
+
+// TimbreRenderParams is defined in TimbreMotionPlan.h (ats::TimbreRenderParams).
+using TimbreRenderParams = ats::TimbreRenderParams;
 
 // LCG for per-band deterministic noise in renderMorphTrajectoryBuffer
 static inline std::uint64_t morphTrajLcgNext(std::uint64_t s) noexcept
@@ -3234,12 +3337,16 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const ATS_SOUND* soundA,
     const ATS_SOUND* soundB,
     const ats::MorphRecipe& recipe,
-    const std::vector<AtsMorphTimelinePoint>& timelinePoints,
+    const CompiledMorphTimeline* timeline,
     double fixedMorphAmount,
     double sampleRate,
     double durationSeconds,
     MorphEnvelopeCache* envCache = nullptr,
-    uint64_t sourcesRevision = 0)
+    uint64_t sourcesRevision = 0,
+    const ats::TimbreMotionPlan* timbrePlan = nullptr,
+    double apvtsBrightnessDb = 0.0,
+    double apvtsTiltDbPerOct = 0.0,
+    double apvtsNoiseBalance = 0.5)
 {
     const int totalSamples = juce::jmax(1, (int) std::llround(sampleRate * durationSeconds));
     juce::AudioBuffer<float> out(2, totalSamples);
@@ -3257,39 +3364,19 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const double twoPi = 2.0 * juce::MathConstants<double>::pi;
     const double invSr = 1.0 / sampleRate;
 
-    // Sanitize once; eliminates per-sample vector copy + sort inside evaluateMorphTimeline.
-    const auto safePoints = sanitizeMorphTimelinePoints(timelinePoints);
-    const bool useTimeline = !timelinePoints.empty();
-
-    // Only Morph-kind breakpoints drive the standard A/B partial blend.
-    // Hybrid breakpoints are intentionally excluded; they affect only the Bark
-    // envelope transfer path and must not cause partial/frequency blending.
-    auto fastMorphAt = [&](double timeNorm) -> double
-    {
-        const double t = juce::jlimit(0.0, 1.0, timeNorm);
-        const AtsMorphTimelinePoint* prev = nullptr;
-        const AtsMorphTimelinePoint* next = nullptr;
-        for (const auto& p : safePoints)
-        {
-            if (p.kind != MorphTimelinePointKind::Morph)
-                continue;
-            if (p.timeNorm <= t)
-                prev = &p;
-            else if (next == nullptr)
-                next = &p;
-        }
-        if (prev == nullptr && next == nullptr) return 0.0;
-        if (prev == nullptr) return next->morphAmount;
-        if (next == nullptr) return prev->morphAmount;
-        const double span = next->timeNorm - prev->timeNorm;
-        if (span <= 1.0e-9) return next->morphAmount;
-        return prev->morphAmount + (t - prev->timeNorm) / span * (next->morphAmount - prev->morphAmount);
-    };
+    const bool useTimeline = timeline != nullptr;
 
     // Chunk size = one ATS frame hop. Trig is computed once per chunk per partial.
     const double smallerHop = (hopA > 0.0 && hopB > 0.0) ? std::min(hopA, hopB)
                             : (hopA > 0.0 ? hopA : (hopB > 0.0 ? hopB : invSr));
     const int chunkSamples = juce::jmax(1, (int) std::floor(smallerHop * sampleRate));
+
+    // Timbre Motion Plan: per-chunk evaluation of time-varying brightness/tilt/noise targets.
+    // chunkRateHz = how many evaluate() calls per second (one per ATS frame hop).
+    const double chunkRateHz = sampleRate / (double) chunkSamples;
+    const ats::TimbreMotionPlan emptyPlan;
+    const ats::TimbreMotionPlan& activePlan = (timbrePlan && !timbrePlan->empty()) ? *timbrePlan : emptyPlan;
+    ats::CompiledTimbrePlan compiledTimbrePlan(activePlan, chunkRateHz);
 
     // Onset/time alignment: A and B are otherwise both sampled at the same wall-clock time, so if
     // their principal attacks sit at different times the morph midpoint hears a doubled/smeared
@@ -3345,7 +3432,10 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         if (hasPhaseA || hasPhaseB)
         {
             const double morphAmount0 = juce::jlimit(0.0, 1.0,
-                useTimeline ? fastMorphAt(0.0) : fixedMorphAmount);
+                useTimeline ? timeline->sampleMorph(0.0, false) : fixedMorphAmount);
+            // Use phase lane amount at t=0 for initial phasor seeding.
+            const double phaseMorphAmount0 = ats::evaluateMorphLaneAmount(
+                recipe, ats::MorphLane::Phase, morphAmount0);
 
             auto addPhase = [](double& cx, double& cy, const ATS_SOUND* snd, int partial,
                                bool has, double weight)
@@ -3368,8 +3458,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 switch (rec.kind)
                 {
                     case ats::MorphCorrespondenceKind::Matched:
-                        addPhase(cx, cy, soundA, rec.sourcePartialIndex, hasPhaseA, 1.0 - morphAmount0);
-                        addPhase(cx, cy, soundB, rec.targetPartialIndex, hasPhaseB, morphAmount0);
+                        addPhase(cx, cy, soundA, rec.sourcePartialIndex, hasPhaseA, 1.0 - phaseMorphAmount0);
+                        addPhase(cx, cy, soundB, rec.targetPartialIndex, hasPhaseB, phaseMorphAmount0);
                         break;
                     case ats::MorphCorrespondenceKind::UnmatchedSource:
                         addPhase(cx, cy, soundA, rec.sourcePartialIndex, hasPhaseA, 1.0);
@@ -3536,17 +3626,30 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const double timeNorm = totalSamples > 1 ? (double) s / (double) (totalSamples - 1) : 0.0;
 
         const double morphAmount = juce::jlimit(0.0, 1.0,
-            useTimeline ? fastMorphAt(timeNorm) : fixedMorphAmount);
+            useTimeline ? timeline->sampleMorph(timeNorm, false) : fixedMorphAmount);
 
         const double envTransferAmount = juce::jlimit(0.0, 1.0,
-            useTimeline ? evaluateEnvTransferTimeline(safePoints, timeNorm) : 0.0);
+            useTimeline ? timeline->sampleEffect(MorphTimelinePointKind::Hybrid, timeNorm) : 0.0);
 
         // Envelope-driven amplitude morph ("true morph"): blend A/B Bark envelopes and
         // resample each partial's amplitude from the interpolated envelope.
         const double envMorphAmount = juce::jlimit(0.0, 1.0,
-            useTimeline ? evaluateLaneTimeline(safePoints, timeNorm,
-                                               MorphTimelinePointKind::EnvelopeMorph)
+            useTimeline ? timeline->sampleEffect(MorphTimelinePointKind::EnvelopeMorph, timeNorm)
                         : 0.0);
+
+        // Per-chunk timbre: evaluate plan if active, otherwise fall back to APVTS values (§7.1).
+        const TimbreRenderParams timbre = compiledTimbrePlan.evaluate(
+            timeNorm, apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance);
+
+        // Per-lane morph amounts: frequency, amplitude, residual-noise may be decoupled
+        // from the main morph amount via recipe lane settings (linkedToMainMorph + curve).
+        // Default: all lanes linked → same value as morphAmount (bit-identical to old behavior).
+        const double freqMorphAmount = ats::evaluateMorphLaneAmount(
+            recipe, ats::MorphLane::Frequency, morphAmount);
+        const double ampMorphAmount = ats::evaluateMorphLaneAmount(
+            recipe, ats::MorphLane::Amplitude, morphAmount);
+        const double residualNoiseMorphAmount = ats::evaluateMorphLaneAmount(
+            recipe, ats::MorphLane::ResidualNoise, morphAmount);
 
         // Fractional frame positions at this chunk's start
         const double fpA = hopA > 0.0 ? t / hopA : 0.0;
@@ -3719,7 +3822,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                                                       ampA,
                                                                       freqB,
                                                                       ampB,
-                                                                      morphAmount,
+                                                                      freqMorphAmount,
+                                                                      ampMorphAmount,
                                                                       nearestTargetHz,
                                                                       nearestSourceHz);
             const double freq = resolved.frequencyHz;
@@ -3737,7 +3841,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 // axis is warped so a formant that moves from A to B glides as a single peak
                 // rather than double-imaging or dipping at the midpoint. Reduces to the plain
                 // fixed-frequency log blend when no formants match (identity warp).
-                const double blendedEnv = morphedEnv.sampleAtHz(freq, morphAmount);
+                const double blendedEnv = morphedEnv.sampleAtHz(freq, ampMorphAmount);
                 // Crossfade the independent per-partial amplitude toward its position on the
                 // blended envelope. Geometric (dB-domain) interpolation when both endpoints are
                 // audible: loudness is logarithmic, so a linear-amplitude crossfade biases toward
@@ -3750,6 +3854,25 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                    + envMorphAmount * std::log(blendedEnv));
                 else
                     amp += envMorphAmount * (blendedEnv - amp);
+            }
+
+            // Timbre transforms — resolution order §8.6: tonal/noise → tilt → brightness
+            if (freq > 0.0 && amp > 0.0)
+            {
+                constexpr double kTimbrePivotHz = 1000.0;
+                if (std::abs(timbre.noiseBalance - 0.5) > 0.001)
+                    amp *= std::sqrt(2.0 * std::max(0.0, 1.0 - timbre.noiseBalance));
+                if (std::abs(timbre.tiltDbPerOct) > 0.001)
+                {
+                    const double oct = std::log2(freq / kTimbrePivotHz);
+                    amp *= std::pow(10.0, timbre.tiltDbPerOct * oct / 20.0);
+                }
+                if (std::abs(timbre.brightnessDb) > 0.001)
+                {
+                    const double oct = std::log2(freq / kTimbrePivotHz);
+                    amp *= std::pow(10.0, timbre.brightnessDb * std::tanh(oct / 3.0) / 20.0);
+                }
+                amp = std::max(0.0, amp);
             }
 
             auto& p = ps[(size_t) ri];
@@ -3832,8 +3955,28 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 // so their powers add. Interpolating RMS linearly dips ~3 dB at the midpoint
                 // (the classic equal-gain crossfade hole); blending in the power domain keeps
                 // the perceived loudness constant across the morph.
-                const double morphedRms = std::sqrt(juce::jmax(0.0,
-                    (1.0 - morphAmount) * rmsA * rmsA + morphAmount * rmsB * rmsB));
+                double morphedRms = std::sqrt(juce::jmax(0.0,
+                    (1.0 - residualNoiseMorphAmount) * rmsA * rmsA
+                    + residualNoiseMorphAmount * rmsB * rmsB));
+                // Timbre transforms on residual — tonal/noise → tilt → brightness (§8.6)
+                if (morphedRms > 0.0)
+                {
+                    constexpr double kTimbrePivotHz = 1000.0;
+                    const double centerHz = kAtsBandCenterHz[band];
+                    if (std::abs(timbre.noiseBalance - 0.5) > 0.001)
+                        morphedRms *= std::sqrt(2.0 * timbre.noiseBalance);
+                    if (std::abs(timbre.tiltDbPerOct) > 0.001)
+                    {
+                        const double oct = std::log2(centerHz / kTimbrePivotHz);
+                        morphedRms *= std::pow(10.0, timbre.tiltDbPerOct * oct / 20.0);
+                    }
+                    if (std::abs(timbre.brightnessDb) > 0.001)
+                    {
+                        const double oct = std::log2(centerHz / kTimbrePivotHz);
+                        morphedRms *= std::pow(10.0, timbre.brightnessDb * std::tanh(oct / 3.0) / 20.0);
+                    }
+                    morphedRms = std::max(0.0, morphedRms);
+                }
                 // Split the band's energy across its carriers: with N uncorrelated carriers the
                 // powers add, so amp/sqrt(N) per carrier preserves the band's total RMS.
                 const int nUsable = bandUsable[(size_t) band];
@@ -3975,9 +4118,15 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
         ats::AtsSoundPtr shapedB;
         const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, frequencyShape, shapedA);
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
-        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, {}, morphAmount, renderSampleRate, duration,
+        const ats::TimbreMotionPlan timbrePlan =
+            ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, nullptr, morphAmount, renderSampleRate, duration,
                                                     morphEnvelopeCache.get(),
-                                                    morphSourcesRevision.load(std::memory_order_acquire));
+                                                    morphSourcesRevision.load(std::memory_order_acquire),
+                                                    &timbrePlan,
+                                                    (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
+                                                    (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
+                                                    (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
         const int totalSamples = rendered.getNumSamples();
         if (totalSamples <= 0)
         {
@@ -4154,9 +4303,10 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 }
             }
 
+            const CompiledMorphTimeline compiledTimeline(timelinePoints);
             int endpointSourceIndex = -1;
             if (sA != nullptr && sB != nullptr
-                && getConstantMorphEndpointSourceIndex(timelinePoints, endpointSourceIndex))
+                && compiledTimeline.constantEndpointSourceIndex(endpointSourceIndex))
             {
                 // An all-A/all-B timeline is an A/B reference path. Use the same ATSA
                 // renderer as source audition so residual-only playback nulls in level/timbre.
@@ -4172,10 +4322,16 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 ats::AtsSoundPtr shapedB;
                 const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
                 const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
-                timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
+                const ats::TimbreMotionPlan timbrePlan =
+                    ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+                timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                             0.5, renderSampleRate, duration,
                                                             morphEnvelopeCache.get(),
-                                                            morphSourcesRevision.load(std::memory_order_acquire));
+                                                            morphSourcesRevision.load(std::memory_order_acquire),
+                                                            &timbrePlan,
+                                                            (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
+                                                            (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
+                                                            (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
             }
             else
             {
@@ -4204,7 +4360,7 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                     const double midSample = 0.5 * (double) (boundaryStart + boundaryEnd);
                     const double timeNorm = midSample / (double) juce::jmax(1, totalSamples - 1);
 
-                    options.morphAmount = evaluateMorphTimeline(timelinePoints, timeNorm);
+                    options.morphAmount = compiledTimeline.sampleMorph(timeNorm, true);
                     const auto snapshot = ats::evaluateMorphRecipeSnapshot(recipe, options);
 
                     ats::MorphSnapshotPlaybackSettings settings;
@@ -4360,10 +4516,11 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds,
                                                         recipe.sourceB.durationSeconds));
 
+    const CompiledMorphTimeline compiledTimeline(timelinePoints);
     juce::AudioBuffer<float> timelineBuffer;
     int endpointSourceIndex = -1;
     if (sA != nullptr && sB != nullptr
-        && getConstantMorphEndpointSourceIndex(timelinePoints, endpointSourceIndex))
+        && compiledTimeline.constantEndpointSourceIndex(endpointSourceIndex))
     {
         timelineBuffer = renderClassicSourcePlaybackBuffer(endpointSourceIndex == 0 ? sA : sB,
                                                            core,
@@ -4375,10 +4532,16 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
         ats::AtsSoundPtr shapedB;
         const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
-        timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, timelinePoints,
+        const ats::TimbreMotionPlan timbrePlan =
+            ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+        timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                      0.5, renderSampleRate, duration,
                                                      morphEnvelopeCache.get(),
-                                                     morphSourcesRevision.load(std::memory_order_acquire));
+                                                     morphSourcesRevision.load(std::memory_order_acquire),
+                                                     &timbrePlan,
+                                                     (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
+                                                     (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
+                                                     (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
     }
     else
     {
@@ -4400,7 +4563,7 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
             const double midSample = 0.5 * (double) (boundaryStart + boundaryEnd);
             const double timeNorm = midSample / (double) juce::jmax(1, totalSamples - 1);
 
-            options.morphAmount = evaluateMorphTimeline(timelinePoints, timeNorm);
+            options.morphAmount = compiledTimeline.sampleMorph(timeNorm, true);
             const auto snapshot = ats::evaluateMorphRecipeSnapshot(recipe, options);
 
             ats::MorphSnapshotPlaybackSettings settings;
@@ -5054,8 +5217,8 @@ bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMo
     AtsMorphSourceSlotInfo info;
     if (!getMorphSourceSlotInfo(slotIndex, info) || !info.hasModel)
     {
-        atsPlayLog("listenMorphSourceSlot slot=" + juce::String(slotIndex)
-                   + " REJECTED: no model (hasModel=" + juce::String((int) info.hasModel) + ")");
+        ATS_PLAY_LOG("listenMorphSourceSlot slot=" + juce::String(slotIndex)
+                     + " REJECTED: no model (hasModel=" + juce::String((int) info.hasModel) + ")");
         error = "Assign a source slot before listening.";
         return false;
     }
@@ -5064,8 +5227,8 @@ bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMo
         error = "This source has no residual layer. Re-analyze with analysis type 3 or 4.";
         return false;
     }
-    atsPlayLog("listenMorphSourceSlot slot=" + juce::String(slotIndex)
-               + " mode=" + juce::String((int) mode) + " liveSmear=" + juce::String((int) liveSmear));
+    ATS_PLAY_LOG("listenMorphSourceSlot slot=" + juce::String(slotIndex)
+                 + " mode=" + juce::String((int) mode) + " liveSmear=" + juce::String((int) liveSmear));
 
     const int bufferIndex = slotIndex == 0 ? kSourceAPlaybackBufferIndex : kSourceBPlaybackBufferIndex;
     const bool smearIsolate = mode == AtsSourceAuditionMode::SmearOnly;
@@ -6580,6 +6743,63 @@ static int smearnovSourceSlot(AtsTraceSource source)
     }
 }
 
+static bool sameSmearnovDetectParams(const ats::SmearnovDetectParams& a,
+                                     const ats::SmearnovDetectParams& b)
+{
+    return a.weightDetFlux == b.weightDetFlux
+           && a.weightResFlux == b.weightResFlux
+           && a.weightHfcFlux == b.weightHfcFlux
+           && a.weightBirth == b.weightBirth
+           && a.weightPhaseDev == b.weightPhaseDev
+           && a.usePhaseDeviation == b.usePhaseDeviation
+           && a.useSmrWeighting == b.useSmrWeighting
+           && a.smrWeightFloor == b.smrWeightFloor
+           && a.normWindowRadiusFrames == b.normWindowRadiusFrames
+           && a.peakWindowRadiusFrames == b.peakWindowRadiusFrames
+           && a.thresholdLambda == b.thresholdLambda
+           && a.thresholdAutoScale == b.thresholdAutoScale
+           && a.onsetFloor == b.onsetFloor
+           && a.minGapSeconds == b.minGapSeconds
+           && a.minGapFramesOverride == b.minGapFramesOverride
+           && a.preMarginSeconds == b.preMarginSeconds
+           && a.maxAttackFrames == b.maxAttackFrames;
+}
+
+void AtsAudioProcessor::getUiOnsetDetection(AtsTraceSource source,
+                                            const ATS_SOUND* sound,
+                                            uint64_t sourceRevision,
+                                            const ats::SmearnovDetectParams& params,
+                                            std::vector<ats::AtsOnset>& onsets,
+                                            ats::SmearnovDetectionFunctions& functions) const
+{
+    const int slot = smearnovSourceSlot(source);
+    {
+        const juce::ScopedLock sl(uiOnsetDetectionCacheLock);
+        const auto& cache = uiOnsetDetectionCache[(size_t) slot];
+        if (cache.valid && cache.sourceRevision == sourceRevision
+            && sameSmearnovDetectParams(cache.params, params))
+        {
+            onsets = cache.onsets;
+            functions = cache.functions;
+            return;
+        }
+    }
+
+    ats::SmearnovDetectionFunctions detectedFunctions;
+    auto detectedOnsets = ats::detectOnsets(sound, params, &detectedFunctions);
+    {
+        const juce::ScopedLock sl(uiOnsetDetectionCacheLock);
+        auto& cache = uiOnsetDetectionCache[(size_t) slot];
+        cache.onsets = detectedOnsets;
+        cache.functions = detectedFunctions;
+        cache.params = params;
+        cache.sourceRevision = sourceRevision;
+        cache.valid = true;
+    }
+    onsets = std::move(detectedOnsets);
+    functions = std::move(detectedFunctions);
+}
+
 size_t AtsAudioProcessor::computeSmearLiveHash() const
 {
     const auto d = readSmearnovDetectParamsFromApvts();
@@ -6895,6 +7115,8 @@ static bool buildSpectralTraceSnapshotForSound(const ATS_SOUND* s,
                                                const ats::FrequencyShapeSettings& frequencyShape,
                                                const ats::SmearnovDetectParams& onsetDetectParams,
                                                uint64_t shapeRevision,
+                                               const std::vector<ats::AtsOnset>* cachedDetectedOnsets,
+                                               const ats::SmearnovDetectionFunctions* cachedOnsetFunctions,
                                                const std::vector<ats::AtsOnset>* onsetOverride)
 {
     out = {};
@@ -6912,7 +7134,16 @@ static bool buildSpectralTraceSnapshotForSound(const ATS_SOUND* s,
     out.durationSeconds = s->dur;
     out.hasResidual = (s->band_energy != nullptr);
     ats::SmearnovDetectionFunctions onsetFunctions;
-    auto detectedOnsets = ats::detectOnsets(s, onsetDetectParams, &onsetFunctions);
+    std::vector<ats::AtsOnset> detectedOnsets;
+    if (cachedDetectedOnsets != nullptr && cachedOnsetFunctions != nullptr)
+    {
+        detectedOnsets = *cachedDetectedOnsets;
+        onsetFunctions = *cachedOnsetFunctions;
+    }
+    else
+    {
+        detectedOnsets = ats::detectOnsets(s, onsetDetectParams, &onsetFunctions);
+    }
     // User edits (drag/disable) take precedence over auto-detection so the
     // overlay reflects the edited window; detection curves still come from the
     // raw detector for the foot-of-plot display.
@@ -7190,15 +7421,25 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsSpectralTraceSnapshot& out
     // O(partials×frames) snapshot computation runs outside the lock so
     // the message thread is not blocked for the full snapshot duration.
     ats::AtsSoundPtr snap;
+    uint64_t sourceRevision = 0;
     {
         const juce::ScopedLock ml(modelLock);
         if (analyzedModel.get() == nullptr)
             return false;
         snap.reset(copy_sound(const_cast<ATS_SOUND*>(analyzedModel.get())));
+        sourceRevision = (uint64_t) modelRevision.load(std::memory_order_acquire);
     }
     if (snap.get() == nullptr)
         return false;
 
+    std::vector<ats::AtsOnset> detectedOnsets;
+    ats::SmearnovDetectionFunctions onsetFunctions;
+    getUiOnsetDetection(AtsTraceSource::Current,
+                        snap.get(),
+                        sourceRevision,
+                        onsetDetectParams,
+                        detectedOnsets,
+                        onsetFunctions);
     std::vector<ats::AtsOnset> onsetOverride;
     const bool hasOverride = copySmearnovOnsetOverride(AtsTraceSource::Current, onsetOverride);
     return buildSpectralTraceSnapshotForSound(snap.get(),
@@ -7210,6 +7451,8 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsSpectralTraceSnapshot& out
                                               shape,
                                               onsetDetectParams,
                                               shapeRevision,
+                                              &detectedOnsets,
+                                              &onsetFunctions,
                                               hasOverride ? &onsetOverride : nullptr);
 }
 
@@ -7229,16 +7472,26 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
     const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
 
     ats::AtsSoundPtr snap;
+    uint64_t sourceRevision = 0;
     {
         const juce::ScopedLock ml(morphRecipeLock);
         auto* s = morphSourceSounds[(size_t) slotIndex].get();
         if (s == nullptr)
             return false;
         snap.reset(copy_sound(const_cast<ATS_SOUND*>(s)));
+        sourceRevision = morphSourcesRevision.load(std::memory_order_acquire);
     }
     if (snap.get() == nullptr)
         return false;
 
+    std::vector<ats::AtsOnset> detectedOnsets;
+    ats::SmearnovDetectionFunctions onsetFunctions;
+    getUiOnsetDetection(source,
+                        snap.get(),
+                        sourceRevision,
+                        onsetDetectParams,
+                        detectedOnsets,
+                        onsetFunctions);
     std::vector<ats::AtsOnset> onsetOverride;
     const bool hasOverride = copySmearnovOnsetOverride(source, onsetOverride);
     return buildSpectralTraceSnapshotForSound(snap.get(),
@@ -7250,6 +7503,8 @@ bool AtsAudioProcessor::buildSpectralTraceSnapshot(AtsTraceSource source,
                                               shape,
                                               onsetDetectParams,
                                               shapeRevision,
+                                              &detectedOnsets,
+                                              &onsetFunctions,
                                               hasOverride ? &onsetOverride : nullptr);
 }
 
