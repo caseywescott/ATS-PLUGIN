@@ -3346,7 +3346,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const ats::TimbreMotionPlan* timbrePlan = nullptr,
     double apvtsBrightnessDb = 0.0,
     double apvtsTiltDbPerOct = 0.0,
-    double apvtsNoiseBalance = 0.5)
+    double apvtsNoiseBalance = 0.5,
+    ats::HybridizeDomains interpDomains = {})
 {
     const int totalSamples = juce::jmax(1, (int) std::llround(sampleRate * durationSeconds));
     juce::AudioBuffer<float> out(2, totalSamples);
@@ -3825,7 +3826,8 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                                                       freqMorphAmount,
                                                                       ampMorphAmount,
                                                                       nearestTargetHz,
-                                                                      nearestSourceHz);
+                                                                      nearestSourceHz,
+                                                                      interpDomains);
             const double freq = resolved.frequencyHz;
             double amp = resolved.amplitude;
 
@@ -4120,13 +4122,17 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
         const ats::TimbreMotionPlan timbrePlan =
             ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+        const ats::HybridizeDomains interpDomains{
+            getRawChoiceValue(apvts, ats_param::kMorphFrequencyInterpolationDomain, kDefaultMorphFrequencyDomain) == 1,
+            getRawChoiceValue(apvts, ats_param::kMorphAmplitudeInterpolationDomain, kDefaultMorphAmplitudeDomain) == 1};
         auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, nullptr, morphAmount, renderSampleRate, duration,
                                                     morphEnvelopeCache.get(),
                                                     morphSourcesRevision.load(std::memory_order_acquire),
                                                     &timbrePlan,
                                                     (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                     (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
-                                                    (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
+                                                    (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
+                                                    interpDomains);
         const int totalSamples = rendered.getNumSamples();
         if (totalSamples <= 0)
         {
@@ -4324,6 +4330,9 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
                 const ats::TimbreMotionPlan timbrePlan =
                     ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+                const ats::HybridizeDomains interpDomains{
+                    options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
+                    options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
                 timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                             0.5, renderSampleRate, duration,
                                                             morphEnvelopeCache.get(),
@@ -4331,7 +4340,8 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                                                             &timbrePlan,
                                                             (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                             (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
-                                                            (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
+                                                            (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
+                                                            interpDomains);
             }
             else
             {
@@ -4534,6 +4544,9 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
         const ats::TimbreMotionPlan timbrePlan =
             ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+        const ats::HybridizeDomains interpDomains{
+            options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
+            options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
         timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                      0.5, renderSampleRate, duration,
                                                      morphEnvelopeCache.get(),
@@ -4541,7 +4554,8 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
                                                      &timbrePlan,
                                                      (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                      (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
-                                                     (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
+                                                     (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
+                                                     interpDomains);
     }
     else
     {

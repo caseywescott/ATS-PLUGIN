@@ -112,6 +112,31 @@ double equalPowerInterpAmp(double a0, double a1, double t)
     return power > 0.0 ? std::sqrt(power) : 0.0;
 }
 
+// Bark-scale frequency interpolation using Zwicker's simplified approximation with
+// analytic inverse. Mirrors MorphFrequencyInterpolationDomain::BarkCoordinate.
+// Uses the 6*asinh(f/600) form because its inverse is a single closed-form expression
+// (avoids the binary-search inversion needed for the atan formula).
+double barkInterpHz(double f0, double f1, double t)
+{
+    if (!std::isfinite(f0) || !std::isfinite(f1) || f0 <= 0.0 || f1 <= 0.0)
+        return f0 + (f1 - f0) * t;
+    constexpr double kC = 600.0;
+    auto toB  = [](double f) { return 6.0 * std::asinh(f / kC); };
+    auto fromB = [](double b) { return kC * std::sinh(b / 6.0); };
+    return std::max(1.0, fromB(toB(f0) + t * (toB(f1) - toB(f0))));
+}
+
+// dB-domain (geometric) amplitude interpolation: linear blend in log-amplitude.
+// Matches MorphAmplitudeInterpolationDomain::Decibels. More perceptually uniform
+// than equal-power for matched partials where neither source is near silence.
+constexpr double kDecibelAmpFloor = 1.0e-12;
+double decibelInterpAmp(double a0, double a1, double t)
+{
+    const double d0 = 20.0 * std::log10(std::max(kDecibelAmpFloor, a0));
+    const double d1 = 20.0 * std::log10(std::max(kDecibelAmpFloor, a1));
+    return std::pow(10.0, (d0 + t * (d1 - d0)) / 20.0);
+}
+
 } // namespace
 
 double BarkSpectralEnvelope::hzToBark(double frequencyHz)
@@ -690,20 +715,26 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
                                                              double freqMorphAmount,
                                                              double ampMorphAmount,
                                                              double nearestTargetHz,
-                                                             double nearestSourceHz)
+                                                             double nearestSourceHz,
+                                                             HybridizeDomains domains)
 {
     HybridizedPartialRenderResult result;
     const double fAmt = clampUnit(freqMorphAmount);
     const double aAmt = clampUnit(ampMorphAmount);
 
+    auto freqInterp = [&](double f0, double f1, double t) -> double {
+        return domains.barkFrequency ? barkInterpHz(f0, f1, t) : logInterpHz(f0, f1, t);
+    };
+
     switch (kind)
     {
         case HybridizedPartialKind::Matched:
-            // Geometric frequency blend + equal-power amplitude blend so pitch glides track
-            // perceived pitch and the morph midpoint holds its loudness.
+            // Geometric or Bark frequency blend; equal-power or dB amplitude blend.
             // Independent lane amounts let users move frequency ahead of or behind amplitude.
-            result.frequencyHz = logInterpHz(sourceFrequencyHz, targetFrequencyHz, fAmt);
-            result.amplitude = equalPowerInterpAmp(sourceAmplitude, targetAmplitude, aAmt);
+            result.frequencyHz = freqInterp(sourceFrequencyHz, targetFrequencyHz, fAmt);
+            result.amplitude = domains.decibelAmplitude
+                                   ? decibelInterpAmp(sourceAmplitude, targetAmplitude, aAmt)
+                                   : equalPowerInterpAmp(sourceAmplitude, targetAmplitude, aAmt);
             break;
 
         case HybridizedPartialKind::UnmatchedSource:
@@ -712,19 +743,18 @@ HybridizedPartialRenderResult resolveHybridizedPartialRender(HybridizedPartialKi
             // sources (where most partials are unmatched) that turned the blend into a mass of
             // partials sliding to arbitrary lower targets — audible downward sweeps and tones
             // present in neither source. Fading in place keeps the morph midpoint a clean union
-            // of the two spectra. Equal-power (sqrt) fade pairs with the UnmatchedTarget fade-in
-            // so a replacing pair holds constant power through the crossfade; time-domain
-            // smoothing is handled by per-sample amplitude ramping in the renderer, not here.
+            // of the two spectra. Equal-power (sqrt) fade regardless of domain — the target is
+            // silence, not a real partial, so dB interpolation toward -∞ is not meaningful.
             (void) nearestTargetHz;
             result.frequencyHz = sourceFrequencyHz;
             result.amplitude = sourceAmplitude * std::sqrt(1.0 - aAmt);
             break;
 
         case HybridizedPartialKind::UnmatchedTarget:
-            // Glide in from nearest source partial (when one is supplied) while fading in
-            // with the equal-power (sqrt) law.
+            // Glide in from nearest source partial (when one is supplied) while fading in.
+            // Apply freq domain to the glide; keep sqrt fade (source is silence, not a partial).
             result.frequencyHz = (nearestSourceHz > 0.0)
-                                     ? logInterpHz(nearestSourceHz, targetFrequencyHz, fAmt)
+                                     ? freqInterp(nearestSourceHz, targetFrequencyHz, fAmt)
                                      : targetFrequencyHz;
             result.amplitude = targetAmplitude * std::sqrt(aAmt);
             break;

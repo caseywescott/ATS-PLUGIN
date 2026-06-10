@@ -21,9 +21,9 @@ ATS models sound as **sinusoidal partial tracks** plus **stochastic Bark-band no
 | **`renderMorphTrajectoryBuffer`** | Primary audible morph — frame-wise oscillator bank when Source A/B frame data exists |
 | **`evaluateMorphRecipeSnapshot`** | Fallback when A/B frames unavailable (preset load) or timeline segment fallback → `renderMorphSnapshotPlaybackBuffer` |
 
-**Main render reads:** timeline **Morph** amount; **Hybrid** / **EnvelopeMorph** breakpoints; correspondence (rank, greedy, assignment matrix + per-chunk `reassignCorrespondenceByLogFrequency`); frequency shaping on A/B; Bark/True Envelope transfer via `applySpectralEnvelopeTransfer` + `resolveHybridizedPartialRender`; residual band morph with envelope transfer + `softCapEnvelopeBoost`; transient **onset offset only** (`maxOnsetAlignmentOffsetSeconds`).
+**Main render reads:** timeline **Morph** amount; **Hybrid** / **EnvelopeMorph** breakpoints; correspondence (rank, greedy, assignment matrix + per-chunk `reassignCorrespondenceByLogFrequency`); frequency shaping on A/B; Bark/True Envelope transfer via `applySpectralEnvelopeTransfer` + `resolveHybridizedPartialRender`; residual band morph with envelope transfer + `softCapEnvelopeBoost`; transient **onset offset only** (`maxOnsetAlignmentOffsetSeconds`); per-lane morph amounts (Frequency, Amplitude, ResidualNoise lanes via `evaluateMorphLaneAmount`); interpolation domains (`HybridizeDomains`: Bark vs log freq, dB vs equal-power amplitude); per-chunk timbre motion (`CompiledTimbrePlan` brightness/tilt/noise).
 
-**UI vs main render:** Morph lane sliders and **lane curves** (`MorphCurveShape`, `evaluateMorphLaneAmount`) persist in the recipe and drive the **snapshot** path only. Also snapshot-only: phase strategy, transient policy, unmatched policies, interpolation domains, performance macro, smoothing. Main render uses a single `morphAmount` for partial/residual crossfade. See [Priority queue](#priority-queue).
+**Still snapshot-only:** phase strategy, transient policy, unmatched policies, performance macro, smoothing, Time lane. See [Priority queue](#priority-queue).
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
     D --> E[renderMorphSnapshotPlaybackBuffer]
     C --> F[Timeline morphAmount + Hybrid + EnvelopeMorph]
     C --> G[Bark/True Envelope transfer + softCap]
-    C --> H[resolveHybridizedPartialRender — single morphAmount]
+    C --> H[resolveHybridizedPartialRender — per-lane freq/amp + HybridizeDomains]
     D --> I[evaluateMorphLaneAmounts + curves]
     D --> J[phase strategy + unmatched policies]
 ```
@@ -227,7 +227,7 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Classic Both playback | Combined vs sum | **Done** | Synthesis Both playback mode |
 | Smearnov detection overlay | Detector curves | **Done** | Spectrogram overlay |
 | Spectrogram view modes | Seven layouts | **Done** | Combined through Iso Env (RDC); Current/A/B |
-| Per-lane morph controls | Six lanes + curves | **Partial** | UI + recipe + snapshot (`evaluateMorphLaneAmount`, `MorphCurveShape`); not in main render |
+| Per-lane morph controls | Six lanes + curves | **Partial** | UI + recipe + snapshot + main render for Freq/Amp/Noise lanes (`evaluateMorphLaneAmount`, `MorphCurveShape`, `HybridizeDomains`); Time/Phase/Transient lanes snapshot-only |
 | Morph amount (macro) | Global blend | **Done** | kMorphAmount; constant morph preview |
 | Morph performance macro | Macro feel | **Partial** | APVTS/preset only; no Session control |
 | Morph control smoothing | De-click | **Partial** | Session slider; not in render |
@@ -258,7 +258,7 @@ Ordered by musical payoff and dependency. Items with UI already present are fini
 
 | Prio | Milestone | Status today |
 | ---- | --------- | ------------ |
-| **P0** | Wire morph lanes + policies + curves into `renderMorphTrajectoryBuffer` | **Partial** (recipe/snapshot done) |
+| **P0** | Wire morph lanes + policies + curves into `renderMorphTrajectoryBuffer` | **Partial** (Freq/Amp/Noise lanes + interpolation domains wired Jun 2026; Time/Phase/Transient + unmatched policies still snapshot-only) |
 | **P0** | Real-time morph preview (no full re-bounce per tweak) | **Partial** |
 | **P0** | Morph fixture audio + metric CI | **Partial** (`asset_status: placeholder`; smoke harness only) |
 | **P1** | Merge worktree RDC into main morph path + envelope UX | **Partial** (worktree R&D feature-complete; fixed-λ default, GCV opt-in only) |

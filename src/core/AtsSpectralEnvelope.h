@@ -153,6 +153,15 @@ enum class HybridizedPartialKind
     UnmatchedTarget
 };
 
+// Interpolation domain settings for the main morph render — mirrors
+// MorphFrequency/AmplitudeInterpolationDomain from the snapshot path without
+// introducing a circular dependency on AtsMorphRecipe.h.
+struct HybridizeDomains
+{
+    bool barkFrequency = false;    // true → Bark-scale freq interp; false → log
+    bool decibelAmplitude = false; // true → dB-domain amp interp; false → equal-power
+};
+
 // Resolve a single partial's blended frequency and amplitude with independent
 // frequency-lane and amplitude-lane morph amounts.
 [[nodiscard]] HybridizedPartialRenderResult resolveHybridizedPartialRender(
@@ -164,23 +173,23 @@ enum class HybridizedPartialKind
     double freqMorphAmount,
     double ampMorphAmount,
     double nearestTargetHz = 0.0,
-    double nearestSourceHz = 0.0);
+    double nearestSourceHz = 0.0,
+    HybridizeDomains domains = {});
 
 // Convenience overload: same amount for frequency and amplitude (backward compat).
+// Does not expose nearestTargetHz / nearestSourceHz / domains — use the primary
+// 10-parameter signature when those are needed.
 [[nodiscard]] inline HybridizedPartialRenderResult resolveHybridizedPartialRender(
     HybridizedPartialKind kind,
     double sourceFrequencyHz,
     double sourceAmplitude,
     double targetFrequencyHz,
     double targetAmplitude,
-    double morphAmount,
-    double nearestTargetHz = 0.0,
-    double nearestSourceHz = 0.0)
+    double morphAmount)
 {
     return resolveHybridizedPartialRender(kind, sourceFrequencyHz, sourceAmplitude,
                                           targetFrequencyHz, targetAmplitude,
-                                          morphAmount, morphAmount,
-                                          nearestTargetHz, nearestSourceHz);
+                                          morphAmount, morphAmount);
 }
 
 } // namespace ats

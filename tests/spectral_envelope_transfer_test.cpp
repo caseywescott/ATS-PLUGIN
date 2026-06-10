@@ -207,6 +207,81 @@ int main()
             return fail("soft cap with non-positive source should pass the output through");
     }
 
+    // HybridizeDomains — Bark frequency interpolation
+    {
+        // Default (log) domain: mid-point of 100 Hz and 10000 Hz should be the geometric mean
+        // (~1000 Hz). Bark-domain mid-point lands slightly different due to the non-uniform mapping.
+        const double f0 = 100.0, f1 = 10000.0;
+
+        auto logResult = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, f0, 1.0, f1, 1.0, 0.5, 0.5);
+        const double logMid = logResult.frequencyHz;
+        if (!closeEnough(logMid, std::sqrt(f0 * f1), 1.0e-6))
+            return fail("log-domain frequency midpoint must be the geometric mean");
+
+        auto barkResult = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, f0, 1.0, f1, 1.0, 0.5, 0.5,
+            0.0, 0.0, ats::HybridizeDomains{true, false});
+        const double barkMid = barkResult.frequencyHz;
+        // Bark midpoint must differ from the log midpoint and land above it for this
+        // wide interval (100–10 kHz): Bark scale is sub-log at high frequencies, so the
+        // linear midpoint in Bark space maps to a frequency above the geometric mean.
+        if (barkMid <= logMid)
+            return fail("Bark-domain frequency midpoint must exceed log-domain midpoint for wide intervals");
+        // Endpoints must be preserved exactly at t=0 and t=1
+        auto barkAt0 = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, f0, 1.0, f1, 1.0, 0.0, 0.0,
+            0.0, 0.0, ats::HybridizeDomains{true, false});
+        auto barkAt1 = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, f0, 1.0, f1, 1.0, 1.0, 1.0,
+            0.0, 0.0, ats::HybridizeDomains{true, false});
+        if (!closeEnough(barkAt0.frequencyHz, f0, 1.0e-6))
+            return fail("Bark-domain t=0 must return source frequency");
+        if (!closeEnough(barkAt1.frequencyHz, f1, 1.0e-6))
+            return fail("Bark-domain t=1 must return target frequency");
+    }
+
+    // HybridizeDomains — dB amplitude interpolation
+    {
+        // At t=0.5, dB interp should give geometric mean; equal-power gives a louder result
+        const double a0 = 0.1, a1 = 0.9;
+        auto powerResult = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 440.0, a0, 440.0, a1, 0.5, 0.5);
+        auto dbResult = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 440.0, a0, 440.0, a1, 0.5, 0.5,
+            0.0, 0.0, ats::HybridizeDomains{false, true});
+        // dB interp gives geometric mean: sqrt(a0 * a1)
+        const double geomMean = std::sqrt(a0 * a1);
+        if (!closeEnough(dbResult.amplitude, geomMean, 1.0e-6))
+            return fail("dB-domain amplitude midpoint must be the geometric mean");
+        // Equal-power is louder than geometric mean at the midpoint when a0 != a1
+        if (powerResult.amplitude <= dbResult.amplitude)
+            return fail("equal-power amplitude must exceed dB-domain at midpoint for asymmetric inputs");
+        // Endpoints preserved
+        auto dbAt0 = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 440.0, a0, 440.0, a1, 0.0, 0.0,
+            0.0, 0.0, ats::HybridizeDomains{false, true});
+        auto dbAt1 = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 440.0, a0, 440.0, a1, 1.0, 1.0,
+            0.0, 0.0, ats::HybridizeDomains{false, true});
+        if (!closeEnough(dbAt0.amplitude, a0, 1.0e-6))
+            return fail("dB-domain t=0 must return source amplitude");
+        if (!closeEnough(dbAt1.amplitude, a1, 1.0e-6))
+            return fail("dB-domain t=1 must return target amplitude");
+    }
+
+    // Default HybridizeDomains{} must be identical to calling without domains argument
+    {
+        const auto withDefault = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 220.0, 0.5, 880.0, 0.8, 0.3, 0.7,
+            0.0, 0.0, ats::HybridizeDomains{});
+        const auto withoutDomains = ats::resolveHybridizedPartialRender(
+            ats::HybridizedPartialKind::Matched, 220.0, 0.5, 880.0, 0.8, 0.3, 0.7);
+        if (!closeEnough(withDefault.frequencyHz, withoutDomains.frequencyHz)
+            || !closeEnough(withDefault.amplitude, withoutDomains.amplitude))
+            return fail("default HybridizeDomains must produce identical output to omitting domains");
+    }
+
     std::cout << "ok: spectral envelope transfer helpers\n";
     return 0;
 }
