@@ -350,6 +350,10 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     residualSwapButton.onClick = [this] { runSwapBands(); };
     addChildComponent(residualSwapButton);
 
+    residualRedistButton.setTooltip("Equalize energy across selected bands per frame (preserves total energy).");
+    residualRedistButton.onClick = [this] { runRedistBands(); };
+    addChildComponent(residualRedistButton);
+
     residualDbLabel.setText("Cell dB", juce::dontSendNotification);
     residualDbLabel.setJustificationType(juce::Justification::centredRight);
     residualDbLabel.setFont(juce::Font(11.0f));
@@ -408,6 +412,34 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
                                "RDC spectral envelope over the visible time range.");
     envSmoothButton.onClick = [this] { runSmoothEnvelope(); };
     addChildComponent(envSmoothButton);
+
+    partialFreqDrawButton.setClickingTogglesState(true);
+    partialFreqDrawButton.setTooltip("Draw partial frequency: drag near a partial trace to reshape its pitch contour.");
+    partialFreqDrawButton.setHelpText("Paint a new frequency contour onto a partial by dragging.");
+    addChildComponent(partialFreqDrawButton);
+
+    partialSoloButton.setTooltip("Audition selected partials in isolation (silences all others).");
+    partialSoloButton.onClick = [this] { runPartialSolo(); };
+    addChildComponent(partialSoloButton);
+
+    partialFreezeButton.setTooltip("Freeze: copy the center-of-view frame's spectrum to all frames, creating a sustained static tone.");
+    partialFreezeButton.onClick = [this] { runPartialFreeze(); };
+    addChildComponent(partialFreezeButton);
+
+    partialPruneButton.setTooltip("Select all partials below an amplitude threshold for deletion. Press H to select harmonics of the hovered partial.");
+    partialPruneButton.onClick = [this] { runPartialPrune(); };
+    addChildComponent(partialPruneButton);
+
+    partialTiltSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    partialTiltSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 18);
+    partialTiltSlider.setRange(-12.0, 12.0, 0.1);
+    partialTiltSlider.setValue(0.0, juce::dontSendNotification);
+    partialTiltSlider.setTooltip("Spectral tilt in dB/octave applied to partial amplitudes.");
+    addChildComponent(partialTiltSlider);
+
+    partialTiltButton.setTooltip("Apply spectral tilt to partial amplitudes across the visible frame range.");
+    partialTiltButton.onClick = [this] { runPartialTilt(); };
+    addChildComponent(partialTiltButton);
 
     updateResidualToolbarVisibility();
     startTimerHz(10);
@@ -1916,6 +1948,33 @@ void SpectrogramPanel::paintSelectionOverlay(juce::Graphics& g,
             g.strokePath(stroke, juce::PathStrokeType(2.0f));
         }
     }
+
+    if (drawingPartialFreq && partialFreqDrawPoints.size() >= 2 && traceSnapshot.frameCount > 1)
+    {
+        const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+        const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+        const double logRange = std::log(maxHz / minHz);
+        juce::Path stroke;
+        bool started = false;
+        for (const auto& pt : partialFreqDrawPoints)
+        {
+            const float timeNorm = (float) pt.first / (float) (traceSnapshot.frameCount - 1);
+            const float freqNorm = (float) juce::jlimit(0.0, 1.0,
+                                                        std::log(juce::jmax(1.0, pt.second) / minHz) / logRange);
+            const auto pos = positionForPoint(AtsPartialTracePoint { timeNorm, freqNorm }, plot);
+            if (!started)
+            {
+                stroke.startNewSubPath(pos.x, pos.y);
+                started = true;
+            }
+            else
+            {
+                stroke.lineTo(pos.x, pos.y);
+            }
+        }
+        g.setColour(juce::Colour(0xffaaff99).withAlpha(0.9f));
+        g.strokePath(stroke, juce::PathStrokeType(2.0f));
+    }
 }
 
 void SpectrogramPanel::paintPlaybackPlayhead(juce::Graphics& g, juce::Rectangle<float> plot)
@@ -2337,7 +2396,8 @@ void SpectrogramPanel::resized()
     auto r = getLocalBounds().reduced(5);
     const bool residualUi = isResidualDisplayMode(mode);
     const bool envelopeUi = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
-    auto header = r.removeFromTop((residualUi || envelopeUi) ? 50 : 26);
+    const bool partialUi = (mode == Mode::Partials || mode == Mode::Combined);
+    auto header = r.removeFromTop((residualUi || envelopeUi || partialUi) ? 50 : 26);
     auto headerRow1 = header.removeFromTop(26);
 
     if (zoomBar != nullptr)
@@ -2376,6 +2436,8 @@ void SpectrogramPanel::resized()
         residualPasteButton.setBounds(toolRow.removeFromLeft(56));
         toolRow.removeFromLeft(4);
         residualSwapButton.setBounds(toolRow.removeFromLeft(56));
+        toolRow.removeFromLeft(4);
+        residualRedistButton.setBounds(toolRow.removeFromLeft(56));
         toolRow.removeFromLeft(8);
         residualTiltSlider.setBounds(toolRow.removeFromLeft(juce::jmax(72, toolRow.getWidth() / 4)));
         toolRow.removeFromLeft(4);
@@ -2392,6 +2454,21 @@ void SpectrogramPanel::resized()
         envSmoothSlider.setBounds(toolRow.removeFromLeft(juce::jmax(120, toolRow.getWidth() / 3)));
         toolRow.removeFromLeft(8);
         envSmoothButton.setBounds(toolRow.removeFromLeft(88));
+    }
+    else if (partialUi)
+    {
+        auto toolRow = header;
+        partialFreqDrawButton.setBounds(toolRow.removeFromLeft(52));
+        toolRow.removeFromLeft(4);
+        partialSoloButton.setBounds(toolRow.removeFromLeft(48));
+        toolRow.removeFromLeft(4);
+        partialFreezeButton.setBounds(toolRow.removeFromLeft(56));
+        toolRow.removeFromLeft(4);
+        partialPruneButton.setBounds(toolRow.removeFromLeft(52));
+        toolRow.removeFromLeft(8);
+        partialTiltSlider.setBounds(toolRow.removeFromLeft(juce::jmax(72, toolRow.getWidth() / 3)));
+        toolRow.removeFromLeft(4);
+        partialTiltButton.setBounds(toolRow.removeFromLeft(44));
     }
 
     layoutTraceViewChrome();
@@ -2681,6 +2758,15 @@ void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    // Click-to-seek: when preview is playing, Ctrl+click anywhere in the plot seeks playback.
+    if (e.mods.isCommandDown() && !e.mods.isAltDown() && plot.contains(e.position)
+        && processor.isPreviewPlaying() && traceSnapshot.frameCount > 0)
+    {
+        const float timeNorm = timeNormFromScreenX(e.position.x, plot);
+        processor.seekPreviewPlaybackNorm(juce::jlimit(0.0f, 1.0f, timeNorm));
+        return;
+    }
+
     // Smearnov onset/attack-window editing takes precedence over trace/residual
     // selection when a handle is grabbed.
     if (!e.mods.isAltDown() && !e.mods.isMiddleButtonDown())
@@ -2796,6 +2882,28 @@ void SpectrogramPanel::mouseDown(const juce::MouseEvent& e)
     selectedResidualFirstFrame = -1;
     selectedResidualLastFrame = -1;
 
+    if (partialFreqDrawButton.getToggleState())
+    {
+        const auto plot = getPlotBounds();
+        const int nearest = findNearestPartial(e.position, 12.0f);
+        if (nearest >= 0)
+        {
+            partialFreqDrawPartial = nearest;
+            drawingPartialFreq = true;
+            const int frame = frameForX(e.position.x, plot);
+            const float fn = freqNormFromScreenY(e.position.y, plot);
+            const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+            const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+            const double hz = minHz * std::exp((double) fn * std::log(maxHz / minHz));
+            partialFreqDrawPoints.clear();
+            partialFreqDrawPoints.push_back({ frame, hz });
+            selectedPartials = { nearest };
+            updateSelectionLabel();
+            repaintDisplay();
+            return;
+        }
+    }
+
     const int nearest = findNearestPartial(e.position, 8.0f);
     if (nearest >= 0)
     {
@@ -2833,6 +2941,16 @@ void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    // Ctrl+drag scrubs preview playback position.
+    if (e.mods.isCommandDown() && !e.mods.isAltDown() && processor.isPreviewPlaying()
+        && traceSnapshot.frameCount > 0)
+    {
+        const auto plot = getPlotBounds();
+        const float timeNorm = timeNormFromScreenX(e.position.x, plot);
+        processor.seekPreviewPlaybackNorm(juce::jlimit(0.0f, 1.0f, timeNorm));
+        return;
+    }
+
     if (panningView)
     {
         const auto plot = getPlotBounds();
@@ -2848,6 +2966,22 @@ void SpectrogramPanel::mouseDrag(const juce::MouseEvent& e)
             syncZoomControlsFromViewport();
             repaintDisplay();
         }
+        return;
+    }
+
+    if (drawingPartialFreq && partialFreqDrawPartial >= 0)
+    {
+        const auto plot = getPlotBounds();
+        const int frame = frameForX(e.position.x, plot);
+        const float fn = freqNormFromScreenY(e.position.y, plot);
+        const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+        const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+        const double hz = minHz * std::exp((double) fn * std::log(maxHz / minHz));
+        if (partialFreqDrawPoints.empty() || partialFreqDrawPoints.back().first != frame)
+            partialFreqDrawPoints.push_back({ frame, hz });
+        else
+            partialFreqDrawPoints.back().second = hz;
+        repaintDisplay();
         return;
     }
 
@@ -2913,6 +3047,21 @@ void SpectrogramPanel::mouseUp(const juce::MouseEvent& e)
         panningView = false;
         draggingLasso = false;
         lassoRect = {};
+        return;
+    }
+
+    if (drawingPartialFreq)
+    {
+        commitPartialFreqDraw();
+        drawingPartialFreq = false;
+        partialFreqDrawPartial = -1;
+        partialFreqDrawPoints.clear();
+        scalingSelection = false;
+        panningView = false;
+        draggingLasso = false;
+        lassoRect = {};
+        updateSelectionLabel();
+        repaintDisplay();
         return;
     }
 
@@ -3286,6 +3435,43 @@ bool SpectrogramPanel::keyPressed(const juce::KeyPress& key)
         && key.getKeyCode() == juce::KeyPress::returnKey)
     {
         applyResidualDbFromEditor();
+        return true;
+    }
+
+    // 'H' — select all harmonics of the hovered partial (within ±50 cents).
+    if ((key.getTextCharacter() == 'h' || key.getTextCharacter() == 'H')
+        && !isResidualDisplayMode(mode)
+        && hoveredPartial >= 0)
+    {
+        const auto it = std::find_if(traceSnapshot.partials.begin(), traceSnapshot.partials.end(),
+                                     [this](const AtsPartialTrace& t) { return t.partialIndex == hoveredPartial; });
+        if (it != traceSnapshot.partials.end() && it->meanFrequencyHz > 0.0)
+        {
+            const double baseHz = it->meanFrequencyHz;
+            constexpr double kCentsTolerance = 50.0; // ±50 cents (~2.9%)
+            const double ratio = std::pow(2.0, kCentsTolerance / 1200.0);
+
+            const bool additive = key.getModifiers().isShiftDown();
+            if (!additive)
+                selectedPartials.clear();
+
+            for (const auto& trace : traceSnapshot.partials)
+            {
+                if (trace.meanFrequencyHz <= 0.0)
+                    continue;
+                const double f = trace.meanFrequencyHz;
+                const double k = f / baseHz;
+                const long kRound = std::lround(k);
+                if (kRound >= 1 && std::abs(k - (double) kRound) * baseHz / f < (ratio - 1.0))
+                {
+                    if (std::find(selectedPartials.begin(), selectedPartials.end(),
+                                  trace.partialIndex) == selectedPartials.end())
+                        selectedPartials.push_back(trace.partialIndex);
+                }
+            }
+            updateSelectionLabel();
+            repaintDisplay();
+        }
         return true;
     }
 
@@ -4130,6 +4316,7 @@ void SpectrogramPanel::updateResidualToolbarVisibility()
                      static_cast<juce::Component*>(&residualCopyButton),
                      static_cast<juce::Component*>(&residualPasteButton),
                      static_cast<juce::Component*>(&residualSwapButton),
+                     static_cast<juce::Component*>(&residualRedistButton),
                      static_cast<juce::Component*>(&residualDbLabel),
                      static_cast<juce::Component*>(&residualDbEditor) })
     {
@@ -4148,6 +4335,21 @@ void SpectrogramPanel::updateResidualToolbarVisibility()
         residualDbEditorActive = false;
         drawingResidualEnvelope = false;
         envelopeDrawPoints.clear();
+    }
+
+    const bool partialUi = (mode == Mode::Partials || mode == Mode::Combined);
+    for (auto* c : { static_cast<juce::Component*>(&partialFreqDrawButton),
+                     static_cast<juce::Component*>(&partialSoloButton),
+                     static_cast<juce::Component*>(&partialFreezeButton),
+                     static_cast<juce::Component*>(&partialPruneButton),
+                     static_cast<juce::Component*>(&partialTiltSlider),
+                     static_cast<juce::Component*>(&partialTiltButton) })
+        c->setVisible(partialUi);
+    if (!partialUi)
+    {
+        partialFreqDrawButton.setToggleState(false, juce::dontSendNotification);
+        drawingPartialFreq = false;
+        partialFreqDrawPoints.clear();
     }
 
     const bool envMode = (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC);
@@ -4299,6 +4501,61 @@ void SpectrogramPanel::commitEnvelopeDraw()
     rebuildTraceSnapshot(true);
 }
 
+void SpectrogramPanel::commitPartialFreqDraw()
+{
+    if (partialFreqDrawPartial < 0 || partialFreqDrawPoints.empty())
+        return;
+
+    std::sort(partialFreqDrawPoints.begin(),
+              partialFreqDrawPoints.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    const int firstFrame = partialFreqDrawPoints.front().first;
+    const int lastFrame = partialFreqDrawPoints.back().first;
+    std::vector<std::pair<int, double>> painted;
+    painted.reserve((size_t) (lastFrame - firstFrame + 1));
+
+    size_t segment = 0;
+    for (int frame = firstFrame; frame <= lastFrame; ++frame)
+    {
+        while (segment + 1 < partialFreqDrawPoints.size()
+               && partialFreqDrawPoints[segment + 1].first <= frame)
+            ++segment;
+
+        const auto& a = partialFreqDrawPoints[segment];
+        if (segment + 1 >= partialFreqDrawPoints.size())
+        {
+            painted.push_back({ frame, a.second });
+            continue;
+        }
+
+        const auto& b = partialFreqDrawPoints[segment + 1];
+        if (b.first == a.first)
+        {
+            painted.push_back({ frame, a.second });
+            continue;
+        }
+
+        const double t = (double) (frame - a.first) / (double) (b.first - a.first);
+        painted.push_back({ frame, a.second + t * (b.second - a.second) });
+    }
+
+    juce::String error;
+    if (!processor.paintPartialFrequency(traceSource,
+                                         partialFreqDrawPartial,
+                                         firstFrame,
+                                         lastFrame,
+                                         painted,
+                                         error))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                    "Paint Partial Frequency", error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+}
+
 void SpectrogramPanel::runSmoothEnvelope()
 {
     if (traceSnapshot.partials.empty() || traceSnapshot.frameCount <= 0)
@@ -4386,6 +4643,80 @@ void SpectrogramPanel::runTiltOnSelection()
     repaintDisplay();
 }
 
+void SpectrogramPanel::runPartialTilt()
+{
+    const double tilt = partialTiltSlider.getValue();
+    if (std::abs(tilt) < 1.0e-6)
+        return;
+
+    int f0 = 0, f1 = 0;
+    if (!envBoxFrameRange(f0, f1))
+        return;
+
+    double loHz = 0.0, hiHz = 0.0;
+    (void) envBoxFreqRangeHz(loHz, hiHz);
+
+    juce::String error;
+    if (!processor.tiltPartialEnvelope(traceSource, f0, f1, loHz, hiHz, tilt, error))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                    "Tilt Partial Envelope",
+                                                    error.isEmpty() ? "Could not apply tilt." : error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runPartialSolo()
+{
+    if (selectedPartials.empty())
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials",
+                                                    "Select one or more partials before soloing.");
+        return;
+    }
+
+    juce::String error;
+    if (!processor.playSelectedPartialsPreview(traceSource, selectedPartials, error))
+    {
+        if (error.isNotEmpty())
+            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials", error);
+    }
+}
+
+void SpectrogramPanel::runPartialFreeze()
+{
+    if (traceSnapshot.frameCount <= 0)
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
+                                                    "No model loaded.");
+        return;
+    }
+
+    // Use the playhead position if preview is active; otherwise use view center.
+    float centerNorm = (visibleTimeRange().getStart() + visibleTimeRange().getEnd()) * 0.5f;
+    const float playheadNorm = processor.getPreviewPlayheadNormForTraceSource(traceSource);
+    if (playheadNorm >= 0.0f)
+        centerNorm = playheadNorm;
+
+    const int frame = juce::jlimit(0,
+                                   traceSnapshot.frameCount - 1,
+                                   juce::roundToInt(centerNorm * (float) (traceSnapshot.frameCount - 1)));
+
+    juce::String error;
+    if (!processor.freezePartialAtFrame(traceSource, frame, error))
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
+                                                    error.isEmpty() ? "Could not freeze." : error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
 void SpectrogramPanel::runCopyBand()
 {
     if (!hasResidualSelection() || selectedResidualBands.size() != 1)
@@ -4449,6 +4780,65 @@ void SpectrogramPanel::runSwapBands()
                                      getSelectionFirstFrame(),
                                      getSelectionLastFrame(),
                                      error))
+    {
+        showResidualEditError(error);
+        return;
+    }
+
+    rebuildTraceSnapshot(true);
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runPartialPrune()
+{
+    if (traceSnapshot.partials.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Prune Partials", "No partials to prune.");
+        return;
+    }
+
+    juce::AlertWindow dialog("Prune Weak Partials",
+                             "Select all partials whose peak amplitude is below this threshold "
+                             "(as % of the loudest partial). Press Delete to remove them after.",
+                             juce::AlertWindow::QuestionIcon);
+    dialog.addTextEditor("threshold", "10", "Threshold (% of peak):");
+    dialog.addButton("Select", 1);
+    dialog.addButton("Cancel", 0);
+
+    if (dialog.runModalLoop() != 1)
+        return;
+
+    const double pct = dialog.getTextEditorContents("threshold").getDoubleValue();
+    if (pct <= 0.0 || pct > 100.0)
+        return;
+
+    const float threshold = (float) (pct / 100.0);
+    selectedPartials.clear();
+    for (const auto& trace : traceSnapshot.partials)
+    {
+        if (trace.peakAmpNorm < threshold)
+            selectedPartials.push_back(trace.partialIndex);
+    }
+
+    updateSelectionLabel();
+    repaintDisplay();
+}
+
+void SpectrogramPanel::runRedistBands()
+{
+    if (!hasResidualSelection() || selectedResidualBands.size() < 2)
+    {
+        showResidualEditError("Select at least two bands (Shift/Cmd-click) over a frame range to redistribute.");
+        return;
+    }
+
+    juce::String error;
+    if (!processor.autoRedistributeResidualBands(traceSource,
+                                                  selectedResidualBands,
+                                                  getSelectionFirstFrame(),
+                                                  getSelectionLastFrame(),
+                                                  error))
     {
         showResidualEditError(error);
         return;

@@ -2714,6 +2714,10 @@ void AtsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
     if (shouldPreview && playback != nullptr)
     {
+        const int pendingSeek = seekToSample.exchange(-1, std::memory_order_acq_rel);
+        if (pendingSeek >= 0)
+            playbackPosition = juce::jlimit(0, playbackSampleCount - 1, pendingSeek);
+
         previewPlaybackAnchorSamples.store((double) playbackPosition, std::memory_order_release);
         previewPlaybackAnchorTimeMs.store(juce::Time::getMillisecondCounterHiRes(), std::memory_order_release);
         previewPlaybackHostSampleRate.store(hostSampleRate, std::memory_order_release);
@@ -2774,6 +2778,107 @@ void AtsAudioProcessor::stopPreviewPlayback()
     playbackPosition = 0;
     previewPlaybackAnchorSamples.store(0.0, std::memory_order_release);
     previewPlaybackKind.store((int) AtsPreviewPlaybackKind::None, std::memory_order_release);
+}
+
+void AtsAudioProcessor::seekPreviewPlaybackNorm(float norm)
+{
+    if (!previewPlaying.load(std::memory_order_acquire))
+        return;
+    const int activeIndex = activePlaybackBufferIndex.load(std::memory_order_acquire);
+    if (activeIndex < 0 || activeIndex >= (int) playbackBuffers.size())
+        return;
+    const int len = playbackBuffers[(size_t) activeIndex].getNumSamples();
+    if (len <= 0)
+        return;
+    const int sample = juce::jlimit(0, len - 1, juce::roundToInt(norm * (float) (len - 1)));
+    seekToSample.store(sample, std::memory_order_release);
+}
+
+bool AtsAudioProcessor::freezePartialAtFrame(AtsTraceSource source, int frame, juce::String& error)
+{
+    ScopedModelEdit edit(*this, source, "Freeze Partials");
+    if (frame < 0)
+    {
+        error = "Invalid freeze frame.";
+        return false;
+    }
+
+    auto freezeSound = [&](ATS_SOUND* s) -> bool {
+        if (s == nullptr || s->frames <= 0 || s->partials <= 0)
+            return false;
+        const int freezeFrame = juce::jlimit(0, s->frames - 1, frame);
+
+        // Partials: copy amp and frq from freezeFrame to every frame.
+        if (s->amp != nullptr && s->frq != nullptr)
+        {
+            for (int p = 0; p < s->partials; ++p)
+            {
+                if (s->amp[p] == nullptr || s->frq[p] == nullptr)
+                    continue;
+                const double frozenAmp = s->amp[p][freezeFrame];
+                const double frozenFrq = s->frq[p][freezeFrame];
+                for (int f = 0; f < s->frames; ++f)
+                {
+                    s->amp[p][f] = frozenAmp;
+                    s->frq[p][f] = frozenFrq;
+                }
+            }
+        }
+
+        // Residual bands: copy band_energy from freezeFrame to every frame.
+        if (s->band_energy != nullptr)
+        {
+            for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+            {
+                if (s->band_energy[band] == nullptr)
+                    continue;
+                const double frozenEnergy = s->band_energy[band][freezeFrame];
+                for (int f = 0; f < s->frames; ++f)
+                    s->band_energy[band][f] = frozenEnergy;
+            }
+        }
+        return true;
+    };
+
+    bool ok = false;
+    if (source == AtsTraceSource::Current)
+    {
+        {
+            const juce::ScopedLock ml(modelLock);
+            ok = freezeSound(analyzedModel.get());
+        }
+        if (!ok)
+        {
+            error = "No analyzed model to freeze.";
+            return false;
+        }
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
+        synthParamsDirty.store(true);
+        triggerAsyncUpdate();
+        return true;
+    }
+
+    const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        auto* s = morphSourceSounds[(size_t) slotIndex].get();
+        ok = freezeSound(s);
+        if (ok)
+        {
+            morphSourceAssignments[(size_t) slotIndex] =
+                makeMorphAssignmentsFromSound(s, morphRecipe.frequencyGrid);
+            rebuildMorphCorrespondenceIfReady();
+            serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
+        }
+    }
+    if (!ok)
+    {
+        error = "No source model to freeze.";
+        return false;
+    }
+    markMorphSnapshotStale();
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 float AtsAudioProcessor::getPreviewPlayheadNormForTraceSource(AtsTraceSource source) const
@@ -2886,6 +2991,114 @@ bool AtsAudioProcessor::playCurrentModelPreview(AtsSourceAuditionMode mode, bool
 
     activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
     previewAuditionMode.store((int) mode, std::memory_order_release);
+    previewPlaybackKind.store((int) AtsPreviewPlaybackKind::MorphPreview, std::memory_order_release);
+    startPreviewPlayback();
+    return true;
+}
+
+bool AtsAudioProcessor::playSelectedPartialsPreview(AtsTraceSource source,
+                                                    const std::vector<int>& partialIndices,
+                                                    juce::String& error)
+{
+    error.clear();
+    if (partialIndices.empty())
+    {
+        error = "No partials selected.";
+        return false;
+    }
+    if (isWorkerBusy())
+    {
+        error = "Wait for the current analysis or render to finish before playing.";
+        return false;
+    }
+
+    const ats::SynthParams core = readCoreSynthParamsFromApvts();
+
+    // Acquire the appropriate model and make a temporary copy with non-selected partials silenced.
+    ats::AtsSoundPtr tempSound;
+    {
+        if (source == AtsTraceSource::Current)
+        {
+            const juce::ScopedLock ml(modelLock);
+            if (analyzedModel.get() == nullptr)
+            {
+                error = "No analyzed ATS model.";
+                return false;
+            }
+            tempSound.reset(copy_sound(const_cast<ATS_SOUND*>(analyzedModel.get())));
+        }
+        else
+        {
+            const int slot = source == AtsTraceSource::SourceA ? 0 : 1;
+            const juce::ScopedLock ml(morphRecipeLock);
+            auto* src = morphSourceSounds[(size_t) slot].get();
+            if (src == nullptr)
+            {
+                error = source == AtsTraceSource::SourceA ? "No Source A model." : "No Source B model.";
+                return false;
+            }
+            tempSound.reset(copy_sound(const_cast<ATS_SOUND*>(src)));
+        }
+    }
+
+    if (!tempSound)
+    {
+        error = "Could not copy model for solo render.";
+        return false;
+    }
+
+    ATS_SOUND* s = tempSound.get();
+    if (s->amp != nullptr)
+    {
+        const std::set<int> soloSet(partialIndices.begin(), partialIndices.end());
+        for (int p = 0; p < s->partials; ++p)
+        {
+            if (soloSet.count(p) == 0 && s->amp[p] != nullptr)
+                for (int f = 0; f < s->frames; ++f)
+                    s->amp[p][f] = 0.0;
+        }
+    }
+
+    // Silence residual — solo is partials-only.
+    ats::SynthParams soloParams = core;
+    soloParams.residualGain = 0.0;
+    soloParams.partialsGain = 1.0;
+
+    auto buf = runDoSynthesis(s, soloParams);
+    const int n = buf.getNumSamples();
+    if (n <= 0)
+    {
+        error = "Selected partials have no audible output.";
+        return false;
+    }
+
+    // Resample to host rate if needed, then write to the preview buffer.
+    const int modelSr = s->srate > 0 ? juce::roundToInt(s->srate) : juce::roundToInt(core.sampleRate);
+    juce::AudioBuffer<float> resampled;
+    if (std::abs((double) modelSr - hostSampleRate) > 1.0 && modelSr > 0 && hostSampleRate > 0.0)
+    {
+        const double ratio = hostSampleRate / (double) modelSr;
+        const int newLen = juce::roundToInt((double) n * ratio);
+        resampled.setSize(1, juce::jmax(1, newLen));
+        juce::LagrangeInterpolator interp;
+        interp.process(1.0 / ratio,
+                       buf.getReadPointer(0),
+                       resampled.getWritePointer(0),
+                       newLen);
+    }
+    else
+    {
+        resampled = std::move(buf);
+    }
+
+    {
+        while (readingPlaybackBufferIndex.load(std::memory_order_acquire) == kMorphPlaybackBufferIndex)
+            std::this_thread::yield();
+        playbackBuffers[(size_t) kMorphPlaybackBufferIndex] = std::move(resampled);
+    }
+
+    activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
+    previewAuditionMode.store((int) AtsSourceAuditionMode::PartialsOnly, std::memory_order_release);
     previewPlaybackKind.store((int) AtsPreviewPlaybackKind::MorphPreview, std::memory_order_release);
     startPreviewPlayback();
     return true;
@@ -3271,6 +3484,31 @@ static inline double morphTrajLcgDouble(std::uint64_t s) noexcept
     return static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53); // [0, 1)
 }
 
+// ATSA critical-band center frequencies (Hz), shared by the residual synthesis pass and the
+// unmatched-partial MergeIntoResidual policy (which reroutes a discarded partial's power into the
+// nearest residual band).
+static constexpr double kAtsBandCenterHzTable[ATSA_CRITICAL_BANDS] = {
+    50.0, 150.0, 250.0, 350.0, 455.0, 570.0, 700.0, 845.0, 1000.0,
+    1175.0, 1375.0, 1600.0, 1860.0, 2160.0, 2510.0, 2925.0, 3425.0,
+    4050.0, 4850.0, 5850.0, 7050.0, 8600.0, 10750.0, 13750.0, 17750.0
+};
+
+// Nearest ATSA critical band index for a frequency in Hz (log-distance to band centers).
+static inline int nearestAtsBandIndex(double hz) noexcept
+{
+    if (!(hz > 0.0))
+        return 0;
+    int best = 0;
+    double bestDist = std::numeric_limits<double>::max();
+    const double lh = std::log(hz);
+    for (int b = 0; b < ATSA_CRITICAL_BANDS; ++b)
+    {
+        const double d = std::abs(lh - std::log(kAtsBandCenterHzTable[b]));
+        if (d < bestDist) { bestDist = d; best = b; }
+    }
+    return best;
+}
+
 ats::BarkSpectralEnvelope buildBarkEnvelopeForFrame(const ATS_SOUND* sound,
                                                     int frame0,
                                                     int frame1,
@@ -3387,7 +3625,9 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     double apvtsBrightnessDb = 0.0,
     double apvtsTiltDbPerOct = 0.0,
     double apvtsNoiseBalance = 0.5,
-    ats::HybridizeDomains interpDomains = {})
+    ats::HybridizeDomains interpDomains = {},
+    double smoothingMs = 0.0,
+    double performanceMacro = 0.5)
 {
     const int totalSamples = juce::jmax(1, (int) std::llround(sampleRate * durationSeconds));
     juce::AudioBuffer<float> out(2, totalSamples);
@@ -3418,6 +3658,65 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     const ats::TimbreMotionPlan emptyPlan;
     const ats::TimbreMotionPlan& activePlan = (timbrePlan && !timbrePlan->empty()) ? *timbrePlan : emptyPlan;
     ats::CompiledTimbrePlan compiledTimbrePlan(activePlan, chunkRateHz);
+
+    // Measured centroid endpoints for InterpolateAB/AbsoluteTarget brightness curves (§5/§8.1).
+    // Built once from a representative (max-energy) frame of each source; the solver later finds
+    // the brightnessDb that places the reference spectrum's centroid at the requested Bark value.
+    // Only built when the plan actually drives the centroid axis — otherwise the endpoint context
+    // stays empty and evaluate() reproduces the analyzer-free behavior exactly.
+    ats::TimbreEndpoints timbreEndpoints;
+    std::vector<double> timbreRefFreqsHz, timbreRefAmps;
+    if (!activePlan.empty() && compiledTimbrePlan.needsCentroidEndpoints())
+    {
+        auto sourceCentroidSpectrum = [](const ATS_SOUND* snd,
+                                         std::vector<double>& freqsOut,
+                                         std::vector<double>& ampsOut) -> double
+        {
+            freqsOut.clear();
+            ampsOut.clear();
+            if (snd == nullptr || snd->frq == nullptr || snd->amp == nullptr
+                || snd->partials <= 0 || snd->frames <= 0)
+                return 0.0;
+            // Pick the frame carrying the most total partial energy (a representative spectrum).
+            int bestFrame = 0;
+            double bestEnergy = -1.0;
+            for (int f = 0; f < snd->frames; ++f)
+            {
+                double e = 0.0;
+                for (int p = 0; p < snd->partials; ++p)
+                    if (snd->amp[p] != nullptr)
+                    {
+                        const double a = snd->amp[p][f];
+                        if (std::isfinite(a) && a > 0.0) e += a * a;
+                    }
+                if (e > bestEnergy) { bestEnergy = e; bestFrame = f; }
+            }
+            for (int p = 0; p < snd->partials; ++p)
+            {
+                if (snd->frq[p] == nullptr || snd->amp[p] == nullptr) continue;
+                const double fr = snd->frq[p][bestFrame];
+                const double am = snd->amp[p][bestFrame];
+                if (std::isfinite(fr) && std::isfinite(am) && fr > 0.0 && am > 0.0)
+                {
+                    freqsOut.push_back(fr);
+                    ampsOut.push_back(am);
+                }
+            }
+            return ats::spectralCentroidBark(freqsOut, ampsOut);
+        };
+
+        std::vector<double> freqsB, ampsB;
+        const double barkA = sourceCentroidSpectrum(soundA, timbreRefFreqsHz, timbreRefAmps);
+        const double barkB = sourceCentroidSpectrum(soundB, freqsB, ampsB);
+        if (barkA > 0.0 && barkB > 0.0 && !timbreRefFreqsHz.empty())
+        {
+            timbreEndpoints.hasCentroid   = true;
+            timbreEndpoints.centroidBarkA = barkA;
+            timbreEndpoints.centroidBarkB = barkB;
+            timbreEndpoints.refFreqsHz    = &timbreRefFreqsHz;
+            timbreEndpoints.refAmps       = &timbreRefAmps;
+        }
+    }
 
     // Onset/time alignment: A and B are otherwise both sampled at the same wall-clock time, so if
     // their principal attacks sit at different times the morph midpoint hears a doubled/smeared
@@ -3453,7 +3752,12 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         if (std::isnan(tA) || std::isnan(tB))
             return 0.0;
         // Read B at (t + offset) so B's onset tB is heard when playback reaches A's onset tA.
-        return juce::jlimit(-maxOff, maxOff, tB - tA);
+        const double rawOffset = juce::jlimit(-maxOff, maxOff, tB - tA);
+        // Time lane scales onset-alignment strength: 0 = no alignment, 1 = full alignment.
+        const double timeLaneAmount = ats::evaluateMorphLaneAmount(
+            recipe, ats::MorphLane::Time,
+            useTimeline ? timeline->sampleMorph(0.0, false) : fixedMorphAmount);
+        return rawOffset * juce::jlimit(0.0, 1.0, timeLaneAmount);
     }();
 
     // Phasor state per partial: complex unit vector {re, im} = {cos(phase), sin(phase)}.
@@ -3472,8 +3776,10 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const bool hasPhaseB = soundB->pha != nullptr;
         if (hasPhaseA || hasPhaseB)
         {
-            const double morphAmount0 = juce::jlimit(0.0, 1.0,
+            const double rawMorphAmount0 = juce::jlimit(0.0, 1.0,
                 useTimeline ? timeline->sampleMorph(0.0, false) : fixedMorphAmount);
+            const double morphAmount0 = juce::jlimit(0.0, 1.0,
+                0.5 + (rawMorphAmount0 - 0.5) * juce::jlimit(0.0, 2.0, performanceMacro * 2.0));
             // Use phase lane amount at t=0 for initial phasor seeding.
             const double phaseMorphAmount0 = ats::evaluateMorphLaneAmount(
                 recipe, ats::MorphLane::Phase, morphAmount0);
@@ -3659,6 +3965,26 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     std::vector<int> rePrev, reTargets;
     constexpr double kRepairHysteresisLogHz = 0.02; // ~0.35 semitone stickiness against flicker
 
+    // One-pole IIR trajectory smoother: alpha = 0 → instant (no filter).
+    const double smoothingAlpha = smoothingMs > 0.0
+        ? std::exp(-1.0 / (smoothingMs * 1.0e-3 * chunkRateHz))
+        : 0.0;
+    double smoothedMorphAmount = juce::jlimit(0.0, 1.0,
+        useTimeline ? timeline->sampleMorph(0.0, false) : fixedMorphAmount);
+
+    // Unmatched-partial policies (§ MorphUnmatchedPartialPolicies). The render's default
+    // crossfade (resolveHybridizedPartialRender) already implements FadeOut for unmatched-source
+    // and FadeIn for unmatched-target, so the default recipe is bit-identical. Hold/Discard/
+    // MergeIntoResidual only diverge when the user selects a non-default policy.
+    const ats::MorphUnmatchedPartialPolicy unmatchedSourcePolicy = recipe.unmatchedPartialPolicies.sourcePolicy;
+    const ats::MorphUnmatchedPartialPolicy unmatchedTargetPolicy = recipe.unmatchedPartialPolicies.targetPolicy;
+    const bool mergeUnmatchedIntoResidual =
+        unmatchedSourcePolicy == ats::MorphUnmatchedPartialPolicy::MergeIntoResidual
+        || unmatchedTargetPolicy == ats::MorphUnmatchedPartialPolicy::MergeIntoResidual;
+    // Per-chunk power (sine RMS², i.e. amp²/2) rerouted from merged unmatched partials into each
+    // critical band. Filled in the partial loop, consumed in the residual loop of the same chunk.
+    std::array<double, ATSA_CRITICAL_BANDS> mergedBandPower{};
+
     for (int s = 0; s < totalSamples; )
     {
         const int chunkEnd = juce::jmin(s + chunkSamples, totalSamples);
@@ -3666,8 +3992,16 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const double t = (double) s * invSr;
         const double timeNorm = totalSamples > 1 ? (double) s / (double) (totalSamples - 1) : 0.0;
 
+        {
+            const double rawMorphAmount = juce::jlimit(0.0, 1.0,
+                useTimeline ? timeline->sampleMorph(timeNorm, false) : fixedMorphAmount);
+            smoothedMorphAmount = smoothingAlpha * smoothedMorphAmount
+                                  + (1.0 - smoothingAlpha) * rawMorphAmount;
+        }
+        // Performance macro: scales the morph deviation from the midpoint (0 = frozen at 0.5,
+        // 0.5 = passthrough, 1.0 = exaggerated). Useful for live expression control.
         const double morphAmount = juce::jlimit(0.0, 1.0,
-            useTimeline ? timeline->sampleMorph(timeNorm, false) : fixedMorphAmount);
+            0.5 + (smoothedMorphAmount - 0.5) * juce::jlimit(0.0, 2.0, performanceMacro * 2.0));
 
         const double envTransferAmount = juce::jlimit(0.0, 1.0,
             useTimeline ? timeline->sampleEffect(MorphTimelinePointKind::Hybrid, timeNorm) : 0.0);
@@ -3680,7 +4014,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
 
         // Per-chunk timbre: evaluate plan if active, otherwise fall back to APVTS values (§7.1).
         const TimbreRenderParams timbre = compiledTimbrePlan.evaluate(
-            timeNorm, apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance);
+            timeNorm, apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance, timbreEndpoints);
 
         // Per-lane morph amounts: frequency, amplitude, residual-noise may be decoupled
         // from the main morph amount via recipe lane settings (linkedToMainMorph + curve).
@@ -3787,6 +4121,9 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
             }
         }
 
+        if (mergeUnmatchedIntoResidual)
+            mergedBandPower.fill(0.0);
+
         // Per-chunk setup: compute freq/amp and the phasor rotation (cos/sin once per chunk).
         for (int ri = 0; ri < nRec; ++ri)
         {
@@ -3870,6 +4207,37 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                                                                       interpDomains);
             const double freq = resolved.frequencyHz;
             double amp = resolved.amplitude;
+
+            // Unmatched-partial policy override. resolved() already implements the default
+            // FadeOut (source) / FadeIn (target) crossfade, so those branches are no-ops and the
+            // default recipe stays bit-identical. Hold keeps the partial at its own amplitude
+            // (no fade); Discard silences it; MergeIntoResidual silences the partial but reroutes
+            // its power into the nearest critical band (consumed by the residual pass below).
+            if (rec.kind != ats::MorphCorrespondenceKind::Matched)
+            {
+                const ats::MorphUnmatchedPartialPolicy policy =
+                    rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource
+                        ? unmatchedSourcePolicy : unmatchedTargetPolicy;
+                const double availableAmp =
+                    rec.kind == ats::MorphCorrespondenceKind::UnmatchedSource ? ampA : ampB;
+                switch (policy)
+                {
+                    case ats::MorphUnmatchedPartialPolicy::FadeOut:
+                    case ats::MorphUnmatchedPartialPolicy::FadeIn:
+                        break; // default crossfade already applied by resolved()
+                    case ats::MorphUnmatchedPartialPolicy::Hold:
+                        amp = availableAmp; // hold at full amplitude, no fade
+                        break;
+                    case ats::MorphUnmatchedPartialPolicy::Discard:
+                        amp = 0.0;
+                        break;
+                    case ats::MorphUnmatchedPartialPolicy::MergeIntoResidual:
+                        if (freq > 0.0 && availableAmp > 0.0)
+                            mergedBandPower[(size_t) nearestAtsBandIndex(freq)] += 0.5 * availableAmp * availableAmp;
+                        amp = 0.0;
+                        break;
+                }
+            }
 
             // Envelope-driven amplitude morph: interpolate A's and B's Bark envelopes by the
             // morph position and resample this partial's amplitude from the blended envelope.
@@ -4000,6 +4368,11 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 double morphedRms = std::sqrt(juce::jmax(0.0,
                     (1.0 - residualNoiseMorphAmount) * rmsA * rmsA
                     + residualNoiseMorphAmount * rmsB * rmsB));
+                // Add any power rerouted from unmatched partials under the MergeIntoResidual
+                // policy. Powers (RMS²) add for uncorrelated sources, so combine in the power
+                // domain. Zero unless a non-default merge policy is active.
+                if (mergeUnmatchedIntoResidual && mergedBandPower[(size_t) band] > 0.0)
+                    morphedRms = std::sqrt(morphedRms * morphedRms + mergedBandPower[(size_t) band]);
                 // Timbre transforms on residual — tonal/noise → tilt → brightness (§8.6)
                 if (morphedRms > 0.0)
                 {
@@ -4173,7 +4546,9 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
                                                     (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                     (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
                                                     (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
-                                                    interpDomains);
+                                                    interpDomains,
+                                                    getRawParamValue(apvts, ats_param::kMorphSmoothingMs, kDefaultMorphSmoothingMs),
+                                                    getRawParamValue(apvts, ats_param::kMorphPerformanceMacro, kDefaultMorphPerformanceMacro));
         const int totalSamples = rendered.getNumSamples();
         if (totalSamples <= 0)
         {
@@ -4383,7 +4758,9 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                                                             (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                             (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
                                                             (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
-                                                            interpDomains);
+                                                            interpDomains,
+                                                            getRawParamValue(apvts, ats_param::kMorphSmoothingMs, kDefaultMorphSmoothingMs),
+                                                            getRawParamValue(apvts, ats_param::kMorphPerformanceMacro, kDefaultMorphPerformanceMacro));
             }
             else
             {
@@ -4597,7 +4974,9 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
                                                      (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
                                                      (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
                                                      (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
-                                                     interpDomains);
+                                                     interpDomains,
+                                                     getRawParamValue(apvts, ats_param::kMorphSmoothingMs, kDefaultMorphSmoothingMs),
+                                                     getRawParamValue(apvts, ats_param::kMorphPerformanceMacro, kDefaultMorphPerformanceMacro));
     }
     else
     {
@@ -8462,6 +8841,94 @@ bool AtsAudioProcessor::paintResidualBandEnvelope(AtsTraceSource source,
                                     error);
 }
 
+bool AtsAudioProcessor::paintPartialFrequency(AtsTraceSource source,
+                                              int partialIdx,
+                                              int firstFrame,
+                                              int lastFrame,
+                                              const std::vector<std::pair<int, double>>& frameHzPairs,
+                                              juce::String& error)
+{
+    ScopedModelEdit edit(*this, source, "Paint Partial Frequency");
+    if (partialIdx < 0 || frameHzPairs.empty())
+    {
+        error = "Nothing to paint.";
+        return false;
+    }
+
+    std::map<int, double> hzByFrame;
+    for (const auto& pair : frameHzPairs)
+        if (std::isfinite(pair.second) && pair.second > 0.0)
+            hzByFrame[pair.first] = pair.second;
+    if (hzByFrame.empty())
+    {
+        error = "Nothing to paint.";
+        return false;
+    }
+
+    auto paintSound = [&](ATS_SOUND* s) -> bool {
+        if (s == nullptr || s->amp == nullptr || s->frq == nullptr
+            || partialIdx >= s->partials || s->frames <= 0)
+            return false;
+        if (s->amp[partialIdx] == nullptr || s->frq[partialIdx] == nullptr)
+            return false;
+
+        const int f0 = juce::jlimit(0, s->frames - 1, std::min(firstFrame, lastFrame));
+        const int f1 = juce::jlimit(0, s->frames - 1, std::max(firstFrame, lastFrame));
+        bool changedAny = false;
+        for (int f = f0; f <= f1; ++f)
+        {
+            const auto it = hzByFrame.find(f);
+            if (it == hzByFrame.end())
+                continue;
+            if (s->amp[partialIdx][f] <= 0.0)
+                continue; // skip inactive frames
+            s->frq[partialIdx][f] = it->second;
+            changedAny = true;
+        }
+        return changedAny;
+    };
+
+    bool changedAny = false;
+    if (source == AtsTraceSource::Current)
+    {
+        {
+            const juce::ScopedLock ml(modelLock);
+            changedAny = paintSound(analyzedModel.get());
+        }
+        if (!changedAny)
+        {
+            error = "No active frames in the selected range for this partial.";
+            return false;
+        }
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
+        synthParamsDirty.store(true);
+        triggerAsyncUpdate();
+        return true;
+    }
+
+    const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        auto* s = morphSourceSounds[(size_t) slotIndex].get();
+        changedAny = paintSound(s);
+        if (changedAny)
+        {
+            morphSourceAssignments[(size_t) slotIndex] =
+                makeMorphAssignmentsFromSound(s, morphRecipe.frequencyGrid);
+            rebuildMorphCorrespondenceIfReady();
+            serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
+        }
+    }
+    if (!changedAny)
+    {
+        error = "No active frames in the selected range for this partial.";
+        return false;
+    }
+    markMorphSnapshotStale();
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 bool AtsAudioProcessor::smoothResidualBands(AtsTraceSource source,
                                             const std::vector<int>& bandIndices,
                                             int firstFrame,
@@ -8581,6 +9048,125 @@ bool AtsAudioProcessor::tiltResidualBands(AtsTraceSource source,
                                         energy = residualDbToEnergy(db);
                                     },
                                     error);
+}
+
+bool AtsAudioProcessor::tiltPartialEnvelope(AtsTraceSource source,
+                                            int firstFrame,
+                                            int lastFrame,
+                                            double freqLoHz,
+                                            double freqHiHz,
+                                            double tiltDbPerOctave,
+                                            juce::String& error)
+{
+    ScopedModelEdit edit(*this, source, "Tilt Partial Envelope");
+    if (!std::isfinite(tiltDbPerOctave) || std::abs(tiltDbPerOctave) < 1.0e-9)
+    {
+        error = "Tilt amount must be non-zero.";
+        return false;
+    }
+
+    const bool freqConstrained = (freqLoHz > 0.0 && freqHiHz > 0.0);
+    const double loHz = freqConstrained ? juce::jmin(freqLoHz, freqHiHz) : 0.0;
+    const double hiHz = freqConstrained ? juce::jmax(freqLoHz, freqHiHz) : 0.0;
+
+    auto tiltSound = [&](ATS_SOUND* s) -> bool {
+        if (s == nullptr || s->amp == nullptr || s->frq == nullptr || s->partials <= 0 || s->frames <= 0)
+            return false;
+
+        // Pivot: geometric mean of freq constraint or of all active partial Hz in the box.
+        double pivot = 0.0;
+        if (freqConstrained)
+        {
+            pivot = std::sqrt(loHz * hiHz);
+        }
+        else
+        {
+            // Geometric mean from all active partial freqs in the time box.
+            double logSum = 0.0;
+            int count = 0;
+            const int f0c = juce::jlimit(0, s->frames - 1, std::min(firstFrame, lastFrame));
+            const int f1c = juce::jlimit(0, s->frames - 1, std::max(firstFrame, lastFrame));
+            for (int p = 0; p < s->partials; ++p)
+            {
+                if (s->amp[p] == nullptr || s->frq[p] == nullptr)
+                    continue;
+                for (int f = f0c; f <= f1c; ++f)
+                    if (s->amp[p][f] > 0.0 && s->frq[p][f] > 0.0)
+                    {
+                        logSum += std::log(s->frq[p][f]);
+                        ++count;
+                    }
+            }
+            pivot = count > 0 ? std::exp(logSum / (double) count) : 440.0;
+        }
+
+        if (pivot <= 0.0)
+            pivot = 440.0;
+
+        const int f0 = juce::jlimit(0, s->frames - 1, std::min(firstFrame, lastFrame));
+        const int f1 = juce::jlimit(0, s->frames - 1, std::max(firstFrame, lastFrame));
+        bool changedAny = false;
+        for (int p = 0; p < s->partials; ++p)
+        {
+            if (s->amp[p] == nullptr || s->frq[p] == nullptr)
+                continue;
+            for (int f = f0; f <= f1; ++f)
+            {
+                if (s->amp[p][f] <= 0.0)
+                    continue;
+                const double hz = s->frq[p][f];
+                if (freqConstrained && (hz < loHz || hz > hiHz))
+                    continue;
+                if (hz <= 0.0)
+                    continue;
+                const double octaves = std::log2(hz / pivot);
+                const double gainFactor = std::pow(10.0, tiltDbPerOctave * octaves / 20.0);
+                s->amp[p][f] = juce::jmax(0.0, s->amp[p][f] * gainFactor);
+                changedAny = true;
+            }
+        }
+        return changedAny;
+    };
+
+    bool changedAny = false;
+    if (source == AtsTraceSource::Current)
+    {
+        {
+            const juce::ScopedLock ml(modelLock);
+            changedAny = tiltSound(analyzedModel.get());
+        }
+        if (!changedAny)
+        {
+            error = "No active partials in the selection.";
+            return false;
+        }
+        modelRevision.fetch_add(1, std::memory_order_relaxed);
+        synthParamsDirty.store(true);
+        triggerAsyncUpdate();
+        return true;
+    }
+
+    const int slotIndex = source == AtsTraceSource::SourceA ? 0 : 1;
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        auto* s = morphSourceSounds[(size_t) slotIndex].get();
+        changedAny = tiltSound(s);
+        if (changedAny)
+        {
+            morphSourceAssignments[(size_t) slotIndex] =
+                makeMorphAssignmentsFromSound(s, morphRecipe.frequencyGrid);
+            rebuildMorphCorrespondenceIfReady();
+            serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
+        }
+    }
+    if (!changedAny)
+    {
+        error = "No active partials in the selection.";
+        return false;
+    }
+    markMorphSnapshotStale();
+    modelRevision.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 bool AtsAudioProcessor::copyResidualBandToClipboard(AtsTraceSource source,
@@ -8706,6 +9292,54 @@ bool AtsAudioProcessor::swapResidualBands(AtsTraceSource source,
                                         const auto it = energyByBandFrame.find({ sourceBand, frame });
                                         if (it != energyByBandFrame.end())
                                             energy = it->second;
+                                    },
+                                    error);
+}
+
+bool AtsAudioProcessor::autoRedistributeResidualBands(AtsTraceSource source,
+                                                      const std::vector<int>& bandIndices,
+                                                      int firstFrame,
+                                                      int lastFrame,
+                                                      juce::String& error)
+{
+    if (bandIndices.size() < 2)
+    {
+        error = "Select at least two bands to redistribute.";
+        return false;
+    }
+
+    const int startFrame = std::min(firstFrame, lastFrame);
+    const int endFrame   = std::max(firstFrame, lastFrame);
+
+    // Pre-read energies so the mutator can reference the per-frame totals.
+    std::map<std::pair<int, int>, double> energyByBandFrame;
+    std::map<int, double> totalEnergyByFrame;
+
+    for (const int band : bandIndices)
+    {
+        for (int frame = startFrame; frame <= endFrame; ++frame)
+        {
+            double db = kResidualDbFloor;
+            if (!readResidualBandEnergyDb(source, band, frame, db))
+            {
+                error = "No residual-band data in the selection.";
+                return false;
+            }
+            const double e = residualDbToEnergy(db);
+            energyByBandFrame[{ band, frame }] = e;
+            totalEnergyByFrame[frame] += e;
+        }
+    }
+
+    const double numBands = static_cast<double>(bandIndices.size());
+    return mutateResidualBandFrames(source,
+                                    bandIndices,
+                                    startFrame,
+                                    endFrame,
+                                    [&totalEnergyByFrame, numBands](int /*band*/, int frame, double& energy) {
+                                        auto it = totalEnergyByFrame.find(frame);
+                                        if (it != totalEnergyByFrame.end())
+                                            energy = it->second / numBands;
                                     },
                                     error);
 }

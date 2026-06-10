@@ -346,6 +346,195 @@ int testUnknownDescriptorRoundTrip()
     return 0;
 }
 
+// ─── Bark centroid model (§8.1) ───────────────────────────────────────────────
+
+int testHzToBarkMonotonic()
+{
+    // Bark must increase monotonically with frequency over the audible range.
+    double prev = ats::hzToBark(20.0);
+    for (double hz = 50.0; hz <= 18000.0; hz *= 1.2)
+    {
+        const double b = ats::hzToBark(hz);
+        if (!(b > prev))
+            return fail("hzToBark should be strictly increasing with frequency");
+        prev = b;
+    }
+    if (!(ats::hzToBark(0.0) == 0.0))
+        return fail("hzToBark(0) should be 0");
+    return 0;
+}
+
+int testSpectralCentroidBark()
+{
+    // All energy at one partial → centroid equals that partial's Bark value.
+    {
+        const std::vector<double> f = { 1000.0 };
+        const std::vector<double> a = { 0.5 };
+        if (!near(ats::spectralCentroidBark(f, a), ats::hzToBark(1000.0), 1.0e-9))
+            return fail("single-partial centroid should equal its Bark value");
+    }
+    // Shifting energy toward higher partials raises the centroid.
+    {
+        const std::vector<double> f = { 200.0, 2000.0 };
+        const std::vector<double> lowHeavy  = { 1.0, 0.1 };
+        const std::vector<double> highHeavy = { 0.1, 1.0 };
+        if (!(ats::spectralCentroidBark(f, highHeavy) > ats::spectralCentroidBark(f, lowHeavy)))
+            return fail("high-weighted spectrum should have a higher Bark centroid");
+    }
+    // No usable energy → 0.
+    {
+        const std::vector<double> f = { 1000.0 };
+        const std::vector<double> a = { 0.0 };
+        if (!near(ats::spectralCentroidBark(f, a), 0.0))
+            return fail("zero-energy spectrum centroid should be 0");
+    }
+    return 0;
+}
+
+int testBrightnessGain()
+{
+    // At the pivot the gain is unity regardless of brightnessDb.
+    if (!near(ats::brightnessGainLinear(1000.0, 6.0, 1000.0), 1.0, 1.0e-9))
+        return fail("brightness gain at pivot should be unity");
+    // Positive brightness boosts highs and cuts lows.
+    if (!(ats::brightnessGainLinear(8000.0, 6.0) > 1.0))
+        return fail("positive brightness should boost highs");
+    if (!(ats::brightnessGainLinear(125.0, 6.0) < 1.0))
+        return fail("positive brightness should attenuate lows");
+    return 0;
+}
+
+int testSolveBrightnessForCentroid()
+{
+    // A log-spaced reference spectrum spanning the audible range.
+    std::vector<double> f, a;
+    for (double hz = 100.0; hz <= 12000.0; hz *= 1.3)
+    {
+        f.push_back(hz);
+        a.push_back(1.0);
+    }
+    const double natural = ats::spectralCentroidBark(f, a);
+
+    // Target = natural → ~0 dB.
+    {
+        const double db = ats::solveBrightnessDbForCentroid(f, a, natural);
+        if (std::abs(db) > 0.25)
+            return fail("solving for the natural centroid should return ~0 dB");
+    }
+    // Target above natural → positive dB, and the achieved centroid matches the target.
+    {
+        const double target = natural + 1.5;
+        const double db = ats::solveBrightnessDbForCentroid(f, a, target);
+        if (!(db > 0.0))
+            return fail("a brighter target should solve to positive brightnessDb");
+        std::vector<double> ga = a;
+        for (std::size_t i = 0; i < f.size(); ++i)
+            ga[i] = a[i] * ats::brightnessGainLinear(f[i], db);
+        const double achieved = ats::spectralCentroidBark(f, ga);
+        if (std::abs(achieved - target) > 0.1)
+            return fail("achieved centroid should converge to the requested target");
+    }
+    // Monotonicity: a higher target solves to a higher (or equal, if clamped) brightnessDb.
+    {
+        const double dbLow  = ats::solveBrightnessDbForCentroid(f, a, natural + 0.5);
+        const double dbHigh = ats::solveBrightnessDbForCentroid(f, a, natural + 2.5);
+        if (!(dbHigh >= dbLow))
+            return fail("higher centroid targets should not solve to lower brightnessDb");
+    }
+    // Unreachable target → clamps to the max.
+    {
+        const double db = ats::solveBrightnessDbForCentroid(f, a, natural + 100.0, -12.0, 12.0);
+        if (!near(db, 12.0, 1.0e-6))
+            return fail("an unreachable bright target should clamp to maxDb");
+    }
+    // Degenerate spectrum (no energy) → 0 dB.
+    {
+        const std::vector<double> ef, ea;
+        if (!near(ats::solveBrightnessDbForCentroid(ef, ea, 10.0), 0.0))
+            return fail("empty spectrum should solve to 0 dB");
+    }
+    return 0;
+}
+
+// ─── Endpoint-aware InterpolateAB (M1.2) ──────────────────────────────────────
+
+int testEndpointInterpolateTiltNoise()
+{
+    ats::TimbreMotionPlan plan;
+    ats::TimbreTargetCurve tilt;
+    tilt.descriptorId = "fitted_envelope.tilt_db_per_oct";
+    tilt.mode         = ats::TimbreTargetMode::InterpolateAB;
+    tilt.enabled      = true;
+    tilt.smoothingMs  = 0.0;
+    tilt.points       = { { 0.0, 0.0, 0 }, { 1.0, 1.0, 0 } };
+    plan.targetCurves.push_back(tilt);
+
+    ats::TimbreTargetCurve noise;
+    noise.descriptorId = "combined.noisiness";
+    noise.mode         = ats::TimbreTargetMode::InterpolateAB;
+    noise.enabled      = true;
+    noise.smoothingMs  = 0.0;
+    noise.points       = { { 0.0, 0.0, 0 }, { 1.0, 1.0, 0 } };
+    plan.targetCurves.push_back(noise);
+
+    ats::TimbreEndpoints ep;
+    ep.hasTilt = true;  ep.tiltDbPerOctA = -2.0; ep.tiltDbPerOctB = 4.0;
+    ep.hasNoise = true; ep.noiseBalanceA = 0.2;  ep.noiseBalanceB = 0.8;
+
+    ats::CompiledTimbrePlan compiled(plan, 1.0e9);
+
+    // At t=0 the curve is 0 → endpoint A; at t=1 → endpoint B; midpoint → mean.
+    const auto r0 = compiled.evaluate(0.0, 0.0, 0.0, 0.5, ep);
+    if (!near(r0.tiltDbPerOct, -2.0, 0.01) || !near(r0.noiseBalance, 0.2, 0.01))
+        return fail("endpoint InterpolateAB at t=0 should equal source A descriptors");
+
+    ats::CompiledTimbrePlan compiled2(plan, 1.0e9);
+    const auto r1 = compiled2.evaluate(1.0, 0.0, 0.0, 0.5, ep);
+    if (!near(r1.tiltDbPerOct, 4.0, 0.01) || !near(r1.noiseBalance, 0.8, 0.01))
+        return fail("endpoint InterpolateAB at t=1 should equal source B descriptors");
+    return 0;
+}
+
+int testEndpointCentroidSolver()
+{
+    ats::TimbreMotionPlan plan;
+    ats::TimbreTargetCurve tc;
+    tc.descriptorId = "combined.centroid_axis";
+    tc.mode         = ats::TimbreTargetMode::InterpolateAB;
+    tc.enabled      = true;
+    tc.smoothingMs  = 0.0;
+    tc.points       = { { 0.0, 0.0, 0 }, { 1.0, 1.0, 0 } };
+    plan.targetCurves.push_back(tc);
+
+    ats::CompiledTimbrePlan compiled(plan, 1.0e9);
+    if (!compiled.needsCentroidEndpoints())
+        return fail("plan with centroid InterpolateAB curve should request endpoints");
+
+    // Reference spectrum + measured endpoints A (darker) / B (brighter).
+    std::vector<double> f, a;
+    for (double hz = 100.0; hz <= 12000.0; hz *= 1.3) { f.push_back(hz); a.push_back(1.0); }
+    const double natural = ats::spectralCentroidBark(f, a);
+
+    ats::TimbreEndpoints ep;
+    ep.hasCentroid = true;
+    ep.centroidBarkA = natural - 1.0;
+    ep.centroidBarkB = natural + 1.0;
+    ep.refFreqsHz = &f;
+    ep.refAmps    = &a;
+
+    // At t=1 the requested centroid is barkB (= natural + 1) → positive brightnessDb whose
+    // applied gain lands the reference centroid at the requested value.
+    const auto r1 = compiled.evaluate(1.0, 0.0, 0.0, 0.5, ep);
+    if (!(r1.brightnessDb > 0.0))
+        return fail("brighter centroid endpoint should solve to positive brightnessDb");
+    std::vector<double> ga = a;
+    for (std::size_t i = 0; i < f.size(); ++i)
+        ga[i] = a[i] * ats::brightnessGainLinear(f[i], r1.brightnessDb);
+    if (std::abs(ats::spectralCentroidBark(f, ga) - ep.centroidBarkB) > 0.15)
+        return fail("solved brightness should place reference centroid at endpoint B");
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -364,6 +553,12 @@ int main()
     result |= testFollowNaturalMode();
     result |= testOffsetNaturalMode();
     result |= testUnknownDescriptorRoundTrip();
+    result |= testHzToBarkMonotonic();
+    result |= testSpectralCentroidBark();
+    result |= testBrightnessGain();
+    result |= testSolveBrightnessForCentroid();
+    result |= testEndpointInterpolateTiltNoise();
+    result |= testEndpointCentroidSolver();
 
     if (result == 0)
         std::cout << "All timbre_motion_plan tests passed.\n";

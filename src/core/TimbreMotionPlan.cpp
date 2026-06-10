@@ -81,6 +81,105 @@ static double clampBrightness(double v) { return std::max(kBrightnessMin, std::m
 static double clampTilt(double v)       { return std::max(kTiltMin,       std::min(kTiltMax,       v)); }
 static double clampNoise(double v)      { return std::max(kNoiseMin,      std::min(kNoiseMax,      v)); }
 
+// ─── Spectral centroid model + brightness solver (§8.1) ───────────────────────
+
+double hzToBark(double hz) noexcept
+{
+    if (!(hz > 0.0))
+        return 0.0;
+    // Traunmüller (1990) analytic Hz→Bark, with the standard low/high corrections.
+    double bark = (26.81 * hz) / (1960.0 + hz) - 0.53;
+    if (bark < 2.0)
+        bark += 0.15 * (2.0 - bark);
+    else if (bark > 20.1)
+        bark += 0.22 * (bark - 20.1);
+    return bark;
+}
+
+double spectralCentroidBark(const std::vector<double>& freqsHz,
+                            const std::vector<double>& amps) noexcept
+{
+    const std::size_t n = std::min(freqsHz.size(), amps.size());
+    double weightedSum = 0.0;
+    double energySum   = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double f = freqsHz[i];
+        const double a = amps[i];
+        if (!std::isfinite(f) || !std::isfinite(a) || f <= 0.0 || a <= 0.0)
+            continue;
+        const double power = a * a; // energy weighting
+        weightedSum += power * hzToBark(f);
+        energySum   += power;
+    }
+    return energySum > 0.0 ? weightedSum / energySum : 0.0;
+}
+
+double brightnessGainLinear(double freqHz, double brightnessDb, double pivotHz) noexcept
+{
+    if (!(freqHz > 0.0) || !(pivotHz > 0.0) || std::abs(brightnessDb) < 1.0e-12)
+        return 1.0;
+    const double oct = std::log2(freqHz / pivotHz);
+    const double gainDb = brightnessDb * std::tanh(oct / 3.0);
+    return std::pow(10.0, gainDb / 20.0);
+}
+
+// Centroid (Bark) of the spectrum after applying a candidate brightnessDb gain.
+static double centroidWithBrightness(const std::vector<double>& freqsHz,
+                                     const std::vector<double>& amps,
+                                     double brightnessDb,
+                                     double pivotHz) noexcept
+{
+    const std::size_t n = std::min(freqsHz.size(), amps.size());
+    double weightedSum = 0.0;
+    double energySum   = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double f = freqsHz[i];
+        const double a = amps[i];
+        if (!std::isfinite(f) || !std::isfinite(a) || f <= 0.0 || a <= 0.0)
+            continue;
+        const double g = brightnessGainLinear(f, brightnessDb, pivotHz);
+        const double power = (a * g) * (a * g);
+        weightedSum += power * hzToBark(f);
+        energySum   += power;
+    }
+    return energySum > 0.0 ? weightedSum / energySum : 0.0;
+}
+
+double solveBrightnessDbForCentroid(const std::vector<double>& freqsHz,
+                                    const std::vector<double>& amps,
+                                    double targetBark,
+                                    double minDb,
+                                    double maxDb,
+                                    double pivotHz,
+                                    int iterations) noexcept
+{
+    // centroid(minDb) <= centroid(maxDb) since higher brightnessDb monotonically raises the
+    // centroid. If the target lies outside [centroidLo, centroidHi] it is unreachable → clamp.
+    const double centroidLo = centroidWithBrightness(freqsHz, amps, minDb, pivotHz);
+    const double centroidHi = centroidWithBrightness(freqsHz, amps, maxDb, pivotHz);
+    if (centroidHi <= centroidLo) // no usable energy or degenerate spectrum
+        return 0.0;
+    if (targetBark <= centroidLo)
+        return minDb;
+    if (targetBark >= centroidHi)
+        return maxDb;
+
+    double lo = minDb;
+    double hi = maxDb;
+    for (int it = 0; it < iterations; ++it)
+    {
+        const double mid = 0.5 * (lo + hi);
+        const double c = centroidWithBrightness(freqsHz, amps, mid, pivotHz);
+        if (c < targetBark)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
 // ─── CompiledTimbrePlan ───────────────────────────────────────────────────────
 
 CompiledTimbrePlan::CompiledTimbrePlan(const TimbreMotionPlan& plan, double chunkRateHz)
@@ -124,6 +223,31 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
                                                 double apvtsTiltDbPerOct,
                                                 double apvtsNoiseBalance)
 {
+    return evaluate(timeNorm, apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance, TimbreEndpoints{});
+}
+
+bool CompiledTimbrePlan::needsCentroidEndpoints() const
+{
+    for (const auto& tc : plan_.targetCurves)
+        if (tc.enabled && !tc.points.empty()
+            && std::string_view(tc.descriptorId) == kDescCentroidAxis
+            && (tc.mode == TimbreTargetMode::InterpolateAB
+                || tc.mode == TimbreTargetMode::AbsoluteTarget))
+            return true;
+    for (const auto& macro : plan_.macros)
+        if (macro.enabled)
+            for (const auto& route : macro.routes)
+                if (std::string_view(route.targetDescriptorId) == kDescCentroidAxis)
+                    return true;
+    return false;
+}
+
+TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
+                                                double apvtsBrightnessDb,
+                                                double apvtsTiltDbPerOct,
+                                                double apvtsNoiseBalance,
+                                                const TimbreEndpoints& endpoints)
+{
     // Empty plan: bit-identical to pre-motion behavior (INV-1).
     if (plan_.empty())
         return { apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance };
@@ -137,6 +261,26 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
     bool centroidHandled = false;
     bool tiltHandled     = false;
     bool noiseHandled    = false;
+
+    const auto clamp01 = [](double v) { return std::max(0.0, std::min(1.0, v)); };
+    const auto lerp    = [](double a, double b, double t) { return a + (b - a) * t; };
+
+    // InterpolateAB / AbsoluteTarget brightness: use measured endpoints + the §8.1 solver when a
+    // reference spectrum is available, otherwise fall back to the bounded heuristic gain mapping.
+    const auto centroidBrightnessFor = [&](double cAmount) -> double
+    {
+        const double c01 = clamp01(cAmount);
+        if (endpoints.hasCentroid)
+        {
+            const double requestedBark = lerp(endpoints.centroidBarkA, endpoints.centroidBarkB, c01);
+            if (endpoints.refFreqsHz != nullptr && endpoints.refAmps != nullptr
+                && !endpoints.refFreqsHz->empty())
+                return clampBrightness(solveBrightnessDbForCentroid(
+                    *endpoints.refFreqsHz, *endpoints.refAmps, requestedBark,
+                    kBrightnessMin, kBrightnessMax));
+        }
+        return clampBrightness(centroidAxisToDb(c01)); // analyzer-free heuristic
+    };
 
     // Priority 1: enabled target curves (highest priority).
     for (std::size_t i = 0; i < plan_.targetCurves.size(); ++i)
@@ -162,7 +306,7 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
                     break; // no change; natural passes through
                 case TimbreTargetMode::InterpolateAB:
                 case TimbreTargetMode::AbsoluteTarget:
-                    brightnessDb = clampBrightness(centroidAxisToDb(c * tc.depth));
+                    brightnessDb = centroidBrightnessFor(c * tc.depth);
                     centroidHandled = true;
                     break;
                 case TimbreTargetMode::OffsetNatural:
@@ -183,7 +327,9 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
                     break;
                 case TimbreTargetMode::InterpolateAB:
                 case TimbreTargetMode::AbsoluteTarget:
-                    tiltDbPerOct = clampTilt(centroidAxisTiltToDb(c * tc.depth));
+                    tiltDbPerOct = endpoints.hasTilt
+                        ? clampTilt(lerp(endpoints.tiltDbPerOctA, endpoints.tiltDbPerOctB, clamp01(c * tc.depth)))
+                        : clampTilt(centroidAxisTiltToDb(c * tc.depth));
                     tiltHandled = true;
                     break;
                 case TimbreTargetMode::OffsetNatural:
@@ -204,7 +350,9 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
                     break;
                 case TimbreTargetMode::InterpolateAB:
                 case TimbreTargetMode::AbsoluteTarget:
-                    noiseBalance = clampNoise(centroidAxisToNoise(c * tc.depth));
+                    noiseBalance = endpoints.hasNoise
+                        ? clampNoise(lerp(endpoints.noiseBalanceA, endpoints.noiseBalanceB, clamp01(c * tc.depth)))
+                        : clampNoise(centroidAxisToNoise(c * tc.depth));
                     noiseHandled = true;
                     break;
                 case TimbreTargetMode::OffsetNatural:
@@ -243,20 +391,23 @@ TimbreRenderParams CompiledTimbrePlan::evaluate(double timeNorm,
             // Macro routes only fire if no direct target curve is active for this descriptor.
             if (rid == kDescCentroidAxis && !centroidHandled)
             {
-                const double c = std::max(0.0, std::min(1.0, macroEffect * route.depth));
-                brightnessDb = clampBrightness(centroidAxisToDb(c));
+                brightnessDb = centroidBrightnessFor(macroEffect * route.depth);
                 centroidHandled = true;
             }
             else if (rid == kDescTiltDbPerOct && !tiltHandled)
             {
                 const double c = std::max(0.0, std::min(1.0, macroEffect * route.depth));
-                tiltDbPerOct = clampTilt(centroidAxisTiltToDb(c));
+                tiltDbPerOct = endpoints.hasTilt
+                    ? clampTilt(lerp(endpoints.tiltDbPerOctA, endpoints.tiltDbPerOctB, c))
+                    : clampTilt(centroidAxisTiltToDb(c));
                 tiltHandled = true;
             }
             else if (rid == kDescNoisiness && !noiseHandled)
             {
                 const double c = std::max(0.0, std::min(1.0, macroEffect * route.depth));
-                noiseBalance = clampNoise(centroidAxisToNoise(c));
+                noiseBalance = endpoints.hasNoise
+                    ? clampNoise(lerp(endpoints.noiseBalanceA, endpoints.noiseBalanceB, c))
+                    : clampNoise(centroidAxisToNoise(c));
                 noiseHandled = true;
             }
         }

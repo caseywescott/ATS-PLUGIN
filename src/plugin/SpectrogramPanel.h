@@ -100,6 +100,11 @@ private:
     void refreshHoveredDbReadout();
     void applyResidualDbFromEditor();
     void commitEnvelopeDraw();
+    void commitPartialFreqDraw();
+    void runPartialTilt();
+    void runPartialSolo();
+    void runPartialFreeze();
+    void runPartialPrune();
     void runSmoothEnvelope();
     [[nodiscard]] bool isEnvelopeDisplayMode() const
     {
@@ -120,6 +125,7 @@ private:
     void runCopyBand();
     void runPasteBand();
     void runSwapBands();
+    void runRedistBands();
     void showResidualEditError(const juce::String& error);
     [[nodiscard]] double dbFromPlotYInBand(int bandIndex, float y, juce::Rectangle<float> plot) const;
     [[nodiscard]] juce::Rectangle<float> getBandLabelGutterBounds() const;
@@ -191,6 +197,12 @@ private:
     juce::TextButton deleteButton { "Delete" };
     juce::Label selectionLabel;
 
+    juce::ToggleButton partialFreqDrawButton { "Draw" };
+    juce::TextButton partialSoloButton { "Solo" };
+    juce::TextButton partialFreezeButton { "Freeze" };
+    juce::TextButton partialPruneButton { "Prune" };
+    juce::Slider partialTiltSlider;
+    juce::TextButton partialTiltButton { "Tilt" };
     juce::ToggleButton residualDrawButton { "Draw" };
     juce::TextButton residualSmoothButton { "Smooth" };
     juce::Slider residualTiltSlider;
@@ -198,6 +210,7 @@ private:
     juce::TextButton residualCopyButton { "Copy" };
     juce::TextButton residualPasteButton { "Paste" };
     juce::TextButton residualSwapButton { "Swap" };
+    juce::TextButton residualRedistButton { "Redist" };
     juce::Label residualDbLabel;
     juce::TextEditor residualDbEditor;
 
@@ -250,6 +263,9 @@ private:
     bool drawingResidualEnvelope = false;
     int envelopeDrawBand = -1;
     std::vector<std::pair<int, double>> envelopeDrawPoints;
+    bool drawingPartialFreq = false;
+    int partialFreqDrawPartial = -1;
+    std::vector<std::pair<int, double>> partialFreqDrawPoints;
     bool residualDbEditorActive = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpectrogramPanel)

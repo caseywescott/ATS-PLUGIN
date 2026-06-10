@@ -952,15 +952,30 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphSmoothingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     morphSmoothingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 54, 18);
     morphSmoothingSlider.setName("Morph smoothing");
-    resetMorphLanesButton.setHelpText("Link every morph lane to the main morph control.");
-    resetMorphLanesButton.onClick = [this] { resetMorphLanesToLinked(); };
-    controlsContent.addAndMakeVisible(morphSmoothingLabel);
-    controlsContent.addAndMakeVisible(morphSmoothingSlider);
-    controlsContent.addAndMakeVisible(resetMorphLanesButton);
     ats_ui::applySliderHint(morphSmoothingSlider,
-                            "Control smoothing time in milliseconds for live morph lanes.");
+                            "Smoothing time in milliseconds applied to the morph trajectory during render.");
     morphSmoothingAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.apvts, ats_param::kMorphSmoothingMs, morphSmoothingSlider);
+    controlsContent.addAndMakeVisible(morphSmoothingLabel);
+    controlsContent.addAndMakeVisible(morphSmoothingSlider);
+
+    morphMacroLabel.setText("Depth", juce::dontSendNotification);
+    morphMacroLabel.setJustificationType(juce::Justification::centredLeft);
+    morphMacroLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphMacroSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    morphMacroSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 42, 18);
+    morphMacroSlider.setName("Morph depth macro");
+    ats_ui::applySliderHint(morphMacroSlider,
+                            "Morph depth (0=frozen at midpoint, 0.5=normal, 1=exaggerated). Scales how far "
+                            "the morph position deviates from the midpoint during render.");
+    morphMacroAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.apvts, ats_param::kMorphPerformanceMacro, morphMacroSlider);
+    controlsContent.addAndMakeVisible(morphMacroLabel);
+    controlsContent.addAndMakeVisible(morphMacroSlider);
+
+    resetMorphLanesButton.setHelpText("Link every morph lane to the main morph control.");
+    resetMorphLanesButton.onClick = [this] { resetMorphLanesToLinked(); };
+    controlsContent.addAndMakeVisible(resetMorphLanesButton);
 
     for (size_t i = 0; i < morphLaneLabels.size(); ++i)
     {
@@ -1760,7 +1775,10 @@ void SessionTabPanel::resized()
         auto laneArea = body.removeFromTop(laneH);
         auto laneHeader = laneArea.removeFromTop(sc(24));
         morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
-        morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(160)));
+        morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(130)));
+        laneHeader.removeFromLeft(sc(4));
+        morphMacroLabel.setBounds(laneHeader.removeFromLeft(sc(44)));
+        morphMacroSlider.setBounds(laneHeader.removeFromLeft(sc(110)));
         laneHeader.removeFromLeft(sc(6));
         resetMorphLanesButton.setBounds(laneHeader.removeFromLeft(sc(92)));
         laneArea.removeFromTop(sc(2));
@@ -1868,6 +1886,8 @@ void SessionTabPanel::hideMorphCluster()
 {
     morphSmoothingLabel.setBounds({});
     morphSmoothingSlider.setBounds({});
+    morphMacroLabel.setBounds({});
+    morphMacroSlider.setBounds({});
     resetMorphLanesButton.setBounds({});
     for (size_t i = 0; i < morphLaneLabels.size(); ++i)
     {

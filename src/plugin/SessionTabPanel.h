@@ -191,6 +191,8 @@ private:
     juce::TextButton morphTimelineResetButton { "Reset" };
     juce::Label morphSmoothingLabel;
     juce::Slider morphSmoothingSlider;
+    juce::Label morphMacroLabel;
+    juce::Slider morphMacroSlider;
     juce::TextButton resetMorphLanesButton { "Link lanes" };
     juce::Label morphPolicyLabel;
     juce::ComboBox morphGridTypeCombo;
@@ -287,6 +289,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> resGainAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphSmoothingAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphMacroAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphGridTypeAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphCorrespondenceAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> morphQualityAttach;

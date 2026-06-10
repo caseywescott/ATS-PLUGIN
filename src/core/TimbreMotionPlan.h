@@ -99,6 +99,55 @@ struct TimbreMotionPlan
 [[nodiscard]] double sampleTimbreCurve(const std::vector<TimbreMotionPoint>& points,
                                        double timeNorm) noexcept;
 
+// ─── Spectral centroid model + brightness solver (§8.1) ───────────────────────
+
+// Hz → Bark (Traunmüller 1990). Monotonic; used as the perceptual "centroid axis".
+[[nodiscard]] double hzToBark(double hz) noexcept;
+
+// Energy-weighted spectral centroid on the Bark axis for a partial spectrum.
+// freqsHz and amps are parallel; entries with non-finite/non-positive values are skipped.
+// Returns 0.0 when there is no usable energy.
+[[nodiscard]] double spectralCentroidBark(const std::vector<double>& freqsHz,
+                                          const std::vector<double>& amps) noexcept;
+
+// Multiplicative brightness gain (linear) at freqHz for a tanh-bounded dB tilt about pivotHz.
+// Mirrors the render post-pass exactly: gainDb = brightnessDb * tanh(log2(f/pivot) / 3).
+// Positive brightnessDb boosts highs and cuts lows, raising the centroid; negative lowers it.
+[[nodiscard]] double brightnessGainLinear(double freqHz, double brightnessDb,
+                                          double pivotHz = 1000.0) noexcept;
+
+// Bisection solve (§8.1): find brightnessDb in [minDb, maxDb] so the centroid of the
+// brightness-weighted spectrum is as close as possible to targetBark. The centroid is monotonic
+// in brightnessDb, so bisection converges; the result clamps to the range when targetBark is
+// unreachable. Returns 0.0 when the spectrum has no usable energy.
+[[nodiscard]] double solveBrightnessDbForCentroid(const std::vector<double>& freqsHz,
+                                                  const std::vector<double>& amps,
+                                                  double targetBark,
+                                                  double minDb = -12.0,
+                                                  double maxDb = 12.0,
+                                                  double pivotHz = 1000.0,
+                                                  int iterations = 48) noexcept;
+
+// ─── Measured descriptor endpoints (Stage 1/2 context) ───────────────────────
+
+// Measured descriptor values on source A and B, used by InterpolateAB / AbsoluteTarget modes so
+// the curve interpolates between the two sounds' real descriptors (spec §5) instead of the full
+// parameter range. Any field left unset falls back to the v1 full-range heuristic for that
+// descriptor, so an empty context reproduces the analyzer-free behavior exactly (INV-1).
+struct TimbreEndpoints
+{
+    bool   hasCentroid   = false; double centroidBarkA = 0.0, centroidBarkB = 0.0;
+    bool   hasTilt       = false; double tiltDbPerOctA  = 0.0, tiltDbPerOctB  = 0.0;
+    bool   hasNoise      = false; double noiseBalanceA  = 0.0, noiseBalanceB  = 0.0;
+
+    // Optional reference spectrum for the centroid brightness solver (§8.1). When provided, a
+    // centroid InterpolateAB/AbsoluteTarget curve solves for the brightnessDb that places this
+    // spectrum's centroid at the requested Bark value; otherwise the requested centroid maps
+    // through the bounded heuristic gain.
+    const std::vector<double>* refFreqsHz = nullptr;
+    const std::vector<double>* refAmps    = nullptr;
+};
+
 // ─── Compiled plan (stateful per-render) ─────────────────────────────────────
 
 // Pre-compiled plan ready for per-chunk evaluation in a single render pass.
@@ -117,6 +166,20 @@ public:
                                               double apvtsBrightnessDb,
                                               double apvtsTiltDbPerOct,
                                               double apvtsNoiseBalance);
+
+    // Endpoint-aware evaluation: InterpolateAB / AbsoluteTarget modes interpolate the measured
+    // source A/B descriptors in `endpoints` when present. Falls back to the analyzer-free
+    // heuristic per descriptor when the corresponding endpoint is unset.
+    [[nodiscard]] TimbreRenderParams evaluate(double timeNorm,
+                                              double apvtsBrightnessDb,
+                                              double apvtsTiltDbPerOct,
+                                              double apvtsNoiseBalance,
+                                              const TimbreEndpoints& endpoints);
+
+    // True when any enabled curve (or macro route) drives combined.centroid_axis in a mode that
+    // benefits from a measured reference spectrum (InterpolateAB / AbsoluteTarget). Lets the
+    // render skip building source centroids/spectra when they are not needed.
+    [[nodiscard]] bool needsCentroidEndpoints() const;
 
     [[nodiscard]] bool empty() const { return plan_.empty(); }
 

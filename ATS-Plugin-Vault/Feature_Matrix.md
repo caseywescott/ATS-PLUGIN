@@ -23,7 +23,7 @@ ATS models sound as **sinusoidal partial tracks** plus **stochastic Bark-band no
 
 **Main render reads:** timeline **Morph** amount; **Hybrid** / **EnvelopeMorph** breakpoints; correspondence (rank, greedy, assignment matrix + per-chunk `reassignCorrespondenceByLogFrequency`); frequency shaping on A/B; Bark/True Envelope transfer via `applySpectralEnvelopeTransfer` + `resolveHybridizedPartialRender`; residual band morph with envelope transfer + `softCapEnvelopeBoost`; transient **onset offset only** (`maxOnsetAlignmentOffsetSeconds`); per-lane morph amounts (Frequency, Amplitude, ResidualNoise lanes via `evaluateMorphLaneAmount`); interpolation domains (`HybridizeDomains`: Bark vs log freq, dB vs equal-power amplitude); per-chunk timbre motion (`CompiledTimbrePlan` brightness/tilt/noise).
 
-**Still snapshot-only:** phase strategy, transient policy, unmatched policies, performance macro, smoothing, Time lane. See [Priority queue](#priority-queue).
+**Still snapshot-only:** phase strategy, transient policy, Transient lane. (Performance macro, control smoothing, the Time lane, and unmatched-partial policies — fade/hold/discard/merge-into-residual — are now wired into `renderMorphTrajectoryBuffer`.) See [Priority queue](#priority-queue).
 
 ```mermaid
 flowchart TD
@@ -74,7 +74,7 @@ flowchart TD
 
 - **Smearnov (Jun 2026):** five flux detectors, editable overlay, live transport preview, Apply bake. RPCA toggle is **disabled** (not implemented).
 - **Spectral envelope morph (Jun 2026):** True Envelope + Bark, de-color/apply, formant-aligned blend; timeline Hybrid + EnvelopeMorph; Iso 3D Envelope / Env (RDC) display viz (`rdcDisplay::fitRDC`). Offline **Smooth Spectral Envelope** edit via `reimposeRdcEnvelopeFrame`. Full production RDC estimator stack lives in worktree only — [[Spectral Envelope - PRD Summary]].
-- **Morph lane curves (Jun 2026):** per-lane `MorphCurveShape` (linear/ease in/out/in-out) in recipe, preset, and snapshot eval; **not** wired to main render yet.
+- **Morph lane curves (Jun 2026):** per-lane `MorphCurveShape` (linear/ease in/out/in-out) in recipe, preset, and snapshot eval; wired into main render for Frequency/Amplitude/ResidualNoise/Time lanes via `evaluateMorphLaneAmount`.
 - **Frequency shaping + Bark residual editor (May 2026):** Synthesis warp + morph render; spectrogram residual edit toolbar.
 - **GCV λ baselines (worktree, Jun 2026):** opt-in Stage 1 baseline recorded in `SPECTRAL_ENVELOPE_BASELINES_GCV.md`; fixed-λ New RDC beats Bark on 55% of ATSA reference frames; GCV is **not a promotion candidate** (dense-clean C++ gate still open).
 
@@ -118,10 +118,10 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | ------- | ----------- | ------ | -------- |
 | Time stretch | Temporal rescale, fixed pitch | **Done** | Synthesis `timeStretch` |
 | Time compression | Shorten duration | **Done** | Same control (< 1.0) |
-| Spectral freeze | Hold partial state | **Not started** | — |
-| Temporal interpolation | Morph between states | **Partial** | Morph timeline + lane eval in snapshot; Time lane not in main render |
+| Spectral freeze | Hold partial state | **Done** | Freeze button copies center-frame spectrum to all frames; Ctrl+click/drag scrubs preview position (Jun 2026) |
+| Temporal interpolation | Morph between states | **Done** | Morph timeline + lane eval in snapshot; Time lane scales onset-alignment in render |
 | Trajectory resampling | Different temporal rate | **Partial** | Via time factor + hop; no dedicated tool |
-| Scrubbing | Non-linear traversal | **Partial** | Playhead during preview only |
+| Scrubbing | Non-linear traversal | **Done** | Playhead during preview; Ctrl+click/drag seeks buffer position (Jun 2026) |
 | Onset detection | Find attacks in model | **Done** | Smearnov D1–D5; overlay + markers |
 | Attack smearing | Blur/sharpen/exaggerate attacks | **Done** | Smearnov macro; live preview; Apply bake |
 
@@ -134,7 +134,7 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Gain scaling | Global levels | **Done** | `partGain`, `resGain`, `outputTrim` |
 | Partial gain scaling | Selected traces | **Partial** | Spectrogram vertical drag scale |
 | Envelope remapping | Trajectory reshape | **Partial** | MathExpr; Partials tab; residual band draw |
-| Spectral tilt | Brightness emphasis | **Partial** | Residual Tilt; not on partial traces |
+| Spectral tilt | Brightness emphasis | **Done** | Residual Tilt (bands); Partial Tilt (dB/oct on partial amps, Jun 2026) |
 | Harmonic weighting | Harmonic balance | **Not started** | — |
 | Spectral envelope estimation | Fit envelope over partials | **Partial** | `BarkSpectralEnvelope`; display-only `rdcDisplay::fitRDC`; offline `reimposeRdcEnvelopeFrame`; worktree `RegularizedCepstrum` (pre-merge) |
 | Spectral envelope transfer | De-color + apply target | **Partial** | `applySpectralEnvelopeTransfer`, `FormantAlignedEnvelopeMorph`, `softCapEnvelopeBoost`; Hybrid timeline; morph render on partials + bands |
@@ -149,7 +149,7 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Noise-only resynthesis | Stochastic alone | **Done** | Audition Residual |
 | Harmonic-only resynthesis | Partials alone | **Done** | Audition Partials |
 | Noise scaling | Band levels | **Done** | `resGain`; drag scale; per-cell dB on `band_energy` |
-| Noise redistribution | Move energy between bands | **Partial** | Copy/paste/swap band clipboard |
+| Noise redistribution | Move energy between bands | **Done** | Copy/paste/swap band clipboard + auto-equalize (Redist button) |
 | Noise morphing | Interpolate noise structures | **Partial** | Residual crossfade + envelope transfer in render; Noise lane = snapshot only |
 | Residual manipulation | Direct band edit | **Done** | Lasso, draw, smooth, tilt, clipboard; `mutateResidualBandFrames` |
 
@@ -160,10 +160,10 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Feature | Description | Status | Evidence |
 | ------- | ----------- | ------ | -------- |
 | Partial deletion | Remove tracks | **Done** | Delete → `mutePartials` |
-| Partial isolation | Solo trajectories | **Partial** | Multi-select + audition; no solo button |
+| Partial isolation | Solo trajectories | **Done** | Multi-select + Solo button → isolated preview (Jun 2026) |
 | Partial cloning | Duplicate structure | **Not started** | — |
-| Partial group editing | Harmonic groups | **Partial** | Lasso multi-partial ops |
-| Spectral pruning | Low-SMR removal | **Partial** | At analysis via SMR thresholds |
+| Partial group editing | Harmonic groups | **Done** | Lasso multi-partial ops + 'H' key selects all harmonics of hovered partial (±50 cents) |
+| Spectral pruning | Low-SMR removal | **Done** | At analysis via SMR thresholds + Prune button (select by peak amplitude % threshold) |
 | Harmonic extraction | Subset isolation | **Not started** | — |
 
 ---
@@ -175,7 +175,7 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Spectral interpolation | Blend trajectories | **Done** | `renderMorphTrajectoryBuffer` + timeline Morph amount |
 | Timbre morphing | A↔B transition | **Partial** | Dual slots, timeline, bounce, lane curves in snapshot; lane UI ahead of main render |
 | Formant-aligned envelope morph | Formant-warped blend | **Partial** | `FormantAlignedEnvelopeMorph`; EnvelopeMorph timeline in render |
-| Partial replacement | Unmatched partial policies | **Partial** | Policy combos + snapshot; main render uses `resolveHybridizedPartialRender` (in-place crossfade, no glide) |
+| Partial replacement | Unmatched partial policies | **Done** | Policy combos + snapshot; main render applies fade-out/in, hold, discard, and merge-into-residual (power rerouted to nearest band) |
 | Noise transfer | Borrow stochastic model | **Partial** | Residual morph + Hybrid on bands |
 | Cross-synthesis | Multi-property merge | **Partial** | Timeline envelope kinds; lanes snapshot-only |
 | Multi-sound hybridization | More than two sources | **Not started** | A and B only |
@@ -197,7 +197,7 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 
 | Feature | Description | Status | Evidence |
 | ------- | ----------- | ------ | -------- |
-| Trajectory editing | Draw/edit paths | **Partial** | Partials: scale/delete; residual: envelope draw |
+| Trajectory editing | Draw/edit paths | **Partial** | Partials: scale/delete, **freq draw** (Jun 2026); residual: envelope draw |
 | Spectral visualization | Trace views | **Done** | `SpectrogramPanel` modes |
 | Envelope visualization | Envelope surfaces | **Partial** | Iso 3D Envelope / Env (RDC) display fit; worktree envelope workspace panel (pre-merge) |
 | Noise visualization | Stochastic view | **Done** | Residual modes + Hz gutter |
@@ -227,10 +227,10 @@ Formant-preserving pitch; partial freq drawing; RT oscillator bank in `processBl
 | Classic Both playback | Combined vs sum | **Done** | Synthesis Both playback mode |
 | Smearnov detection overlay | Detector curves | **Done** | Spectrogram overlay |
 | Spectrogram view modes | Seven layouts | **Done** | Combined through Iso Env (RDC); Current/A/B |
-| Per-lane morph controls | Six lanes + curves | **Partial** | UI + recipe + snapshot + main render for Freq/Amp/Noise lanes (`evaluateMorphLaneAmount`, `MorphCurveShape`, `HybridizeDomains`); Time/Phase/Transient lanes snapshot-only |
+| Per-lane morph controls | Six lanes + curves | **Partial** | UI + recipe + snapshot + main render for Freq/Amp/Noise lanes (`evaluateMorphLaneAmount`, `MorphCurveShape`, `HybridizeDomains`); Time lane scales onset-alignment; Phase lane seeds phasors; Transient lane snapshot-only |
 | Morph amount (macro) | Global blend | **Done** | kMorphAmount; constant morph preview |
-| Morph performance macro | Macro feel | **Partial** | APVTS/preset only; no Session control |
-| Morph control smoothing | De-click | **Partial** | Session slider; not in render |
+| Morph performance macro | Macro feel | **Done** | Session "Depth" slider; scales morph deviation from midpoint in render |
+| Morph control smoothing | De-click | **Done** | Session slider; one-pole IIR applied per chunk in `renderMorphTrajectoryBuffer` |
 | MathExpr offline transforms | Script edits | **Done** | Math tab, worker thread |
 
 ---
@@ -258,17 +258,17 @@ Ordered by musical payoff and dependency. Items with UI already present are fini
 
 | Prio | Milestone | Status today |
 | ---- | --------- | ------------ |
-| **P0** | Wire morph lanes + policies + curves into `renderMorphTrajectoryBuffer` | **Partial** (Freq/Amp/Noise lanes + interpolation domains wired Jun 2026; Time/Phase/Transient + unmatched policies still snapshot-only) |
+| **P0** | Wire morph lanes + policies + curves into `renderMorphTrajectoryBuffer` | **Partial** (Freq/Amp/Noise/Time lanes + interpolation domains wired Jun 2026; Phase lane seeds phasors; Transient + unmatched policies still snapshot-only) |
 | **P0** | Real-time morph preview (no full re-bounce per tweak) | **Partial** (auto-rerender: 350 ms debounced re-render fires automatically after first user play; live oscillator bank deferred) |
 | **P0** | Morph fixture audio + metric CI | **Partial** (`asset_status: placeholder`; smoke harness only) |
 | **P1** | Merge worktree RDC into main morph path + envelope UX | **Partial** (worktree R&D feature-complete; fixed-λ default, GCV opt-in only) |
-| **P1** | Partial trajectory draw/edit (freq vs time) | **Partial** |
-| **P1** | Spectral freeze + scrub-driven preview | **Not started** / **Partial** |
-| **P2** | Noise redistribution (auto / drag between bands) | **Partial** |
-| **P2** | Partial solo + harmonic group ops | **Partial** |
-| **P2** | Spectral tilt on partial traces | **Partial** |
+| **P1** | Partial trajectory draw/edit (freq vs time) | **Done** (Jun 2026) |
+| **P1** | Spectral freeze + scrub-driven preview | **Done** (Jun 2026) |
+| **P2** | Noise redistribution (auto / drag between bands) | **Done** (Jun 2026) |
+| **P2** | Partial solo + harmonic group ops | **Done** (Jun 2026) |
+| **P2** | Spectral tilt on partial traces | **Done** (Jun 2026) |
 | **P2** | Arbitrary spectral-warp maps | **Partial** |
-| **P2** | Morph macro + smoothing in render | **Partial** |
+| **P2** | Morph macro + smoothing in render | **Done** (Jun 2026) |
 | **P2** | Multi-source hybrid (>2) | **Not started** |
 | **P3** | Partial cloning | **Not started** |
 | **P3** | Perceptual resynthesis | **Not started** |

@@ -441,6 +441,14 @@ public:
                                    int lastFrame,
                                    const std::vector<std::pair<int, double>>& frameDbPairs,
                                    juce::String& error);
+    /** Write a drawn frequency contour onto one partial across a frame range.
+        Only frames where the partial is active (amplitude > 0) are touched. */
+    bool paintPartialFrequency(AtsTraceSource source,
+                               int partialIdx,
+                               int firstFrame,
+                               int lastFrame,
+                               const std::vector<std::pair<int, double>>& frameHzPairs,
+                               juce::String& error);
     bool smoothResidualBands(AtsTraceSource source,
                              const std::vector<int>& bandIndices,
                              int firstFrame,
@@ -453,6 +461,16 @@ public:
                            int lastFrame,
                            double tiltDbPerBandStep,
                            juce::String& error);
+    /** Apply a spectral tilt (dB/octave slope) to partial amplitudes in a time × frequency box.
+        The pivot frequency is the geometric mean of [freqLoHz, freqHiHz], or of the model's
+        full range when freqLoHz <= 0 or freqHiHz <= 0. */
+    bool tiltPartialEnvelope(AtsTraceSource source,
+                             int firstFrame,
+                             int lastFrame,
+                             double freqLoHz,
+                             double freqHiHz,
+                             double tiltDbPerOctave,
+                             juce::String& error);
     bool copyResidualBandToClipboard(AtsTraceSource source,
                                      int bandIndex,
                                      int firstFrame,
@@ -469,6 +487,11 @@ public:
                            int firstFrame,
                            int lastFrame,
                            juce::String& error);
+    bool autoRedistributeResidualBands(AtsTraceSource source,
+                                       const std::vector<int>& bandIndices,
+                                       int firstFrame,
+                                       int lastFrame,
+                                       juce::String& error);
     bool hasResidualBandClipboard() const;
     const AtsResidualBandClipboard& getResidualBandClipboard() const { return residualBandClipboard; }
 
@@ -549,6 +572,16 @@ public:
     bool playCurrentModelPreview(juce::String& error);
     bool playCurrentModelPreview(juce::String& error, bool liveSmear);
     bool playCurrentModelPreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error);
+    /** Audition only the specified partials from the given source by silencing all others. */
+    bool playSelectedPartialsPreview(AtsTraceSource source,
+                                     const std::vector<int>& partialIndices,
+                                     juce::String& error);
+    /** Freeze all partials (and residual bands) at the given frame — copies that frame's data
+        to every other frame in the model, creating a sustained static spectrum. */
+    bool freezePartialAtFrame(AtsTraceSource source, int frame, juce::String& error);
+    /** Seek preview playback to a normalized position [0,1] in the active buffer. No-op if
+        nothing is playing. Thread-safe (posts via atomic; applied in processBlock). */
+    void seekPreviewPlaybackNorm(float norm);
     void startPreviewPlayback();
     void stopPreviewPlayback();
     bool isPreviewPlaying() const { return previewPlaying.load(); }
@@ -748,6 +781,7 @@ private:
     int currentPlaybackBufferIndex = -1;
     int nextPlaybackBufferIndex = 0;
     int playbackPosition = 0;
+    std::atomic<int> seekToSample { -1 }; // -1 = no pending seek; set by seekPreviewPlaybackNorm
     /** Sample position at the start of the current audio block; UI interpolates from anchor time. */
     std::atomic<double> previewPlaybackAnchorSamples { 0.0 };
     std::atomic<double> previewPlaybackAnchorTimeMs { 0.0 };
