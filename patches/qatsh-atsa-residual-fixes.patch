@@ -118,8 +118,8 @@ index 91d236a..6cc3e57 100644
 +  srand(ATSA_SYNTH_RANDOM_SEED);
 +  has_residual = ats_sound->band_energy != NULL;
 +
-+  // Transfer residual data if partial noise is present
-+  if (has_residual) {
++  // Transfer residual data only for combined deterministic + residual synthesis
++  if (has_residual && sparams->ramp != 0. && sparams->amp != 0.) {
 +    for(f=0; f<ats_sound->frames; f++) {
 +      band_energy_to_res(ats_sound, f);
 +    }

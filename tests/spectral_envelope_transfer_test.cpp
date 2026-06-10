@@ -40,6 +40,31 @@ int main()
             return fail("sparse Bark envelope gap fill should produce a positive contour");
     }
 
+    // Reused DCT tables and scratch must be isolated by (binCount, order) and fully reset.
+    {
+        const std::vector<ats::SpectralEnvelopePoint> source {
+            { 110.0, 0.15 }, { 260.0, 0.8 }, { 720.0, 0.35 }, { 1800.0, 0.6 }, { 6400.0, 0.2 }
+        };
+        const std::vector<double> probes { 90.0, 220.0, 500.0, 1300.0, 4000.0, 12000.0 };
+
+        ats::BarkSpectralEnvelope first;
+        first.build(source, 64, 9);
+        std::vector<double> expected;
+        for (double hz : probes)
+            expected.push_back(first.sampleAtHz(hz));
+
+        ats::BarkSpectralEnvelope otherKey;
+        otherKey.build({ { 80.0, 0.9 }, { 3000.0, 0.1 }, { 15000.0, 0.7 } }, 96, 15);
+        ats::BarkSpectralEnvelope sameKeyOtherInput;
+        sameKeyOtherInput.build({ { 140.0, 0.4 }, { 900.0, 0.95 }, { 10000.0, 0.08 } }, 64, 9);
+
+        ats::BarkSpectralEnvelope rebuilt;
+        rebuilt.build(source, 64, 9);
+        for (size_t i = 0; i < probes.size(); ++i)
+            if (rebuilt.sampleAtHz(probes[i]) != expected[i])
+                return fail("reused DCT workspace changed an envelope sample");
+    }
+
     {
         const auto transfer = ats::applySpectralEnvelopeTransfer(0.1, 1.0, 1000.0, 1.0);
         if (!transfer.ok || !closeEnough(transfer.outputAmplitude, 100.0, 1.0e-8))
