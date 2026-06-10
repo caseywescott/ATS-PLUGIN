@@ -840,6 +840,14 @@ private:
     std::atomic<bool> freqShapePendingResynth { false };
     std::atomic<int64_t> freqShapeLastChangeMs { 0 };
 
+    // Auto-preview: when a morph parameter changes after the user has played a morph
+    // preview, re-render and restart playback automatically after the debounce period.
+    // 0 = never played, 1 = last was playMorphPreview, 2 = last was playMorphTimelinePreview.
+    std::atomic<int> lastMorphPlayKind { 0 };
+    std::atomic<bool> morphAutoRerenderPending { false };
+    std::atomic<int64_t> morphAutoRerenderLastChangeMs { 0 };
+    static constexpr int64_t kMorphAutoRerenderDebounceMs = 350;
+
     /** Semitones relative to middle C (note 60) applied on top of the Freq APVTS factor. */
     std::atomic<float> midiSemitoneOffset { 0.0f };
 

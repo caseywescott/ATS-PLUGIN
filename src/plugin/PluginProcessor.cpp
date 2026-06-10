@@ -1959,6 +1959,14 @@ void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float 
     if (isMorphSnapshotParameter(parameterID))
     {
         markMorphSnapshotStale();
+        // Trigger auto-rerender if the user has already played a morph preview:
+        // re-render after the debounce so parameter drags don't queue N renders.
+        if (lastMorphPlayKind.load(std::memory_order_acquire) != 0)
+        {
+            morphAutoRerenderPending.store(true, std::memory_order_release);
+            morphAutoRerenderLastChangeMs.store(juce::Time::currentTimeMillis(),
+                                                std::memory_order_release);
+        }
         return;
     }
 
@@ -2013,6 +2021,38 @@ void AtsAudioProcessor::timerCallback()
             freqShapePendingResynth.store(false, std::memory_order_release);
             synthParamsDirty.store(true, std::memory_order_release);
             triggerAsyncUpdate();
+        }
+    }
+
+    // Auto-rerender morph preview after the debounce: when a morph param changed
+    // and the user has previously played a morph preview, re-render automatically.
+    if (morphAutoRerenderPending.load(std::memory_order_acquire))
+    {
+        const int64_t elapsed = juce::Time::currentTimeMillis()
+                                - morphAutoRerenderLastChangeMs.load(std::memory_order_acquire);
+        if (elapsed >= kMorphAutoRerenderDebounceMs)
+        {
+            if (isWorkerBusy())
+            {
+                // Worker still busy — reset the clock so we retry after another debounce.
+                morphAutoRerenderLastChangeMs.store(juce::Time::currentTimeMillis(),
+                                                    std::memory_order_release);
+            }
+            else if (canPlayMorphPreview())
+            {
+                morphAutoRerenderPending.store(false, std::memory_order_release);
+                juce::String ignored;
+                const int kind = lastMorphPlayKind.load(std::memory_order_acquire);
+                if (kind == 2)
+                    playMorphTimelinePreview(ignored);
+                else
+                    playMorphPreview(ignored);
+            }
+            else
+            {
+                // Can't play (sources not ready): clear so we don't loop forever.
+                morphAutoRerenderPending.store(false, std::memory_order_release);
+            }
         }
     }
 }
@@ -4081,6 +4121,7 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
         error = "Wait for the current analysis or render to finish before playing the morph.";
         return false;
     }
+    lastMorphPlayKind.store(1, std::memory_order_release);
 
     ats::MorphRecipe recipe;
     std::array<std::vector<ats::MorphResidualNoiseBand>, 2> residualBands;
@@ -4195,6 +4236,7 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
         error = "Wait for the current analysis or render to finish before playing the morph timeline.";
         return false;
     }
+    lastMorphPlayKind.store(2, std::memory_order_release);
 
     ats::MorphRecipe recipe;
     std::array<std::vector<ats::MorphResidualNoiseBand>, 2> residualBands;

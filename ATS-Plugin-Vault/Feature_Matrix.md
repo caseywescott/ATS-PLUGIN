@@ -259,7 +259,7 @@ Ordered by musical payoff and dependency. Items with UI already present are fini
 | Prio | Milestone | Status today |
 | ---- | --------- | ------------ |
 | **P0** | Wire morph lanes + policies + curves into `renderMorphTrajectoryBuffer` | **Partial** (Freq/Amp/Noise lanes + interpolation domains wired Jun 2026; Time/Phase/Transient + unmatched policies still snapshot-only) |
-| **P0** | Real-time morph preview (no full re-bounce per tweak) | **Partial** |
+| **P0** | Real-time morph preview (no full re-bounce per tweak) | **Partial** (auto-rerender: 350 ms debounced re-render fires automatically after first user play; live oscillator bank deferred) |
 | **P0** | Morph fixture audio + metric CI | **Partial** (`asset_status: placeholder`; smoke harness only) |
 | **P1** | Merge worktree RDC into main morph path + envelope UX | **Partial** (worktree R&D feature-complete; fixed-λ default, GCV opt-in only) |
 | **P1** | Partial trajectory draw/edit (freq vs time) | **Partial** |
