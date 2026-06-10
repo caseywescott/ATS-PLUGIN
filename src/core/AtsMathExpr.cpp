@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cctype>
 #include <functional>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -74,13 +73,151 @@ static double hfn(const EvalCtx* ctx, int pi, int ti)
     return hp ? oh : 0.0;
 }
 
-class Parser
+enum class ExprOp
+{
+    Constant,
+    P,
+    T,
+    PartialIndex,
+    FrameIndex,
+    Amplitude,
+    Frequency,
+    Phase,
+    Negate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Power,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Log,
+    Log10,
+    Exp,
+    Sqrt,
+    Abs,
+    Atan2,
+    Min,
+    Max,
+    ReadAmplitude,
+    ReadFrequency,
+    ReadPhase,
+};
+
+struct ExprInstruction
+{
+    ExprOp op = ExprOp::Constant;
+    double value = 0.0;
+};
+
+struct ExprProgram
+{
+    std::vector<ExprInstruction> instructions;
+
+    bool evaluate(EvalCtx& ctx, std::vector<double>& stack, double& result, std::string& err) const
+    {
+        stack.clear();
+        for (const auto& instruction : instructions)
+        {
+            const auto push = [&](double value) { stack.push_back(value); };
+            const auto pop = [&]() {
+                const double value = stack.back();
+                stack.pop_back();
+                return value;
+            };
+
+            switch (instruction.op)
+            {
+                case ExprOp::Constant:     push(instruction.value); break;
+                case ExprOp::P:            push((double) ctx.P); break;
+                case ExprOp::T:            push((double) ctx.T); break;
+                case ExprOp::PartialIndex: push((double) ctx.p); break;
+                case ExprOp::FrameIndex:   push((double) ctx.t); break;
+                case ExprOp::Amplitude:    push(ctx.a); break;
+                case ExprOp::Frequency:    push(ctx.f); break;
+                case ExprOp::Phase:        push(ctx.h); break;
+
+                case ExprOp::Negate: stack.back() = -stack.back(); break;
+                case ExprOp::Sin:    stack.back() = std::sin(stack.back()); break;
+                case ExprOp::Cos:    stack.back() = std::cos(stack.back()); break;
+                case ExprOp::Tan:    stack.back() = std::tan(stack.back()); break;
+                case ExprOp::Asin:   stack.back() = std::asin(stack.back()); break;
+                case ExprOp::Acos:   stack.back() = std::acos(stack.back()); break;
+                case ExprOp::Atan:   stack.back() = std::atan(stack.back()); break;
+                case ExprOp::Log:    stack.back() = std::log(stack.back()); break;
+                case ExprOp::Log10:  stack.back() = std::log10(stack.back()); break;
+                case ExprOp::Exp:    stack.back() = std::exp(stack.back()); break;
+                case ExprOp::Sqrt:   stack.back() = std::sqrt(stack.back()); break;
+                case ExprOp::Abs:    stack.back() = std::fabs(stack.back()); break;
+
+                case ExprOp::Add:
+                case ExprOp::Subtract:
+                case ExprOp::Multiply:
+                case ExprOp::Divide:
+                case ExprOp::Power:
+                case ExprOp::Atan2:
+                case ExprOp::Min:
+                case ExprOp::Max:
+                case ExprOp::ReadAmplitude:
+                case ExprOp::ReadFrequency:
+                case ExprOp::ReadPhase:
+                {
+                    const double y = pop();
+                    const double x = pop();
+                    switch (instruction.op)
+                    {
+                        case ExprOp::Add:      push(x + y); break;
+                        case ExprOp::Subtract: push(x - y); break;
+                        case ExprOp::Multiply: push(x * y); break;
+                        case ExprOp::Divide:
+                            if (y == 0.0)
+                            {
+                                err = "Division by zero";
+                                return false;
+                            }
+                            push(x / y);
+                            break;
+                        case ExprOp::Power: push(std::pow(x, y)); break;
+                        case ExprOp::Atan2: push(std::atan2(x, y)); break;
+                        case ExprOp::Min:   push(std::min(x, y)); break;
+                        case ExprOp::Max:   push(std::max(x, y)); break;
+                        case ExprOp::ReadAmplitude:
+                            push(afn(&ctx, (int) std::lround(x), (int) std::lround(y)));
+                            break;
+                        case ExprOp::ReadFrequency:
+                            push(ffn(&ctx, (int) std::lround(x), (int) std::lround(y)));
+                            break;
+                        case ExprOp::ReadPhase:
+                            push(hfn(&ctx, (int) std::lround(x), (int) std::lround(y)));
+                            break;
+                        default: break;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (stack.size() != 1)
+        {
+            err = "Internal expression evaluation error";
+            return false;
+        }
+        result = stack.back();
+        return true;
+    }
+};
+
+class Compiler
 {
 public:
     const char* s = nullptr;
     const char* cur = nullptr;
     const char* end = nullptr;
-    EvalCtx* ctx = nullptr;
+    ExprProgram* program = nullptr;
     std::string err;
 
     void skipWs()
@@ -107,291 +244,184 @@ public:
         return false;
     }
 
-    std::optional<double> parseNumber()
+    bool parseNumber()
     {
         skipWs();
         if (cur >= end)
-            return std::nullopt;
+            return false;
         char* next = nullptr;
         const std::string frag(cur, end);
-        double v = std::strtod(frag.c_str(), &next);
+        const double v = std::strtod(frag.c_str(), &next);
         if (next == frag.c_str())
-            return std::nullopt;
+            return false;
         cur += (const char*) next - frag.c_str();
-        return v;
+        emit(ExprOp::Constant, v);
+        return true;
     }
 
-    std::optional<std::string> parseIdent()
+    bool parseIdent(std::string& ident)
     {
         skipWs();
         if (cur >= end || (!std::isalpha((unsigned char) *cur) && *cur != '_'))
-            return std::nullopt;
+            return false;
         const char* a = cur;
         while (cur < end && (std::isalnum((unsigned char) *cur) || *cur == '_'))
             ++cur;
-        return std::string(a, cur);
+        ident.assign(a, cur);
+        return true;
     }
 
-    std::optional<double> parseExpr(); // + -
+    void emit(ExprOp op, double value = 0.0)
+    {
+        program->instructions.push_back({ op, value });
+    }
 
-    std::optional<double> parseAtom()
+    bool parseExpr(); // + -
+
+    bool parseAtom()
     {
         skipWs();
         if (cur >= end)
         {
             err = "Unexpected end of expression";
-            return std::nullopt;
+            return false;
         }
 
         if (*cur == '(')
         {
             ++cur;
-            auto v = parseExpr();
-            if (!v)
-                return std::nullopt;
+            if (!parseExpr())
+                return false;
             if (!eat(')'))
             {
                 err = "Expected ')'";
-                return std::nullopt;
+                return false;
             }
-            return v;
+            return true;
         }
 
         if (std::isdigit((unsigned char) *cur) || (*cur == '.' && cur + 1 < end && std::isdigit((unsigned char) cur[1])))
             return parseNumber();
 
-        auto idOpt = parseIdent();
-        if (!idOpt)
+        std::string id;
+        if (!parseIdent(id))
         {
             err = "Expected number, identifier, or '('";
-            return std::nullopt;
+            return false;
         }
-        const std::string id = *idOpt;
 
         if (eat('('))
         {
-            auto x = parseExpr();
-            if (!x)
-                return std::nullopt;
+            if (!parseExpr())
+                return false;
 
-            if (id == "sin")
+            ExprOp unaryOp {};
+            bool isUnary = true;
+            if (id == "sin") unaryOp = ExprOp::Sin;
+            else if (id == "cos") unaryOp = ExprOp::Cos;
+            else if (id == "tan") unaryOp = ExprOp::Tan;
+            else if (id == "asin") unaryOp = ExprOp::Asin;
+            else if (id == "acos") unaryOp = ExprOp::Acos;
+            else if (id == "atan") unaryOp = ExprOp::Atan;
+            else if (id == "log") unaryOp = ExprOp::Log;
+            else if (id == "log10") unaryOp = ExprOp::Log10;
+            else if (id == "exp") unaryOp = ExprOp::Exp;
+            else if (id == "sqrt") unaryOp = ExprOp::Sqrt;
+            else if (id == "abs" || id == "fabs") unaryOp = ExprOp::Abs;
+            else isUnary = false;
+
+            if (isUnary)
             {
                 if (!eat(')'))
                 {
-                    err = "Expected ')' after sin";
-                    return std::nullopt;
+                    err = "Expected ')' after " + std::string(id == "fabs" ? "abs" : id);
+                    return false;
                 }
-                return std::sin(*x);
-            }
-            if (id == "cos")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after cos";
-                    return std::nullopt;
-                }
-                return std::cos(*x);
-            }
-            if (id == "tan")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after tan";
-                    return std::nullopt;
-                }
-                return std::tan(*x);
-            }
-            if (id == "asin")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after asin";
-                    return std::nullopt;
-                }
-                return std::asin(*x);
-            }
-            if (id == "acos")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after acos";
-                    return std::nullopt;
-                }
-                return std::acos(*x);
-            }
-            if (id == "atan")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after atan";
-                    return std::nullopt;
-                }
-                return std::atan(*x);
-            }
-            if (id == "log")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after log";
-                    return std::nullopt;
-                }
-                return std::log(*x);
-            }
-            if (id == "log10")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after log10";
-                    return std::nullopt;
-                }
-                return std::log10(*x);
-            }
-            if (id == "exp")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after exp";
-                    return std::nullopt;
-                }
-                return std::exp(*x);
-            }
-            if (id == "sqrt")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after sqrt";
-                    return std::nullopt;
-                }
-                return std::sqrt(*x);
-            }
-            if (id == "abs" || id == "fabs")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after abs";
-                    return std::nullopt;
-                }
-                return std::fabs(*x);
+                emit(unaryOp);
+                return true;
             }
 
             if (!eat(','))
             {
                 err = "Expected ',' or ')' in function call";
-                return std::nullopt;
+                return false;
             }
-            auto y = parseExpr();
-            if (!y)
-                return std::nullopt;
+            if (!parseExpr())
+                return false;
 
-            if (id == "pow")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after pow";
-                    return std::nullopt;
-                }
-                return std::pow(*x, *y);
-            }
-            if (id == "atan2")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after atan2";
-                    return std::nullopt;
-                }
-                return std::atan2(*x, *y);
-            }
-            if (id == "min")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after min";
-                    return std::nullopt;
-                }
-                return std::min(*x, *y);
-            }
-            if (id == "max")
-            {
-                if (!eat(')'))
-                {
-                    err = "Expected ')' after max";
-                    return std::nullopt;
-                }
-                return std::max(*x, *y);
-            }
+            ExprOp binaryOp {};
+            bool isBinary = true;
+            if (id == "pow") binaryOp = ExprOp::Power;
+            else if (id == "atan2") binaryOp = ExprOp::Atan2;
+            else if (id == "min") binaryOp = ExprOp::Min;
+            else if (id == "max") binaryOp = ExprOp::Max;
+            else if (id == "A") binaryOp = ExprOp::ReadAmplitude;
+            else if (id == "F") binaryOp = ExprOp::ReadFrequency;
+            else if (id == "H") binaryOp = ExprOp::ReadPhase;
+            else isBinary = false;
 
-            if (id == "A" || id == "F" || id == "H")
+            if (isBinary)
             {
-                int pi = (int) std::lround(*x);
-                int ti = (int) std::lround(*y);
                 if (!eat(')'))
                 {
-                    err = "Expected ')' after A/F/H";
-                    return std::nullopt;
+                    err = (id == "A" || id == "F" || id == "H")
+                              ? "Expected ')' after A/F/H"
+                              : "Expected ')' after " + id;
+                    return false;
                 }
-                if (id == "A")
-                    return afn(ctx, pi, ti);
-                if (id == "F")
-                    return ffn(ctx, pi, ti);
-                return hfn(ctx, pi, ti);
+                emit(binaryOp);
+                return true;
             }
 
             err = "Unknown function: " + id;
-            return std::nullopt;
+            return false;
         }
 
-        if (id == "P")
-            return (double) ctx->P;
-        if (id == "T")
-            return (double) ctx->T;
-        if (id == "p")
-            return (double) ctx->p;
-        if (id == "t")
-            return (double) ctx->t;
-        if (id == "a")
-            return ctx->a;
-        if (id == "f")
-            return ctx->f;
-        if (id == "h")
-            return ctx->h;
-        if (id == "pi")
-            return 3.14159265358979323846;
-        if (id == "e")
-            return 2.71828182845904523536;
+        if (id == "P") emit(ExprOp::P);
+        else if (id == "T") emit(ExprOp::T);
+        else if (id == "p") emit(ExprOp::PartialIndex);
+        else if (id == "t") emit(ExprOp::FrameIndex);
+        else if (id == "a") emit(ExprOp::Amplitude);
+        else if (id == "f") emit(ExprOp::Frequency);
+        else if (id == "h") emit(ExprOp::Phase);
+        else if (id == "pi") emit(ExprOp::Constant, 3.14159265358979323846);
+        else if (id == "e") emit(ExprOp::Constant, 2.71828182845904523536);
+        else
+        {
+            err = "Unknown identifier: " + id;
+            return false;
+        }
 
-        err = "Unknown identifier: " + id;
-        return std::nullopt;
+        return true;
     }
 
-    std::optional<double> parsePow()
+    bool parsePow()
     {
-        auto lhs = parseAtom();
-        if (!lhs)
-            return std::nullopt;
+        if (!parseAtom())
+            return false;
         for (;;)
         {
             skipWs();
             if (cur >= end || *cur != '^')
                 break;
             ++cur;
-            auto rhs = parseAtom();
-            if (!rhs)
-                return std::nullopt;
-            lhs = std::pow(*lhs, *rhs);
+            if (!parseAtom())
+                return false;
+            emit(ExprOp::Power);
         }
-        return lhs;
+        return true;
     }
 
-    std::optional<double> parseUnary()
+    bool parseUnary()
     {
         skipWs();
         if (cur < end && *cur == '-')
         {
             ++cur;
-            auto v = parseUnary();
-            if (!v)
-                return std::nullopt;
-            return -(*v);
+            if (!parseUnary())
+                return false;
+            emit(ExprOp::Negate);
+            return true;
         }
         if (cur < end && *cur == '+')
         {
@@ -401,11 +431,10 @@ public:
         return parsePow();
     }
 
-    std::optional<double> parseMul()
+    bool parseMul()
     {
-        auto lhs = parseUnary();
-        if (!lhs)
-            return std::nullopt;
+        if (!parseUnary())
+            return false;
         for (;;)
         {
             skipWs();
@@ -415,30 +444,18 @@ public:
             if (op != '*' && op != '/')
                 break;
             ++cur;
-            auto rhs = parseUnary();
-            if (!rhs)
-                return std::nullopt;
-            if (op == '*')
-                lhs = *lhs * *rhs;
-            else
-            {
-                if (*rhs == 0.0)
-                {
-                    err = "Division by zero";
-                    return std::nullopt;
-                }
-                lhs = *lhs / *rhs;
-            }
+            if (!parseUnary())
+                return false;
+            emit(op == '*' ? ExprOp::Multiply : ExprOp::Divide);
         }
-        return lhs;
+        return true;
     }
 };
 
-std::optional<double> Parser::parseExpr()
+bool Compiler::parseExpr()
 {
-    auto lhs = parseMul();
-    if (!lhs)
-        return std::nullopt;
+    if (!parseMul())
+        return false;
     for (;;)
     {
         skipWs();
@@ -448,15 +465,11 @@ std::optional<double> Parser::parseExpr()
         if (op != '+' && op != '-')
             break;
         ++cur;
-        auto rhs = parseMul();
-        if (!rhs)
-            return std::nullopt;
-        if (op == '+')
-            lhs = *lhs + *rhs;
-        else
-            lhs = *lhs - *rhs;
+        if (!parseMul())
+            return false;
+        emit(op == '+' ? ExprOp::Add : ExprOp::Subtract);
     }
-    return lhs;
+    return true;
 }
 
 static bool parseAssignmentLine(const std::string& line, char& target, std::string& rhs)
@@ -545,6 +558,27 @@ bool applyMathExprScript(ATS_SOUND* sound,
 
     for (const auto& pass : passes)
     {
+        ExprProgram program;
+        Compiler compiler;
+        compiler.program = &program;
+        compiler.s = pass.expr.c_str();
+        compiler.cur = compiler.s;
+        compiler.end = compiler.s + pass.expr.size();
+        if (!compiler.parseExpr())
+        {
+            errorMessage = "Expression error (partial 0, frame 0): "
+                           + (compiler.err.empty() ? "invalid parse" : compiler.err);
+            return false;
+        }
+        compiler.skipWs();
+        if (compiler.cur != compiler.end)
+        {
+            errorMessage = "Trailing junk in expression at partial 0, frame 0";
+            return false;
+        }
+
+        std::vector<double> evalStack;
+        evalStack.reserve(program.instructions.size());
         for (int p = 0; p < P; ++p)
         {
             for (int t = 0; t < T; ++t)
@@ -565,40 +599,28 @@ bool applyMathExprScript(ATS_SOUND* sound,
                 }
                 ctx.hasPhase = hp;
 
-                Parser ps;
-                ps.ctx = &ctx;
-                ps.s = pass.expr.c_str();
-                ps.cur = ps.s;
-                ps.end = ps.s + pass.expr.size();
-
-                auto val = ps.parseExpr();
-                ps.skipWs();
-                if (!val)
+                double val = 0.0;
+                std::string evalError;
+                if (!program.evaluate(ctx, evalStack, val, evalError))
                 {
                     errorMessage = "Expression error (partial " + std::to_string(p) + ", frame " + std::to_string(t)
-                                   + "): " + (ps.err.empty() ? "invalid parse" : ps.err);
+                                   + "): " + (evalError.empty() ? "invalid evaluation" : evalError);
                     return false;
                 }
-                if (ps.cur != ps.end)
-                {
-                    errorMessage = "Trailing junk in expression at partial " + std::to_string(p) + ", frame "
-                                   + std::to_string(t);
-                    return false;
-                }
-                if (!std::isfinite(*val))
+                if (!std::isfinite(val))
                 {
                     errorMessage = "Non-finite value from expression.";
                     return false;
                 }
 
                 if (pass.target == 'a')
-                    sound->amp[p][t] = std::max(0.0, *val);
+                    sound->amp[p][t] = std::max(0.0, val);
                 else if (pass.target == 'f')
-                    sound->frq[p][t] = std::max(1e-6, *val);
+                    sound->frq[p][t] = std::max(1e-6, val);
                 else if (pass.target == 'h')
                 {
                     if (sound->pha != nullptr)
-                        sound->pha[p][t] = *val;
+                        sound->pha[p][t] = val;
                 }
             }
         }
