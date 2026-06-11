@@ -1,0 +1,12 @@
+--- a/src/atsa/residual-analysis.c
++++ b/src/atsa/residual-analysis.c
+@@ -137,6 +137,9 @@
+   while( def_size < min_fft_size ){
+     def_size = ppp2(def_size+1);
+   }
++  /* ATSA_RESIDUAL_POW2: round N to power-of-two above min_fft_size (valid FFT + vDSP). */
++  if ((unsigned int)def_size != ppp2((unsigned int)def_size))
++    def_size = (int)ppp2((unsigned int)def_size + 1u);
+   return(def_size);
+ }
+ 

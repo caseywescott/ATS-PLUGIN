@@ -401,3 +401,18 @@ order preserved. Touches `src/atsa/peak-tracking.c` only.
 
 CMake requires it by default (marker `ATSA_TRACKING_DS`).
 Use `-DATS_REQUIRE_QATSH_TRACKING_DS=OFF` to bypass.
+
+## `qatsh-atsa-residual-pow2.patch`
+
+**C-004 / Q-001**: rounds residual FFT size up to the next power of two so the
+transform is valid and vDSP-eligible at 44.1 kHz. **Behavior-changing** —
+regenerate golden expectations after applying. Touches
+`src/atsa/residual-analysis.c` only.
+
+```sh
+./scripts/apply_qatsh_residual_pow2.sh apply
+./scripts/apply_qatsh_residual_pow2.sh status
+```
+
+CMake requires it by default (marker `ATSA_RESIDUAL_POW2`).
+Use `-DATS_REQUIRE_QATSH_RESIDUAL_POW2=OFF` to bypass.
