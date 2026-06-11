@@ -24,6 +24,10 @@
 
 #include "ResampleLinear.h"
 
+#if defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#endif
+
 #include <JuceHeader.h>
 
 extern "C" {
@@ -198,8 +202,12 @@ juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::Synth
 
     out.setSize(1, nOut);
     float* const dst = out.getWritePointer(0);
+#if defined(__APPLE__)
+    vDSP_vdpsp(rawOut, 1, dst, 1, (vDSP_Length) nOut);
+#else
     for (int i = 0; i < nOut; ++i)
         dst[i] = static_cast<float>(rawOut[i]);
+#endif
 
     std::free(rawOut);
     return out;
