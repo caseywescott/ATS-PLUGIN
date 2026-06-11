@@ -726,7 +726,7 @@ private:
     juce::String lastError;
 
     juce::CriticalSection sourceLock;
-    std::vector<double> sourceMono;
+    std::shared_ptr<const std::vector<double>> sourceMono;
     int sourceSampleRate = 0;
     juce::File currentSourceFile;
     std::array<juce::File, 2> morphSourceFiles;

@@ -2257,9 +2257,10 @@ void AtsAudioProcessor::loadSourceFile(const juce::File& file)
         mono[static_cast<size_t>(i)] = acc / static_cast<double>(nCh);
     }
 
+    auto monoPtr = std::make_shared<std::vector<double>>(std::move(mono));
     {
         const juce::ScopedLock sl(sourceLock);
-        sourceMono = std::move(mono);
+        sourceMono = std::move(monoPtr);
         sourceSampleRate = (int) fileSr;
         currentSourceFile = file;
     }
@@ -2319,11 +2320,11 @@ void AtsAudioProcessor::startAnalysis()
     cancelJobs();
     joinWorkers();
 
-    std::vector<double> localMono;
+    std::shared_ptr<const std::vector<double>> localMono;
     int fileSr = 0;
     {
         const juce::ScopedLock sl(sourceLock);
-        if (sourceMono.empty())
+        if (sourceMono == nullptr || sourceMono->empty())
         {
             setError("No audio loaded.");
             return;
@@ -2357,12 +2358,12 @@ void AtsAudioProcessor::startAnalysis()
             prog->store(0.10f + 0.80f * (float) fraction);
         };
 
-        auto* samples = const_cast<double*>(localMono.data());
+        auto* samples = const_cast<double*>(localMono->data());
         double** residual = nullptr;
         int resLen = 0;
 
         analysisProgress.store(0.10f);
-        ATS_SOUND* raw = tracker(&an, samples, fileSr, (int) localMono.size(), &residual, &resLen);
+        ATS_SOUND* raw = tracker(&an, samples, fileSr, (int) localMono->size(), &residual, &resLen);
         freeResidual(&residual);
 
         if (jobGeneration.load() != gen)
@@ -6846,7 +6847,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
             bool hasSource = false;
             {
                 const juce::ScopedLock sl(sourceLock);
-                hasSource = !sourceMono.empty();
+                hasSource = sourceMono != nullptr && !sourceMono->empty();
             }
             setUiState(hasSource ? AtsUiState::ReadyToAnalyze : AtsUiState::NoSource);
             synthParamsDirty.store(true);
@@ -6865,7 +6866,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         bool hasSource = false;
         {
             const juce::ScopedLock sl(sourceLock);
-            hasSource = !sourceMono.empty();
+            hasSource = sourceMono != nullptr && !sourceMono->empty();
         }
         setUiState(hasSource ? AtsUiState::ReadyToAnalyze : AtsUiState::NoSource);
         synthParamsDirty.store(true);
