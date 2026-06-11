@@ -31,6 +31,7 @@ option(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL "Require local Qatsh ATSA parallel ma
 option(ATS_REQUIRE_QATSH_IFFT_SRAND "Require Qatsh ATSA IFFT srand-before-dispatch fix (C-002)" ON)
 option(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT "Require Qatsh ATSA DDM slope maintenance in utilities (C-003)" ON)
 option(ATS_REQUIRE_QATSH_TRACKSTORE "Require Qatsh ATSA O(P*T) track-store loop (A-001)" ON)
+option(ATS_REQUIRE_QATSH_SMR_PRECOMPUTE "Require Qatsh ATSA SMR bark/dB precompute (A-003)" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -224,6 +225,16 @@ if(ATS_REQUIRE_QATSH_TRACKSTORE)
   endif()
   unset(_atsa_trackstore_source)
   unset(_atsa_trackstore_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_SMR_PRECOMPUTE)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/critical-bands.c" _atsa_smr_pre_source)
+  string(FIND "${_atsa_smr_pre_source}" "ATSA_SMR_PRECOMPUTE" _atsa_smr_pre_marker)
+  if(_atsa_smr_pre_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA SMR precompute patch is not applied. Run scripts/apply_qatsh_smr_precompute.sh apply, or configure with -DATS_REQUIRE_QATSH_SMR_PRECOMPUTE=OFF to bypass.")
+  endif()
+  unset(_atsa_smr_pre_source)
+  unset(_atsa_smr_pre_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

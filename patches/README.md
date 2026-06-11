@@ -374,3 +374,16 @@ T touches `src/atsa/tracker.c` only.
 
 CMake requires it by default (marker `ATSA_TRACKSTORE` in `tracker.c`).
 Use `-DATS_REQUIRE_QATSH_TRACKSTORE=OFF` to bypass.
+
+## `qatsh-atsa-smr-precompute.patch`
+
+**A-003**: hoists `frq2bark`/`amp2db_spl` out of the O(n²) SMR pair loop in
+`evaluate_smr`. Bit-identical. Touches `src/atsa/critical-bands.c` only.
+
+```sh
+./scripts/apply_qatsh_smr_precompute.sh apply
+./scripts/apply_qatsh_smr_precompute.sh status
+```
+
+CMake requires it by default (marker `ATSA_SMR_PRECOMPUTE`).
+Use `-DATS_REQUIRE_QATSH_SMR_PRECOMPUTE=OFF` to bypass.
