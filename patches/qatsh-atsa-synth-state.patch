@@ -1,0 +1,188 @@
+--- a/src/atsa/synthesis.c	2026-06-11 13:23:49
++++ b/src/atsa/synthesis.c	2026-06-11 13:35:48
+@@ -99,6 +99,25 @@
+   int    cnt;  //sample position counter
+ } RANDI;
+ 
++/* ATSA_SYNTH_STATE: thread-local deterministic LCG replaces libc rand/srand. */
++#if defined(_WIN32)
++#  define ATSA_SYNTH_TLS __declspec(thread)
++#else
++#  define ATSA_SYNTH_TLS _Thread_local
++#endif
++typedef struct { unsigned int state; } ATSA_SYNTH_RNG;
++static ATSA_SYNTH_TLS ATSA_SYNTH_RNG atsa_synth_rng;
++static ATSA_SYNTH_TLS int atsa_synth_rng_seeded = 0;
++static void atsa_synth_seed_rng(unsigned seed) { atsa_synth_rng.state = seed; atsa_synth_rng_seeded = 1; }
++static int atsa_synth_rand_i(void) {
++  if (!atsa_synth_rng_seeded) atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED);
++  atsa_synth_rng.state = atsa_synth_rng.state * 1103515245u + 12345u;
++  return (int)((atsa_synth_rng.state >> 16) & 0x7fffu);
++}
++#if !defined(_WIN32)
++#include <pthread.h>
++static pthread_once_t atsa_sine_table_once = PTHREAD_ONCE_INIT;
++#endif
+ 
+ //GLOBAL VARIABLES
+ static int sine_table_ready = 0;
+@@ -114,8 +133,8 @@
+   radat->size = (int) (sr / freq) - 1;
+   if (radat->size < 1)
+     radat->size = 1;
+-  radat->a1   = rand();
+-  radat->a2   = rand();
++  radat->a1   = (double)atsa_synth_rand_i();
++  radat->a2   = (double)atsa_synth_rand_i();
+   radat->cnt  = 0;
+ }
+ ///////////////////////////////////////////////////////////////////
+@@ -125,14 +144,14 @@
+ 
+   if (radat->cnt == radat->size) { //get a new random value
+     radat->a1  = radat->a2; 
+-    radat->a2  = rand();
++    radat->a2  = (double)atsa_synth_rand_i();
+     radat->cnt = 0;
+   }
+ 
+   output = radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+   radat->cnt++;
+ 
+-  return 1. - 2. * output / RAND_MAX;
++  return 1. - 2. * output / 32767.0;
+ }
+ ///////////////////////////////////////////////////////////////////
+ double randif(RANDI *radat, double freq, double sr)
+@@ -141,7 +160,7 @@
+ 
+   if(radat->cnt == radat->size) { //get a new random value
+     radat->a1  = radat->a2; 
+-    radat->a2  = rand();
++    radat->a2  = (double)atsa_synth_rand_i();
+     radat->cnt = 0;
+     radat->size= (int) (sr / freq) - 1;
+     if (radat->size < 1)
+@@ -151,7 +170,7 @@
+   output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+   radat->cnt++;
+   
+-  return 1. - 2. * output / RAND_MAX;
++  return 1. - 2. * output / 32767.0;
+ }
+ ///////////////////////////////////////////////////////////////////
+ void make_sine_table() 
+@@ -167,6 +186,9 @@
+ 
+   sine_table_ready = 1;
+ }
++#if !defined(_WIN32)
++static void make_sine_table_once(void) { make_sine_table(); }
++#endif
+ ////////////////////////////////////////////////////////////////////
+ double ioscilator(double amp, double freq, double pha, double sr, double *oscpt)
+ {
+@@ -188,8 +210,11 @@
+   double output;
+   int curr_ind, next_ind;
+ 
+-  if (!sine_table_ready)
+-    make_sine_table();
++#if !defined(_WIN32)
++  pthread_once(&atsa_sine_table_once, make_sine_table_once);
++#else
++  if (!sine_table_ready) make_sine_table();
++#endif
+ 
+   // Linear interpolation of the amplitude from the sine table.
+   curr_ind = (int)floor(osc);
+@@ -419,6 +444,8 @@
+   double hop_sec, *out, *nrm, *re, *im, *hann;
+   const int Kw = 6; /* Hann main-lobe deposit half-width (bins) */
+ 
++  atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED);
++
+   *out_samps = NULL;
+   *n_out_samps = 0;
+   if (F < 1 || P < 1 || sparams->sr <= 0.0)
+@@ -517,8 +544,7 @@
+     RANDI *rb = (RANDI*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(RANDI));
+     double *bcent = (double*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(double));
+     double *osc = (double*)calloc((size_t)ATSA_CRITICAL_BANDS, sizeof(double));
+-    for (f = 0; f < F; ++f)
+-      band_energy_to_res(ats_sound, f);
++    atsa_prefill_partial_residual(ats_sound);
+     for (b_band = 0; b_band < ATSA_CRITICAL_BANDS; ++b_band) {
+       bcent[b_band] = (ATSA_CRITICAL_BAND_EDGES[b_band + 1] + ATSA_CRITICAL_BAND_EDGES[b_band]) / 2.0;
+       randi_setup(sparams->sr,
+@@ -579,7 +605,7 @@
+   int p, d, b;
+   int has_residual;
+ 
+-  srand(ATSA_SYNTH_RANDOM_SEED);
++  atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED);
+ 
+   /* ATSA_IFFT_SYNTH: opt-in inverse-FFT path (uniform grid, no time-warp). */
+   if (sparams->use_ifft) {
+@@ -593,12 +619,8 @@
+ 
+   has_residual = ats_sound->band_energy != NULL;
+ 
+-  // Transfer residual data only for the combined branch below. Deterministic-only
+-  // and residual-only synthesis never read the per-partial residual array.
+-  if (has_residual && sparams->ramp != 0. && sparams->amp != 0.) {
+-    for(f=0; f<ats_sound->frames; f++) {
+-      band_energy_to_res(ats_sound, f);
+-    }
++  if (has_residual && sparams->ramp != 0.) {
++    atsa_prefill_partial_residual(ats_sound);
+   }
+ 
+   // Build envelop segments descriptor and compute number of samples to generate
+--- a/src/atsa/residual-analysis.c	2026-06-11 13:23:49
++++ b/src/atsa/residual-analysis.c	2026-06-11 13:35:49
+@@ -291,7 +291,32 @@
+   }
+ }
+ 
++/* ATSA_SYNTH_STATE: mutex-guarded one-shot fill of sound->res from band_energy. */
++#if defined(ATSA_HAVE_THREADS)
++static pthread_mutex_t atsa_res_prefill_mu = PTHREAD_MUTEX_INITIALIZER;
++static ATS_SOUND *atsa_res_prefilled_sound = NULL;
++#endif
+ 
++void atsa_prefill_partial_residual(ATS_SOUND *sound)
++{
++  int f;
++  if (sound == NULL || sound->band_energy == NULL)
++    return;
++#if defined(ATSA_HAVE_THREADS)
++  pthread_mutex_lock(&atsa_res_prefill_mu);
++  if (atsa_res_prefilled_sound != sound) {
++    for (f = 0; f < sound->frames; f++)
++      band_energy_to_res(sound, f);
++    atsa_res_prefilled_sound = sound;
++  }
++  pthread_mutex_unlock(&atsa_res_prefill_mu);
++#else
++  for (f = 0; f < sound->frames; f++)
++    band_energy_to_res(sound, f);
++#endif
++}
++
++
+ /* res_to_band_energy
+  * ==================
+  * transfers residual engergy from partials to bands
+--- a/src/atsa/atsa.h	2026-06-11 13:23:49
++++ b/src/atsa/atsa.h	2026-06-11 13:33:09
+@@ -635,6 +635,9 @@
+  */
+ void band_energy_to_res(ATS_SOUND *sound, int frame);
+ 
++/* ATSA_SYNTH_STATE: fill the per-partial residual plane once before parallel synthesis. */
++void atsa_prefill_partial_residual(ATS_SOUND *sound);
++
+ /* res_to_band_energy
+  * ==================
+  * transfers residual engergy from partials to bands

@@ -454,8 +454,7 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
 
     if (render.hasResidual)
     {
-        // C-001: serialize passes — concurrent do_synthesis races on libc rand(),
-        // sound->res writes, and sine-table init (see FABLE_PERFORMANCE_REVIEW.md).
+        // ATSA_SYNTH_STATE (Phase 2.7): per-thread LCG + mutex prefill make parallel passes safe.
         ats::SynthParams spResidual = core;
         spResidual.partialsGain = 0.0;
         spResidual.residualGain = 1.0;
@@ -464,11 +463,17 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
         spCombined.partialsGain = 1.0;
         spCombined.residualGain = 1.0;
 
-        render.partials = runDoSynthesis(renderSound, spPartials);
-        render.residual = runDoSynthesis(renderSound, spResidual);
+        auto doPartials = [&]() { return runDoSynthesis(renderSound, spPartials); };
+        auto doResidual = [&]() { return runDoSynthesis(renderSound, spResidual); };
+        auto doCombined = [&]() { return runDoSynthesis(renderSound, spCombined); };
+
+        auto futurePartials = std::async(std::launch::async, doPartials);
+        auto futureResidual = std::async(std::launch::async, doResidual);
+        render.partials = futurePartials.get();
+        render.residual = futureResidual.get();
         if (renderCombinedPass)
         {
-            render.combined = runDoSynthesis(renderSound, spCombined);
+            render.combined = doCombined();
             render.combinedRendered = true;
         }
     }
