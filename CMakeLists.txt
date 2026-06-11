@@ -30,6 +30,7 @@ option(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL "Require local Qatsh ATSA parallel re
 option(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL "Require local Qatsh ATSA parallel main-lobe-gain patch before building" ON)
 option(ATS_REQUIRE_QATSH_IFFT_SRAND "Require Qatsh ATSA IFFT srand-before-dispatch fix (C-002)" ON)
 option(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT "Require Qatsh ATSA DDM slope maintenance in utilities (C-003)" ON)
+option(ATS_REQUIRE_QATSH_TRACKSTORE "Require Qatsh ATSA O(P*T) track-store loop (A-001)" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -213,6 +214,16 @@ if(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT)
   endif()
   unset(_atsa_ddm_maint_source)
   unset(_atsa_ddm_maint_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_TRACKSTORE)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/tracker.c" _atsa_trackstore_source)
+  string(FIND "${_atsa_trackstore_source}" "ATSA_TRACKSTORE" _atsa_trackstore_marker)
+  if(_atsa_trackstore_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA track-store loop patch is not applied. Run scripts/apply_qatsh_trackstore.sh apply, or configure with -DATS_REQUIRE_QATSH_TRACKSTORE=OFF to bypass.")
+  endif()
+  unset(_atsa_trackstore_source)
+  unset(_atsa_trackstore_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

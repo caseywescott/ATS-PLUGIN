@@ -360,3 +360,17 @@ Fixes **C-003**: includes `frq_slope`/`amp_slope` in `remove_partials` swaps and
 
 CMake requires it by default (marker: slope swaps in `remove_partials`).
 Use `-DATS_REQUIRE_QATSH_DDM_SLOPES_MAINT=OFF` to bypass.
+
+## `qatsh-atsa-trackstore.patch`
+
+**A-001**: inverts the track-store loop from O(P²·T) to O(P·T) by walking frames
+then peaks. Bit-identical output. Apply after the parallel patch stack.
+T touches `src/atsa/tracker.c` only.
+
+```sh
+./scripts/apply_qatsh_trackstore.sh apply
+./scripts/apply_qatsh_trackstore.sh status
+```
+
+CMake requires it by default (marker `ATSA_TRACKSTORE` in `tracker.c`).
+Use `-DATS_REQUIRE_QATSH_TRACKSTORE=OFF` to bypass.

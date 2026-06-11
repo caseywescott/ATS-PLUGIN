@@ -1,0 +1,35 @@
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
+@@ -692,20 +692,19 @@
+   init_sound(sound, anargs->srate, (int)floor(anargs->hop_size * anargs->win_size), 
+ 	     anargs->win_size, anargs->frames, anargs->duration, n_partials, 0);
+ 
+-  /* store values from frames into the arrays */
+-  for(k=0; k<n_partials; k++) {
+-    for(frame=0; frame<sound->frames; frame++) {
++  /* ATSA_TRACKSTORE: O(P*T) store — each (track,frame) cell written once */
++  for(frame=0; frame<sound->frames; frame++) {
++    for(k=0; k<n_partials; k++)
+       sound->time[k][frame] = ana_frames[frame].time;
+-      for(i=0; i<ana_frames[frame].n_peaks; i++) 
+-        if(ana_frames[frame].peaks[i].track == k) {
+-	  sound->amp[k][frame] = ana_frames[frame].peaks[i].amp;
+-          sound->frq[k][frame] = ana_frames[frame].peaks[i].frq;
+-          sound->pha[k][frame] = ana_frames[frame].peaks[i].pha;
+-          sound->smr[k][frame] = ana_frames[frame].peaks[i].smr;
+-          /* ATSA_DDM_SLOPES: carry within-frame slopes into the sound */
+-          sound->frq_slope[k][frame] = ana_frames[frame].peaks[i].frq_slope;
+-          sound->amp_slope[k][frame] = ana_frames[frame].peaks[i].amp_slope;
+-        }
++    for(i=0; i<ana_frames[frame].n_peaks; i++) {
++      k = ana_frames[frame].peaks[i].track;
++      sound->amp[k][frame] = ana_frames[frame].peaks[i].amp;
++      sound->frq[k][frame] = ana_frames[frame].peaks[i].frq;
++      sound->pha[k][frame] = ana_frames[frame].peaks[i].pha;
++      sound->smr[k][frame] = ana_frames[frame].peaks[i].smr;
++      /* ATSA_DDM_SLOPES: carry within-frame slopes into the sound */
++      sound->frq_slope[k][frame] = ana_frames[frame].peaks[i].frq_slope;
++      sound->amp_slope[k][frame] = ana_frames[frame].peaks[i].amp_slope;
+     }
+   }
+ 
