@@ -474,6 +474,15 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
     content.addAndMakeVisible(windowTypeLabel);
     content.addAndMakeVisible(windowTypeBox);
 
+    const juce::String multiResTooltip =
+        "Run a second, longer FFT window for the low band (below 500 Hz). Better bass partial "
+        "separation; slower analysis. Off by default for bit-identical legacy behavior.";
+    setupRowLabel(multiResLabel, "Multi-resolution", multiResTooltip);
+    multiResButton.setHelpText(multiResTooltip);
+    multiResButton.setTooltip(multiResTooltip);
+    content.addAndMakeVisible(multiResLabel);
+    content.addAndMakeVisible(multiResButton);
+
     for (size_t i = 0; i < kSliderSpecs.size(); ++i)
     {
         setupRowLabel(sliderLabels[i], kSliderSpecs[i].label, kSliderSpecs[i].tooltip);
@@ -488,6 +497,8 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, ats_param::kAnalysisType, analysisTypeBox);
     windowTypeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.apvts, ats_param::kAnalysisWinType, windowTypeBox);
+    multiResAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, ats_param::kAnalysisMultiRes, multiResButton);
 
     viewport.setViewedComponent(&content, false);
     viewport.setScrollBarsShown(true, false);
@@ -645,7 +656,7 @@ void AnalysisTabPanel::resized()
     const int gap = 8;
     const int margin = 12;
     const int contentWidth = juce::jmax(540, viewport.getWidth() - 20);
-    const int contentHeight = margin * 2 + 66 + rowH * 17 + sectionH * 3 + gap * 10;
+    const int contentHeight = margin * 2 + 66 + rowH * 18 + sectionH * 3 + gap * 10;
     content.setSize(contentWidth, contentHeight);
 
     auto r = content.getLocalBounds().reduced(margin);
@@ -677,6 +688,7 @@ void AnalysisTabPanel::resized()
     placeRow(sliderLabels[4], sliders[4]);
     placeRow(sliderLabels[5], sliders[5]);
     placeRow(windowTypeLabel, windowTypeBox);
+    placeRow(multiResLabel, multiResButton);
     placeRow(sliderLabels[6], sliders[6]);
     placeRow(sliderLabels[7], sliders[7]);
 
@@ -1035,6 +1047,7 @@ void AnalysisTabPanel::resetToClassicDefaults()
     setPlainParameter(audioProcessor.apvts, ats_param::kAnalysisMinSegSmr, (float) ATSA_MSEGSMR);
     setPlainParameter(audioProcessor.apvts, ats_param::kAnalysisLastPeakContribution, (float) ATSA_LPKCONT);
     setPlainParameter(audioProcessor.apvts, ats_param::kAnalysisSmrContribution, (float) ATSA_SMRCONT);
+    setPlainParameter(audioProcessor.apvts, ats_param::kAnalysisMultiRes, 0.0f);
     profileChoicePending = false;
     refreshProfileSelection();
 }

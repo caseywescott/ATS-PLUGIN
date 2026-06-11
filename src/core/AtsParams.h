@@ -46,6 +46,10 @@ struct AnalysisParams
     double last_peak_cont = ATSA_LPKCONT;
     double SMR_cont = ATSA_SMRCONT;
     int type = ATSA_TYPE;
+    /** Opt-in multi-resolution low-band analysis (ANARGS.multi_res). Default off is bit-identical. */
+    bool multiRes = false;
+    double mrWinMult = ATSA_MRWINMULT;
+    double mrCrossover = ATSA_MRCROSS;
 
     void toAnargs(ANARGS& out) const;
     static AnalysisParams fromAnargs(const ANARGS& a);

@@ -94,12 +94,15 @@ private:
     juce::ComboBox analysisTypeBox;
     juce::Label windowTypeLabel;
     juce::ComboBox windowTypeBox;
+    juce::Label multiResLabel;
+    juce::ToggleButton multiResButton { "Multi-resolution low band" };
 
     std::array<juce::Label, kSliderCount> sliderLabels;
     std::array<juce::Slider, kSliderCount> sliders;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> analysisTypeAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> windowTypeAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> multiResAttach;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, kSliderCount> sliderAttachments;
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::FileChooser> sourceAtsExportChooser;

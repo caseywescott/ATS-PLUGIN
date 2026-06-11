@@ -1961,6 +1961,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f),
         (float) ATSA_SMRCONT));
     layout.add(std::make_unique<juce::AudioParameterBool>(
+        ats_param::kAnalysisMultiRes,
+        "Analysis multi-resolution",
+        false));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
         ats_param::kUseIfftSynth,
         "Use IFFT synthesis",
         false));
@@ -2174,6 +2178,7 @@ ats::AnalysisParams AtsAudioProcessor::readAnalysisParamsFromApvts() const
     a.min_seg_SMR = getRawParamValue(apvts, ats_param::kAnalysisMinSegSmr, (float) ATSA_MSEGSMR);
     a.last_peak_cont = getRawParamValue(apvts, ats_param::kAnalysisLastPeakContribution, (float) ATSA_LPKCONT);
     a.SMR_cont = getRawParamValue(apvts, ats_param::kAnalysisSmrContribution, (float) ATSA_SMRCONT);
+    a.multiRes = getRawParamValue(apvts, ats_param::kAnalysisMultiRes, 0.0f) > 0.5f;
     return a;
 }
 

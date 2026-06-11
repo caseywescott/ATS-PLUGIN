@@ -53,6 +53,7 @@ inline constexpr const char* kAnalysisSmrThreshold = "analysisSmrThreshold";
 inline constexpr const char* kAnalysisMinSegSmr = "analysisMinSegSmr";
 inline constexpr const char* kAnalysisLastPeakContribution = "analysisLastPeakContribution";
 inline constexpr const char* kAnalysisSmrContribution = "analysisSmrContribution";
+inline constexpr const char* kAnalysisMultiRes = "analysisMultiRes";
 inline constexpr const char* kClassicPreviewMode = "classicPreviewMode";
 inline constexpr const char* kUseIfftSynth = "useIfftSynth";
 inline constexpr const char* kFreqShapeMode = "freqShapeMode";

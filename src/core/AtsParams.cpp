@@ -24,6 +24,12 @@ void AnalysisParams::toAnargs(ANARGS& out) const
     out.last_peak_cont = last_peak_cont;
     out.SMR_cont = SMR_cont;
     out.type = type;
+    if (multiRes)
+    {
+        out.multi_res = 1;
+        out.mr_win_mult = mrWinMult;
+        out.mr_crossover = mrCrossover;
+    }
 }
 
 AnalysisParams AnalysisParams::fromAnargs(const ANARGS& a)
@@ -47,6 +53,9 @@ AnalysisParams AnalysisParams::fromAnargs(const ANARGS& a)
     p.last_peak_cont = a.last_peak_cont;
     p.SMR_cont = a.SMR_cont;
     p.type = a.type;
+    p.multiRes = a.multi_res != 0;
+    p.mrWinMult = a.mr_win_mult;
+    p.mrCrossover = a.mr_crossover;
     return p;
 }
 
