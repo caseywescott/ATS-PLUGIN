@@ -4602,70 +4602,124 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
     const double duration = juce::jmax(0.25, juce::jmax(recipe.sourceA.durationSeconds, recipe.sourceB.durationSeconds));
     const double renderSampleRate = hostSampleRate > 0.0 ? hostSampleRate : 44100.0;
     const auto frequencyShape = readFrequencyShapeFromApvts();
+    const ats::TimbreMotionPlan timbrePlan =
+        ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+    const ats::HybridizeDomains interpDomains{
+        getRawChoiceValue(apvts, ats_param::kMorphFrequencyInterpolationDomain, kDefaultMorphFrequencyDomain) == 1,
+        getRawChoiceValue(apvts, ats_param::kMorphAmplitudeInterpolationDomain, kDefaultMorphAmplitudeDomain) == 1};
+    const float morphSmoothingMs = getRawParamValue(apvts, ats_param::kMorphSmoothingMs, kDefaultMorphSmoothingMs);
+    const float morphPerformanceMacro =
+        getRawParamValue(apvts, ats_param::kMorphPerformanceMacro, kDefaultMorphPerformanceMacro);
+    const double timbreBrightnessDb = (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed);
+    const double timbreTiltDbPerOct = (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed);
+    const double timbreNoiseBalance = (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed);
+    const uint64_t morphSourcesRev = morphSourcesRevision.load(std::memory_order_acquire);
 
-    if (sA != nullptr && sB != nullptr)
-    {
-        // Frame-by-frame oscillator bank synthesis through actual ATS per-frame data.
-        ats::AtsSoundPtr shapedA;
-        ats::AtsSoundPtr shapedB;
-        const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, frequencyShape, shapedA);
-        const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
-        const ats::TimbreMotionPlan timbrePlan =
-            ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
-        const ats::HybridizeDomains interpDomains{
-            getRawChoiceValue(apvts, ats_param::kMorphFrequencyInterpolationDomain, kDefaultMorphFrequencyDomain) == 1,
-            getRawChoiceValue(apvts, ats_param::kMorphAmplitudeInterpolationDomain, kDefaultMorphAmplitudeDomain) == 1};
-        auto rendered = renderMorphTrajectoryBuffer(renderA, renderB, recipe, nullptr, morphAmount, renderSampleRate, duration,
-                                                    morphEnvelopeCache.get(),
-                                                    morphSourcesRevision.load(std::memory_order_acquire),
-                                                    &timbrePlan,
-                                                    (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
-                                                    (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
-                                                    (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed),
-                                                    interpDomains,
-                                                    getRawParamValue(apvts, ats_param::kMorphSmoothingMs, kDefaultMorphSmoothingMs),
-                                                    getRawParamValue(apvts, ats_param::kMorphPerformanceMacro, kDefaultMorphPerformanceMacro));
-        const int totalSamples = rendered.getNumSamples();
-        if (totalSamples <= 0)
+    joinWorkers();
+
+    const uint64_t gen = jobGeneration.load(std::memory_order_acquire);
+    morphSnapshotState.store((int) AtsMorphSnapshotUiState::Rebuilding, std::memory_order_release);
+    transformThreadRunning.store(true, std::memory_order_release);
+
+    transformThread = std::thread([this, recipe, residualBands, sA, sB, morphAmount, duration, renderSampleRate,
+                                   frequencyShape, timbrePlan, interpDomains, morphSmoothingMs, morphPerformanceMacro,
+                                   timbreBrightnessDb, timbreTiltDbPerOct, timbreNoiseBalance, morphSourcesRev, gen]() {
+        try
         {
-            error = "Morph trajectory produced no audio.";
-            return false;
+            if (jobGeneration.load(std::memory_order_acquire) != gen)
+            {
+                transformThreadRunning.store(false, std::memory_order_release);
+                return;
+            }
+
+            if (sA != nullptr && sB != nullptr)
+            {
+                ats::AtsSoundPtr shapedA;
+                ats::AtsSoundPtr shapedB;
+                const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, frequencyShape, shapedA);
+                const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, frequencyShape, shapedB);
+                juce::AudioBuffer<float> rendered = renderMorphTrajectoryBuffer(
+                    renderA, renderB, recipe, nullptr, morphAmount, renderSampleRate, duration,
+                    morphEnvelopeCache.get(), morphSourcesRev, &timbrePlan, timbreBrightnessDb, timbreTiltDbPerOct,
+                    timbreNoiseBalance, interpDomains, morphSmoothingMs, morphPerformanceMacro);
+                if (rendered.getNumSamples() <= 0)
+                {
+                    transformThreadRunning.store(false, std::memory_order_release);
+                    morphSnapshotState.store((int) AtsMorphSnapshotUiState::Warning, std::memory_order_release);
+                    setError("Morph trajectory produced no audio.");
+                    return;
+                }
+
+                if (jobGeneration.load(std::memory_order_acquire) != gen)
+                {
+                    transformThreadRunning.store(false, std::memory_order_release);
+                    return;
+                }
+
+                if (activePlaybackBufferIndex.load(std::memory_order_acquire) == kMorphPlaybackBufferIndex)
+                    stopPreviewPlayback();
+                while (readingPlaybackBufferIndex.load(std::memory_order_acquire) == kMorphPlaybackBufferIndex
+                       && jobGeneration.load(std::memory_order_acquire) == gen)
+                {
+                    std::this_thread::yield();
+                }
+
+                if (jobGeneration.load(std::memory_order_acquire) != gen)
+                {
+                    transformThreadRunning.store(false, std::memory_order_release);
+                    return;
+                }
+
+                std::swap(playbackBuffers[(size_t) kMorphPlaybackBufferIndex], rendered);
+                activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
+                previewAuditionMode.store((int) AtsSourceAuditionMode::Both, std::memory_order_release);
+                previewPlaying.store(false, std::memory_order_release);
+                morphSnapshotState.store((int) AtsMorphSnapshotUiState::Ready, std::memory_order_release);
+                previewPlaybackKind.store((int) AtsPreviewPlaybackKind::MorphPreview, std::memory_order_release);
+                transformThreadRunning.store(false, std::memory_order_release);
+                startPreviewPlayback();
+                return;
+            }
+
+            ats::MorphSnapshotOptions options;
+            options.morphAmount = (float) morphAmount;
+            options.frequency.domain = interpDomains.barkFrequency
+                                           ? ats::MorphFrequencyInterpolationDomain::BarkCoordinate
+                                           : ats::MorphFrequencyInterpolationDomain::LogFrequency;
+            options.amplitude.domain = interpDomains.decibelAmplitude
+                                           ? ats::MorphAmplitudeInterpolationDomain::Decibels
+                                           : ats::MorphAmplitudeInterpolationDomain::Power;
+            options.sourceResidualNoiseBands = residualBands[0];
+            options.targetResidualNoiseBands = residualBands[1];
+
+            const auto snapshot = ats::evaluateMorphRecipeSnapshot(recipe, options);
+            juce::String workerError;
+            if (!installPreparedMorphSnapshotForPlayback(snapshot, duration, workerError))
+            {
+                transformThreadRunning.store(false, std::memory_order_release);
+                morphSnapshotState.store((int) AtsMorphSnapshotUiState::Warning, std::memory_order_release);
+                if (workerError.isNotEmpty())
+                    setError(workerError);
+                return;
+            }
+
+            transformThreadRunning.store(false, std::memory_order_release);
+            startPreviewPlayback();
         }
+        catch (const std::exception& e)
+        {
+            transformThreadRunning.store(false, std::memory_order_release);
+            morphSnapshotState.store((int) AtsMorphSnapshotUiState::Warning, std::memory_order_release);
+            setError("Could not render morph preview: " + juce::String(e.what()));
+        }
+        catch (...)
+        {
+            transformThreadRunning.store(false, std::memory_order_release);
+            morphSnapshotState.store((int) AtsMorphSnapshotUiState::Warning, std::memory_order_release);
+            setError("Could not render morph preview.");
+        }
+    });
 
-        if (activePlaybackBufferIndex.load(std::memory_order_acquire) == kMorphPlaybackBufferIndex)
-            stopPreviewPlayback();
-        while (readingPlaybackBufferIndex.load(std::memory_order_acquire) == kMorphPlaybackBufferIndex)
-            std::this_thread::yield();
-
-        playbackBuffers[(size_t) kMorphPlaybackBufferIndex].makeCopyOf(rendered);
-        activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
-        previewAuditionMode.store((int) AtsSourceAuditionMode::Both, std::memory_order_release);
-        previewPlaying.store(false, std::memory_order_release);
-        morphSnapshotState.store((int) AtsMorphSnapshotUiState::Ready, std::memory_order_release);
-        previewPlaybackKind.store((int) AtsPreviewPlaybackKind::MorphPreview, std::memory_order_release);
-    }
-    else
-    {
-        // No raw frame data (e.g. after preset load): fall back to static snapshot.
-        ats::MorphSnapshotOptions options;
-        options.morphAmount = (float) morphAmount;
-        options.frequency.domain =
-            getRawChoiceValue(apvts, ats_param::kMorphFrequencyInterpolationDomain, kDefaultMorphFrequencyDomain) == 1
-                ? ats::MorphFrequencyInterpolationDomain::BarkCoordinate
-                : ats::MorphFrequencyInterpolationDomain::LogFrequency;
-        options.amplitude.domain =
-            getRawChoiceValue(apvts, ats_param::kMorphAmplitudeInterpolationDomain, kDefaultMorphAmplitudeDomain) == 1
-                ? ats::MorphAmplitudeInterpolationDomain::Decibels
-                : ats::MorphAmplitudeInterpolationDomain::Power;
-        options.sourceResidualNoiseBands = residualBands[0];
-        options.targetResidualNoiseBands = residualBands[1];
-
-        const auto snapshot = ats::evaluateMorphRecipeSnapshot(recipe, options);
-        if (!installPreparedMorphSnapshotForPlayback(snapshot, duration, error))
-            return false;
-    }
-
-    startPreviewPlayback();
     return true;
 }
 
@@ -4935,7 +4989,7 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 return;
             }
 
-            playbackBuffers[(size_t) kMorphPlaybackBufferIndex].makeCopyOf(timelineBuffer);
+            std::swap(playbackBuffers[(size_t) kMorphPlaybackBufferIndex], timelineBuffer);
             activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
             previewAuditionMode.store((int) mode, std::memory_order_release);
             previewPlaying.store(false, std::memory_order_release);
