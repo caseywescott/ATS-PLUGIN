@@ -112,6 +112,8 @@ struct ClassicLayerRender
     juce::AudioBuffer<float> combined;
     int modelSampleRate = 44100;
     bool hasResidual = false;
+    /** True after the combined pass (per-partial noise) has been synthesized. */
+    bool combinedRendered = false;
 };
 
 // Sample-wise (wet - dry) into a fresh mono buffer, zero-padding the shorter one.
@@ -142,7 +144,23 @@ ClassicLayerRender subtractClassicLayers(const ClassicLayerRender& wet, const Cl
     out.partials = subtractMonoBuffers(wet.partials, dry.partials);
     out.residual = subtractMonoBuffers(wet.residual, dry.residual);
     out.combined = subtractMonoBuffers(wet.combined, dry.combined);
+    out.combinedRendered = wet.combinedRendered && dry.combinedRendered;
     return out;
+}
+
+/** Synthesize the combined layer on demand (R-002). Skipped by default in renderClassicLayers
+ *  to avoid a third full pass until the user auditions Both with classic combined playback. */
+void ensureClassicCombinedLayer(ClassicLayerRender& render, const ATS_SOUND* sound,
+                                const ats::SynthParams& core)
+{
+    if (render.combinedRendered || !render.hasResidual || sound == nullptr)
+        return;
+
+    ats::SynthParams spCombined = core;
+    spCombined.partialsGain = 1.0;
+    spCombined.residualGain = 1.0;
+    render.combined = runDoSynthesis(sound, spCombined);
+    render.combinedRendered = true;
 }
 
 void freeResidual(double*** res)
@@ -391,7 +409,8 @@ std::vector<ats::MorphTransientMarker> detectMorphTransients(const ATS_SOUND* so
     return markers;
 }
 
-ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthParams& core)
+ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthParams& core,
+                                       bool renderCombinedPass = false)
 {
     ClassicLayerRender render;
     if (sound == nullptr)
@@ -436,12 +455,17 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
 
         render.partials = runDoSynthesis(renderSound, spPartials);
         render.residual = runDoSynthesis(renderSound, spResidual);
-        render.combined = runDoSynthesis(renderSound, spCombined);
+        if (renderCombinedPass)
+        {
+            render.combined = runDoSynthesis(renderSound, spCombined);
+            render.combinedRendered = true;
+        }
     }
     else
     {
         render.partials = runDoSynthesis(renderSound, spPartials);
         render.combined.makeCopyOf(render.partials);
+        render.combinedRendered = true;
     }
 
     return render;
@@ -522,7 +546,7 @@ juce::AudioBuffer<float> renderClassicSourcePlaybackBuffer(const ATS_SOUND* soun
                                                            const ats::SynthParams& core,
                                                            double renderSampleRate)
 {
-    return makePlaybackBufferFromClassicLayers(renderClassicLayers(sound, core), renderSampleRate);
+    return makePlaybackBufferFromClassicLayers(renderClassicLayers(sound, core, true), renderSampleRate);
 }
 
 const ATS_SOUND* makeFrequencyShapedRenderSound(const ATS_SOUND* sound,
@@ -2983,8 +3007,11 @@ bool AtsAudioProcessor::playCurrentModelPreview(AtsSourceAuditionMode mode, bool
     }
 
     const bool smearIsolate = mode == AtsSourceAuditionMode::SmearOnly;
+    const bool classicCombinedPlayback =
+        juce::jmax(0, juce::roundToInt(classicPreviewModeRaw->load(std::memory_order_relaxed))) == 0;
+    const bool renderCombinedPass = mode == AtsSourceAuditionMode::Both && classicCombinedPlayback && hasResidual;
     if (!renderCurrentModelToPlaybackBuffer(kMorphPlaybackBufferIndex, error,
-                                            liveSmear || smearIsolate, smearIsolate))
+                                            liveSmear || smearIsolate, smearIsolate, renderCombinedPass))
         return false;
 
     activePlaybackBufferIndex.store(kMorphPlaybackBufferIndex, std::memory_order_release);
@@ -3116,7 +3143,7 @@ bool AtsAudioProcessor::canPlayMorphPreview() const
 }
 
 bool AtsAudioProcessor::transportCacheTryReuse(int bufferIndex, int sourceTag, const ats::SynthParams& core,
-                                              bool liveSmear, bool smearIsolate)
+                                              bool liveSmear, bool smearIsolate, bool renderCombinedPass)
 {
     if (bufferIndex < 0 || bufferIndex >= (int) transportRenderCache.size())
         return false;
@@ -3128,6 +3155,7 @@ bool AtsAudioProcessor::transportCacheTryReuse(int bufferIndex, int sourceTag, c
     if (e.sourceTag != sourceTag
         || e.liveSmear != liveSmear
         || e.smearIsolate != smearIsolate
+        || e.renderCombinedPass != renderCombinedPass
         || e.modelRevisionSnap != modelRevision.load(std::memory_order_acquire)
         || e.morphSourcesRevisionSnap != morphSourcesRevision.load(std::memory_order_acquire)
         || e.displayShapeRevisionSnap != displayShapeRevision.load(std::memory_order_acquire)
@@ -3158,7 +3186,7 @@ bool AtsAudioProcessor::transportCacheTryReuse(int bufferIndex, int sourceTag, c
 }
 
 void AtsAudioProcessor::transportCacheStore(int bufferIndex, int sourceTag, const ats::SynthParams& core,
-                                            bool liveSmear, bool smearIsolate,
+                                            bool liveSmear, bool smearIsolate, bool renderCombinedPass,
                                             const juce::AudioBuffer<float>& buffer)
 {
     if (bufferIndex < 0 || bufferIndex >= (int) transportRenderCache.size())
@@ -3167,6 +3195,7 @@ void AtsAudioProcessor::transportCacheStore(int bufferIndex, int sourceTag, cons
     auto& e = transportRenderCache[(size_t) bufferIndex];
     e.valid = true;
     e.sourceTag = sourceTag;
+    e.renderCombinedPass = renderCombinedPass;
     e.modelRevisionSnap = modelRevision.load(std::memory_order_acquire);
     e.morphSourcesRevisionSnap = morphSourcesRevision.load(std::memory_order_acquire);
     e.displayShapeRevisionSnap = displayShapeRevision.load(std::memory_order_acquire);
@@ -3179,7 +3208,8 @@ void AtsAudioProcessor::transportCacheStore(int bufferIndex, int sourceTag, cons
     e.buffer.makeCopyOf(buffer);
 }
 
-bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear, bool smearIsolate)
+bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear,
+                                                           bool smearIsolate, bool renderCombinedPass)
 {
     error.clear();
     if (bufferIndex < 0 || bufferIndex >= (int) playbackBuffers.size())
@@ -3191,7 +3221,8 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
     constexpr int kCurrentModelSourceTag = 100;
     {
         const ats::SynthParams cacheCore = readCoreSynthParamsFromApvts();
-        if (transportCacheTryReuse(bufferIndex, kCurrentModelSourceTag, cacheCore, liveSmear, smearIsolate))
+        if (transportCacheTryReuse(bufferIndex, kCurrentModelSourceTag, cacheCore, liveSmear, smearIsolate,
+                                   renderCombinedPass))
             return true;
     }
 
@@ -3214,7 +3245,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core); // private copy: no modelLock needed
+        const ClassicLayerRender wet = renderClassicLayers(smeared, core, true); // private copy: no modelLock needed
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(modelLock);
@@ -3223,7 +3254,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                 error = "No analyzed ATS model to render.";
                 return false;
             }
-            dry = renderClassicLayers(analyzedModel.get(), core);
+            dry = renderClassicLayers(analyzedModel.get(), core, true);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3233,7 +3264,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(AtsTraceSource::Current, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core); // private copy: no modelLock needed
+            rendered = renderClassicLayers(smeared, core, renderCombinedPass); // private copy: no modelLock needed
             renderedLive = true;
         }
     }
@@ -3245,7 +3276,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
             error = "No analyzed ATS model to render.";
             return false;
         }
-        rendered = renderClassicLayers(analyzedModel.get(), core);
+        rendered = renderClassicLayers(analyzedModel.get(), core, renderCombinedPass);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -3299,7 +3330,8 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
             playback.setSample(2, i, c);
         }
     }
-    transportCacheStore(bufferIndex, kCurrentModelSourceTag, core, liveSmear, smearIsolate, playback);
+    transportCacheStore(bufferIndex, kCurrentModelSourceTag, core, liveSmear, smearIsolate, renderCombinedPass,
+                        playback);
 #if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     {
         auto peak = [&playback](int ch) {
@@ -3319,7 +3351,8 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
     return true;
 }
 
-bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear, bool smearIsolate)
+bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear,
+                                                              bool smearIsolate, bool renderCombinedPass)
 {
     error.clear();
     if (slotIndex < 0 || slotIndex > 1)
@@ -3336,7 +3369,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
     const ats::SynthParams core = readCoreSynthParamsFromApvts();
     const AtsTraceSource src = slotIndex == 0 ? AtsTraceSource::SourceA : AtsTraceSource::SourceB;
 
-    if (transportCacheTryReuse(bufferIndex, slotIndex, core, liveSmear, smearIsolate))
+    if (transportCacheTryReuse(bufferIndex, slotIndex, core, liveSmear, smearIsolate, renderCombinedPass))
         return true;
 
     ClassicLayerRender rendered;
@@ -3352,7 +3385,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core); // private copy: no morphRecipeLock needed
+        const ClassicLayerRender wet = renderClassicLayers(smeared, core, true); // private copy: no morphRecipeLock needed
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(morphRecipeLock);
@@ -3362,7 +3395,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                 error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
                 return false;
             }
-            dry = renderClassicLayers(sound, core);
+            dry = renderClassicLayers(sound, core, true);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3372,7 +3405,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(src, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core); // private copy: no morphRecipeLock needed
+            rendered = renderClassicLayers(smeared, core, renderCombinedPass); // private copy: no morphRecipeLock needed
             renderedLive = true;
         }
     }
@@ -3385,7 +3418,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
             error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
             return false;
         }
-        rendered = renderClassicLayers(sound, core);
+        rendered = renderClassicLayers(sound, core, renderCombinedPass);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -3438,7 +3471,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
             playback.setSample(2, i, c);
         }
     }
-    transportCacheStore(bufferIndex, slotIndex, core, liveSmear, smearIsolate, playback);
+    transportCacheStore(bufferIndex, slotIndex, core, liveSmear, smearIsolate, renderCombinedPass, playback);
 #if ATS_ENABLE_PLAYBACK_DIAGNOSTICS
     {
         auto peak = [&playback](int ch) {
@@ -5738,7 +5771,11 @@ bool AtsAudioProcessor::listenMorphSourceSlot(int slotIndex, AtsSourceAuditionMo
 
     const int bufferIndex = slotIndex == 0 ? kSourceAPlaybackBufferIndex : kSourceBPlaybackBufferIndex;
     const bool smearIsolate = mode == AtsSourceAuditionMode::SmearOnly;
-    if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error, liveSmear || smearIsolate, smearIsolate))
+    const bool classicCombinedPlayback =
+        juce::jmax(0, juce::roundToInt(classicPreviewModeRaw->load(std::memory_order_relaxed))) == 0;
+    const bool renderCombinedPass = mode == AtsSourceAuditionMode::Both && classicCombinedPlayback && info.hasResidual;
+    if (!renderMorphSourceSlotToPlaybackBuffer(slotIndex, error, liveSmear || smearIsolate, smearIsolate,
+                                               renderCombinedPass))
     {
         if (error.isEmpty())
             error = "No rendered source preview is available. Analyze this source again.";

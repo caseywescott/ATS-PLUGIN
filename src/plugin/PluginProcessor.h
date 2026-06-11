@@ -675,8 +675,10 @@ private:
     int undoTransactionTick = 0;
     std::int64_t lastTimelineEditMs = 0; // coalesces a continuous timeline drag
     std::int64_t lastTimbreMotionEditMs = 0; // coalesces a continuous timbre-motion drag
-    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
-    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false, bool smearIsolate = false);
+    bool renderCurrentModelToPlaybackBuffer(int bufferIndex, juce::String& error, bool liveSmear = false,
+                                            bool smearIsolate = false, bool renderCombinedPass = false);
+    bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false,
+                                               bool smearIsolate = false, bool renderCombinedPass = false);
     void rebuildMorphCorrespondenceIfReady();
 
     // --- Live (non-destructive) Smearnov preview (transport "Smear" toggle) ---
@@ -770,15 +772,17 @@ private:
         ats::SynthParams core {};
         bool liveSmear = false;
         bool smearIsolate = false;
+        bool renderCombinedPass = false;
         size_t smearHash = 0;
         uint64_t smearOverlayRevisionSnap = 0;
         juce::AudioBuffer<float> buffer;
     };
     std::array<TransportRenderCacheEntry, 3> transportRenderCache;
     bool transportCacheTryReuse(int bufferIndex, int sourceTag, const ats::SynthParams& core,
-                                bool liveSmear, bool smearIsolate);
+                                bool liveSmear, bool smearIsolate, bool renderCombinedPass);
     void transportCacheStore(int bufferIndex, int sourceTag, const ats::SynthParams& core,
-                             bool liveSmear, bool smearIsolate, const juce::AudioBuffer<float>& buffer);
+                             bool liveSmear, bool smearIsolate, bool renderCombinedPass,
+                             const juce::AudioBuffer<float>& buffer);
 
     /** Per slot: ch0 = partials-only, ch1 = residual-only, optional ch2 = classic combined. */
     std::array<juce::AudioBuffer<float>, 3> playbackBuffers;
