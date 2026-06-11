@@ -47,6 +47,9 @@ public:
 
     [[nodiscard]] static double hzToBark(double frequencyHz);
 
+    /** R-005: linear blend of log-bin envelopes (envelope-of-interp approximation). */
+    [[nodiscard]] BarkSpectralEnvelope lerpLogBinsWith(const BarkSpectralEnvelope& other, double frac) const;
+
 private:
     std::vector<double> ampBins;
     std::vector<double> logBins; // log(ampBins[i]); precomputed for sampleAtBark interpolation

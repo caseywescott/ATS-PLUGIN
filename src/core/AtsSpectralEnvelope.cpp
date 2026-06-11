@@ -330,6 +330,33 @@ double BarkSpectralEnvelope::sampleAtBark(double bark) const
     return std::max(amplitudeFloor, std::exp(l0 * (1.0 - t) + l1 * t));
 }
 
+BarkSpectralEnvelope BarkSpectralEnvelope::lerpLogBinsWith(const BarkSpectralEnvelope& other,
+                                                           double frac) const
+{
+    BarkSpectralEnvelope out;
+    if (!valid || !other.valid || ampBins.size() < 2 || ampBins.size() != other.ampBins.size())
+        return out;
+
+    const double t = std::clamp(frac, 0.0, 1.0);
+    out.maxBark = maxBark;
+    out.amplitudeFloor = amplitudeFloor;
+    out.ampBins.resize(ampBins.size());
+    out.logBins.resize(logBins.size());
+    out.peakAmplitude = amplitudeFloor;
+
+    for (size_t i = 0; i < ampBins.size(); ++i)
+    {
+        const double logA = logBins[i] * (1.0 - t) + other.logBins[i] * t;
+        const double a = std::max(amplitudeFloor, std::exp(logA));
+        out.logBins[i] = logA;
+        out.ampBins[i] = a;
+        out.peakAmplitude = std::max(out.peakAmplitude, a);
+    }
+
+    out.valid = true;
+    return out;
+}
+
 std::vector<double> BarkSpectralEnvelope::findPeakBarks(double minProminenceDb) const
 {
     std::vector<double> peaks;

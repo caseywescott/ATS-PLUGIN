@@ -54,6 +54,9 @@ struct MorphEnvelopeCache
     const ATS_SOUND* keyB = nullptr;
     std::map<std::tuple<int, int, uint64_t>, ats::BarkSpectralEnvelope> mapA;
     std::map<std::tuple<int, int, uint64_t>, ats::BarkSpectralEnvelope> mapB;
+    /** R-005: per-integer-frame envelopes (frac=0) for timeline lerp — avoids rebuilding every chunk. */
+    std::map<int, ats::BarkSpectralEnvelope> perFrameA;
+    std::map<int, ats::BarkSpectralEnvelope> perFrameB;
 };
 
 namespace
@@ -3610,13 +3613,17 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeCached(MorphEnvelopeCache* cache, boo
             cache->keyA = cache->keyB = nullptr;
             cache->mapA.clear();
             cache->mapB.clear();
+            cache->perFrameA.clear();
+            cache->perFrameB.clear();
         }
         const ATS_SOUND*& keyPtr = isSourceA ? cache->keyA : cache->keyB;
         auto& map = isSourceA ? cache->mapA : cache->mapB;
+        auto& perFrame = isSourceA ? cache->perFrameA : cache->perFrameB;
         if (keyPtr != sound)
         {
             keyPtr = sound;
             map.clear();
+            perFrame.clear();
         }
         const auto it = map.find(key);
         if (it != map.end())
@@ -3636,6 +3643,78 @@ ats::BarkSpectralEnvelope buildBarkEnvelopeCached(MorphEnvelopeCache* cache, boo
         }
     }
     return env;
+}
+
+// R-005: cache integer-frame envelopes and lerp log-bins for timeline chunks (approximation;
+// see FABLE_PERFORMANCE_REVIEW.md). Fixed-morph preview keeps buildBarkEnvelopeCached (exact).
+static ats::BarkSpectralEnvelope getPerFrameBarkEnvelope(MorphEnvelopeCache* cache, bool isSourceA,
+                                                         const ATS_SOUND* sound, int frame,
+                                                         uint64_t sourcesRevision)
+{
+    if (cache == nullptr || sound == nullptr)
+        return buildBarkEnvelopeForFrame(sound, frame, frame, 0.0);
+
+    {
+        const juce::ScopedLock sl(cache->lock);
+        if (cache->revision != sourcesRevision)
+        {
+            cache->revision = sourcesRevision;
+            cache->keyA = cache->keyB = nullptr;
+            cache->mapA.clear();
+            cache->mapB.clear();
+            cache->perFrameA.clear();
+            cache->perFrameB.clear();
+        }
+        const ATS_SOUND*& keyPtr = isSourceA ? cache->keyA : cache->keyB;
+        auto& perFrame = isSourceA ? cache->perFrameA : cache->perFrameB;
+        if (keyPtr != sound)
+        {
+            keyPtr = sound;
+            cache->mapA.clear();
+            cache->mapB.clear();
+            perFrame.clear();
+        }
+        const auto it = perFrame.find(frame);
+        if (it != perFrame.end())
+            return it->second;
+    }
+
+    ats::BarkSpectralEnvelope env = buildBarkEnvelopeForFrame(sound, frame, frame, 0.0);
+
+    {
+        const juce::ScopedLock sl(cache->lock);
+        if (cache->revision == sourcesRevision)
+        {
+            const ATS_SOUND* keyPtr = isSourceA ? cache->keyA : cache->keyB;
+            auto& perFrame = isSourceA ? cache->perFrameA : cache->perFrameB;
+            if (keyPtr == sound)
+                perFrame.emplace(frame, env);
+        }
+    }
+    return env;
+}
+
+static ats::BarkSpectralEnvelope buildBarkEnvelopeTimelineCached(MorphEnvelopeCache* cache,
+                                                                 bool isSourceA,
+                                                                 const ATS_SOUND* sound,
+                                                                 int frame0, int frame1,
+                                                                 double frac,
+                                                                 uint64_t sourcesRevision)
+{
+    if (frame0 == frame1 || frac <= 0.0)
+        return getPerFrameBarkEnvelope(cache, isSourceA, sound, frame0, sourcesRevision);
+    if (frac >= 1.0)
+        return getPerFrameBarkEnvelope(cache, isSourceA, sound, frame1, sourcesRevision);
+
+    const ats::BarkSpectralEnvelope e0 =
+        getPerFrameBarkEnvelope(cache, isSourceA, sound, frame0, sourcesRevision);
+    const ats::BarkSpectralEnvelope e1 =
+        getPerFrameBarkEnvelope(cache, isSourceA, sound, frame1, sourcesRevision);
+    if (!e0.isValid())
+        return e1;
+    if (!e1.isValid())
+        return e0;
+    return e0.lerpLogBinsWith(e1, frac);
 }
 
 ats::HybridizedPartialKind toHybridizedPartialKind(ats::MorphCorrespondenceKind kind)
@@ -4118,8 +4197,18 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         ats::BarkSpectralEnvelope barkA, barkB;
         if (effectiveEnvTransfer > 1.0e-9 || envMorphAmount > 1.0e-9)
         {
-            barkA = buildBarkEnvelopeCached(envCache, true, soundA, fA0, fA1, fracA, sourcesRevision);
-            barkB = buildBarkEnvelopeCached(envCache, false, soundB, fB0, fB1, fracB, sourcesRevision);
+            if (useTimeline && envCache != nullptr)
+            {
+                barkA = buildBarkEnvelopeTimelineCached(envCache, true, soundA, fA0, fA1, fracA,
+                                                        sourcesRevision);
+                barkB = buildBarkEnvelopeTimelineCached(envCache, false, soundB, fB0, fB1, fracB,
+                                                        sourcesRevision);
+            }
+            else
+            {
+                barkA = buildBarkEnvelopeCached(envCache, true, soundA, fA0, fA1, fracA, sourcesRevision);
+                barkB = buildBarkEnvelopeCached(envCache, false, soundB, fB0, fB1, fracB, sourcesRevision);
+            }
         }
 
         // For the EnvelopeMorph lane, align the two envelopes' formants and warp the Bark axis
