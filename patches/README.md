@@ -416,3 +416,35 @@ regenerate golden expectations after applying. Touches
 
 CMake requires it by default (marker `ATSA_RESIDUAL_POW2`).
 Use `-DATS_REQUIRE_QATSH_RESIDUAL_POW2=OFF` to bypass.
+
+## `qatsh-atsa-scratch.patch`
+
+**A-004**: reuses per-worker polar FFT scratch in `FrameScratch`, extends
+`peak_detection` with optional magnitude/phase buffers, and grows peak lists
+geometrically in `push_peak`. Touches `other-utils.c`, `tracker.c`,
+`peak-detection.c`, and `atsa.h`.
+
+```sh
+./scripts/apply_qatsh_scratch.sh apply
+./scripts/apply_qatsh_scratch.sh status
+```
+
+CMake requires it by default (markers `ATSA_SCRATCH_PEAKS`, `polar_mags`).
+Use `-DATS_REQUIRE_QATSH_SCRATCH=OFF` to bypass.
+
+## `qatsh-atsa-synth-state.patch`
+
+**C-001 root fix (Phase 2.7)**: thread-local deterministic LCG replaces libc
+`rand`/`srand`, mutex-guarded `atsa_prefill_partial_residual` removes concurrent
+`sound->res` writes, and `pthread_once` initializes the sine table safely.
+Restores parallel classic `do_synthesis` passes in the plugin. **Behavior-changing**
+(residual noise sequence); regenerate goldens after applying. Touches
+`synthesis.c`, `residual-analysis.c`, and `atsa.h`.
+
+```sh
+./scripts/apply_qatsh_synth_state.sh apply
+./scripts/apply_qatsh_synth_state.sh status
+```
+
+CMake requires it by default (markers `ATSA_SYNTH_STATE`, `atsa_prefill_partial_residual`).
+Use `-DATS_REQUIRE_QATSH_SYNTH_STATE=OFF` to bypass.
