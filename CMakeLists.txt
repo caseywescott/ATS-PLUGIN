@@ -29,6 +29,7 @@ option(ATS_REQUIRE_QATSH_PARALLEL "Require local Qatsh ATSA parallel frame-loop 
 option(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL "Require local Qatsh ATSA parallel residual-stage patch before building" ON)
 option(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL "Require local Qatsh ATSA parallel main-lobe-gain patch before building" ON)
 option(ATS_REQUIRE_QATSH_IFFT_SRAND "Require Qatsh ATSA IFFT srand-before-dispatch fix (C-002)" ON)
+option(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT "Require Qatsh ATSA DDM slope maintenance in utilities (C-003)" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -202,6 +203,16 @@ if(ATS_REQUIRE_QATSH_IFFT_SRAND)
   unset(_atsa_ifft_srand_source)
   unset(_atsa_ifft_srand_pos)
   unset(_atsa_ifft_dispatch_pos)
+endif()
+
+if(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/utilities.c" _atsa_ddm_maint_source)
+  string(FIND "${_atsa_ddm_maint_source}" "swap(double*, sound->frq_slope[part], sound->frq_slope[kept])" _atsa_ddm_maint_marker)
+  if(_atsa_ddm_maint_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA DDM slope maintenance patch is not applied. Run scripts/apply_qatsh_ddm_slopes_maint.sh apply, or configure with -DATS_REQUIRE_QATSH_DDM_SLOPES_MAINT=OFF to bypass.")
+  endif()
+  unset(_atsa_ddm_maint_source)
+  unset(_atsa_ddm_maint_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

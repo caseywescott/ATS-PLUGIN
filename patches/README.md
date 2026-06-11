@@ -346,3 +346,17 @@ Fixes **C-002**: seeds the synthesis PRNG before the IFFT dispatch so the opt-in
 
 CMake requires it by default (`srand` precedes `sparams->use_ifft` in `synthesis.c`).
 Use `-DATS_REQUIRE_QATSH_IFFT_SRAND=OFF` to bypass.
+
+## `qatsh-atsa-ddm-slopes-maint.patch`
+
+Fixes **C-003**: includes `frq_slope`/`amp_slope` in `remove_partials` swaps and
+`add_partial` copy/zero-fill when `has_slopes` is set. Apply *after*
+`qatsh-atsa-ddm.patch`. Touches `src/atsa/utilities.c` only.
+
+```sh
+./scripts/apply_qatsh_ddm_slopes_maint.sh apply
+./scripts/apply_qatsh_ddm_slopes_maint.sh status
+```
+
+CMake requires it by default (marker: slope swaps in `remove_partials`).
+Use `-DATS_REQUIRE_QATSH_DDM_SLOPES_MAINT=OFF` to bypass.

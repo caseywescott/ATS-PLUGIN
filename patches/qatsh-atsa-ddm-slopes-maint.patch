@@ -1,0 +1,35 @@
+--- a/src/atsa/utilities.c
++++ b/src/atsa/utilities.c
+@@ -531,6 +531,10 @@
+     memcpy(sound->pha[tgt_index], sound->pha[src_index], sound->frames * sizeof(double));
+     memcpy(sound->smr[tgt_index], sound->smr[src_index], sound->frames * sizeof(double));
+     memcpy(sound->res[tgt_index], sound->res[src_index], sound->frames * sizeof(double));
++    if (sound->has_slopes) {
++      memcpy(sound->frq_slope[tgt_index], sound->frq_slope[src_index], sound->frames * sizeof(double));
++      memcpy(sound->amp_slope[tgt_index], sound->amp_slope[src_index], sound->frames * sizeof(double));
++    }
+   } else {
+     /* other wise, set it to 0 everywhere */
+     memset(sound->time[tgt_index], 0, sound->frames * sizeof(double));
+@@ -539,6 +543,10 @@
+     memset(sound->pha[tgt_index], 0, sound->frames * sizeof(double));
+     memset(sound->smr[tgt_index], 0, sound->frames * sizeof(double));
+     memset(sound->res[tgt_index], 0, sound->frames * sizeof(double));
++    if (sound->has_slopes) {
++      memset(sound->frq_slope[tgt_index], 0, sound->frames * sizeof(double));
++      memset(sound->amp_slope[tgt_index], 0, sound->frames * sizeof(double));
++    }
+   }
+ 
+   /* update the number of partials */
+@@ -585,6 +593,10 @@
+ 	  swap(double*, sound->pha[part],  sound->pha[kept]);
+ 	  swap(double*, sound->smr[part],  sound->smr[kept]);
+ 	  swap(double*, sound->res[part],  sound->res[kept]);
++	  if (sound->has_slopes) {
++	    swap(double*, sound->frq_slope[part], sound->frq_slope[kept]);
++	    swap(double*, sound->amp_slope[part], sound->amp_slope[kept]);
++	  }
+       }
+ 
+       /* increment kept partials insertion index */
