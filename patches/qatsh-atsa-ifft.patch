@@ -1,244 +1,707 @@
-diff --git a/src/atsa/atsa.h b/src/atsa/atsa.h
-index a862f79..ca143b2 100644
---- a/src/atsa/atsa.h
-+++ b/src/atsa/atsa.h
-@@ -303,6 +303,10 @@ typedef struct { //parameters for resynthesis
-   double sr;          // Sampling Rate
-   short allorsel;     // when TRUE, use only selected partials ; when FALSE use all
-   short upha;         // when TRUE, the phase information (if any) is used ; when FALSE is not
-+  /* ATSA_IFFT_SYNTH: select the overlap-add inverse-FFT (Rodet-Depalle)
-+     deterministic synthesizer instead of the oscillator bank. Zero-initialized,
-+     so existing callers keep the bit-identical oscillator-bank path. */
-+  short use_ifft;
- } SPARAMS;
- 
- /* CURVE
-@@ -494,6 +498,13 @@ void do_atsh_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, in
- void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
-                   double** out_samps, int* n_out_samps);
- 
-+/* ATSA_IFFT_SYNTH: overlap-add inverse-FFT (Rodet-Depalle) deterministic
-+ * synthesis on the uniform analysis grid (no time-warp / time-envelope).
-+ * Residual band-noise is added time-domain. do_synthesis dispatches here when
-+ * sparams->use_ifft is set; called directly it ignores timenv. */
-+void do_synthesis_ifft(ATS_SOUND *ats_sound, SPARAMS* sparams, int *selected,
-+                       double** out_samps, int* n_out_samps);
-+
- /* tracker.c */
- 
- /* tracker
-diff --git a/src/atsa/synthesis.c b/src/atsa/synthesis.c
-index 70409f9..d11e2e9 100644
 --- a/src/atsa/synthesis.c
 +++ b/src/atsa/synthesis.c
-@@ -26,10 +26,10 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
- #define SINE_TABLE_LEN 16384
- 
- #define BW 0.1
--#define BW_FREQ 500.
+@@ -1,51 +1,51 @@
+-/*
+-SYNTHESIS.C
+-Oscar Pablo Di Liscia / Juan Pampin
 -
--#define EPSILON 0.001
--#define ATSA_SYNTH_RANDOM_SEED 1u
-+#define BW_FREQ 500.
-+
-+#define EPSILON 0.001
-+#define ATSA_SYNTH_RANDOM_SEED 1u
- 
- //MACROS
- /*
-@@ -46,32 +46,32 @@ Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
- #define LIN3_INTERP(x, yp, yc, yn) \
-  (((x) < .5) ? ((yc) + (yp)) / 2 + x * ((yc) - (yp)) : (3*(yc) - (yn)) / 2 + x * ((yn) - (yc)))
- 
--/* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
-- * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
-- * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
-- * with the DDM-measured chirp S (Hz per frame). Solving a+bx+cx^2+ex^3 for those
-- * four constraints: e=4(D1-S), b=4*D2-D1+e/2, c=D1-e-b, a=(fp+fc)/2, with
-- * D1=(fn-fp)/2 and D2=(fc-fp)/2. When S equals the linear-implied slope (fn-fp)/2
-- * the cubic collapses to LIN3 exactly, so curvature is added only for genuine
-- * sub-hop frequency motion (vibrato turning points).
-- *
-- * Overshoot limiter (Fritsch-Carlson 1980): the raw DDM chirp is unreliable on
-- * weak/near-stationary partials -- measured up to ~5x the inter-frame chord and
-- * ~900 Hz over a 50 ms frame, which the bare cubic renders as audible spurious
-- * sweeps. Bounding the center tangent to 3*min(|secantL|,|secantR|) (the two
-- * half-frame secants fc-fp and fn-fc) keeps the interpolant within the data
-- * envelope: on a steady partial both secants ~0 so S is clamped toward 0 and the
-- * cubic falls back to LIN3, while genuine vibrato flanks (sizable secants) retain
-- * their curvature. Linear motion (S = chord) is well under the cap, so the
-- * LIN3-exact reduction is preserved. */
--#define CUBIC_FREQ_COEFFS(use, fp, fc, fn, S, A, B, C, E) do { \
--    if (use) { double F0=((fp)+(fc))*.5, D1=((fn)-(fp))*.5, D2=((fc)-(fp))*.5; \
--      double sL=(fc)-(fp), sR=(fn)-(fc); \
--      double mn=(fabs(sL)<fabs(sR)?fabs(sL):fabs(sR)), Slim=3.0*mn, Sc=(S); \
--      if(Sc>Slim) Sc=Slim; else if(Sc<-Slim) Sc=-Slim; \
--      (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
--#define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
+-Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
+-- moved to double computation everywhere
+-- do_synthesis no longer writes to a sound file, but simply allocates and returns
+-  a sample array => now independant from any sound IO library.
+-- improved synthesis algorithm, that precisely takes into account
+-  all the frames pieces (but suppose the time streching/expanding
+-  function is always increasing, contrary to original algorithm).
+-*/
 -
-+/* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
-+ * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
-+ * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
-+ * with the DDM-measured chirp S (Hz per frame). Solving a+bx+cx^2+ex^3 for those
-+ * four constraints: e=4(D1-S), b=4*D2-D1+e/2, c=D1-e-b, a=(fp+fc)/2, with
-+ * D1=(fn-fp)/2 and D2=(fc-fp)/2. When S equals the linear-implied slope (fn-fp)/2
-+ * the cubic collapses to LIN3 exactly, so curvature is added only for genuine
-+ * sub-hop frequency motion (vibrato turning points).
-+ *
-+ * Overshoot limiter (Fritsch-Carlson 1980): the raw DDM chirp is unreliable on
-+ * weak/near-stationary partials -- measured up to ~5x the inter-frame chord and
-+ * ~900 Hz over a 50 ms frame, which the bare cubic renders as audible spurious
-+ * sweeps. Bounding the center tangent to 3*min(|secantL|,|secantR|) (the two
-+ * half-frame secants fc-fp and fn-fc) keeps the interpolant within the data
-+ * envelope: on a steady partial both secants ~0 so S is clamped toward 0 and the
-+ * cubic falls back to LIN3, while genuine vibrato flanks (sizable secants) retain
-+ * their curvature. Linear motion (S = chord) is well under the cap, so the
-+ * LIN3-exact reduction is preserved. */
-+#define CUBIC_FREQ_COEFFS(use, fp, fc, fn, S, A, B, C, E) do { \
-+    if (use) { double F0=((fp)+(fc))*.5, D1=((fn)-(fp))*.5, D2=((fc)-(fp))*.5; \
-+      double sL=(fc)-(fp), sR=(fn)-(fc); \
-+      double mn=(fabs(sL)<fabs(sR)?fabs(sL):fabs(sR)), Slim=3.0*mn, Sc=(S); \
-+      if(Sc>Slim) Sc=Slim; else if(Sc<-Slim) Sc=-Slim; \
-+      (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
-+#define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
+-#include <stdlib.h>
+-#include <stdio.h>
+-#include <math.h>
+-#include <string.h>
+-#include <time.h>
+-
+-#include "atsa.h"
+-
+-
+-//CONSTANTS
+-#define TWO_PI (2*M_PI)
+-
+-#define SINE_TABLE_LEN 16384
+-
+-#define BW 0.1
++/*
++SYNTHESIS.C
++Oscar Pablo Di Liscia / Juan Pampin
 +
- /*
- ;;; note that for this macro the values of i should go
- ;;; from 0 to dt. So in the case of having 220 samples
-@@ -108,15 +108,15 @@ static double sine_table[SINE_TABLE_LEN];
- //randi output random numbers in the range of 1,-1
- //getting a new number at frequency freq and interpolating
- //the intermediate values.
--void randi_setup(double sr, double freq, RANDI *radat)
--{
--  // Initialize 
--  radat->size = (int) (sr / freq) - 1;
--  if (radat->size < 1)
--    radat->size = 1;
--  radat->a1   = rand();
--  radat->a2   = rand();
--  radat->cnt  = 0;
-+void randi_setup(double sr, double freq, RANDI *radat)
-+{
-+  // Initialize 
-+  radat->size = (int) (sr / freq) - 1;
-+  if (radat->size < 1)
-+    radat->size = 1;
-+  radat->a1   = rand();
-+  radat->a2   = rand();
-+  radat->cnt  = 0;
- }
- ///////////////////////////////////////////////////////////////////
- double randi(RANDI *radat)
-@@ -139,14 +139,14 @@ double randif(RANDI *radat, double freq, double sr)
++Extracted from atsh synth-funcs.c and modified by jpmeuret@free.fr
++- moved to double computation everywhere
++- do_synthesis no longer writes to a sound file, but simply allocates and returns
++  a sample array => now independant from any sound IO library.
++- improved synthesis algorithm, that precisely takes into account
++  all the frames pieces (but suppose the time streching/expanding
++  function is always increasing, contrary to original algorithm).
++*/
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <math.h>
++#include <string.h>
++#include <time.h>
++
++#include "atsa.h"
++
++
++//CONSTANTS
++#define TWO_PI (2*M_PI)
++
++#define SINE_TABLE_LEN 16384
++
++#define BW 0.1
+ #define BW_FREQ 500.
+ 
+ #define EPSILON 0.001
+ #define ATSA_SYNTH_RANDOM_SEED 1u
+-
+-//MACROS
+-/*
+-;;; In these macros pha_1 and frq_1 refers to the instantaneous phase
+-;;; and frequency of the previous frame while pha and frq refer
+-;;; to the phase and frequency of the present frame.
+-*/
+-#define COMPUTE_M(pha_1, frq_1, pha, frq, dt) ((pha_1 + (frq_1 * dt) - pha) + ((frq - frq_1) * .5 * dt)) / TWO_PI   
+-#define COMPUTE_AUX(pha_1, pha, frq_1, dt, M) (pha + (TWO_PI * M)) - (pha_1 + (frq_1 * dt))
+-#define COMPUTE_ALPHA(aux, frq_1, frq, dt) ((3. / (dt * dt)) * aux ) - ((frq - frq_1) / dt)
+-#define COMPUTE_BETA(aux, frq_1, frq, dt) ((-2. / (dt * dt * dt)) * aux) + ((frq - frq_1) / (dt * dt))
+-
+-// Linear interpolation with 3 given points (-.5,yp), (0.5,yc), (1.5, yn)
+-#define LIN3_INTERP(x, yp, yc, yn) \
+- (((x) < .5) ? ((yc) + (yp)) / 2 + x * ((yc) - (yp)) : (3*(yc) - (yn)) / 2 + x * ((yn) - (yc)))
+-
++
++//MACROS
++/*
++;;; In these macros pha_1 and frq_1 refers to the instantaneous phase
++;;; and frequency of the previous frame while pha and frq refer
++;;; to the phase and frequency of the present frame.
++*/
++#define COMPUTE_M(pha_1, frq_1, pha, frq, dt) ((pha_1 + (frq_1 * dt) - pha) + ((frq - frq_1) * .5 * dt)) / TWO_PI   
++#define COMPUTE_AUX(pha_1, pha, frq_1, dt, M) (pha + (TWO_PI * M)) - (pha_1 + (frq_1 * dt))
++#define COMPUTE_ALPHA(aux, frq_1, frq, dt) ((3. / (dt * dt)) * aux ) - ((frq - frq_1) / dt)
++#define COMPUTE_BETA(aux, frq_1, frq, dt) ((-2. / (dt * dt * dt)) * aux) + ((frq - frq_1) / (dt * dt))
++
++// Linear interpolation with 3 given points (-.5,yp), (0.5,yc), (1.5, yn)
++#define LIN3_INTERP(x, yp, yc, yn) \
++ (((x) < .5) ? ((yc) + (yp)) / 2 + x * ((yc) - (yp)) : (3*(yc) - (yn)) / 2 + x * ((yn) - (yc)))
++
+ /* ATSA_DDM_SLOPES: cubic frequency interpolation over the current frame x in
+  * [0,1]. It passes through the SAME three control points LIN3 nails -- f(0)=
+  * (fp+fc)/2, f(.5)=fc, f(1)=(fc+fn)/2 -- but replaces LIN3's kinked center slope
+@@ -72,42 +72,42 @@
+       (E)=4.*(D1-Sc); (B)=4.*D2-D1+.5*(E); (C)=D1-(E)-(B); (A)=F0; } } while(0)
+ #define CUBIC_FREQ_EVAL(x, A, B, C, E) ((A) + (x)*((B) + (x)*((C) + (x)*(E))))
+ 
+-/*
+-;;; note that for this macro the values of i should go
+-;;; from 0 to dt. So in the case of having 220 samples
+-;;; within a frame the increment for i will be dt/200
+-*/
+-#define INTERP_PHASE(pha_1, frq_1, alpha, beta, i) (beta * i * i * i) + (alpha * i * i)+ (frq_1 * i) + pha_1
+-
+-#define ENG_RMS(val, ws) sqrt((double)val/(ws * (double)ATSA_NOISE_VARIANCE))
+-
+-#define fair_floor(value, epsilon) (int)(ceil(value) - (value) <= (epsilon) ? ceil(value) : floor(value))
+-
+-//STRUCTURES
+-typedef struct { //the time data for each segment of the time function
+-  double beg_frame;   // 1st frame index in [0.0, sound.frames-1]
+-  double end_frame;   // last frame index in [1.0, sound.frames]
+-  double beg_time;    // start time (non streched) (relative to sparams->beg)
+-  double end_time;    // end time (non streched) (relative to sparams->beg)
+-  double time_factor; // time stretching factor (1=invariant)
+-} TIME_DATA;
+-
+-typedef struct { //the data for the randi UG
+-  int    size; //size of the frame in samples this should be sr/freq.
+-  double a1;   //first amplitude value
+-  double a2;   //next  amplitude value
+-  int    cnt;  //sample position counter
+-} RANDI;
+-
+-
+-//GLOBAL VARIABLES
+-static int sine_table_ready = 0;
+-static double sine_table[SINE_TABLE_LEN];
+-
+-///////////////////////////////////////////////////////////////////
+-//randi output random numbers in the range of 1,-1
+-//getting a new number at frequency freq and interpolating
+-//the intermediate values.
++/*
++;;; note that for this macro the values of i should go
++;;; from 0 to dt. So in the case of having 220 samples
++;;; within a frame the increment for i will be dt/200
++*/
++#define INTERP_PHASE(pha_1, frq_1, alpha, beta, i) (beta * i * i * i) + (alpha * i * i)+ (frq_1 * i) + pha_1
++
++#define ENG_RMS(val, ws) sqrt((double)val/(ws * (double)ATSA_NOISE_VARIANCE))
++
++#define fair_floor(value, epsilon) (int)(ceil(value) - (value) <= (epsilon) ? ceil(value) : floor(value))
++
++//STRUCTURES
++typedef struct { //the time data for each segment of the time function
++  double beg_frame;   // 1st frame index in [0.0, sound.frames-1]
++  double end_frame;   // last frame index in [1.0, sound.frames]
++  double beg_time;    // start time (non streched) (relative to sparams->beg)
++  double end_time;    // end time (non streched) (relative to sparams->beg)
++  double time_factor; // time stretching factor (1=invariant)
++} TIME_DATA;
++
++typedef struct { //the data for the randi UG
++  int    size; //size of the frame in samples this should be sr/freq.
++  double a1;   //first amplitude value
++  double a2;   //next  amplitude value
++  int    cnt;  //sample position counter
++} RANDI;
++
++
++//GLOBAL VARIABLES
++static int sine_table_ready = 0;
++static double sine_table[SINE_TABLE_LEN];
++
++///////////////////////////////////////////////////////////////////
++//randi output random numbers in the range of 1,-1
++//getting a new number at frequency freq and interpolating
++//the intermediate values.
+ void randi_setup(double sr, double freq, RANDI *radat)
  {
-   double output;
- 
--  if(radat->cnt == radat->size) { //get a new random value
+   // Initialize 
+@@ -117,28 +117,28 @@
+   radat->a1   = rand();
+   radat->a2   = rand();
+   radat->cnt  = 0;
+-}
+-///////////////////////////////////////////////////////////////////
+-double randi(RANDI *radat)
+-{
+-  double output;
+-
+-  if (radat->cnt == radat->size) { //get a new random value
 -    radat->a1  = radat->a2; 
 -    radat->a2  = rand();
 -    radat->cnt = 0;
--    radat->size= (int) (sr / freq) - 1;
--    if (radat->size < 1)
--      radat->size = 1;
 -  }
-+  if(radat->cnt == radat->size) { //get a new random value
+-
+-  output = radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+-  radat->cnt++;
+-
+-  return 1. - 2. * output / RAND_MAX;
+-}
+-///////////////////////////////////////////////////////////////////
+-double randif(RANDI *radat, double freq, double sr)
+-{
+-  double output;
+-
++}
++///////////////////////////////////////////////////////////////////
++double randi(RANDI *radat)
++{
++  double output;
++
++  if (radat->cnt == radat->size) { //get a new random value
 +    radat->a1  = radat->a2; 
 +    radat->a2  = rand();
 +    radat->cnt = 0;
-+    radat->size= (int) (sr / freq) - 1;
-+    if (radat->size < 1)
-+      radat->size = 1;
 +  }
- 
-   output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
-   radat->cnt++;
-@@ -290,28 +290,28 @@ double locate_frame(ATS_SOUND *ats_sound, double from_frame, double time)
- */
- ////////////////////////////////////////////////////////////////////
- int synth_deterministic_only(double ampl_p, double ampl_c, double ampl_n,
--                             double freq_p, double freq_c, double freq_n,
--                             double pha_p, double pha_c, double pha_n,
--                             double fslope_c, short use_slope,
--                             double time_offset, double duration, double sample_rate,
-+                             double freq_p, double freq_c, double freq_n,
-+                             double pha_p, double pha_c, double pha_n,
-+                             double fslope_c, short use_slope,
-+                             double time_offset, double duration, double sample_rate,
-                              short use_phase, double *oscpt, double* sample_buf)
- {
-   int s, frame_samps;
-   double ampl, freq, pha, frame_offset;
--  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
-+  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
- 
-   frame_samps = fair_floor(sample_rate * duration, EPSILON);
- 
--  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
-+  if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
-       return frame_samps; //nothing to do if no amplitude
- 
--  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
--
-+  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
 +
-   for(s = 0; s < frame_samps; s++) {
-     frame_offset = (time_offset + s / sample_rate) / duration;
-     ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
--    freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
--                     : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
-+    freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
-+                     : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
-     pha  = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
-     sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt);
++  output = radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
++  radat->cnt++;
++
++  return 1. - 2. * output / RAND_MAX;
++}
++///////////////////////////////////////////////////////////////////
++double randif(RANDI *radat, double freq, double sr)
++{
++  double output;
++
+   if(radat->cnt == radat->size) { //get a new random value
+     radat->a1  = radat->a2; 
+     radat->a2  = rand();
+@@ -147,263 +147,431 @@
+     if (radat->size < 1)
+       radat->size = 1;
    }
-@@ -343,17 +343,17 @@ int synth_residual_only(double ampl_p, double ampl_c, double ampl_n,
-  }
- ////////////////////////////////////////////////////////////////////
- int synth_both(double ampl_p, double ampl_c, double ampl_n,
--               double freq_p, double freq_c, double freq_n,
--               double pha_p, double pha_c, double pha_n,
--               double resid_p, double resid_c, double resid_n,
--               double fslope_c, short use_slope,
--               double time_offset, double duration, double sample_rate,
-+               double freq_p, double freq_c, double freq_n,
-+               double pha_p, double pha_c, double pha_n,
-+               double resid_p, double resid_c, double resid_n,
-+               double fslope_c, short use_slope,
-+               double time_offset, double duration, double sample_rate,
-                short use_phase, double *oscpt, RANDI* rdata, double* sample_buf)
- {
-   int s, frame_samps;
-   double ampl, freq, pha, resid, rfreq, frame_offset;
--  double rfreq_p, rfreq_c, rfreq_n;
--  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
-+  double rfreq_p, rfreq_c, rfreq_n;
-+  double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
- 
-   frame_samps = fair_floor(sample_rate * duration, EPSILON);
- 
-@@ -365,13 +365,13 @@ int synth_both(double ampl_p, double ampl_c, double ampl_n,
-   rfreq_c = BW * (freq_c < BW_FREQ ? BW_FREQ : freq_c / 2);
-   rfreq_n = BW * (freq_n < BW_FREQ ? BW_FREQ : freq_n / 2);
- 
--  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
 -
-+  CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
+-  output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
+-  radat->cnt++;
+-  
+-  return 1. - 2. * output / RAND_MAX;
+-}
+-///////////////////////////////////////////////////////////////////
+-void make_sine_table() 
+-{
+-  static const double incr = TWO_PI / SINE_TABLE_LEN;
+-  int i;
+-  double theta = 0.;
+-  
+-  for(i=0; i < SINE_TABLE_LEN; i++) {
+-    sine_table[i] = sin(theta);
+-    theta += incr;
+-  }
+-
+-  sine_table_ready = 1;
+-}
+-////////////////////////////////////////////////////////////////////
+-double ioscilator(double amp, double freq, double pha, double sr, double *oscpt)
+-{
+-  // Phase management = 3 options (uncomment only one) :
+-  // 1) No phase = 0 phase.
+-  //const double osc = *oscpt; 
+-
+-  // 2) Random phase.
+-  //static const int max_pha_shift = 300; //(SINE_TABLE_LEN / 2) / 1000;
+-  //const int pha_shift = rand() % (2 * max_pha_shift) - max_pha_shift;
+-  //const int pha_shift = 
+-  //    (int) ((2.0 * max_pha_shift + 1.0) * (rand() / (RAND_MAX + 1.0))) - max_pha_shift;
+-  //const double osc = fmod(*oscpt + SINE_TABLE_LEN + pha_shift, SINE_TABLE_LEN);
+-
+-  // 3) Shipped phase (linear interpolation).
+-  const int pha_shift = (int)(pha * (double)SINE_TABLE_LEN / TWO_PI);
+-  const double osc = fmod(*oscpt + SINE_TABLE_LEN + pha_shift, SINE_TABLE_LEN);
+-
+-  double output;
+-  int curr_ind, next_ind;
+-
+-  if (!sine_table_ready)
+-    make_sine_table();
+-
+-  // Linear interpolation of the amplitude from the sine table.
+-  curr_ind = (int)floor(osc);
+-  next_ind = (curr_ind + 1) % SINE_TABLE_LEN;
+-  output = amp * (sine_table[curr_ind]
+-                  + (sine_table[next_ind] - sine_table[curr_ind]) 
+-                    * (osc - curr_ind));
+-
+-  // Update oscillator index.
+-  const double incr = freq * (double)SINE_TABLE_LEN / sr; 
+-  *oscpt = fmod(*oscpt + incr, SINE_TABLE_LEN);
+-
+-  return output;
+-}
+-///////////////////////////////////////////////////////////////
+-double locate_frame(ATS_SOUND *ats_sound, double from_frame, double time)
+-{
+-  //Assuming that the duration of each frame may be different, we
+-  //do not have any other method to locate the frame for a given time
+-  double frame;
+-  int i_frame;
+-
+-  if (from_frame < 0) 
+-    i_frame = 0;
+-  else if (from_frame > ats_sound->frames - 1) 
+-    i_frame = ats_sound->frames - 1;
+-  else
+-    i_frame = (int)floor(from_frame);
+-
+-  while (i_frame < ats_sound->frames - 1
+-         && time > ats_sound->time[0][i_frame + 1])
+-  {
+-    fprintf(stderr, "locate_frame : i=%d, time[i+1]=%f\n",
+-            i_frame, ats_sound->time[0][i_frame + 1]);
+-    i_frame++;
+-  }
+-
+-  if (i_frame == ats_sound->frames - 1)
+-    frame = (time - ats_sound->time[0][i_frame])
+-            / ((double)ats_sound->dur - ats_sound->time[0][i_frame]);
+-  else
+-    frame = (time - ats_sound->time[0][i_frame])
+-            / ((double)ats_sound->time[0][i_frame + 1] - ats_sound->time[0][i_frame]);
+-  frame += i_frame;
+-  if (frame >= ats_sound->frames)
+-    frame = ats_sound->frames;
+-  if (frame - floor(frame) < 1.0 / ats_sound->frame_size)
+-    // The time interval for a rame is open upward [beg, end[.
+-    frame *= (1.0 - 0.01 / ats_sound->frame_size);
+-
+-  fprintf(stderr, "locate_frame(from=%f, time=%f) = %f\n", from_frame, time, frame);
+-
+-  return frame;
+-}
+-////////////////////////////////////////////////////////////////////
+-//Synthesizes a Buffer using phase interpolation (not used for the moment)
+-/*void synth_buffer_phint(double a1, double a2, double f1, double f2, double p1, double p2, double dt, double frame_samps, double* frbuf)
+-{
+-  double t_inc, a_inc, M, aux, alpha, beta, time, amp, scale, new_phase;
+-  int k, index;
+-  double out=0., phase=0.;
+-
+-  if (!sine_table)
+-    make_sine_table();
+-
+-  f1  *=TWO_PI;
+-  f2  *=TWO_PI;
+-  t_inc= dt  / frame_samps;
+-  a_inc= (a2 - a1) / frame_samps;
+-  M    = COMPUTE_M(p1, f1, p2, f2,dt);
+-  aux  = COMPUTE_AUX(p1, p2, f1, dt, M);
+-  alpha= COMPUTE_ALPHA(aux,f1,f2,dt);
+-  beta = COMPUTE_BETA(aux,f1,f2,dt);
+-  time = 0.;
+-  amp  = a1;
+-  scale = TWO_PI / (SINE_TABLE_LEN - 1); // must take it out from here...
+-
+-  for(k = 0; k < (int)frame_samps; k++) { 
+- 
+-    phase = INTERP_PHASE(p1,f1,alpha,beta,time);
+-    new_phase = (phase >= TWO_PI  ? phase - TWO_PI : phase);
+-    index=(int)((new_phase / TWO_PI)*(double)SINE_TABLE_LEN - 1.);
+-    while ( index >= SINE_TABLE_LEN ) {
+-      index -=SINE_TABLE_LEN;
+-    }
+-     while ( index < 0 ) {
+-      index +=SINE_TABLE_LEN;
+-    }
+-    out = sine_table[index] * amp;
+-
+-    /////////////////////////////////////////////////////////
+-    time +=t_inc;
+-    amp  +=a_inc;
+-    frbuf[k] +=out; //buffer adds each partial at each pass
+-
+-  }
+-}
+-*/
+-////////////////////////////////////////////////////////////////////
+-int synth_deterministic_only(double ampl_p, double ampl_c, double ampl_n,
 +
-   for(s = 0; s < frame_samps; s++) {
-     frame_offset = (time_offset + s / sample_rate) / duration;
-     ampl  = LIN3_INTERP(frame_offset, ampl_p,  ampl_c,  ampl_n);
--    freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
--                      : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
-+    freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
-+                      : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
-     pha   = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
-     resid = LIN3_INTERP(frame_offset, resid_p, resid_c, resid_n);
-     rfreq = LIN3_INTERP(frame_offset, rfreq_p, rfreq_c, rfreq_n);
-@@ -383,6 +383,173 @@ int synth_both(double ampl_p, double ampl_c, double ampl_n,
-   return frame_samps;
- }
++  output= radat->a1 + (radat->a2 - radat->a1) * radat->cnt / radat->size;
++  radat->cnt++;
++  
++  return 1. - 2. * output / RAND_MAX;
++}
++///////////////////////////////////////////////////////////////////
++void make_sine_table() 
++{
++  static const double incr = TWO_PI / SINE_TABLE_LEN;
++  int i;
++  double theta = 0.;
++  
++  for(i=0; i < SINE_TABLE_LEN; i++) {
++    sine_table[i] = sin(theta);
++    theta += incr;
++  }
++
++  sine_table_ready = 1;
++}
++////////////////////////////////////////////////////////////////////
++double ioscilator(double amp, double freq, double pha, double sr, double *oscpt)
++{
++  // Phase management = 3 options (uncomment only one) :
++  // 1) No phase = 0 phase.
++  //const double osc = *oscpt; 
++
++  // 2) Random phase.
++  //static const int max_pha_shift = 300; //(SINE_TABLE_LEN / 2) / 1000;
++  //const int pha_shift = rand() % (2 * max_pha_shift) - max_pha_shift;
++  //const int pha_shift = 
++  //    (int) ((2.0 * max_pha_shift + 1.0) * (rand() / (RAND_MAX + 1.0))) - max_pha_shift;
++  //const double osc = fmod(*oscpt + SINE_TABLE_LEN + pha_shift, SINE_TABLE_LEN);
++
++  // 3) Shipped phase (linear interpolation).
++  const int pha_shift = (int)(pha * (double)SINE_TABLE_LEN / TWO_PI);
++  const double osc = fmod(*oscpt + SINE_TABLE_LEN + pha_shift, SINE_TABLE_LEN);
++
++  double output;
++  int curr_ind, next_ind;
++
++  if (!sine_table_ready)
++    make_sine_table();
++
++  // Linear interpolation of the amplitude from the sine table.
++  curr_ind = (int)floor(osc);
++  next_ind = (curr_ind + 1) % SINE_TABLE_LEN;
++  output = amp * (sine_table[curr_ind]
++                  + (sine_table[next_ind] - sine_table[curr_ind]) 
++                    * (osc - curr_ind));
++
++  // Update oscillator index.
++  const double incr = freq * (double)SINE_TABLE_LEN / sr; 
++  *oscpt = fmod(*oscpt + incr, SINE_TABLE_LEN);
++
++  return output;
++}
++///////////////////////////////////////////////////////////////
++double locate_frame(ATS_SOUND *ats_sound, double from_frame, double time)
++{
++  //Assuming that the duration of each frame may be different, we
++  //do not have any other method to locate the frame for a given time
++  double frame;
++  int i_frame;
++
++  if (from_frame < 0) 
++    i_frame = 0;
++  else if (from_frame > ats_sound->frames - 1) 
++    i_frame = ats_sound->frames - 1;
++  else
++    i_frame = (int)floor(from_frame);
++
++  while (i_frame < ats_sound->frames - 1
++         && time > ats_sound->time[0][i_frame + 1])
++  {
++    fprintf(stderr, "locate_frame : i=%d, time[i+1]=%f\n",
++            i_frame, ats_sound->time[0][i_frame + 1]);
++    i_frame++;
++  }
++
++  if (i_frame == ats_sound->frames - 1)
++    frame = (time - ats_sound->time[0][i_frame])
++            / ((double)ats_sound->dur - ats_sound->time[0][i_frame]);
++  else
++    frame = (time - ats_sound->time[0][i_frame])
++            / ((double)ats_sound->time[0][i_frame + 1] - ats_sound->time[0][i_frame]);
++  frame += i_frame;
++  if (frame >= ats_sound->frames)
++    frame = ats_sound->frames;
++  if (frame - floor(frame) < 1.0 / ats_sound->frame_size)
++    // The time interval for a rame is open upward [beg, end[.
++    frame *= (1.0 - 0.01 / ats_sound->frame_size);
++
++  fprintf(stderr, "locate_frame(from=%f, time=%f) = %f\n", from_frame, time, frame);
++
++  return frame;
++}
++////////////////////////////////////////////////////////////////////
++//Synthesizes a Buffer using phase interpolation (not used for the moment)
++/*void synth_buffer_phint(double a1, double a2, double f1, double f2, double p1, double p2, double dt, double frame_samps, double* frbuf)
++{
++  double t_inc, a_inc, M, aux, alpha, beta, time, amp, scale, new_phase;
++  int k, index;
++  double out=0., phase=0.;
++
++  if (!sine_table)
++    make_sine_table();
++
++  f1  *=TWO_PI;
++  f2  *=TWO_PI;
++  t_inc= dt  / frame_samps;
++  a_inc= (a2 - a1) / frame_samps;
++  M    = COMPUTE_M(p1, f1, p2, f2,dt);
++  aux  = COMPUTE_AUX(p1, p2, f1, dt, M);
++  alpha= COMPUTE_ALPHA(aux,f1,f2,dt);
++  beta = COMPUTE_BETA(aux,f1,f2,dt);
++  time = 0.;
++  amp  = a1;
++  scale = TWO_PI / (SINE_TABLE_LEN - 1); // must take it out from here...
++
++  for(k = 0; k < (int)frame_samps; k++) { 
++ 
++    phase = INTERP_PHASE(p1,f1,alpha,beta,time);
++    new_phase = (phase >= TWO_PI  ? phase - TWO_PI : phase);
++    index=(int)((new_phase / TWO_PI)*(double)SINE_TABLE_LEN - 1.);
++    while ( index >= SINE_TABLE_LEN ) {
++      index -=SINE_TABLE_LEN;
++    }
++     while ( index < 0 ) {
++      index +=SINE_TABLE_LEN;
++    }
++    out = sine_table[index] * amp;
++
++    /////////////////////////////////////////////////////////
++    time +=t_inc;
++    amp  +=a_inc;
++    frbuf[k] +=out; //buffer adds each partial at each pass
++
++  }
++}
++*/
++////////////////////////////////////////////////////////////////////
++int synth_deterministic_only(double ampl_p, double ampl_c, double ampl_n,
+                              double freq_p, double freq_c, double freq_n,
+                              double pha_p, double pha_c, double pha_n,
+                              double fslope_c, short use_slope,
+                              double time_offset, double duration, double sample_rate,
+-                             short use_phase, double *oscpt, double* sample_buf)
+-{
+-  int s, frame_samps;
+-  double ampl, freq, pha, frame_offset;
++                             short use_phase, double *oscpt, double* sample_buf)
++{
++  int s, frame_samps;
++  double ampl, freq, pha, frame_offset;
+   double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+-
+-  frame_samps = fair_floor(sample_rate * duration, EPSILON);
+-
++
++  frame_samps = fair_floor(sample_rate * duration, EPSILON);
++
+   if (ampl_p == 0. && ampl_c == 0. && ampl_n == 0.)
+-      return frame_samps; //nothing to do if no amplitude
+-
++      return frame_samps; //nothing to do if no amplitude
++
+   CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
  
+-  for(s = 0; s < frame_samps; s++) {
+-    frame_offset = (time_offset + s / sample_rate) / duration;
+-    ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
++  for(s = 0; s < frame_samps; s++) {
++    frame_offset = (time_offset + s / sample_rate) / duration;
++    ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
+     freq = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
+                      : LIN3_INTERP(frame_offset, freq_p, freq_c, freq_n);
+-    pha  = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+-    sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt);
+-  }
+-
+-  return frame_samps;
+-}
+-////////////////////////////////////////////////////////////////////
+-int synth_residual_only(double ampl_p, double ampl_c, double ampl_n,
+-                        double freq,
+-                        double time_offset, double duration, double sample_rate,
+-                        double *oscpt, RANDI* rdata, double* sample_buf)
+-{
+-  int s, frame_samps;
+-  double ampl, pha, frame_offset;
+-
+-  frame_samps = fair_floor(sample_rate * duration, EPSILON);
+-
+-  if(ampl_p==0. && ampl_c==0. && ampl_n==0.) 
+-      return frame_samps; //nothing to do if no amplitude
+-
+-  for(s = 0; s < frame_samps; s++) { 
+-    frame_offset = (time_offset + s / sample_rate) / duration;
+-    ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
+-    pha = 0.; // Shouldn't we use a random phase here ?
+-    sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt) * randi(rdata);  
+-  }
+-
+-  return frame_samps;
+- }
+-////////////////////////////////////////////////////////////////////
+-int synth_both(double ampl_p, double ampl_c, double ampl_n,
++    pha  = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
++    sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt);
++  }
++
++  return frame_samps;
++}
++////////////////////////////////////////////////////////////////////
++int synth_residual_only(double ampl_p, double ampl_c, double ampl_n,
++                        double freq,
++                        double time_offset, double duration, double sample_rate,
++                        double *oscpt, RANDI* rdata, double* sample_buf)
++{
++  int s, frame_samps;
++  double ampl, pha, frame_offset;
++
++  frame_samps = fair_floor(sample_rate * duration, EPSILON);
++
++  if(ampl_p==0. && ampl_c==0. && ampl_n==0.) 
++      return frame_samps; //nothing to do if no amplitude
++
++  for(s = 0; s < frame_samps; s++) { 
++    frame_offset = (time_offset + s / sample_rate) / duration;
++    ampl = LIN3_INTERP(frame_offset, ampl_p, ampl_c, ampl_n);
++    pha = 0.; // Shouldn't we use a random phase here ?
++    sample_buf[s] += ioscilator(ampl, freq, pha, sample_rate, oscpt) * randi(rdata);  
++  }
++
++  return frame_samps;
++ }
++////////////////////////////////////////////////////////////////////
++int synth_both(double ampl_p, double ampl_c, double ampl_n,
+                double freq_p, double freq_c, double freq_n,
+                double pha_p, double pha_c, double pha_n,
+                double resid_p, double resid_c, double resid_n,
+                double fslope_c, short use_slope,
+                double time_offset, double duration, double sample_rate,
+-               short use_phase, double *oscpt, RANDI* rdata, double* sample_buf)
+-{
+-  int s, frame_samps;
+-  double ampl, freq, pha, resid, rfreq, frame_offset;
++               short use_phase, double *oscpt, RANDI* rdata, double* sample_buf)
++{
++  int s, frame_samps;
++  double ampl, freq, pha, resid, rfreq, frame_offset;
+   double rfreq_p, rfreq_c, rfreq_n;
+   double fa=0., fb=0., fcc=0., fe=0.; /* ATSA_DDM_SLOPES cubic-freq coeffs */
+-
+-  frame_samps = fair_floor(sample_rate * duration, EPSILON);
+-
+-  if(ampl_p==0. && ampl_c==0. && ampl_n==0.
+-     && resid_p==0. && resid_c==0. && resid_n==0.)
+-    return frame_samps; //nothing to do if no amplitude
+-
+-  rfreq_p = BW * (freq_p < BW_FREQ ? BW_FREQ : freq_p / 2);
+-  rfreq_c = BW * (freq_c < BW_FREQ ? BW_FREQ : freq_c / 2);
+-  rfreq_n = BW * (freq_n < BW_FREQ ? BW_FREQ : freq_n / 2);
+-
++
++  frame_samps = fair_floor(sample_rate * duration, EPSILON);
++
++  if(ampl_p==0. && ampl_c==0. && ampl_n==0.
++     && resid_p==0. && resid_c==0. && resid_n==0.)
++    return frame_samps; //nothing to do if no amplitude
++
++  rfreq_p = BW * (freq_p < BW_FREQ ? BW_FREQ : freq_p / 2);
++  rfreq_c = BW * (freq_c < BW_FREQ ? BW_FREQ : freq_c / 2);
++  rfreq_n = BW * (freq_n < BW_FREQ ? BW_FREQ : freq_n / 2);
++
+   CUBIC_FREQ_COEFFS(use_slope, freq_p, freq_c, freq_n, fslope_c, fa, fb, fcc, fe);
+ 
+-  for(s = 0; s < frame_samps; s++) {
+-    frame_offset = (time_offset + s / sample_rate) / duration;
+-    ampl  = LIN3_INTERP(frame_offset, ampl_p,  ampl_c,  ampl_n);
++  for(s = 0; s < frame_samps; s++) {
++    frame_offset = (time_offset + s / sample_rate) / duration;
++    ampl  = LIN3_INTERP(frame_offset, ampl_p,  ampl_c,  ampl_n);
+     freq  = use_slope ? CUBIC_FREQ_EVAL(frame_offset, fa, fb, fcc, fe)
+                       : LIN3_INTERP(frame_offset, freq_p,  freq_c,  freq_n);
+-    pha   = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
+-    resid = LIN3_INTERP(frame_offset, resid_p, resid_c, resid_n);
+-    rfreq = LIN3_INTERP(frame_offset, rfreq_p, rfreq_c, rfreq_n);
+-    sample_buf[s] += 
+-      ioscilator(1.0, freq, pha, sample_rate, oscpt)
+-      * (ampl + resid * randif(rdata, rfreq, sample_rate));  
+-  }
+-
+-  return frame_samps;
+-}
+-
+-////////////////////////////////////////////////////////////////////
+-////////////////////////////////////////////////////////////////////
+-/////////THIS IS THE MAIN SYNTHESIS LOOP////////////////////////////
+-////////////////////////////////////////////////////////////////////
+-void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
+-                  double** out_samps, int* n_out_samps)
+-{
+-  double dt=0., rfreq;
+-  int frame_samps=0;
+-  double bframe, eframe;
+-  double dur, dy, bxval, byval, exval, eyval, difx, dify;
+-  TIME_DATA *tdata;
+-  int nbp;
+-  double *ospt=0;
+-  RANDI *rarray=0;
+-  static double res_band_centers[ATSA_CRITICAL_BANDS];
+-  int todo;
+-  double ampl_p, ampl_c, ampl_n;
+-  double freq_p, freq_c, freq_n;
+-  double pha_p, pha_c, pha_n;
+-  double resid_p, resid_c, resid_n;
++    pha   = (use_phase ? LIN3_INTERP(frame_offset, pha_p, pha_c, pha_n) : 0.);
++    resid = LIN3_INTERP(frame_offset, resid_p, resid_c, resid_n);
++    rfreq = LIN3_INTERP(frame_offset, rfreq_p, rfreq_c, rfreq_n);
++    sample_buf[s] += 
++      ioscilator(1.0, freq, pha, sample_rate, oscpt)
++      * (ampl + resid * randif(rdata, rfreq, sample_rate));  
++  }
++
++  return frame_samps;
++}
++
 +/* ATSA_IFFT_SYNTH ====================================================
 + * Overlap-add inverse-FFT additive synthesis (Rodet & Depalle 1992).
 + * Each frame's deterministic partials are deposited into one spectrum as
@@ -368,6 +831,7 @@ index 70409f9..d11e2e9 100644
 +      out[n] /= nrm[n];
 +
 +  /* Residual band-noise: same model as the oscillator path, uniform grid. */
++  srand(ATSA_SYNTH_RANDOM_SEED);
 +  has_residual = ats_sound->band_energy != NULL;
 +  if (has_residual && sparams->ramp > 0.0 && sparams->amp != 0.0) {
 +    RANDI *rb = (RANDI*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(RANDI));
@@ -406,168 +870,495 @@ index 70409f9..d11e2e9 100644
 +  *n_out_samps = todo;
 +}
 +
- ////////////////////////////////////////////////////////////////////
- ////////////////////////////////////////////////////////////////////
- /////////THIS IS THE MAIN SYNTHESIS LOOP////////////////////////////
-@@ -404,26 +571,32 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-   double freq_p, freq_c, freq_n;
-   double pha_p, pha_c, pha_n;
-   double resid_p, resid_c, resid_n;
--  double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
--  int n_samps;
--  int first, last;
--  int f, f_p, f_n;
--  double frame_dur, time_offset, duration;
--  int p, d, b;
--  int has_residual;
--
--  // Fix special params values
--  if (sparams->end <= sparams->beg)
--      sparams->end = sparams->beg + ats_sound->dur;
--
--  srand(ATSA_SYNTH_RANDOM_SEED);
--  has_residual = ats_sound->band_energy != NULL;
--
--  // Transfer residual data if partial noise is present
--  if (has_residual) {
--    for(f=0; f<ats_sound->frames; f++) {
--      band_energy_to_res(ats_sound, f);
--    }
-+  double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
-+  int n_samps;
-+  int first, last;
-+  int f, f_p, f_n;
-+  double frame_dur, time_offset, duration;
-+  int p, d, b;
-+  int has_residual;
-+
++////////////////////////////////////////////////////////////////////
++////////////////////////////////////////////////////////////////////
++/////////THIS IS THE MAIN SYNTHESIS LOOP////////////////////////////
++////////////////////////////////////////////////////////////////////
++void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
++                  double** out_samps, int* n_out_samps)
++{
++  double dt=0., rfreq;
++  int frame_samps=0;
++  double bframe, eframe;
++  double dur, dy, bxval, byval, exval, eyval, difx, dify;
++  TIME_DATA *tdata;
++  int nbp;
++  double *ospt=0;
++  RANDI *rarray=0;
++  static double res_band_centers[ATSA_CRITICAL_BANDS];
++  int todo;
++  double ampl_p, ampl_c, ampl_n;
++  double freq_p, freq_c, freq_n;
++  double pha_p, pha_c, pha_n;
++  double resid_p, resid_c, resid_n;
+   double fslope_c; /* ATSA_DDM_SLOPES: within-frame chirp, Hz per frame */
+   int n_samps;
+   int first, last;
+@@ -412,231 +580,237 @@
+   int p, d, b;
+   int has_residual;
+ 
 +  /* ATSA_IFFT_SYNTH: opt-in inverse-FFT path (uniform grid, no time-warp). */
 +  if (sparams->use_ifft) {
 +    do_synthesis_ifft(ats_sound, sparams, selected, out_samps, n_out_samps);
 +    return;
 +  }
 +
-+  // Fix special params values
-+  if (sparams->end <= sparams->beg)
-+      sparams->end = sparams->beg + ats_sound->dur;
-+
-+  srand(ATSA_SYNTH_RANDOM_SEED);
-+  has_residual = ats_sound->band_energy != NULL;
-+
-+  // Transfer residual data only for combined deterministic + residual synthesis
-+  if (has_residual && sparams->ramp != 0. && sparams->amp != 0.) {
-+    for(f=0; f<ats_sound->frames; f++) {
-+      band_energy_to_res(ats_sound, f);
-+    }
-   }
+   // Fix special params values
+   if (sparams->end <= sparams->beg)
+       sparams->end = sparams->beg + ats_sound->dur;
  
-   // Build envelop segments descriptor and compute number of samples to generate
-@@ -433,7 +606,7 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-   dur   = sparams->end - sparams->beg;
-   todo=0;
-   bframe = 0.;
+-  srand(ATSA_SYNTH_RANDOM_SEED);
+   has_residual = ats_sound->band_energy != NULL;
+ 
+-  // Transfer residual data only for combined deterministic + residual synthesis
++  // Transfer residual data only for the combined branch below. Deterministic-only
++  // and residual-only synthesis never read the per-partial residual array.
+   if (has_residual && sparams->ramp != 0. && sparams->amp != 0.) {
+     for(f=0; f<ats_sound->frames; f++) {
+       band_energy_to_res(ats_sound, f);
+     }
+-  }
+-
+-  // Build envelop segments descriptor and compute number of samples to generate
+-  nbp   = get_nbp(timenv);
+-  tdata = (TIME_DATA*)malloc(nbp * sizeof(TIME_DATA));
+-  dy    = get_maxy_value(timenv) - get_miny_value(timenv);
+-  dur   = sparams->end - sparams->beg;
+-  todo=0;
+-  bframe = 0.;
 -  fprintf(stdout, "do_synthesis: nbp=%d, dur=%f, dy=%f, pha=%d\n", nbp, dur, dy, sparams->upha);
-+  //fprintf(stdout, "do_synthesis: nbp=%d, dur=%f, dy=%f, pha=%d\n", nbp, dur, dy, sparams->upha);
- 
-   for(p=0; p < nbp - 1; ++p){
- 
-@@ -443,8 +616,8 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-     exval= dur * get_x_value(timenv, p+1); // We assume xmin=0, xmax=1
-     eyval= dur * get_y_value(timenv, p+1) * dy; // We assume ymin=0
-     
+-
+-  for(p=0; p < nbp - 1; ++p){
+-
+-    //get the data from the time envelope and convert it to time
+-    bxval= dur * get_x_value(timenv, p); // We assume xmin=0, xmax=1
+-    byval= dur * get_y_value(timenv, p) * dy; // We assume ymin=0
+-    exval= dur * get_x_value(timenv, p+1); // We assume xmin=0, xmax=1
+-    eyval= dur * get_y_value(timenv, p+1) * dy; // We assume ymin=0
+-    
 -    fprintf(stdout, "do_synthesis: seg %d : bxval=%f, byval=%f, exval=%f, eyval=%f\n",
 -            p, bxval, byval, exval, eyval);
+-
+-    //diff=0. is a special case we must take in account
+-    //here all we do is to set it to one millisecond (arbitrarly)
+-    difx= exval - bxval; 
+-    if(difx == 0.)
+-        difx=.001;
+-    dify= eyval - byval;
+-    if(dify == 0.)
+-        dify=.001;
+-
+-    //locate the frame for the begining and end of segments
+-    bframe= locate_frame(ats_sound, bframe, byval);
+-    eframe= locate_frame(ats_sound, bframe, eyval);
+-
+-    //collect the data to be used
+-    tdata[p].beg_frame   = bframe;
+-    tdata[p].end_frame   = eframe;
+-    tdata[p].beg_time    = byval;
+-    tdata[p].end_time    = eyval;
+-    tdata[p].time_factor = fabs(difx/dify);
+-
+-    // update the number of samples to synthesise
+-    dt = fabs(eyval - byval);
+-    todo += fair_floor(dt * sparams->sr * tdata[p].time_factor, EPSILON);
+-
+-    bframe=eframe;
+-  }
+-  
+-  // Allocate and zero output sample array
+-  *out_samps = (double*)malloc(todo*sizeof(double));
+-  memset(*out_samps, 0, todo*sizeof(double));
+-  //fprintf(stdout, "do_synthesis: %d samples to be generated\n", todo);
+-
+-  // Allocate space for oscilators and noise generator
++  }
++
++  // Build envelop segments descriptor and compute number of samples to generate
++  nbp   = get_nbp(timenv);
++  tdata = (TIME_DATA*)malloc(nbp * sizeof(TIME_DATA));
++  dy    = get_maxy_value(timenv) - get_miny_value(timenv);
++  dur   = sparams->end - sparams->beg;
++  todo=0;
++  bframe = 0.;
++  //fprintf(stdout, "do_synthesis: nbp=%d, dur=%f, dy=%f, pha=%d\n", nbp, dur, dy, sparams->upha);
++
++  for(p=0; p < nbp - 1; ++p){
++
++    //get the data from the time envelope and convert it to time
++    bxval= dur * get_x_value(timenv, p); // We assume xmin=0, xmax=1
++    byval= dur * get_y_value(timenv, p) * dy; // We assume ymin=0
++    exval= dur * get_x_value(timenv, p+1); // We assume xmin=0, xmax=1
++    eyval= dur * get_y_value(timenv, p+1) * dy; // We assume ymin=0
++    
 +    //fprintf(stdout, "do_synthesis: seg %d : bxval=%f, byval=%f, exval=%f, eyval=%f\n",
 +    //        p, bxval, byval, exval, eyval);
- 
-     //diff=0. is a special case we must take in account
-     //here all we do is to set it to one millisecond (arbitrarly)
-@@ -479,10 +652,10 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-   //fprintf(stdout, "do_synthesis: %d samples to be generated\n", todo);
- 
-   // Allocate space for oscilators and noise generator
--  if(sparams->ramp == 0. || !has_residual) { 
--        //deterministic synthesis only
++
++    //diff=0. is a special case we must take in account
++    //here all we do is to set it to one millisecond (arbitrarly)
++    difx= exval - bxval; 
++    if(difx == 0.)
++        difx=.001;
++    dify= eyval - byval;
++    if(dify == 0.)
++        dify=.001;
++
++    //locate the frame for the begining and end of segments
++    bframe= locate_frame(ats_sound, bframe, byval);
++    eframe= locate_frame(ats_sound, bframe, eyval);
++
++    //collect the data to be used
++    tdata[p].beg_frame   = bframe;
++    tdata[p].end_frame   = eframe;
++    tdata[p].beg_time    = byval;
++    tdata[p].end_time    = eyval;
++    tdata[p].time_factor = fabs(difx/dify);
++
++    // update the number of samples to synthesise
++    dt = fabs(eyval - byval);
++    todo += fair_floor(dt * sparams->sr * tdata[p].time_factor, EPSILON);
++
++    bframe=eframe;
++  }
++  
++  // Allocate and zero output sample array
++  *out_samps = (double*)malloc(todo*sizeof(double));
++  memset(*out_samps, 0, todo*sizeof(double));
++  //fprintf(stdout, "do_synthesis: %d samples to be generated\n", todo);
++
++  // Allocate space for oscilators and noise generator
+   if(sparams->ramp == 0. || !has_residual) { 
+         //deterministic synthesis only
+     ospt = (double*)malloc(ats_sound->partials * sizeof(double));
+         memset(ospt, 0, ats_sound->partials * sizeof(double));
+-  }  else if(sparams->amp == 0.) { 
+-        //residual synthesis only
+-    ospt = (double*)malloc(ATSA_CRITICAL_BANDS * sizeof(double));
+-        memset(ospt, 0, ATSA_CRITICAL_BANDS * sizeof(double));
+-    rarray= (RANDI*)malloc(ATSA_CRITICAL_BANDS * sizeof(RANDI));
+-    for(b=0; b<ATSA_CRITICAL_BANDS; ++b) {
+-      res_band_centers[b]= 
+-                (ATSA_CRITICAL_BAND_EDGES[b+1] + ATSA_CRITICAL_BAND_EDGES[b]) / 2;
+-      randi_setup(sparams->sr, ATSA_CRITICAL_BAND_EDGES[b+1] - ATSA_CRITICAL_BAND_EDGES[b],
+-                                  &rarray[b]);
+-    }
+-  } else { 
+-        //residual and deterministic synthesis
 -    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
 -        memset(ospt, 0, ats_sound->partials * sizeof(double));
-+  if(sparams->ramp == 0. || !has_residual) { 
-+        //deterministic synthesis only
-+    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
-+        memset(ospt, 0, ats_sound->partials * sizeof(double));
-   }  else if(sparams->amp == 0.) { 
-         //residual synthesis only
-     ospt = (double*)malloc(ATSA_CRITICAL_BANDS * sizeof(double));
-@@ -514,8 +687,8 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-     first=(int)floor(tdata[p].beg_frame);
-     last=(int)floor(tdata[p].end_frame);
-  
+-    rarray= (RANDI*)malloc(ats_sound->partials * sizeof(RANDI));
+-    for(p=0; p<ats_sound->partials; p++) {
+-          rfreq=BW * (ats_sound->frq[p][(int)floor(tdata[0].beg_frame)] < BW_FREQ ?
+-                      BW_FREQ : ats_sound->frq[p][(int)floor(tdata[0].beg_frame)]);
+-      randi_setup(sparams->sr,rfreq,&rarray[p]);
+-    }
+-  }
+-
+-  // Generate samples :
+-  // For each time function control point/segment :
+-  n_samps=0;
+-  for(p = 0; p < nbp - 1; p++) { 
+-
+-    first=(int)floor(tdata[p].beg_frame);
+-    last=(int)floor(tdata[p].end_frame);
+- 
 -    fprintf(stdout, "do_synthesis: seg %d : begf=%d, endf=%d, fact=%f, begt=%f, endt=%f\n",
 -            p, first, last, tdata[p].time_factor, tdata[p].beg_time, tdata[p].end_time);
+-
+-    // For each frame inside the segment :
+-    for(f = first; f <= last; f++) {
+-
+-      // Determine index of "previous" and "next" frame for interpolation.
+-      f_p = f < 1 ? 0 : f - 1;
+-      f_n = f >= ats_sound->frames - 1 ? ats_sound->frames - 1 : f + 1;
+-
+-      // Determine frame duration.
+-      if (f < ats_sound->frames - 1)
+-          frame_dur = ats_sound->time[0][f+1] - ats_sound->time[0][f];
+-      else
+-          frame_dur = ats_sound->dur - ats_sound->time[0][f];
+-          
+-      // Determine time origin in frame and duration for sample generation.
+-      if (f == first && f != tdata[p].beg_frame)
+-      {
+-        time_offset = tdata[p].beg_time - ats_sound->time[0][f];
+-        duration = frame_dur - time_offset;
+-      }
+-      else if (f == last && f != tdata[p].end_frame)
+-      {
+-        duration = tdata[p].end_time - ats_sound->time[0][f];
+-        time_offset = 0.0;
+-      }
+-      else
+-      {
+-          duration = frame_dur;
+-          time_offset = 0.0;
+-      }
+-
+-      // Apply the time factor.
+-      duration *= tdata[p].time_factor;      
+-      time_offset *= tdata[p].time_factor;      
+-
+-      // Do the sample generation.
++  }  else if(sparams->amp == 0.) { 
++        //residual synthesis only
++    ospt = (double*)malloc(ATSA_CRITICAL_BANDS * sizeof(double));
++        memset(ospt, 0, ATSA_CRITICAL_BANDS * sizeof(double));
++    rarray= (RANDI*)malloc(ATSA_CRITICAL_BANDS * sizeof(RANDI));
++    for(b=0; b<ATSA_CRITICAL_BANDS; ++b) {
++      res_band_centers[b]= 
++                (ATSA_CRITICAL_BAND_EDGES[b+1] + ATSA_CRITICAL_BAND_EDGES[b]) / 2;
++      randi_setup(sparams->sr, ATSA_CRITICAL_BAND_EDGES[b+1] - ATSA_CRITICAL_BAND_EDGES[b],
++                                  &rarray[b]);
++    }
++  } else { 
++        //residual and deterministic synthesis
++    ospt = (double*)malloc(ats_sound->partials * sizeof(double));
++        memset(ospt, 0, ats_sound->partials * sizeof(double));
++    rarray= (RANDI*)malloc(ats_sound->partials * sizeof(RANDI));
++    for(p=0; p<ats_sound->partials; p++) {
++          rfreq=BW * (ats_sound->frq[p][(int)floor(tdata[0].beg_frame)] < BW_FREQ ?
++                      BW_FREQ : ats_sound->frq[p][(int)floor(tdata[0].beg_frame)]);
++      randi_setup(sparams->sr,rfreq,&rarray[p]);
++    }
++  }
++
++  // Generate samples :
++  // For each time function control point/segment :
++  n_samps=0;
++  for(p = 0; p < nbp - 1; p++) { 
++
++    first=(int)floor(tdata[p].beg_frame);
++    last=(int)floor(tdata[p].end_frame);
++ 
 +    //fprintf(stdout, "do_synthesis: seg %d : begf=%d, endf=%d, fact=%f, begt=%f, endt=%f\n",
 +    //        p, first, last, tdata[p].time_factor, tdata[p].beg_time, tdata[p].end_time);
- 
-     // For each frame inside the segment :
-     for(f = first; f <= last; f++) {
-@@ -552,9 +725,9 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-       time_offset *= tdata[p].time_factor;      
- 
-       // Do the sample generation.
--      if(sparams->ramp == 0. || !has_residual) {
--          //deterministic synthesis only
++
++    // For each frame inside the segment :
++    for(f = first; f <= last; f++) {
++
++      // Determine index of "previous" and "next" frame for interpolation.
++      f_p = f < 1 ? 0 : f - 1;
++      f_n = f >= ats_sound->frames - 1 ? ats_sound->frames - 1 : f + 1;
++
++      // Determine frame duration.
++      if (f < ats_sound->frames - 1)
++          frame_dur = ats_sound->time[0][f+1] - ats_sound->time[0][f];
++      else
++          frame_dur = ats_sound->dur - ats_sound->time[0][f];
++          
++      // Determine time origin in frame and duration for sample generation.
++      if (f == first && f != tdata[p].beg_frame)
++      {
++        time_offset = tdata[p].beg_time - ats_sound->time[0][f];
++        duration = frame_dur - time_offset;
++      }
++      else if (f == last && f != tdata[p].end_frame)
++      {
++        duration = tdata[p].end_time - ats_sound->time[0][f];
++        time_offset = 0.0;
++      }
++      else
++      {
++          duration = frame_dur;
++          time_offset = 0.0;
++      }
++
++      // Apply the time factor.
++      duration *= tdata[p].time_factor;      
++      time_offset *= tdata[p].time_factor;      
++
++      // Do the sample generation.
+       if(sparams->ramp == 0. || !has_residual) {
+           //deterministic synthesis only
+           for(d = 0; d < ats_sound->partials; d++) {
+-              if (sparams->allorsel && selected && !selected[d])
+-                  continue;
+-              ampl_p = ats_sound->amp[d][f_p] * sparams->amp;
+-              ampl_c = ats_sound->amp[d][f]   * sparams->amp;
+-              ampl_n = ats_sound->amp[d][f_n] * sparams->amp;
+-              freq_p = ats_sound->frq[d][f_p] * sparams->frec;
+-              freq_c = ats_sound->frq[d][f]   * sparams->frec;
+-              freq_n = ats_sound->frq[d][f_n] * sparams->frec;
+-              pha_p = ats_sound->pha[d][f_p];
+-              pha_c = ats_sound->pha[d][f];
+-              pha_n = ats_sound->pha[d][f_n];
++              if (sparams->allorsel && selected && !selected[d])
++                  continue;
++              ampl_p = ats_sound->amp[d][f_p] * sparams->amp;
++              ampl_c = ats_sound->amp[d][f]   * sparams->amp;
++              ampl_n = ats_sound->amp[d][f_n] * sparams->amp;
++              freq_p = ats_sound->frq[d][f_p] * sparams->frec;
++              freq_c = ats_sound->frq[d][f]   * sparams->frec;
++              freq_n = ats_sound->frq[d][f_n] * sparams->frec;
++              pha_p = ats_sound->pha[d][f_p];
++              pha_c = ats_sound->pha[d][f];
++              pha_n = ats_sound->pha[d][f_n];
+               /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
+               fslope_c = ats_sound->has_slopes
+                   ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+-              frame_samps = synth_deterministic_only(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+-                                                     pha_p, pha_c, pha_n,
++              frame_samps = synth_deterministic_only(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
++                                                     pha_p, pha_c, pha_n,
+                                                      fslope_c, (short)ats_sound->has_slopes,
+-                                                     time_offset, duration, sparams->sr, sparams->upha,
+-                                                     ospt+d, *out_samps + n_samps);
+-          }
+-      } else if(sparams->amp == 0.) {
+-          //residual synthesis only
+-          for(b = 0; b < ATSA_CRITICAL_BANDS; b++) {
+-              ampl_p  = ENG_RMS(ats_sound->band_energy[b][f_p], ats_sound->window_size)
+-                  * sparams->ramp;
+-              ampl_c  = ENG_RMS(ats_sound->band_energy[b][f], ats_sound->window_size)
+-                  * sparams->ramp;
+-              ampl_n  = ENG_RMS(ats_sound->band_energy[b][f_n], ats_sound->window_size)
+-                  * sparams->ramp;
+-              freq_c  = res_band_centers[b] * sparams->frec;
+-              frame_samps = synth_residual_only(ampl_p, ampl_c, ampl_n, freq_c,
+-                                                time_offset, duration, sparams->sr,
+-                                                ospt+b, &rarray[b], *out_samps + n_samps);
+-          }
+-      } else {
+-          //residual and deterministic synthesis
 -          for(d = 0; d < ats_sound->partials; d++) {
-+      if(sparams->ramp == 0. || !has_residual) {
-+          //deterministic synthesis only
+-              if (sparams->allorsel && selected && !selected[d])
+-                  continue;
+-              ampl_p  = ats_sound->amp[d][f_p] * sparams->amp;
+-              ampl_c  = ats_sound->amp[d][f]   * sparams->amp;
+-              ampl_n  = ats_sound->amp[d][f_n] * sparams->amp;
+-              freq_p  = ats_sound->frq[d][f_p] * sparams->frec;
+-              freq_c  = ats_sound->frq[d][f]   * sparams->frec;
+-              freq_n  = ats_sound->frq[d][f_n] * sparams->frec;
+-              pha_p = ats_sound->pha[d][f_p];
+-              pha_c = ats_sound->pha[d][f];
+-              pha_n = ats_sound->pha[d][f_n];
+-              resid_p = ENG_RMS(ats_sound->res[d][f_p], ats_sound->window_size)
+-                  * sparams->ramp;
+-              resid_c = ENG_RMS(ats_sound->res[d][f], ats_sound->window_size)
+-                  * sparams->ramp;
+-              resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
+-                  * sparams->ramp;
++                                                     time_offset, duration, sparams->sr, sparams->upha,
++                                                     ospt+d, *out_samps + n_samps);
++          }
++      } else if(sparams->amp == 0.) {
++          //residual synthesis only
++          for(b = 0; b < ATSA_CRITICAL_BANDS; b++) {
++              ampl_p  = ENG_RMS(ats_sound->band_energy[b][f_p], ats_sound->window_size)
++                  * sparams->ramp;
++              ampl_c  = ENG_RMS(ats_sound->band_energy[b][f], ats_sound->window_size)
++                  * sparams->ramp;
++              ampl_n  = ENG_RMS(ats_sound->band_energy[b][f_n], ats_sound->window_size)
++                  * sparams->ramp;
++              freq_c  = res_band_centers[b] * sparams->frec;
++              frame_samps = synth_residual_only(ampl_p, ampl_c, ampl_n, freq_c,
++                                                time_offset, duration, sparams->sr,
++                                                ospt+b, &rarray[b], *out_samps + n_samps);
++          }
++      } else {
++          //residual and deterministic synthesis
 +          for(d = 0; d < ats_sound->partials; d++) {
-               if (sparams->allorsel && selected && !selected[d])
-                   continue;
-               ampl_p = ats_sound->amp[d][f_p] * sparams->amp;
-@@ -566,12 +739,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-               pha_p = ats_sound->pha[d][f_p];
-               pha_c = ats_sound->pha[d][f];
-               pha_n = ats_sound->pha[d][f_n];
--              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
--              fslope_c = ats_sound->has_slopes
--                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
-+              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
-+              fslope_c = ats_sound->has_slopes
-+                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
-               frame_samps = synth_deterministic_only(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
-                                                      pha_p, pha_c, pha_n,
--                                                     fslope_c, (short)ats_sound->has_slopes,
-+                                                     fslope_c, (short)ats_sound->has_slopes,
-                                                      time_offset, duration, sparams->sr, sparams->upha,
-                                                      ospt+d, *out_samps + n_samps);
-           }
-@@ -609,12 +782,12 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-                   * sparams->ramp;
-               resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
-                   * sparams->ramp;
--              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
--              fslope_c = ats_sound->has_slopes
--                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
-+              /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
-+              fslope_c = ats_sound->has_slopes
-+                  ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
-               frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
-                                        pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
--                                       fslope_c, (short)ats_sound->has_slopes,
-+                                       fslope_c, (short)ats_sound->has_slopes,
-                                        time_offset, duration, sparams->sr, sparams->upha,
-                                        ospt+d, &rarray[d], *out_samps + n_samps);
-           }
-@@ -623,13 +796,13 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
-       // Jump into sample buffer for next frame.
-       n_samps += (int)frame_samps;
-       
++              if (sparams->allorsel && selected && !selected[d])
++                  continue;
++              ampl_p  = ats_sound->amp[d][f_p] * sparams->amp;
++              ampl_c  = ats_sound->amp[d][f]   * sparams->amp;
++              ampl_n  = ats_sound->amp[d][f_n] * sparams->amp;
++              freq_p  = ats_sound->frq[d][f_p] * sparams->frec;
++              freq_c  = ats_sound->frq[d][f]   * sparams->frec;
++              freq_n  = ats_sound->frq[d][f_n] * sparams->frec;
++              pha_p = ats_sound->pha[d][f_p];
++              pha_c = ats_sound->pha[d][f];
++              pha_n = ats_sound->pha[d][f_n];
++              resid_p = ENG_RMS(ats_sound->res[d][f_p], ats_sound->window_size)
++                  * sparams->ramp;
++              resid_c = ENG_RMS(ats_sound->res[d][f], ats_sound->window_size)
++                  * sparams->ramp;
++              resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
++                  * sparams->ramp;
+               /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
+               fslope_c = ats_sound->has_slopes
+                   ? ats_sound->frq_slope[d][f] * sparams->frec * frame_dur : 0.;
+-              frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+-                                       pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
++              frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
++                                       pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
+                                        fslope_c, (short)ats_sound->has_slopes,
+-                                       time_offset, duration, sparams->sr, sparams->upha,
+-                                       ospt+d, &rarray[d], *out_samps + n_samps);
+-          }
+-      }
+-        
+-      // Jump into sample buffer for next frame.
+-      n_samps += (int)frame_samps;
+-      
 -      fprintf(stdout, "    frame#%d, samps=%d (%d/%d)\n", f, frame_samps, n_samps, todo);
-+      //fprintf(stdout, "    frame#%d, samps=%d (%d/%d)\n", f, frame_samps, n_samps, todo);
-     }
-   }
-   
-   *n_out_samps = n_samps;
-   
+-    }
+-  }
+-  
+-  *n_out_samps = n_samps;
+-  
 -  fprintf(stdout, "%d samples generated\n", *n_out_samps);
+-
+-  if (ospt)
+-      free(ospt);
+-  if (rarray)
+-      free(rarray);
+-  free(tdata);
+-
+-  return;
+-}
+-
++                                       time_offset, duration, sparams->sr, sparams->upha,
++                                       ospt+d, &rarray[d], *out_samps + n_samps);
++          }
++      }
++        
++      // Jump into sample buffer for next frame.
++      n_samps += (int)frame_samps;
++      
++      //fprintf(stdout, "    frame#%d, samps=%d (%d/%d)\n", f, frame_samps, n_samps, todo);
++    }
++  }
++  
++  *n_out_samps = n_samps;
++  
 +  //fprintf(stdout, "%d samples generated\n", *n_out_samps);
++
++  if (ospt)
++      free(ospt);
++  if (rarray)
++      free(rarray);
++  free(tdata);
++
++  return;
++}
++
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -303,6 +303,10 @@
+   double sr;          // Sampling Rate
+   short allorsel;     // when TRUE, use only selected partials ; when FALSE use all
+   short upha;         // when TRUE, the phase information (if any) is used ; when FALSE is not
++  /* ATSA_IFFT_SYNTH: select the overlap-add inverse-FFT (Rodet-Depalle)
++     deterministic synthesizer instead of the oscillator bank. Zero-initialized,
++     so existing callers keep the bit-identical oscillator-bank path. */
++  short use_ifft;
+ } SPARAMS;
  
-   if (ospt)
-       free(ospt);
+ /* CURVE
+@@ -494,6 +498,13 @@
+ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
+                   double** out_samps, int* n_out_samps);
+ 
++/* ATSA_IFFT_SYNTH: overlap-add inverse-FFT (Rodet-Depalle) deterministic
++ * synthesis on the uniform analysis grid (no time-warp / time-envelope).
++ * Residual band-noise is added time-domain. do_synthesis dispatches here when
++ * sparams->use_ifft is set; called directly it ignores timenv. */
++void do_synthesis_ifft(ATS_SOUND *ats_sound, SPARAMS* sparams, int *selected,
++                       double** out_samps, int* n_out_samps);
++
+ /* tracker.c */
+ 
+ /* tracker

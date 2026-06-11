@@ -1,6 +1,6 @@
 --- a/src/atsa/tracker.c
 +++ b/src/atsa/tracker.c
-@@ -692,20 +692,19 @@
+@@ -702,20 +702,19 @@
    init_sound(sound, anargs->srate, (int)floor(anargs->hop_size * anargs->win_size), 
  	     anargs->win_size, anargs->frames, anargs->duration, n_partials, 0);
  

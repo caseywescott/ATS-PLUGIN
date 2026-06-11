@@ -422,8 +422,180 @@ std::vector<ats::MorphTransientMarker> detectMorphTransients(const ATS_SOUND* so
     return markers;
 }
 
+static void applyTimbreToSound(ATS_SOUND* sound,
+                               double brightnessDb, double tiltDbPerOct, double noiseBalance)
+{
+    if (sound == nullptr)
+        return;
+    constexpr double kTimbrePivotHz = 1000.0;
+    const bool doNoise = std::abs(noiseBalance - 0.5) > 0.001;
+    const bool doTilt  = std::abs(tiltDbPerOct) > 0.001;
+    const bool doLight = std::abs(brightnessDb) > 0.001;
+    if (!doNoise && !doTilt && !doLight)
+        return;
+
+    if (sound->amp != nullptr && sound->frq != nullptr)
+    {
+        for (int p = 0; p < sound->partials; ++p)
+        {
+            if (sound->amp[p] == nullptr || sound->frq[p] == nullptr)
+                continue;
+            for (int f = 0; f < sound->frames; ++f)
+            {
+                const double freq = sound->frq[p][f];
+                double amp = sound->amp[p][f];
+                if (freq <= 0.0 || amp <= 0.0)
+                    continue;
+                if (doNoise)
+                    amp *= std::sqrt(2.0 * std::max(0.0, 1.0 - noiseBalance));
+                if (doTilt)
+                {
+                    const double oct = std::log2(freq / kTimbrePivotHz);
+                    amp *= std::pow(10.0, tiltDbPerOct * oct / 20.0);
+                }
+                if (doLight)
+                {
+                    const double oct = std::log2(freq / kTimbrePivotHz);
+                    amp *= std::pow(10.0, brightnessDb * std::tanh(oct / 3.0) / 20.0);
+                }
+                sound->amp[p][f] = std::max(0.0, amp);
+            }
+        }
+    }
+
+    // Band energies are in ENG_RMS^2 units; timbre scale is amplitude-domain so energy gets scale^2.
+    // Noise balance is inverted for residual: higher noiseBalance → more noise, less partials.
+    static constexpr double kBandCenterHz[ATSA_CRITICAL_BANDS] = {
+        50.0, 150.0, 250.0, 350.0, 455.0, 570.0, 700.0, 845.0, 1000.0,
+        1175.0, 1375.0, 1600.0, 1860.0, 2160.0, 2510.0, 2925.0, 3425.0,
+        4050.0, 4850.0, 5850.0, 7050.0, 8600.0, 10750.0, 13750.0, 17750.0
+    };
+    if (sound->band_energy != nullptr)
+    {
+        for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+        {
+            if (sound->band_energy[band] == nullptr)
+                continue;
+            const double centerHz = kBandCenterHz[band];
+            double scale = 1.0;
+            if (doNoise)
+                scale *= std::sqrt(2.0 * noiseBalance);
+            if (doTilt)
+            {
+                const double oct = std::log2(centerHz / kTimbrePivotHz);
+                scale *= std::pow(10.0, tiltDbPerOct * oct / 20.0);
+            }
+            if (doLight)
+            {
+                const double oct = std::log2(centerHz / kTimbrePivotHz);
+                scale *= std::pow(10.0, brightnessDb * std::tanh(oct / 3.0) / 20.0);
+            }
+            const double energyScale = scale * scale;
+            for (int f = 0; f < sound->frames; ++f)
+            {
+                const double e = sound->band_energy[band][f];
+                if (e > 0.0)
+                    sound->band_energy[band][f] = e * energyScale;
+            }
+        }
+    }
+}
+
+// Per-frame timbre from plan, baked into the sound copy before do_synthesis.
+// Use a very high update rate so IIR smoothing is effectively off — do_synthesis
+// already interpolates between consecutive frames, so no zipper noise.
+static void applyTimbreMotionPlanToSound(ATS_SOUND* sound,
+                                          const ats::TimbreMotionPlan& plan,
+                                          double apvtsBrightnessDb,
+                                          double apvtsTiltDbPerOct,
+                                          double apvtsNoiseBalance)
+{
+    if (sound == nullptr || sound->frames <= 0 || plan.empty())
+        return;
+
+    constexpr double kTimbrePivotHz = 1000.0;
+    constexpr double kFramePlanRate = 100000.0; // effectively no IIR smoothing
+    ats::CompiledTimbrePlan compiledPlan(plan, kFramePlanRate);
+    const ats::TimbreEndpoints endpoints; // empty: no A/B measured centroids for single-source
+
+    static constexpr double kBandCenterHz[ATSA_CRITICAL_BANDS] = {
+        50.0, 150.0, 250.0, 350.0, 455.0, 570.0, 700.0, 845.0, 1000.0,
+        1175.0, 1375.0, 1600.0, 1860.0, 2160.0, 2510.0, 2925.0, 3425.0,
+        4050.0, 4850.0, 5850.0, 7050.0, 8600.0, 10750.0, 13750.0, 17750.0
+    };
+
+    for (int f = 0; f < sound->frames; ++f)
+    {
+        const double timeNorm = sound->frames > 1 ? (double) f / (double) (sound->frames - 1) : 0.0;
+        const ats::TimbreRenderParams timbre = compiledPlan.evaluate(
+            timeNorm, apvtsBrightnessDb, apvtsTiltDbPerOct, apvtsNoiseBalance, endpoints);
+
+        const bool doNoise = std::abs(timbre.noiseBalance - 0.5) > 0.001;
+        const bool doTilt  = std::abs(timbre.tiltDbPerOct) > 0.001;
+        const bool doLight = std::abs(timbre.brightnessDb) > 0.001;
+
+        if (doNoise || doTilt || doLight)
+        {
+            if (sound->amp != nullptr && sound->frq != nullptr)
+            {
+                for (int p = 0; p < sound->partials; ++p)
+                {
+                    if (sound->amp[p] == nullptr || sound->frq[p] == nullptr)
+                        continue;
+                    const double freq = sound->frq[p][f];
+                    double amp = sound->amp[p][f];
+                    if (freq <= 0.0 || amp <= 0.0)
+                        continue;
+                    if (doNoise)
+                        amp *= std::sqrt(2.0 * std::max(0.0, 1.0 - timbre.noiseBalance));
+                    if (doTilt)
+                    {
+                        const double oct = std::log2(freq / kTimbrePivotHz);
+                        amp *= std::pow(10.0, timbre.tiltDbPerOct * oct / 20.0);
+                    }
+                    if (doLight)
+                    {
+                        const double oct = std::log2(freq / kTimbrePivotHz);
+                        amp *= std::pow(10.0, timbre.brightnessDb * std::tanh(oct / 3.0) / 20.0);
+                    }
+                    sound->amp[p][f] = std::max(0.0, amp);
+                }
+            }
+
+            if (sound->band_energy != nullptr)
+            {
+                for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+                {
+                    if (sound->band_energy[band] == nullptr)
+                        continue;
+                    const double centerHz = kBandCenterHz[band];
+                    double scale = 1.0;
+                    if (doNoise)
+                        scale *= std::sqrt(2.0 * timbre.noiseBalance);
+                    if (doTilt)
+                    {
+                        const double oct = std::log2(centerHz / kTimbrePivotHz);
+                        scale *= std::pow(10.0, timbre.tiltDbPerOct * oct / 20.0);
+                    }
+                    if (doLight)
+                    {
+                        const double oct = std::log2(centerHz / kTimbrePivotHz);
+                        scale *= std::pow(10.0, timbre.brightnessDb * std::tanh(oct / 3.0) / 20.0);
+                    }
+                    const double e = sound->band_energy[band][f];
+                    if (e > 0.0)
+                        sound->band_energy[band][f] = e * scale * scale;
+                }
+            }
+        }
+    }
+}
+
 ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthParams& core,
-                                       bool renderCombinedPass = false)
+                                        double brightnessDb = 0.0, double tiltDbPerOct = 0.0,
+                                        double noiseBalance = 0.5,
+                                        const ats::TimbreMotionPlan* timbrePlan = nullptr,
+                                        bool renderCombinedPass = false)
 {
     ClassicLayerRender render;
     if (sound == nullptr)
@@ -438,6 +610,31 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
             shapedSound.reset(copy);
             ats::applyFrequencyShapeToSound(shapedSound.get(), core.frequencyShape);
             renderSound = shapedSound.get();
+        }
+    }
+
+    // Apply timbre shaping to a mutable copy (reuse freq-shape copy if already made).
+    const bool planActive = timbrePlan != nullptr && !timbrePlan->empty();
+    const bool timbreActive = std::abs(brightnessDb) > 0.001
+                              || std::abs(tiltDbPerOct) > 0.001
+                              || std::abs(noiseBalance - 0.5) > 0.001;
+    if (planActive || timbreActive)
+    {
+        if (shapedSound.get() == nullptr)
+        {
+            if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(renderSound)))
+            {
+                shapedSound.reset(copy);
+                renderSound = shapedSound.get();
+            }
+        }
+        if (shapedSound.get() != nullptr)
+        {
+            if (planActive)
+                applyTimbreMotionPlanToSound(shapedSound.get(), *timbrePlan,
+                                             brightnessDb, tiltDbPerOct, noiseBalance);
+            else
+                applyTimbreToSound(shapedSound.get(), brightnessDb, tiltDbPerOct, noiseBalance);
         }
     }
 
@@ -562,9 +759,14 @@ juce::AudioBuffer<float> makePlaybackBufferFromClassicLayers(const ClassicLayerR
 
 juce::AudioBuffer<float> renderClassicSourcePlaybackBuffer(const ATS_SOUND* sound,
                                                            const ats::SynthParams& core,
-                                                           double renderSampleRate)
+                                                           double renderSampleRate,
+                                                           double brightnessDb = 0.0,
+                                                           double tiltDbPerOct = 0.0,
+                                                           double noiseBalance = 0.5)
 {
-    return makePlaybackBufferFromClassicLayers(renderClassicLayers(sound, core, true), renderSampleRate);
+    return makePlaybackBufferFromClassicLayers(
+        renderClassicLayers(sound, core, brightnessDb, tiltDbPerOct, noiseBalance, nullptr, true),
+        renderSampleRate);
 }
 
 const ATS_SOUND* makeFrequencyShapedRenderSound(const ATS_SOUND* sound,
@@ -2460,6 +2662,9 @@ void AtsAudioProcessor::startResynthWorker()
 
         const uint64_t gen = jobGeneration.load(std::memory_order_relaxed);
         const ats::SynthParams core = readCoreSynthParamsFromApvts();
+        const double resynthBrightnessDb = (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed);
+        const double resynthTiltDbPerOct = (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed);
+        const double resynthNoiseBalance = (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed);
 
         juce::AudioBuffer<float> monoP;
         juce::AudioBuffer<float> monoR;
@@ -2488,6 +2693,9 @@ void AtsAudioProcessor::startResynthWorker()
                             && previewLayerCacheRevision == modelRevSnapshot
                             && (std::abs(previewLayerCacheHostSr - hostSampleRate) < 1e-6)
                             && samePreviewLayerCore(previewLayerCacheCore, core)
+                            && (std::abs(previewLayerCacheBrightnessDb - (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed)) < 0.001)
+                            && (std::abs(previewLayerCacheTiltDbPerOct - (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed)) < 0.001)
+                            && (std::abs(previewLayerCacheNoiseBalance - (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed)) < 0.001)
                             && (previewLayerCachePartials.getNumSamples() > 0
                                 || previewLayerCacheResidual.getNumSamples() > 0
                                 || previewLayerCacheCombined.getNumSamples() > 0);
@@ -2514,7 +2722,8 @@ void AtsAudioProcessor::startResynthWorker()
                 setUiState(AtsUiState::Analyzed);
                 return;
             }
-            auto rendered = renderClassicLayers(modelSnapshot.get(), core);
+            auto rendered = renderClassicLayers(modelSnapshot.get(), core,
+                                                resynthBrightnessDb, resynthTiltDbPerOct, resynthNoiseBalance);
             modelSr = rendered.modelSampleRate;
             monoP = std::move(rendered.partials);
             monoR = std::move(rendered.residual);
@@ -2610,6 +2819,9 @@ void AtsAudioProcessor::startResynthWorker()
             previewLayerCacheResidual = std::move(preparedR);
             previewLayerCacheCombined = std::move(preparedC);
             previewLayerCacheCore = core;
+            previewLayerCacheBrightnessDb = resynthBrightnessDb;
+            previewLayerCacheTiltDbPerOct = resynthTiltDbPerOct;
+            previewLayerCacheNoiseBalance = resynthNoiseBalance;
             previewLayerCacheRevision = modelRevSnapshot;
             previewLayerCacheHostSr = hostSampleRate;
             previewLayerCacheValid = true;
@@ -3189,7 +3401,10 @@ bool AtsAudioProcessor::transportCacheTryReuse(int bufferIndex, int sourceTag, c
         || e.morphSourcesRevisionSnap != morphSourcesRevision.load(std::memory_order_acquire)
         || e.displayShapeRevisionSnap != displayShapeRevision.load(std::memory_order_acquire)
         || std::abs(e.hostSr - hostSampleRate) > 1e-6
-        || !samePreviewLayerCore(e.core, core))
+        || !samePreviewLayerCore(e.core, core)
+        || std::abs(e.timbreBrightnessDb - (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed)) > 0.001
+        || std::abs(e.timbreTiltDbPerOct - (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed)) > 0.001
+        || std::abs(e.timbreNoiseBalance - (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed)) > 0.001)
         return false;
 
     if ((liveSmear || smearIsolate)
@@ -3228,6 +3443,9 @@ void AtsAudioProcessor::transportCacheStore(int bufferIndex, int sourceTag, cons
     e.modelRevisionSnap = modelRevision.load(std::memory_order_acquire);
     e.morphSourcesRevisionSnap = morphSourcesRevision.load(std::memory_order_acquire);
     e.displayShapeRevisionSnap = displayShapeRevision.load(std::memory_order_acquire);
+    e.timbreBrightnessDb = (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed);
+    e.timbreTiltDbPerOct = (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed);
+    e.timbreNoiseBalance = (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed);
     e.hostSr = hostSampleRate;
     e.core = core;
     e.liveSmear = liveSmear;
@@ -3260,6 +3478,9 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
     juce::AudioBuffer<float> monoC;
     int modelSr = 44100;
     const ats::SynthParams core = readCoreSynthParamsFromApvts();
+    const double rcmBrightnessDb = (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed);
+    const double rcmTiltDbPerOct = (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed);
+    const double rcmNoiseBalance = (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed);
 
     ClassicLayerRender rendered;
     bool renderedLive = false;
@@ -3274,7 +3495,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core, true); // private copy: no modelLock needed
+        const ClassicLayerRender wet = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, true); // private copy: no modelLock needed
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(modelLock);
@@ -3283,7 +3504,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                 error = "No analyzed ATS model to render.";
                 return false;
             }
-            dry = renderClassicLayers(analyzedModel.get(), core, true);
+            dry = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, true);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3293,7 +3514,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(AtsTraceSource::Current, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core, renderCombinedPass); // private copy: no modelLock needed
+            rendered = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, renderCombinedPass); // private copy: no modelLock needed
             renderedLive = true;
         }
     }
@@ -3305,7 +3526,7 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
             error = "No analyzed ATS model to render.";
             return false;
         }
-        rendered = renderClassicLayers(analyzedModel.get(), core, renderCombinedPass);
+        rendered = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, renderCombinedPass);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -3396,7 +3617,19 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
     juce::AudioBuffer<float> monoC;
     int modelSr = 44100;
     const ats::SynthParams core = readCoreSynthParamsFromApvts();
+    const double slotBrightnessDb = (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed);
+    const double slotTiltDbPerOct = (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed);
+    const double slotNoiseBalance = (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed);
     const AtsTraceSource src = slotIndex == 0 ? AtsTraceSource::SourceA : AtsTraceSource::SourceB;
+
+    // Read the timbre plan from the current recipe so timeline curves apply during source audition.
+    ats::TimbreMotionPlan slotTimbrePlan;
+    {
+        const juce::ScopedLock ml(morphRecipeLock);
+        slotTimbrePlan = ats::deserializeTimbreMotionPlan(
+            getRecipeUnknownField(morphRecipe, kTimbreMotionPlanUnknownField));
+    }
+    const ats::TimbreMotionPlan* slotTimbrePlanPtr = slotTimbrePlan.empty() ? nullptr : &slotTimbrePlan;
 
     if (transportCacheTryReuse(bufferIndex, slotIndex, core, liveSmear, smearIsolate, renderCombinedPass))
         return true;
@@ -3414,7 +3647,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core, true); // private copy: no morphRecipeLock needed
+        const ClassicLayerRender wet = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, true); // private copy: no morphRecipeLock needed
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(morphRecipeLock);
@@ -3424,7 +3657,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                 error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
                 return false;
             }
-            dry = renderClassicLayers(sound, core, true);
+            dry = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, true);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3434,7 +3667,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(src, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core, renderCombinedPass); // private copy: no morphRecipeLock needed
+            rendered = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, renderCombinedPass); // private copy: no morphRecipeLock needed
             renderedLive = true;
         }
     }
@@ -3447,7 +3680,7 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
             error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
             return false;
         }
-        rendered = renderClassicLayers(sound, core, renderCombinedPass);
+        rendered = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, renderCombinedPass);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -4960,15 +5193,25 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
             }
 
             const CompiledMorphTimeline compiledTimeline(timelinePoints);
+            // Deserialize plan before the endpoint bypass so we can skip it when plan is active.
+            const ats::TimbreMotionPlan timbrePlan =
+                ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+            const ats::HybridizeDomains interpDomains{
+                options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
+                options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
             int endpointSourceIndex = -1;
             if (sA != nullptr && sB != nullptr
+                && timbrePlan.empty() // keep fast path only when no timbre plan is active
                 && compiledTimeline.constantEndpointSourceIndex(endpointSourceIndex))
             {
-                // An all-A/all-B timeline is an A/B reference path. Use the same ATSA
-                // renderer as source audition so residual-only playback nulls in level/timbre.
+                // All-A/all-B timeline with no active timbre plan: use the classic ATSA renderer
+                // so residual-only playback nulls in level/timbre (same as source audition).
                 timelineBuffer = renderClassicSourcePlaybackBuffer(endpointSourceIndex == 0 ? sA : sB,
                                                                    core,
-                                                                   renderSampleRate);
+                                                                   renderSampleRate,
+                                                                   (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
+                                                                   (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
+                                                                   (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
             }
             else if (sA != nullptr && sB != nullptr)
             {
@@ -4978,11 +5221,6 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
                 ats::AtsSoundPtr shapedB;
                 const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
                 const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
-                const ats::TimbreMotionPlan timbrePlan =
-                    ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
-                const ats::HybridizeDomains interpDomains{
-                    options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
-                    options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
                 timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                             0.5, renderSampleRate, duration,
                                                             morphEnvelopeCache.get(),
@@ -5179,14 +5417,24 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
                                                         recipe.sourceB.durationSeconds));
 
     const CompiledMorphTimeline compiledTimeline(timelinePoints);
+    // Deserialize plan before endpoint bypass so we can skip it when plan is active.
+    const ats::TimbreMotionPlan timbrePlan =
+        ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
+    const ats::HybridizeDomains interpDomains{
+        options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
+        options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
     juce::AudioBuffer<float> timelineBuffer;
     int endpointSourceIndex = -1;
     if (sA != nullptr && sB != nullptr
+        && timbrePlan.empty() // keep fast path only when no timbre plan is active
         && compiledTimeline.constantEndpointSourceIndex(endpointSourceIndex))
     {
         timelineBuffer = renderClassicSourcePlaybackBuffer(endpointSourceIndex == 0 ? sA : sB,
                                                            core,
-                                                           renderSampleRate);
+                                                           renderSampleRate,
+                                                           (double) timbreBrightnessDbRaw->load(std::memory_order_relaxed),
+                                                           (double) timbreTiltDbPerOctRaw->load(std::memory_order_relaxed),
+                                                           (double) timbreNoiseBalanceRaw->load(std::memory_order_relaxed));
     }
     else if (sA != nullptr && sB != nullptr)
     {
@@ -5194,11 +5442,6 @@ bool AtsAudioProcessor::bounceMorphTimelineToFile(const juce::File& file,
         ats::AtsSoundPtr shapedB;
         const ATS_SOUND* renderA = makeFrequencyShapedRenderSound(sA, core.frequencyShape, shapedA);
         const ATS_SOUND* renderB = makeFrequencyShapedRenderSound(sB, core.frequencyShape, shapedB);
-        const ats::TimbreMotionPlan timbrePlan =
-            ats::deserializeTimbreMotionPlan(getRecipeUnknownField(recipe, kTimbreMotionPlanUnknownField));
-        const ats::HybridizeDomains interpDomains{
-            options.frequency.domain == ats::MorphFrequencyInterpolationDomain::BarkCoordinate,
-            options.amplitude.domain == ats::MorphAmplitudeInterpolationDomain::Decibels};
         timelineBuffer = renderMorphTrajectoryBuffer(renderA, renderB, recipe, &compiledTimeline,
                                                      0.5, renderSampleRate, duration,
                                                      morphEnvelopeCache.get(),

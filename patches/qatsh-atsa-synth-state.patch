@@ -1,5 +1,17 @@
---- a/src/atsa/synthesis.c	2026-06-11 13:23:49
-+++ b/src/atsa/synthesis.c	2026-06-11 13:35:48
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
+@@ -635,6 +635,9 @@
+  */
+ void band_energy_to_res(ATS_SOUND *sound, int frame);
+ 
++/* ATSA_SYNTH_STATE: fill the per-partial residual plane once before parallel synthesis. */
++void atsa_prefill_partial_residual(ATS_SOUND *sound);
++
+ /* res_to_band_energy
+  * ==================
+  * transfers residual engergy from partials to bands
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
 @@ -99,6 +99,25 @@
    int    cnt;  //sample position counter
  } RANDI;
@@ -139,8 +151,8 @@
    }
  
    // Build envelop segments descriptor and compute number of samples to generate
---- a/src/atsa/residual-analysis.c	2026-06-11 13:23:49
-+++ b/src/atsa/residual-analysis.c	2026-06-11 13:35:49
+--- a/src/atsa/residual-analysis.c
++++ b/src/atsa/residual-analysis.c
 @@ -291,7 +291,32 @@
    }
  }
@@ -170,18 +182,6 @@
 +#endif
 +}
 +
-+
- /* res_to_band_energy
-  * ==================
-  * transfers residual engergy from partials to bands
---- a/src/atsa/atsa.h	2026-06-11 13:23:49
-+++ b/src/atsa/atsa.h	2026-06-11 13:33:09
-@@ -635,6 +635,9 @@
-  */
- void band_energy_to_res(ATS_SOUND *sound, int frame);
- 
-+/* ATSA_SYNTH_STATE: fill the per-partial residual plane once before parallel synthesis. */
-+void atsa_prefill_partial_residual(ATS_SOUND *sound);
 +
  /* res_to_band_energy
   * ==================

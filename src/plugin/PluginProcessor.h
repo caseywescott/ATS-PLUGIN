@@ -756,6 +756,9 @@ private:
     int previewLayerCacheRevision = -1;
     double previewLayerCacheHostSr = 0.0;
     ats::SynthParams previewLayerCacheCore {};
+    double previewLayerCacheBrightnessDb = 0.0;
+    double previewLayerCacheTiltDbPerOct = 0.0;
+    double previewLayerCacheNoiseBalance = 0.5;
     juce::AudioBuffer<float> previewLayerCachePartials;
     juce::AudioBuffer<float> previewLayerCacheResidual;
     juce::AudioBuffer<float> previewLayerCacheCombined;
@@ -772,6 +775,9 @@ private:
         uint64_t displayShapeRevisionSnap = 0;
         double hostSr = 0.0;
         ats::SynthParams core {};
+        double timbreBrightnessDb = 0.0;
+        double timbreTiltDbPerOct = 0.0;
+        double timbreNoiseBalance = 0.5;
         bool liveSmear = false;
         bool smearIsolate = false;
         bool renderCombinedPass = false;

@@ -1,5 +1,5 @@
---- a/src/atsa/critical-bands.c	2026-06-11 13:23:49
-+++ b/src/atsa/critical-bands.c	2026-06-11 13:37:30
+--- a/src/atsa/critical-bands.c
++++ b/src/atsa/critical-bands.c
 @@ -6,6 +6,7 @@
  #include "atsa.h"
  
@@ -8,3 +8,44 @@
  
  /* Definition of critical band frequency edges, based on data from: 
   * Zwicker, Fastl (1990) "Psychoacoustics Facts and Models", 
+@@ -90,14 +91,27 @@
+   double *edges = ATSA_CRITICAL_BAND_EDGES;
+   clear_mask(peaks, peaks_size);
+   if(peaks_size == 1) peaks[0].smr = amp2db_spl(peaks[0].amp);
+-  else for(i=0; i<peaks_size; i++) {
++  else {
++    /* ATSA_SMR_PRECOMPUTE: hoist per-peak bark/dB out of the O(n^2) pair loop */
++    double *bark = (double *)malloc((size_t)peaks_size * sizeof(double));
++    double *db = (double *)malloc((size_t)peaks_size * sizeof(double));
++    if (bark == NULL || db == NULL) {
++      free(bark);
++      free(db);
++      return;
++    }
++    for(i=0; i<peaks_size; i++) {
++      bark[i] = frq2bark(peaks[i].frq, edges);
++      db[i] = amp2db_spl(peaks[i].amp);
++    }
++    for(i=0; i<peaks_size; i++) {
+     maskee = &peaks[i];
+-    frq_maskee = frq2bark(maskee->frq, edges);
+-    amp_maskee = amp2db_spl(maskee->amp);
++    frq_maskee = bark[i];
++    amp_maskee = db[i];
+     for(j=0; j<peaks_size; j++) 
+       if(i != j) {
+-        frq_masker = frq2bark(peaks[j].frq, edges);
+-        amp_masker = amp2db_spl(peaks[j].amp);
++        frq_masker = bark[j];
++        amp_masker = db[j];
+         slope_r = compute_slope_r(amp_masker);
+         mask_term = (frq_masker < frq_maskee) ? 
+           (amp_masker + delta_dB + (slope_r * (frq_maskee - frq_masker))) :
+@@ -106,4 +120,7 @@
+       }
+     maskee->smr = amp_maskee - maskee->smr;
+   }
++    free(bark);
++    free(db);
++  }
+ }

@@ -1,5 +1,5 @@
---- a/src/atsa/other-utils.c	2026-06-11 13:23:49
-+++ b/src/atsa/other-utils.c	2026-06-11 13:30:29
+--- a/src/atsa/other-utils.c
++++ b/src/atsa/other-utils.c
 @@ -88,8 +88,14 @@
   */
  ATS_PEAK *push_peak(ATS_PEAK *new_peak, ATS_PEAK *peaks_list, int *peaks_size)
@@ -17,8 +17,58 @@
    return(peaks_list);
  }
  
---- a/src/atsa/tracker.c	2026-06-11 13:23:49
-+++ b/src/atsa/tracker.c	2026-06-11 13:30:39
+--- a/src/atsa/peak-detection.c
++++ b/src/atsa/peak-detection.c
+@@ -57,13 +57,14 @@
+  * norm: analysis window norm
+  * peaks_size: pointer to size of the returned peaks array
+  */
+-ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size)
++ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size, double *scratch_mags, double *scratch_phase)
+ {
+   int k, N = (highest_bin ? highest_bin : ats_fft->size/2);
+   int first_bin = (lowest_bin ? ((lowest_bin>2)?lowest_bin:2) : 2);
+   double fft_mag = ((double)ats_fft->rate/ats_fft->size), *fftmags, *fftphase;
+   double right_bin, left_bin, central_bin, offset;
+   ATS_PEAK ats_peak, *peaks = NULL;
++  int owned_polar = 0;
+ 
+   lowest_mag  = (double)db2amp(lowest_mag);
+ 
+@@ -75,8 +76,14 @@
+   ats_peak.frq_slope = 0.0; /* ATSA_DDM_SLOPES: stationary unless DDM fills it */
+   ats_peak.amp_slope = 0.0;
+ 
+-  fftmags = (double *)malloc(N * sizeof(double));
+-  fftphase = (double *)malloc(N * sizeof(double));
++  if (scratch_mags != NULL && scratch_phase != NULL) {
++    fftmags = scratch_mags;
++    fftphase = scratch_phase;
++  } else {
++    fftmags = (double *)malloc((size_t)N * sizeof(double));
++    fftphase = (double *)malloc((size_t)N * sizeof(double));
++    owned_polar = 1;
++  }
+   /* convert spectrum to polar coordinates */
+   to_polar(ats_fft, fftmags, fftphase, N, norm);
+   central_bin = fftmags[first_bin - 2];
+@@ -113,9 +120,11 @@
+       peaks = push_peak(&ats_peak, peaks, peaks_size);
+     }
+   }
+-  /* free up fftmags and fftphase */
+-  free(fftmags);
+-  free(fftphase);
++  /* free up fftmags and fftphase when allocated locally */
++  if (owned_polar) {
++    free(fftmags);
++    free(fftphase);
++  }
+   return(peaks);
+ }
+ 
+--- a/src/atsa/tracker.c
++++ b/src/atsa/tracker.c
 @@ -154,6 +154,10 @@
    double *packr, *packi, *fsamps;
    ATS_FFT lfft, ldfft;
@@ -68,58 +118,8 @@
      set_mainlobe_gain(c->mlobe_gain, c->mlobe_res);
      if (lpeaks != NULL) {
        for (k = 0; k < lpeaks_size; k++)
---- a/src/atsa/peak-detection.c	2026-06-11 13:23:49
-+++ b/src/atsa/peak-detection.c	2026-06-11 13:31:11
-@@ -57,13 +57,14 @@
-  * norm: analysis window norm
-  * peaks_size: pointer to size of the returned peaks array
-  */
--ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size)
-+ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size, double *scratch_mags, double *scratch_phase)
- {
-   int k, N = (highest_bin ? highest_bin : ats_fft->size/2);
-   int first_bin = (lowest_bin ? ((lowest_bin>2)?lowest_bin:2) : 2);
-   double fft_mag = ((double)ats_fft->rate/ats_fft->size), *fftmags, *fftphase;
-   double right_bin, left_bin, central_bin, offset;
-   ATS_PEAK ats_peak, *peaks = NULL;
-+  int owned_polar = 0;
- 
-   lowest_mag  = (double)db2amp(lowest_mag);
- 
-@@ -75,8 +76,14 @@
-   ats_peak.frq_slope = 0.0; /* ATSA_DDM_SLOPES: stationary unless DDM fills it */
-   ats_peak.amp_slope = 0.0;
- 
--  fftmags = (double *)malloc(N * sizeof(double));
--  fftphase = (double *)malloc(N * sizeof(double));
-+  if (scratch_mags != NULL && scratch_phase != NULL) {
-+    fftmags = scratch_mags;
-+    fftphase = scratch_phase;
-+  } else {
-+    fftmags = (double *)malloc((size_t)N * sizeof(double));
-+    fftphase = (double *)malloc((size_t)N * sizeof(double));
-+    owned_polar = 1;
-+  }
-   /* convert spectrum to polar coordinates */
-   to_polar(ats_fft, fftmags, fftphase, N, norm);
-   central_bin = fftmags[first_bin - 2];
-@@ -113,9 +120,11 @@
-       peaks = push_peak(&ats_peak, peaks, peaks_size);
-     }
-   }
--  /* free up fftmags and fftphase */
--  free(fftmags);
--  free(fftphase);
-+  /* free up fftmags and fftphase when allocated locally */
-+  if (owned_polar) {
-+    free(fftmags);
-+    free(fftphase);
-+  }
-   return(peaks);
- }
- 
---- a/src/atsa/atsa.h	2026-06-11 13:23:49
-+++ b/src/atsa/atsa.h	2026-06-11 13:30:29
+--- a/src/atsa/atsa.h
++++ b/src/atsa/atsa.h
 @@ -418,7 +418,7 @@
   * dfft: derivative-window spectrum for ATSA_REASSIGN_FREQ frequency
   *       reassignment (Auger-Flandrin); pass NULL for legacy parabolic peaks.
@@ -128,4 +128,4 @@
 +ATS_PEAK *peak_detection(ATS_FFT *ats_fft, ATS_FFT *dfft, int lowest_bin, int highest_bin, double lowest_mag, double norm, int *peaks_size, double *scratch_mags, double *scratch_phase);
  
  /* ATSA_QIFFT_AMP: window-gain (bias-corrected QIFFT) amplitude estimation.
- * build_mainlobe_gain tabulates the analytic window main-lobe gain G(delta)
+  * build_mainlobe_gain tabulates the analytic window main-lobe gain G(delta)
