@@ -4461,63 +4461,97 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
                 if (rs[(size_t) idx].active)
                     activeCarriers.push_back(idx);
 
-        // Hot loop: phasor multiply only — no trig, no timeline lookup.
-        // Write through cached channel pointers; out.setSample() per sample
-        // re-fetches the channel pointer and bounds-checks on every call.
+        // Hot loop (R-001): loop interchange — per partial/carrier, run the whole chunk so
+        // phasor state stays register-resident; accumulate into the output buffers.
         float* const outL = out.getWritePointer(0);
         float* const outR = out.getWritePointer(1);
         const int nActiveP = (int) activePartials.size();
         const int nActiveR = (int) activeCarriers.size();
         const int* const activeP = activePartials.data();
         const int* const activeR = activeCarriers.data();
-        for (int si = s; si < chunkEnd; ++si)
+        const int chunkLen = chunkEnd - s;
+        if (chunkLen > 0)
         {
-            float sample = 0.0f;
+            for (int si = s; si < chunkEnd; ++si)
+            {
+                outL[si] = 0.0f;
+                if (doResidual)
+                    outR[si] = 0.0f;
+            }
+
             for (int ai = 0; ai < nActiveP; ++ai)
             {
                 auto& p = ps[(size_t) activeP[ai]];
-                const double newRe = p.re * p.rotRe - p.im * p.rotIm;
-                const double newIm = p.re * p.rotIm + p.im * p.rotRe;
-                p.re = newRe;
-                p.im = newIm;
-                sample += (float) (newIm * p.amp);
-                p.amp += p.ampInc;
-                if (p.amp < 0.0) p.amp = 0.0;
+                double re = p.re;
+                double im = p.im;
+                double amp = p.amp;
+                const double rotRe = p.rotRe;
+                const double rotIm = p.rotIm;
+                const double ampInc = p.ampInc;
+                for (int si = 0; si < chunkLen; ++si)
+                {
+                    const double newRe = re * rotRe - im * rotIm;
+                    const double newIm = re * rotIm + im * rotRe;
+                    re = newRe;
+                    im = newIm;
+                    outL[s + si] += (float) (newIm * amp);
+                    amp += ampInc;
+                    if (amp < 0.0)
+                        amp = 0.0;
+                }
+                p.re = re;
+                p.im = im;
+                p.amp = amp;
             }
-            outL[si] = sample;
 
             if (doResidual)
             {
-                float resSample = 0.0f;
                 for (int ai = 0; ai < nActiveR; ++ai)
                 {
                     auto& r = rs[(size_t) activeR[ai]];
-
-                    // Advance carrier phasor
-                    const double newRe = r.re * r.rotRe - r.im * r.rotIm;
-                    const double newIm = r.re * r.rotIm + r.im * r.rotRe;
-                    r.re = newRe;
-                    r.im = newIm;
-
-                    // Advance randi: piecewise-linear noise in [-1, 1] at bandwidth rate
-                    if (r.randiCnt >= r.randiSize)
+                    double re = r.re;
+                    double im = r.im;
+                    double amp = r.amp;
+                    const double rotRe = r.rotRe;
+                    const double rotIm = r.rotIm;
+                    const double ampInc = r.ampInc;
+                    uint32_t randSeed = r.randSeed;
+                    double randiA1 = r.randiA1;
+                    double randiA2 = r.randiA2;
+                    int randiCnt = r.randiCnt;
+                    const int randiSize = r.randiSize;
+                    for (int si = 0; si < chunkLen; ++si)
                     {
-                        r.randiA1  = r.randiA2;
-                        r.randSeed = morphTrajLcgNext(r.randSeed);
-                        r.randiA2  = morphTrajLcgDouble(r.randSeed) * 2.0 - 1.0;
-                        r.randiCnt = 0;
-                    }
-                    const double noiseVal = r.randiA1
-                                           + (r.randiA2 - r.randiA1)
-                                               * ((double) r.randiCnt / (double) r.randiSize);
-                    ++r.randiCnt;
+                        const double newRe = re * rotRe - im * rotIm;
+                        const double newIm = re * rotIm + im * rotRe;
+                        re = newRe;
+                        im = newIm;
 
-                    // sin(carrier) × noise × ENG_RMS — matches do_synthesis ioscilator × randi
-                    resSample += (float) (newIm * noiseVal * r.amp);
-                    r.amp += r.ampInc;
-                    if (r.amp < 0.0) r.amp = 0.0;
+                        if (randiCnt >= randiSize)
+                        {
+                            randiA1 = randiA2;
+                            randSeed = morphTrajLcgNext(randSeed);
+                            randiA2 = morphTrajLcgDouble(randSeed) * 2.0 - 1.0;
+                            randiCnt = 0;
+                        }
+                        const double noiseVal = randiA1
+                                                + (randiA2 - randiA1)
+                                                    * ((double) randiCnt / (double) randiSize);
+                        ++randiCnt;
+
+                        outR[s + si] += (float) (newIm * noiseVal * amp);
+                        amp += ampInc;
+                        if (amp < 0.0)
+                            amp = 0.0;
+                    }
+                    r.re = re;
+                    r.im = im;
+                    r.amp = amp;
+                    r.randSeed = randSeed;
+                    r.randiA1 = randiA1;
+                    r.randiA2 = randiA2;
+                    r.randiCnt = randiCnt;
                 }
-                outR[si] = resSample;
             }
         }
 
