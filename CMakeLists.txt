@@ -28,6 +28,7 @@ option(ATS_REQUIRE_QATSH_VDSP_FFT "Require local Qatsh ATSA vDSP FFT backend pat
 option(ATS_REQUIRE_QATSH_PARALLEL "Require local Qatsh ATSA parallel frame-loop patch before building" ON)
 option(ATS_REQUIRE_QATSH_RESIDUAL_PARALLEL "Require local Qatsh ATSA parallel residual-stage patch before building" ON)
 option(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL "Require local Qatsh ATSA parallel main-lobe-gain patch before building" ON)
+option(ATS_REQUIRE_QATSH_IFFT_SRAND "Require Qatsh ATSA IFFT srand-before-dispatch fix (C-002)" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -189,6 +190,18 @@ if(ATS_REQUIRE_QATSH_MAINLOBE_PARALLEL)
   endif()
   unset(_atsa_mlobe_source)
   unset(_atsa_mlobe_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_IFFT_SRAND)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/synthesis.c" _atsa_ifft_srand_source)
+  string(FIND "${_atsa_ifft_srand_source}" "srand(ATSA_SYNTH_RANDOM_SEED)" _atsa_ifft_srand_pos)
+  string(FIND "${_atsa_ifft_srand_source}" "sparams->use_ifft" _atsa_ifft_dispatch_pos)
+  if(_atsa_ifft_srand_pos EQUAL -1 OR _atsa_ifft_dispatch_pos EQUAL -1 OR _atsa_ifft_srand_pos GREATER _atsa_ifft_dispatch_pos)
+    message(FATAL_ERROR "Required Qatsh ATSA IFFT srand-before-dispatch patch is not applied. Run scripts/apply_qatsh_ifft_srand.sh apply, or configure with -DATS_REQUIRE_QATSH_IFFT_SRAND=OFF to bypass.")
+  endif()
+  unset(_atsa_ifft_srand_source)
+  unset(_atsa_ifft_srand_pos)
+  unset(_atsa_ifft_dispatch_pos)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

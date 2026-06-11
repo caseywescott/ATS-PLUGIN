@@ -331,3 +331,18 @@ window's table dominates). Touches `src/atsa/peak-detection.c` only.
 
 CMake requires it by default (marker `mainlobe_worker` in `peak-detection.c`).
 Use `-DATS_REQUIRE_QATSH_MAINLOBE_PARALLEL=OFF` to build against unpatched Qatsh.
+
+## `qatsh-atsa-ifft-srand.patch`
+
+Fixes **C-002**: seeds the synthesis PRNG before the IFFT dispatch so the opt-in
+`use_ifft` path gets deterministic residual noise. Extends the IFFT patch — apply
+*after* `qatsh-atsa-ifft.patch`. Touches `src/atsa/synthesis.c` only.
+
+```sh
+./scripts/apply_qatsh_ifft_srand.sh apply
+./scripts/apply_qatsh_ifft_srand.sh status
+./scripts/apply_qatsh_ifft_srand.sh reverse-check
+```
+
+CMake requires it by default (`srand` precedes `sparams->use_ifft` in `synthesis.c`).
+Use `-DATS_REQUIRE_QATSH_IFFT_SRAND=OFF` to bypass.

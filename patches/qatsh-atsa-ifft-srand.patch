@@ -1,0 +1,19 @@
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -512,7 +512,6 @@
+       out[n] /= nrm[n];
+ 
+   /* Residual band-noise: same model as the oscillator path, uniform grid. */
+-  srand(ATSA_SYNTH_RANDOM_SEED);
+   has_residual = ats_sound->band_energy != NULL;
+   if (has_residual && sparams->ramp > 0.0 && sparams->amp != 0.0) {
+     RANDI *rb = (RANDI*)malloc((size_t)ATSA_CRITICAL_BANDS * sizeof(RANDI));
+@@ -580,6 +579,8 @@
+   int p, d, b;
+   int has_residual;
+ 
++  srand(ATSA_SYNTH_RANDOM_SEED);
++
+   /* ATSA_IFFT_SYNTH: opt-in inverse-FFT path (uniform grid, no time-warp). */
+   if (sparams->use_ifft) {
+     do_synthesis_ifft(ats_sound, sparams, selected, out_samps, n_out_samps);
