@@ -1,3 +1,7 @@
+#if defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#endif
+
 #include "PluginProcessor.h"
 
 #include "PresetLibrary.h"
@@ -23,10 +27,6 @@
 #include "PluginEditor.h"
 
 #include "ResampleLinear.h"
-
-#if defined(__APPLE__)
-#include <Accelerate/Accelerate.h>
-#endif
 
 #include <JuceHeader.h>
 
@@ -154,6 +154,8 @@ ClassicLayerRender subtractClassicLayers(const ClassicLayerRender& wet, const Cl
     out.combinedRendered = wet.combinedRendered && dry.combinedRendered;
     return out;
 }
+
+juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::SynthParams& sp);
 
 /** Synthesize the combined layer on demand (R-002). Skipped by default in renderClassicLayers
  *  to avoid a third full pass until the user auditions Both with classic combined playback. */
@@ -4572,7 +4574,6 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
         const int nActiveR = (int) activeCarriers.size();
         const int* const activeP = activePartials.data();
         const int* const activeR = activeCarriers.data();
-        const int chunkLen = chunkEnd - s;
         if (chunkLen > 0)
         {
             for (int si = s; si < chunkEnd; ++si)

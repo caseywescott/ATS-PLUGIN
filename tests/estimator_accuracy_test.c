@@ -109,7 +109,7 @@ static EstResult estimate_tone(double f_true, double amp_true, double phi,
     const int lowest_bin = 2;
     const int highest_bin = fft_size / 2;
     int peaks_size = 0;
-    ATS_PEAK* peaks = peak_detection(&fft_struct, NULL, lowest_bin, highest_bin, -120.0, norm, &peaks_size);
+    ATS_PEAK* peaks = peak_detection(&fft_struct, NULL, lowest_bin, highest_bin, -120.0, norm, &peaks_size, NULL, NULL);
 
     double best_df = 1.0e18;
     for (int i = 0; i < peaks_size; ++i)
@@ -408,7 +408,7 @@ int main(void)
         }
         fft(ff.fdr, ff.fdi, fft_size, 1);
         int ps = 0;
-        ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size / 2, -120.0, norm, &ps);
+        ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size / 2, -120.0, norm, &ps, NULL, NULL);
         int near = 0;
         for (int i = 0; i < ps; ++i)
             if (pk[i].frq > f1 - 2.0 * fft_mag && pk[i].frq < f2 + 2.0 * fft_mag)
@@ -439,7 +439,7 @@ int main(void)
                 ff.fdr[(k + first_point) % fft_size] = window[k] * (buf)[k];   \
             fft(ff.fdr, ff.fdi, fft_size, 1);                                  \
             int ps = 0;                                                        \
-            ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size/2, -120.0, norm, &ps); \
+            ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size/2, -120.0, norm, &ps, NULL, NULL); \
             double bf = 1e18, fr_ = (fguess);                                  \
             for (int i = 0; i < ps; ++i)                                       \
                 if (fabs(pk[i].frq - (fguess)) < bf) { bf = fabs(pk[i].frq - (fguess)); fr_ = pk[i].frq; } \

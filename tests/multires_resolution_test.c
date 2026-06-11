@@ -58,7 +58,7 @@ static int count_peaks_in_band(double f1, double a1, double f2, double a2,
 
     const double fft_mag = (double) sample_rate / (double) fft_size;
     int ps = 0;
-    ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size / 2, -90.0, norm, &ps);
+    ATS_PEAK* pk = peak_detection(&ff, NULL, 2, fft_size / 2, -90.0, norm, &ps, NULL, NULL);
     int n = 0;
     for (int i = 0; i < ps; ++i)
         if (pk[i].frq >= lo && pk[i].frq <= hi)
