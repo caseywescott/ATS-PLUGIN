@@ -37,6 +37,7 @@ private:
     juce::Slider synDurSlider;
     juce::ToggleButton usePhaseButton;
     juce::ToggleButton useAllPartialsButton;
+    juce::ToggleButton useIfftSynthButton;
     juce::ToggleButton residualOnlyButton;
     juce::ComboBox classicPreviewModeBox;
     juce::ComboBox freqShapeModeBox;
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> synDurAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> usePhaseAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> useAllAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> useIfftSynthAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> residualOnlyAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> classicPreviewModeAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> freqShapeModeAttach;

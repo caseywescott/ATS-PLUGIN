@@ -93,11 +93,15 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
 
     usePhaseButton.setButtonText("Use partial phases");
     useAllPartialsButton.setButtonText("Use all partials");
+    useIfftSynthButton.setButtonText("Use IFFT synthesis");
+    useIfftSynthButton.setHelpText("Overlap-add inverse-FFT resynthesis (faster on dense models). "
+                                   "Default off preserves the oscillator bank path.");
     residualOnlyButton.setButtonText("Residual only (mute partials)");
     residualOnlyButton.setHelpText("Synthesize only the noise / residual path (SPARAMS amp=0). "
                                    "Requires analysis type 3+ with residual data.");
     addAndMakeVisible(usePhaseButton);
     addAndMakeVisible(useAllPartialsButton);
+    addAndMakeVisible(useIfftSynthButton);
     addAndMakeVisible(residualOnlyButton);
 
     classicPreviewModeBox.addItemList(juce::StringArray { "Classic combined", "Layer mix" }, 1);
@@ -129,6 +133,8 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
         audioProcessor.apvts, "usePhase", usePhaseButton);
     useAllAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.apvts, "useAllPartials", useAllPartialsButton);
+    useIfftSynthAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.apvts, ats_param::kUseIfftSynth, useIfftSynthButton);
     residualOnlyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.apvts, "residualOnly", residualOnlyButton);
     classicPreviewModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -190,7 +196,10 @@ void SynthTabPanel::resized()
     row3.removeFromLeft(12);
     useAllPartialsButton.setBounds(row3.removeFromLeft(200));
     row3.removeFromLeft(12);
-    residualOnlyButton.setBounds(row3.removeFromLeft(240));
+    useIfftSynthButton.setBounds(row3.removeFromLeft(200));
+    r.removeFromTop(6);
+    auto row3b = r.removeFromTop(28);
+    residualOnlyButton.setBounds(row3b.removeFromLeft(240));
 
     r.removeFromTop(10);
     auto row4 = r.removeFromTop(30);

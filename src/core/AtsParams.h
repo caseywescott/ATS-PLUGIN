@@ -63,6 +63,8 @@ struct SynthParams
     double frequencyFactor = 1.0;
     double timeFactor = 1.0;
     double sampleRate = 44100.0;
+    /** Opt-in overlap-add IFFT synthesis (SPARAMS.use_ifft). Default off preserves oscillator path. */
+    bool useIfftSynth = false;
     FrequencyShapeSettings frequencyShape;
 
     void toSparams(SPARAMS& out, double soundDurationSec) const;

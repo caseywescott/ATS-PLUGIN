@@ -63,6 +63,7 @@ void SynthParams::toSparams(SPARAMS& out, double soundDurationSec) const
     out.sr = sampleRate;
     out.allorsel = useAllPartials ? static_cast<short>(1) : static_cast<short>(0);
     out.upha = usePartialsPhase ? static_cast<short>(1) : static_cast<short>(0);
+    out.use_ifft = useIfftSynth ? static_cast<short>(1) : static_cast<short>(0);
 }
 
 SynthParams SynthParams::fromSparams(const SPARAMS& s, double soundDurationSec, bool useAll, bool usePhase)
@@ -78,6 +79,7 @@ SynthParams SynthParams::fromSparams(const SPARAMS& s, double soundDurationSec, 
     p.sampleRate = s.sr;
     p.useAllPartials = useAll;
     p.usePartialsPhase = usePhase;
+    p.useIfftSynth = s.use_ifft != 0;
     return p;
 }
 

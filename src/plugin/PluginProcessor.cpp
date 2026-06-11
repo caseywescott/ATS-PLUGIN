@@ -1960,6 +1960,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtsAudioProcessor::createPar
         "SMR tracking weight",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.0001f),
         (float) ATSA_SMRCONT));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        ats_param::kUseIfftSynth,
+        "Use IFFT synthesis",
+        false));
 
     return layout;
 }
@@ -2103,6 +2107,7 @@ ats::SynthParams AtsAudioProcessor::readCoreSynthParamsFromApvts() const
     sp.partialsGain = 1.0;
     sp.residualGain = 1.0;
     sp.frequencyShape = readFrequencyShapeFromApvts();
+    sp.useIfftSynth = getRawParamValue(apvts, ats_param::kUseIfftSynth, 0.0f) > 0.5f;
     return sp;
 }
 
