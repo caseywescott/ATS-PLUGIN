@@ -32,6 +32,7 @@ option(ATS_REQUIRE_QATSH_IFFT_SRAND "Require Qatsh ATSA IFFT srand-before-dispat
 option(ATS_REQUIRE_QATSH_DDM_SLOPES_MAINT "Require Qatsh ATSA DDM slope maintenance in utilities (C-003)" ON)
 option(ATS_REQUIRE_QATSH_TRACKSTORE "Require Qatsh ATSA O(P*T) track-store loop (A-001)" ON)
 option(ATS_REQUIRE_QATSH_SMR_PRECOMPUTE "Require Qatsh ATSA SMR bark/dB precompute (A-003)" ON)
+option(ATS_REQUIRE_QATSH_TRACKING_DS "Require Qatsh ATSA peak-tracking data structures (A-002)" ON)
 
 if(NOT DEFINED ATS_ATSA_SOURCE_DIR)
   set(ATS_ATSA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/qatsh/src/atsa" CACHE PATH "Path to Qatsh ATSA sources (atsa.h and .c files)")
@@ -235,6 +236,16 @@ if(ATS_REQUIRE_QATSH_SMR_PRECOMPUTE)
   endif()
   unset(_atsa_smr_pre_source)
   unset(_atsa_smr_pre_marker)
+endif()
+
+if(ATS_REQUIRE_QATSH_TRACKING_DS)
+  file(READ "${ATS_ATSA_SOURCE_DIR}/peak-tracking.c" _atsa_tracking_ds_source)
+  string(FIND "${_atsa_tracking_ds_source}" "ATSA_TRACKING_DS" _atsa_tracking_ds_marker)
+  if(_atsa_tracking_ds_marker EQUAL -1)
+    message(FATAL_ERROR "Required Qatsh ATSA peak-tracking data structures patch is not applied. Run scripts/apply_qatsh_tracking_ds.sh apply, or configure with -DATS_REQUIRE_QATSH_TRACKING_DS=OFF to bypass.")
+  endif()
+  unset(_atsa_tracking_ds_source)
+  unset(_atsa_tracking_ds_marker)
 endif()
 
 find_path(SNDFILE_INCLUDE_DIR sndfile.h

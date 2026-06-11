@@ -1,0 +1,85 @@
+--- a/src/atsa/peak-tracking.c
++++ b/src/atsa/peak-tracking.c
+@@ -14,6 +14,16 @@
+ 
+ #define LARGEST_DOUBLE 1.7976931348623157e308
+ 
++/* ATSA_TRACKING_DS: map a candidate peak back to its index in the sorted peaks array. */
++static int peak_index_of(const ATS_PEAK *peaks, int peaks_size, const ATS_PEAK *candidate)
++{
++  int i;
++  for (i = 0; i < peaks_size; i++)
++    if (peaks[i].frq == candidate->frq && peaks[i].amp == candidate->amp && peaks[i].track == candidate->track)
++      return i;
++  return -1;
++}
++
+ /* peak_tracking
+  * =============
+  * connects peaks from one analysis frame to tracks
+@@ -30,7 +40,7 @@
+ {
+   ATS_PEAK track, *matched_peak = NULL, *peak_candidates = NULL;
+   double track_frq, track_smr, lo, hi;
+-  int i, k, j, cand_size;
++  int i, k, j, cand_size, matched_idx;
+   ATS_FRAME *returned_peaks = (ATS_FRAME *)malloc(2*sizeof(ATS_FRAME));
+ 
+   returned_peaks[0].peaks = returned_peaks[1].peaks = NULL;
+@@ -51,18 +61,17 @@
+       /* find best candidate */
+       matched_peak = find_best_candidate(peak_candidates, cand_size, track_frq, track_smr, SMR_cont, tracks, tracks_size);
+       if(matched_peak != NULL) {
+-        for(i=0; i<*peaks_size; i++) 
+-          if(peaks[i].frq == matched_peak->frq) {
+-	    if( matched_peak->track >= 0){
++        matched_idx = peak_index_of(peaks, *peaks_size, matched_peak);
++        if (matched_idx >= 0) {
++	  if( peaks[matched_idx].track >= 0){
+ 	      /* put previously holding track into unmatched peaks */
+ 	      for(j=0; j<tracks_size; j++){
+-		if(tracks[j].track == matched_peak->track) break;
++		if(tracks[j].track == peaks[matched_idx].track) break;
+ 	      } 
+ 	      returned_peaks[0].peaks = push_peak(&tracks[j], returned_peaks[0].peaks, &returned_peaks[0].n_peaks);
+ 	    }
+-	    peaks[i].track = track.track;
+-	    break;
+-	  }
++	    peaks[matched_idx].track = track.track;
++        }
+       } else {
+ 	returned_peaks[0].peaks = push_peak(&track, returned_peaks[0].peaks, &returned_peaks[0].n_peaks);
+       }
+@@ -92,10 +101,29 @@
+  */
+ ATS_PEAK *find_candidates(ATS_PEAK *peaks, int peaks_size, double lo, double hi, int *cand_size)
+ {
+-  int i;
++  int i, start = 0, end = peaks_size;
+   ATS_PEAK *cand_list = NULL;
+ 
+-  for(i=0; i<peaks_size; i++) 
++  /* ATSA_TRACKING_DS: binary search the [lo, hi] window on sorted peaks */
++  if (peaks_size > 0) {
++    int lo_idx = 0, hi_idx = peaks_size;
++    while (lo_idx < hi_idx) {
++      int mid = (lo_idx + hi_idx) / 2;
++      if (peaks[mid].frq < lo) lo_idx = mid + 1;
++      else hi_idx = mid;
++    }
++    start = lo_idx;
++    lo_idx = start;
++    hi_idx = peaks_size;
++    while (lo_idx < hi_idx) {
++      int mid = (lo_idx + hi_idx) / 2;
++      if (peaks[mid].frq <= hi) lo_idx = mid + 1;
++      else hi_idx = mid;
++    }
++    end = lo_idx;
++  }
++
++  for(i=start; i<end; i++) 
+     if((lo <= peaks[i].frq) && (peaks[i].frq <= hi)) {
+       cand_list = push_peak(&peaks[i], cand_list, cand_size);
+     }

@@ -387,3 +387,17 @@ Use `-DATS_REQUIRE_QATSH_TRACKSTORE=OFF` to bypass.
 
 CMake requires it by default (marker `ATSA_SMR_PRECOMPUTE`).
 Use `-DATS_REQUIRE_QATSH_SMR_PRECOMPUTE=OFF` to bypass.
+
+## `qatsh-atsa-tracking-ds.patch`
+
+**A-002**: binary-search candidate peaks on the sorted frequency axis and use
+peak-index identity for assignment (partial **C-005** fix). Bit-identical tie
+order preserved. Touches `src/atsa/peak-tracking.c` only.
+
+```sh
+./scripts/apply_qatsh_tracking_ds.sh apply
+./scripts/apply_qatsh_tracking_ds.sh status
+```
+
+CMake requires it by default (marker `ATSA_TRACKING_DS`).
+Use `-DATS_REQUIRE_QATSH_TRACKING_DS=OFF` to bypass.
