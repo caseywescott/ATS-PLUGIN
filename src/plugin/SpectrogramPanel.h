@@ -187,6 +187,7 @@ private:
     juce::Slider envSmoothSlider;
     juce::TextButton envSmoothButton { "Smooth Env" };
     int lastModelRevision = -1;
+    uint64_t lastMorphSourcesRevision = 0;
     uint64_t lastDisplayShapeRevision = 0;
     uint64_t lastSmearnovOverlayRevision = 0;
     double ampDisplayReferencePeak = 0.0;

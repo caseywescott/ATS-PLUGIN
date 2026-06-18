@@ -619,11 +619,13 @@ void SpectrogramPanel::timerCallback()
         return;
 
     const int rev = processor.getModelRevision();
+    const uint64_t morphSourcesRev = processor.getMorphSourcesRevision();
     const uint64_t shapeRev = processor.getDisplayShapeRevision();
     const uint64_t overlayRev = processor.getSmearnovOverlayRevision();
-    if (rev != lastModelRevision)
+    if (rev != lastModelRevision || morphSourcesRev != lastMorphSourcesRevision)
     {
         lastModelRevision = rev;
+        lastMorphSourcesRevision = morphSourcesRev;
         lastDisplayShapeRevision = shapeRev;
         lastSmearnovOverlayRevision = overlayRev;
         rebuildTraceSnapshot();

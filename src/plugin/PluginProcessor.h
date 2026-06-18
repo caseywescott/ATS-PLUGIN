@@ -372,6 +372,7 @@ public:
 
     int getModelRevision() const { return modelRevision.load(); }
     int getMorphRecipeRevision() const { return morphRecipeRevision.load(); }
+    uint64_t getMorphSourcesRevision() const { return morphSourcesRevision.load(std::memory_order_acquire); }
     uint64_t getDisplayShapeRevision() const { return displayShapeRevision.load(std::memory_order_acquire); }
     ats::FrequencyShapeSettings getCurrentFrequencyShapeSettings() const;
 
@@ -598,10 +599,11 @@ public:
     bool hasMorphSourcePreviewAudio(int slotIndex) const;
     bool hasMorphPreviewAudio() const;
     bool canPlayMorphPreview() const;
-    bool playMorphPreview(juce::String& error);
-    bool playMorphTimelinePreview(juce::String& error);
-    bool playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error);
-    bool playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error);
+    bool playMorphPreview(juce::String& error, bool economyPreview = false);
+    bool playMorphTimelinePreview(juce::String& error, bool economyPreview = false);
+    bool playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error, bool economyPreview = false);
+    bool playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error,
+                                  bool economyPreview = false);
     bool bounceMorphTimelineToFile(const juce::File& file, AtsSourceAuditionMode mode, juce::String& error);
     bool installPreparedMorphSnapshotForPlayback(const ats::MorphRenderSnapshot& snapshot,
                                                  double durationSeconds,
@@ -645,6 +647,7 @@ private:
     void joinWorkers();
     void clearPreviewLayerCache();
     void markMorphSnapshotStale();
+    void servicePendingPresetMorphAnalyses();
 
     /** Captures the post-edit model and pushes an undo transaction (message thread only). */
     void recordModelEdit(AtsTraceSource source, AtsSoundSnapshot before, const juce::String& label);
@@ -681,7 +684,8 @@ private:
                                             bool smearIsolate = false, bool renderCombinedPass = false);
     bool renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juce::String& error, bool liveSmear = false,
                                                bool smearIsolate = false, bool renderCombinedPass = false);
-    void rebuildMorphCorrespondenceIfReady();
+    /** qualityOverride >= 0 forces morph OT quality (0=Max, 1=Default, 2=Economy); -1 uses APVTS. */
+    void rebuildMorphCorrespondenceIfReady(int qualityOverride = -1);
 
     // --- Live (non-destructive) Smearnov preview (transport "Smear" toggle) ---
     /** Hash of the current detect+smear params + effective scope + overlay revision; the
@@ -749,6 +753,9 @@ private:
     std::array<AtsMorphSnapshotSlotInfo, ats_param::kMorphVariationSlotCount> morphVariationSlots;
     std::atomic<int> morphSnapshotState { (int) AtsMorphSnapshotUiState::Ready };
     std::atomic<int> pendingMorphSourceSlotAfterAnalysis { -1 };
+    /** Source slots whose saved WAV paths need analysis because restored state had no
+     *  embedded per-frame ATS model. Serviced sequentially from the message thread. */
+    std::atomic<int> pendingPresetMorphAnalysisMask { 0 };
     std::atomic<int> activeControlTab { 0 }; // 0 = Morph, 1 = Smearnov (persisted UI state)
 
     /** Host-rate partial / residual / classic-combined layers; skip re-synthesis when core + model revision unchanged. */
@@ -897,8 +904,11 @@ private:
     // 0 = never played, 1 = last was playMorphPreview, 2 = last was playMorphTimelinePreview.
     std::atomic<int> lastMorphPlayKind { 0 };
     std::atomic<bool> morphAutoRerenderPending { false };
+    std::atomic<bool> morphAutoRerenderDraftDone { false };
     std::atomic<int64_t> morphAutoRerenderLastChangeMs { 0 };
-    static constexpr int64_t kMorphAutoRerenderDebounceMs = 350;
+    static constexpr int kMorphEconomyQuality = 2;
+    static constexpr int64_t kMorphAutoRerenderDraftDebounceMs = 120;
+    static constexpr int64_t kMorphAutoRerenderFinalizeDebounceMs = 350;
 
     /** Semitones relative to middle C (note 60) applied on top of the Freq APVTS factor. */
     std::atomic<float> midiSemitoneOffset { 0.0f };

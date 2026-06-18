@@ -121,6 +121,9 @@ struct ClassicLayerRender
     bool hasResidual = false;
     /** True after the combined pass (per-partial noise) has been synthesized. */
     bool combinedRendered = false;
+    /** Keeps freq-shape / timbre copies alive for lazy combined synthesis. */
+    ats::AtsSoundPtr shapedSoundHold;
+    const ATS_SOUND* synthesisSound = nullptr;
 };
 
 // Sample-wise (wet - dry) into a fresh mono buffer, zero-padding the shorter one.
@@ -157,18 +160,17 @@ ClassicLayerRender subtractClassicLayers(const ClassicLayerRender& wet, const Cl
 
 juce::AudioBuffer<float> runDoSynthesis(const ATS_SOUND* sound, const ats::SynthParams& sp);
 
-/** Synthesize the combined layer on demand (R-002). Skipped by default in renderClassicLayers
- *  to avoid a third full pass until the user auditions Both with classic combined playback. */
-void ensureClassicCombinedLayer(ClassicLayerRender& render, const ATS_SOUND* sound,
-                                const ats::SynthParams& core)
+/** Synthesize the combined layer on demand (R-002). Skipped until playback requests
+ *  classic combined (Both + per-partial noise mode). */
+void ensureClassicCombinedLayer(ClassicLayerRender& render, const ats::SynthParams& core)
 {
-    if (render.combinedRendered || !render.hasResidual || sound == nullptr)
+    if (render.combinedRendered || !render.hasResidual || render.synthesisSound == nullptr)
         return;
 
     ats::SynthParams spCombined = core;
     spCombined.partialsGain = 1.0;
     spCombined.residualGain = 1.0;
-    render.combined = runDoSynthesis(sound, spCombined);
+    render.combined = runDoSynthesis(render.synthesisSound, spCombined);
     render.combinedRendered = true;
 }
 
@@ -594,8 +596,7 @@ static void applyTimbreMotionPlanToSound(ATS_SOUND* sound,
 ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthParams& core,
                                         double brightnessDb = 0.0, double tiltDbPerOct = 0.0,
                                         double noiseBalance = 0.5,
-                                        const ats::TimbreMotionPlan* timbrePlan = nullptr,
-                                        bool renderCombinedPass = false)
+                                        const ats::TimbreMotionPlan* timbrePlan = nullptr)
 {
     ClassicLayerRender render;
     if (sound == nullptr)
@@ -658,23 +659,13 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
         spResidual.partialsGain = 0.0;
         spResidual.residualGain = 1.0;
 
-        ats::SynthParams spCombined = core;
-        spCombined.partialsGain = 1.0;
-        spCombined.residualGain = 1.0;
-
         auto doPartials = [&]() { return runDoSynthesis(renderSound, spPartials); };
         auto doResidual = [&]() { return runDoSynthesis(renderSound, spResidual); };
-        auto doCombined = [&]() { return runDoSynthesis(renderSound, spCombined); };
 
         auto futurePartials = std::async(std::launch::async, doPartials);
         auto futureResidual = std::async(std::launch::async, doResidual);
         render.partials = futurePartials.get();
         render.residual = futureResidual.get();
-        if (renderCombinedPass)
-        {
-            render.combined = doCombined();
-            render.combinedRendered = true;
-        }
     }
     else
     {
@@ -682,6 +673,9 @@ ClassicLayerRender renderClassicLayers(const ATS_SOUND* sound, const ats::SynthP
         render.combined.makeCopyOf(render.partials);
         render.combinedRendered = true;
     }
+
+    render.shapedSoundHold = std::move(shapedSound);
+    render.synthesisSound = renderSound;
 
     return render;
 }
@@ -764,9 +758,9 @@ juce::AudioBuffer<float> renderClassicSourcePlaybackBuffer(const ATS_SOUND* soun
                                                            double tiltDbPerOct = 0.0,
                                                            double noiseBalance = 0.5)
 {
-    return makePlaybackBufferFromClassicLayers(
-        renderClassicLayers(sound, core, brightnessDb, tiltDbPerOct, noiseBalance, nullptr, true),
-        renderSampleRate);
+    ClassicLayerRender layers = renderClassicLayers(sound, core, brightnessDb, tiltDbPerOct, noiseBalance, nullptr);
+    ensureClassicCombinedLayer(layers, core);
+    return makePlaybackBufferFromClassicLayers(layers, renderSampleRate);
 }
 
 const ATS_SOUND* makeFrequencyShapedRenderSound(const ATS_SOUND* sound,
@@ -2214,6 +2208,7 @@ void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float 
         if (lastMorphPlayKind.load(std::memory_order_acquire) != 0)
         {
             morphAutoRerenderPending.store(true, std::memory_order_release);
+            morphAutoRerenderDraftDone.store(false, std::memory_order_release);
             morphAutoRerenderLastChangeMs.store(juce::Time::currentTimeMillis(),
                                                 std::memory_order_release);
         }
@@ -2234,6 +2229,12 @@ void AtsAudioProcessor::parameterChanged(const juce::String& parameterID, float 
 
 void AtsAudioProcessor::handleAsyncUpdate()
 {
+    // A restored preset may need to analyze Source A/B sequentially from its saved
+    // WAV paths. Avoid spending time resynthesizing the intermediate current model.
+    if (analysisThreadRunning.load(std::memory_order_acquire)
+        || pendingPresetMorphAnalysisMask.load(std::memory_order_acquire) != 0)
+        return;
+
     if (synthParamsDirty.exchange(false))
         startResynthWorker();
 }
@@ -2256,9 +2257,13 @@ void AtsAudioProcessor::timerCallback()
         undoManager.beginNewTransaction();
     }
 
+    servicePendingPresetMorphAnalyses();
+
     // Pick up synthParamsDirty set by processBlock (MIDI) without calling
     // triggerAsyncUpdate() from the audio thread.
-    if (synthParamsDirty.load(std::memory_order_acquire))
+    if (!analysisThreadRunning.load(std::memory_order_acquire)
+        && pendingPresetMorphAnalysisMask.load(std::memory_order_acquire) == 0
+        && synthParamsDirty.load(std::memory_order_acquire))
         triggerAsyncUpdate();
 
     // Fire the debounced freq-shape resynth once the slider has been idle ≥120 ms.
@@ -2274,35 +2279,42 @@ void AtsAudioProcessor::timerCallback()
         }
     }
 
-    // Auto-rerender morph preview after the debounce: when a morph param changed
-    // and the user has previously played a morph preview, re-render automatically.
+    // Auto-rerender morph preview while scrubbing morph controls: draft at 120 ms (Economy OT),
+    // then finalize at 350 ms idle with the user's morph quality setting.
     if (morphAutoRerenderPending.load(std::memory_order_acquire))
     {
         const int64_t elapsed = juce::Time::currentTimeMillis()
                                 - morphAutoRerenderLastChangeMs.load(std::memory_order_acquire);
-        if (elapsed >= kMorphAutoRerenderDebounceMs)
+        if (isWorkerBusy())
         {
-            if (isWorkerBusy())
-            {
-                // Worker still busy — reset the clock so we retry after another debounce.
-                morphAutoRerenderLastChangeMs.store(juce::Time::currentTimeMillis(),
-                                                    std::memory_order_release);
-            }
-            else if (canPlayMorphPreview())
-            {
-                morphAutoRerenderPending.store(false, std::memory_order_release);
-                juce::String ignored;
-                const int kind = lastMorphPlayKind.load(std::memory_order_acquire);
-                if (kind == 2)
-                    playMorphTimelinePreview(ignored);
-                else
-                    playMorphPreview(ignored);
-            }
+            // Worker still busy — wait for another debounce window.
+        }
+        else if (!canPlayMorphPreview())
+        {
+            morphAutoRerenderPending.store(false, std::memory_order_release);
+            morphAutoRerenderDraftDone.store(false, std::memory_order_release);
+        }
+        else if (elapsed >= kMorphAutoRerenderFinalizeDebounceMs)
+        {
+            morphAutoRerenderPending.store(false, std::memory_order_release);
+            morphAutoRerenderDraftDone.store(false, std::memory_order_release);
+            juce::String ignored;
+            const int kind = lastMorphPlayKind.load(std::memory_order_acquire);
+            if (kind == 2)
+                playMorphTimelinePreview(ignored, false);
             else
-            {
-                // Can't play (sources not ready): clear so we don't loop forever.
-                morphAutoRerenderPending.store(false, std::memory_order_release);
-            }
+                playMorphPreview(ignored, false);
+        }
+        else if (elapsed >= kMorphAutoRerenderDraftDebounceMs
+                 && !morphAutoRerenderDraftDone.load(std::memory_order_acquire))
+        {
+            morphAutoRerenderDraftDone.store(true, std::memory_order_release);
+            juce::String ignored;
+            const int kind = lastMorphPlayKind.load(std::memory_order_acquire);
+            if (kind == 2)
+                playMorphTimelinePreview(ignored, true);
+            else
+                playMorphPreview(ignored, true);
         }
     }
 }
@@ -2531,6 +2543,7 @@ void AtsAudioProcessor::clearPreviewLayerCache()
 
 void AtsAudioProcessor::cancelJobs()
 {
+    pendingPresetMorphAnalysisMask.store(0, std::memory_order_release);
     jobGeneration.fetch_add(1, std::memory_order_acq_rel);
     resynthJobSerial.fetch_add(1, std::memory_order_acq_rel);
 }
@@ -3495,7 +3508,8 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, true); // private copy: no modelLock needed
+        ClassicLayerRender wet = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr); // private copy: no modelLock needed
+        ensureClassicCombinedLayer(wet, core);
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(modelLock);
@@ -3504,7 +3518,8 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
                 error = "No analyzed ATS model to render.";
                 return false;
             }
-            dry = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, true);
+            dry = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr);
+            ensureClassicCombinedLayer(dry, core);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3514,7 +3529,9 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(AtsTraceSource::Current, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, renderCombinedPass); // private copy: no modelLock needed
+            rendered = renderClassicLayers(smeared, core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr); // private copy: no modelLock needed
+            if (renderCombinedPass)
+                ensureClassicCombinedLayer(rendered, core);
             renderedLive = true;
         }
     }
@@ -3526,7 +3543,9 @@ bool AtsAudioProcessor::renderCurrentModelToPlaybackBuffer(int bufferIndex, juce
             error = "No analyzed ATS model to render.";
             return false;
         }
-        rendered = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr, renderCombinedPass);
+        rendered = renderClassicLayers(analyzedModel.get(), core, rcmBrightnessDb, rcmTiltDbPerOct, rcmNoiseBalance, nullptr);
+        if (renderCombinedPass)
+            ensureClassicCombinedLayer(rendered, core);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -3647,7 +3666,8 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                         : "Smear has no audible effect with the current settings (raise Blur or detect onsets first).";
             return false;
         }
-        const ClassicLayerRender wet = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, true); // private copy: no morphRecipeLock needed
+        ClassicLayerRender wet = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr); // private copy: no morphRecipeLock needed
+        ensureClassicCombinedLayer(wet, core);
         ClassicLayerRender dry;
         {
             const juce::ScopedLock ml(morphRecipeLock);
@@ -3657,7 +3677,8 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
                 error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
                 return false;
             }
-            dry = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, true);
+            dry = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr);
+            ensureClassicCombinedLayer(dry, core);
         }
         rendered = subtractClassicLayers(wet, dry);
         renderedLive = true;
@@ -3667,7 +3688,9 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
         juce::String smearErr;
         if (const ATS_SOUND* smeared = getSmearedSound(src, smearErr))
         {
-            rendered = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, renderCombinedPass); // private copy: no morphRecipeLock needed
+            rendered = renderClassicLayers(smeared, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr); // private copy: no morphRecipeLock needed
+            if (renderCombinedPass)
+                ensureClassicCombinedLayer(rendered, core);
             renderedLive = true;
         }
     }
@@ -3680,7 +3703,9 @@ bool AtsAudioProcessor::renderMorphSourceSlotToPlaybackBuffer(int slotIndex, juc
             error = slotIndex == 0 ? "Source A has no rendered model." : "Source B has no rendered model.";
             return false;
         }
-        rendered = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr, renderCombinedPass);
+        rendered = renderClassicLayers(sound, core, slotBrightnessDb, slotTiltDbPerOct, slotNoiseBalance, slotTimbrePlanPtr);
+        if (renderCombinedPass)
+            ensureClassicCombinedLayer(rendered, core);
     }
     {
         modelSr = rendered.modelSampleRate;
@@ -4898,7 +4923,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
     return out;
 }
 
-bool AtsAudioProcessor::playMorphPreview(juce::String& error)
+bool AtsAudioProcessor::playMorphPreview(juce::String& error, bool economyPreview)
 {
     error.clear();
     if (isWorkerBusy())
@@ -4915,7 +4940,7 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
     {
         const juce::ScopedLock ml(morphRecipeLock);
         syncMorphControlsToRecipe(apvts, morphRecipe);
-        rebuildMorphCorrespondenceIfReady();
+        rebuildMorphCorrespondenceIfReady(economyPreview ? kMorphEconomyQuality : -1);
         serializedMorphRecipe = ats::serializeMorphRecipe(morphRecipe);
         recipe = morphRecipe;
         residualBands = morphSourceResidualBands;
@@ -5059,17 +5084,19 @@ bool AtsAudioProcessor::playMorphPreview(juce::String& error)
     return true;
 }
 
-bool AtsAudioProcessor::playMorphTimelinePreview(juce::String& error)
+bool AtsAudioProcessor::playMorphTimelinePreview(juce::String& error, bool economyPreview)
 {
-    return playMorphTimelinePreview(AtsSourceAuditionMode::Both, false, error);
+    return playMorphTimelinePreview(AtsSourceAuditionMode::Both, false, error, economyPreview);
 }
 
-bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error)
+bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, juce::String& error,
+                                                 bool economyPreview)
 {
-    return playMorphTimelinePreview(mode, false, error);
+    return playMorphTimelinePreview(mode, false, error, economyPreview);
 }
 
-bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear, juce::String& error)
+bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, bool liveSmear,
+                                                 juce::String& error, bool economyPreview)
 {
     error.clear();
     if (isWorkerBusy())
@@ -5087,7 +5114,7 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
     {
         const juce::ScopedLock ml(morphRecipeLock);
         syncMorphControlsToRecipe(apvts, morphRecipe);
-        rebuildMorphCorrespondenceIfReady();
+        rebuildMorphCorrespondenceIfReady(economyPreview ? kMorphEconomyQuality : -1);
         timelinePoints = deserializeMorphTimelinePoints(getRecipeUnknownField(morphRecipe,
                                                                               kMorphTimelineUnknownField));
         upsertRecipeUnknownField(morphRecipe,
@@ -5132,7 +5159,8 @@ bool AtsAudioProcessor::playMorphTimelinePreview(AtsSourceAuditionMode mode, boo
     const int strategy = getRawChoiceValue(apvts,
                                            ats_param::kMorphCorrespondenceStrategy,
                                            kDefaultMorphCorrespondenceStrategy);
-    const int quality = getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
+    const int quality = economyPreview ? kMorphEconomyQuality
+                                       : getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
     const double minMassFraction = morphQualityToMinMassFraction(quality);
     const uint64_t gen = jobGeneration.load(std::memory_order_acquire);
     morphSnapshotState.store((int) AtsMorphSnapshotUiState::Rebuilding, std::memory_order_release);
@@ -6015,6 +6043,35 @@ bool AtsAudioProcessor::loadAndAnalyzeMorphSourceSlot(int slotIndex,
     return true;
 }
 
+void AtsAudioProcessor::servicePendingPresetMorphAnalyses()
+{
+    if (isWorkerBusy())
+        return;
+
+    const int mask = pendingPresetMorphAnalysisMask.load(std::memory_order_acquire);
+    if (mask == 0)
+        return;
+
+    const int slotIndex = (mask & 1) != 0 ? 0 : 1;
+    const int remainingMask = mask & ~(1 << slotIndex);
+    juce::File sourceFile;
+    {
+        const juce::ScopedLock sl(sourceLock);
+        sourceFile = morphSourceFiles[(size_t) slotIndex];
+    }
+
+    juce::String error;
+    const bool started = sourceFile.existsAsFile()
+                         && sourceFile.hasFileExtension(".wav")
+                         && loadAndAnalyzeMorphSourceSlot(slotIndex, sourceFile, error);
+
+    // loadAndAnalyzeMorphSourceSlot intentionally clears queued work while it
+    // replaces the current source. Restore only the slots still awaiting analysis.
+    pendingPresetMorphAnalysisMask.store(remainingMask, std::memory_order_release);
+    if (!started && error.isNotEmpty())
+        setError(error);
+}
+
 bool AtsAudioProcessor::reanalyzeMorphSourceSlot(int slotIndex, juce::String& error)
 {
     error.clear();
@@ -6071,7 +6128,7 @@ void AtsAudioProcessor::markMorphSnapshotStale()
         morphSnapshotState.store((int) AtsMorphSnapshotUiState::Stale, std::memory_order_release);
 }
 
-void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady()
+void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady(int qualityOverride)
 {
     if (morphSourceAssignments[0].empty() || morphSourceAssignments[1].empty())
         return;
@@ -6079,7 +6136,9 @@ void AtsAudioProcessor::rebuildMorphCorrespondenceIfReady()
     const int strategy = getRawChoiceValue(apvts,
                                            ats_param::kMorphCorrespondenceStrategy,
                                            kDefaultMorphCorrespondenceStrategy);
-    const int quality = getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
+    const int quality = qualityOverride >= 0
+                            ? qualityOverride
+                            : getRawChoiceValue(apvts, ats_param::kMorphQuality, kDefaultMorphQuality);
     morphRecipe.correspondenceRecords =
         buildMorphCorrespondence(morphSourceAssignments[0], morphSourceAssignments[1], strategy,
                                  morphQualityToMinMassFraction(quality));
@@ -7181,6 +7240,7 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     // spectral envelope / RDC trace displays restore without forcing a re-analysis.
     // Done outside morphRecipeLock since ats_load touches the filesystem.
     std::array<ats::AtsSoundPtr, 2> restoredMorphSounds;
+    std::array<bool, 2> restoredMorphSoundAvailable {};
     for (size_t slot = 0; slot < loadedMorphSoundData.size(); ++slot)
     {
         auto& blob = loadedMorphSoundData[slot];
@@ -7191,7 +7251,10 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         auto* raw = (ATS_SOUND*) std::calloc(1, sizeof(ATS_SOUND));
         int st = 0;
         if (ats_load(raw, tmp.getFullPathName().toUTF8(), &st) >= 0)
+        {
             restoredMorphSounds[slot].reset(raw);
+            restoredMorphSoundAvailable[slot] = true;
+        }
         else
             std::free(raw);
         tmp.deleteFile();
@@ -7200,10 +7263,17 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         const juce::ScopedLock ml(morphRecipeLock);
         // Restore per-frame morph source data when the preset carried it; otherwise
-        // clear so the trajectory renderer falls back to static snapshots until
-        // re-analyzed (older presets, or sources that failed to decode).
+        // clear and queue file-backed sources for analysis below.
         morphSourceSounds[0] = std::move(restoredMorphSounds[0]);
         morphSourceSounds[1] = std::move(restoredMorphSounds[1]);
+        for (size_t slot = 0; slot < morphSourceSounds.size(); ++slot)
+        {
+            auto* sound = morphSourceSounds[slot].get();
+            morphSourceAssignments[slot] =
+                sound != nullptr ? makeMorphAssignmentsFromSound(sound, morphRecipe.frequencyGrid)
+                                 : std::vector<ats::MorphBandAssignment> {};
+        }
+        rebuildMorphCorrespondenceIfReady();
         if (hasExplicitResidualState)
         {
             morphSourceDiagnostics = loadedMorphSourceDiagnostics;
@@ -7211,11 +7281,34 @@ void AtsAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
         }
         else
         {
-            morphSourceDiagnostics = {};
-            morphSourceResidualBands = {};
+            for (size_t slot = 0; slot < morphSourceSounds.size(); ++slot)
+            {
+                auto* sound = morphSourceSounds[slot].get();
+                morphSourceDiagnostics[slot] =
+                    sound != nullptr ? makeResidualDiagnostics(sound) : AtsResidualDiagnostics {};
+                morphSourceResidualBands[slot] =
+                    sound != nullptr ? makeMorphResidualNoiseBands(sound)
+                                     : std::vector<ats::MorphResidualNoiseBand> {};
+            }
         }
     }
+    morphSourcesRevision.fetch_add(1, std::memory_order_release);
     morphSnapshotState.store((int) AtsMorphSnapshotUiState::Ready, std::memory_order_release);
+
+    int missingMorphAnalysisMask = 0;
+    {
+        const juce::ScopedLock sl(sourceLock);
+        for (size_t slot = 0; slot < morphSourceFiles.size(); ++slot)
+        {
+            if (!restoredMorphSoundAvailable[slot]
+                && morphSourceFiles[slot].existsAsFile()
+                && morphSourceFiles[slot].hasFileExtension(".wav"))
+            {
+                missingMorphAnalysisMask |= 1 << (int) slot;
+            }
+        }
+    }
+    pendingPresetMorphAnalysisMask.store(missingMorphAnalysisMask, std::memory_order_release);
 
     if (atsData.getSize() > 0)
     {
