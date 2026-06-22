@@ -1,0 +1,2 @@
+# requires Python >= 3.10 (mcp uses match statements)
+mcp[cli]>=1.0.0
