@@ -1029,33 +1029,300 @@ def compare_envelopes(
 # TRANSIENTS
 # =============================================================================
 
-@mcp.tool()
-def detect_onsets(ats_path: str) -> dict:
-    """
-    Detect onset frames in an ATS model using Smearnov flux-based detection.
+def _detect_params_flags(
+    weight_det_flux: float,
+    weight_res_flux: float,
+    weight_hfc_flux: float,
+    weight_birth: float,
+    weight_phase_dev: float,
+    use_phase_deviation: bool,
+    norm_window_radius: int,
+    peak_window_radius: int,
+    threshold_lambda: float,
+    threshold_auto_scale: float,
+    onset_floor: float,
+    min_gap_seconds: float,
+    pre_margin_seconds: float,
+    max_attack_frames: int,
+) -> list:
+    """Build the CLI flag list for SmearnovDetectParams."""
+    flags = [
+        "--weight-det",     str(weight_det_flux),
+        "--weight-res",     str(weight_res_flux),
+        "--weight-hfc",     str(weight_hfc_flux),
+        "--weight-birth",   str(weight_birth),
+        "--weight-phase",   str(weight_phase_dev),
+        "--norm-window",    str(norm_window_radius),
+        "--peak-window",    str(peak_window_radius),
+        "--threshold-lambda", str(threshold_lambda),
+        "--threshold-scale",  str(threshold_auto_scale),
+        "--onset-floor",    str(onset_floor),
+        "--min-gap",        str(min_gap_seconds),
+        "--pre-margin",     str(pre_margin_seconds),
+        "--max-attack-frames", str(max_attack_frames),
+    ]
+    if use_phase_deviation:
+        flags.append("--use-phase-dev")
+    return flags
 
-    Calls ats_transient CLI backed by AtsTransientSmear::detectOnsets().
-    Returns {"onsets": [{"frame": int, "pre_frame": int, "peak_frame": int,
-                         "time_s": float, "strength": float}]}.
+
+@mcp.tool()
+def detect_onsets(
+    ats_path: str,
+    # Fusion weights for detection functions D1..D5
+    weight_det_flux: float = 1.0,
+    weight_res_flux: float = 0.8,
+    weight_hfc_flux: float = 0.6,
+    weight_birth: float = 0.7,
+    weight_phase_dev: float = 0.4,
+    use_phase_deviation: bool = False,
+    # Normalization
+    norm_window_radius: int = 8,
+    # Peak picking
+    peak_window_radius: int = 6,
+    threshold_lambda: float = 0.0,
+    threshold_auto_scale: float = 1.5,
+    onset_floor: float = 1e-6,
+    min_gap_seconds: float = 0.03,
+    # Attack window
+    pre_margin_seconds: float = 0.005,
+    max_attack_frames: int = 0,
+) -> dict:
+    """
+    Detect onset frames using Smearnov flux-based detection with full parameter control.
+
+    Five detection functions are fused: D1=deterministic energy flux, D2=residual flux,
+    D3=residual HFC flux, D4=partial-birth rate, D5=phase deviation (type 2/4 only).
+    Returns {"onsets": [{"frame", "pre_frame", "peak_frame", "time_s", "strength"}]}.
+    Pass the result directly to suppress_onsets or smear_attacks.
+
+    Args:
+        weight_det_flux: D1 weight — sensitivity to amplitude onsets in partials (default 1.0)
+        weight_res_flux: D2 weight — sensitivity to residual energy bursts (default 0.8)
+        weight_hfc_flux: D3 weight — high-frequency content changes (default 0.6)
+        weight_birth:    D4 weight — new partial births (default 0.7)
+        weight_phase_dev: D5 weight — phase deviation from expected (default 0.4)
+        use_phase_deviation: Force D5 on even for type 1/3 (auto-enabled for type 2/4)
+        norm_window_radius: Running median/MAD normalization window radius in frames
+        peak_window_radius: Local-max detection window radius in frames
+        threshold_lambda: Fixed additive threshold; <=0 → auto from global MAD
+        threshold_auto_scale: Multiplier on global MAD for auto threshold (lower=more onsets)
+        onset_floor: Absolute minimum combined strength to accept an onset
+        min_gap_seconds: Minimum refractory gap between consecutive onsets
+        pre_margin_seconds: Pre-onset margin folded into the attack window
+        max_attack_frames: Cap on attack window length (0=uncapped)
     """
     tool = _require_tool("ats_transient")
-    result = _run([str(tool), "--mode", "detect", str(ats_path)], "ats_transient")
+    flags = _detect_params_flags(
+        weight_det_flux, weight_res_flux, weight_hfc_flux, weight_birth, weight_phase_dev,
+        use_phase_deviation, norm_window_radius, peak_window_radius,
+        threshold_lambda, threshold_auto_scale, onset_floor,
+        min_gap_seconds, pre_margin_seconds, max_attack_frames,
+    )
+    result = _run([str(tool), "--mode", "detect"] + flags + [str(ats_path)], "ats_transient")
     return _parse_json_stdout("ats_transient", result)
 
 
 @mcp.tool()
-def extract_transient_layer(ats_path: str) -> dict:
+def extract_transient_layer(
+    ats_path: str,
+    weight_det_flux: float = 1.0,
+    weight_res_flux: float = 0.8,
+    weight_hfc_flux: float = 0.6,
+    weight_birth: float = 0.7,
+    weight_phase_dev: float = 0.4,
+    use_phase_deviation: bool = False,
+    norm_window_radius: int = 8,
+    peak_window_radius: int = 6,
+    threshold_lambda: float = 0.0,
+    threshold_auto_scale: float = 1.5,
+    onset_floor: float = 1e-6,
+    min_gap_seconds: float = 0.03,
+    pre_margin_seconds: float = 0.005,
+    max_attack_frames: int = 0,
+) -> dict:
     """
-    Extract the transient event layer from an ATS model.
+    Extract the transient event layer (same detection params as detect_onsets).
 
-    Calls ats_transient CLI backed by extractTransientLayer().
-    Returns {"onsets": [...], "events": [{"frame": int, "time_s": float,
-             "strength": float, "deterministic_energy": float,
-             "band_energy": [float × 25]}]}.
+    Returns {"onsets": [...], "events": [{"frame", "time_s", "strength",
+    "deterministic_energy", "band_energy": [float × 25]}]}.
     """
     tool = _require_tool("ats_transient")
-    result = _run([str(tool), "--mode", "extract", str(ats_path)], "ats_transient")
+    flags = _detect_params_flags(
+        weight_det_flux, weight_res_flux, weight_hfc_flux, weight_birth, weight_phase_dev,
+        use_phase_deviation, norm_window_radius, peak_window_radius,
+        threshold_lambda, threshold_auto_scale, onset_floor,
+        min_gap_seconds, pre_margin_seconds, max_attack_frames,
+    )
+    result = _run([str(tool), "--mode", "extract"] + flags + [str(ats_path)], "ats_transient")
     return _parse_json_stdout("ats_transient", result)
+
+
+@mcp.tool()
+def smear_attacks(
+    ats_path: str,
+    output_path: str,
+    # SmearnovParams
+    blur_ms: float = 0.0,
+    sharpen_amount: float = 0.0,
+    exaggerate_db: float = 0.0,
+    max_db: float = 12.0,
+    mix: float = 1.0,
+    target: str = "both",
+    # SmearnovDetectParams
+    weight_det_flux: float = 1.0,
+    weight_res_flux: float = 0.8,
+    weight_hfc_flux: float = 0.6,
+    weight_birth: float = 0.7,
+    weight_phase_dev: float = 0.4,
+    use_phase_deviation: bool = False,
+    norm_window_radius: int = 8,
+    peak_window_radius: int = 6,
+    threshold_lambda: float = 0.0,
+    threshold_auto_scale: float = 1.5,
+    onset_floor: float = 1e-6,
+    min_gap_seconds: float = 0.03,
+    pre_margin_seconds: float = 0.005,
+    max_attack_frames: int = 0,
+) -> dict:
+    """
+    Reshape onset attack envelopes in-place: blur, sharpen, or exaggerate transient attacks.
+
+    Detects onsets with Smearnov, then applies SmearnovParams to each onset's attack window
+    [pre_frame, peak_frame]. Writes modified model to output_path.
+
+    Args:
+        blur_ms: Gaussian blur of attack amplitude envelope in milliseconds.
+                 Spreads attack energy forward in time — softens transients.
+        sharpen_amount: Unsharp-mask contrast boost. Increases slope of the attack rise.
+        exaggerate_db: Boost (positive) or cut (negative) the attack peak amplitude in dB.
+                       Clamped to ±max_db. Ramps up to peak_frame, holds across decay tail.
+        max_db: Maximum magnitude for exaggerate_db (default 12 dB).
+        mix: Dry/wet blend: 0.0=unchanged, 1.0=full effect (default 1.0).
+        target: Which data to modify: "partials" | "residual" | "both" (default "both").
+
+    At least one of blur_ms > 0, sharpen_amount > 0, or exaggerate_db ≠ 0 must be set.
+    Returns {"onsets_processed", "changed", "blur_ms", "sharpen_amount", "exaggerate_db",
+             "mix", "target", "output_path"}.
+    """
+    if target not in ("partials", "residual", "both"):
+        raise ValueError(f"target must be 'partials', 'residual', or 'both', got {target!r}")
+    if blur_ms == 0.0 and sharpen_amount == 0.0 and exaggerate_db == 0.0:
+        raise ValueError("At least one of blur_ms, sharpen_amount, or exaggerate_db must be non-zero")
+
+    tool = _require_tool("ats_transient")
+    detect_flags = _detect_params_flags(
+        weight_det_flux, weight_res_flux, weight_hfc_flux, weight_birth, weight_phase_dev,
+        use_phase_deviation, norm_window_radius, peak_window_radius,
+        threshold_lambda, threshold_auto_scale, onset_floor,
+        min_gap_seconds, pre_margin_seconds, max_attack_frames,
+    )
+    smear_flags = [
+        "--blur-ms",       str(blur_ms),
+        "--sharpen",       str(sharpen_amount),
+        "--exaggerate-db", str(exaggerate_db),
+        "--max-db",        str(max_db),
+        "--mix",           str(mix),
+        "--target",        target,
+        "--output-ats",    str(output_path),
+    ]
+    cmd = [str(tool), "--mode", "smear"] + detect_flags + smear_flags + [str(ats_path)]
+    result = _run(cmd, "ats_transient")
+    return _parse_json_stdout("ats_transient", result)
+
+
+@mcp.tool()
+def suppress_onsets(
+    ats_path: str,
+    output_path: str,
+    onset_indices: list,
+    onsets: Optional[list] = None,
+    mode: str = "zero",
+    target: str = "both",
+    # Detection params used only when onsets is None
+    min_gap_seconds: float = 0.03,
+    threshold_auto_scale: float = 1.5,
+) -> dict:
+    """
+    Selectively suppress or fade individual onset attacks by index.
+
+    Workflow: call detect_onsets() first to inspect the onset list, then pass
+    onset_indices (0-based) of the onsets you want removed or attenuated.
+
+    Args:
+        onset_indices: 0-based indices into the onset list of onsets to suppress.
+        onsets: Onset list from a prior detect_onsets() call. If None, re-detects
+                internally using min_gap_seconds and threshold_auto_scale.
+        mode: "zero" — zero all amplitudes/energies in [pre_frame, peak_frame].
+              "fade_out" — linear ramp from 1.0 at pre_frame to 0.0 at peak_frame.
+        target: "partials" | "residual" | "both" (default "both").
+        min_gap_seconds: Detection param used only when onsets is None.
+        threshold_auto_scale: Detection param used only when onsets is None.
+
+    Returns {"onsets_suppressed", "onset_indices", "mode", "target",
+             "frames_modified", "output_path"}.
+    """
+    if mode not in ("zero", "fade_out"):
+        raise ValueError(f"mode must be 'zero' or 'fade_out', got {mode!r}")
+    if target not in ("partials", "residual", "both"):
+        raise ValueError(f"target must be 'partials', 'residual', or 'both', got {target!r}")
+
+    # Auto-detect if caller didn't supply an onset list
+    if onsets is None:
+        r = detect_onsets(ats_path,
+                          min_gap_seconds=min_gap_seconds,
+                          threshold_auto_scale=threshold_auto_scale)
+        onsets = r["onsets"]
+
+    if not onsets:
+        raise ValueError("No onsets found — nothing to suppress")
+
+    n_onsets = len(onsets)
+    for idx in onset_indices:
+        if idx < 0 or idx >= n_onsets:
+            raise ValueError(f"onset_index {idx} out of range (0–{n_onsets - 1})")
+
+    header, frames = load_ats_frames_full(ats_path)
+    n_frames = len(frames)
+    do_partials = target in ("partials", "both")
+    do_residual = target in ("residual", "both")
+
+    if do_residual and not header.has_noise():
+        raise ValueError("Residual suppression requires type 3 or 4 (model has no noise bands)")
+
+    frames_modified = set()
+    for idx in onset_indices:
+        onset = onsets[idx]
+        start = max(0, min(onset["pre_frame"], n_frames - 1))
+        end   = max(start, min(onset["peak_frame"], n_frames - 1))
+        span  = max(1, end - start)
+
+        for fi in range(start, end + 1):
+            if mode == "zero":
+                gain = 0.0
+            else:  # fade_out: 1.0 at pre_frame → 0.0 at peak_frame
+                if start == end:
+                    gain = 0.0
+                else:
+                    progress = (fi - start) / (end - start)
+                    gain = max(0.0, 1.0 - progress)
+
+            if do_partials:
+                frames[fi]["amps"] = [a * gain for a in frames[fi]["amps"]]
+            if do_residual and frames[fi].get("band_energies"):
+                frames[fi]["band_energies"] = [e * gain for e in frames[fi]["band_energies"]]
+            frames_modified.add(fi)
+
+    write_ats(header, frames, output_path)
+
+    return {
+        "onsets_suppressed": len(onset_indices),
+        "onset_indices": onset_indices,
+        "mode": mode,
+        "target": target,
+        "frames_modified": len(frames_modified),
+        "output_path": str(output_path),
+    }
 
 
 @mcp.tool()
