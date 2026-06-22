@@ -1,4 +1,5 @@
 #include "SessionTabPanel.h"
+#include "UiFonts.h"
 
 #include "AtsUiHints.h"
 #include "PluginProcessor.h"
@@ -145,7 +146,7 @@ void MorphBandStrip::paint(juce::Graphics& g)
 
     if (bands.empty() || area.getWidth() <= 2.0f)
     {
-        g.setFont(10.0f);
+        g.setFont(UiFonts::small_(10.0f));
         g.setColour(juce::Colour(0xffb8c7d9));
         g.drawText("No bands", getLocalBounds(), juce::Justification::centred);
         return;
@@ -303,7 +304,7 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
     g.drawRoundedRectangle(area, 5.0f, 1.0f);
 
     // Header strip label
-    g.setFont(juce::Font(10.0f, juce::Font::bold));
+    g.setFont(UiFonts::small_(10.0f));
     g.setColour(juce::Colour(0xff8899aa));
     g.drawText("Add:", getLocalBounds().removeFromTop(scaledUi(kHeaderH)).withTrimmedLeft(6),
                juce::Justification::centredLeft);
@@ -320,7 +321,7 @@ void MorphTimelineEditor::paint(juce::Graphics& g)
     }
     g.drawHorizontalLine(juce::roundToInt(plot.getCentreY()), plot.getX(), plot.getRight());
 
-    g.setFont(10.0f);
+    g.setFont(UiFonts::small_(10.0f));
     g.setColour(juce::Colour(0xffb8c7d9));
     g.drawText("A",
                juce::roundToInt(plot.getX()),
@@ -645,7 +646,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(exportAtsButton);
 
     statusLabel.setJustificationType(juce::Justification::centredLeft);
-    statusLabel.setFont(juce::Font(13.5f, juce::Font::bold));
+    statusLabel.setFont(UiFonts::heading(13.5f));
     statusLabel.setExplicitFocusOrder(6);
     statusLabel.setHelpText("Current high-level plugin state.");
     addAndMakeVisible(statusLabel);
@@ -657,7 +658,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(errorLabel);
 
     cpuWarningLabel.setJustificationType(juce::Justification::centredLeft);
-    cpuWarningLabel.setFont(juce::Font(11.0f, juce::Font::italic));
+    cpuWarningLabel.setFont(UiFonts::body());
     cpuWarningLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffcc88));
     cpuWarningLabel.setExplicitFocusOrder(8);
     cpuWarningLabel.setHelpText("Shown when partial and frame counts exceed the documented soft limit.");
@@ -666,7 +667,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     addAndMakeVisible(progressBar);
 
     analysisSummaryLabel.setJustificationType(juce::Justification::centredLeft);
-    analysisSummaryLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    analysisSummaryLabel.setFont(UiFonts::body());
     analysisSummaryLabel.setMinimumHorizontalScale(0.64f);
     analysisSummaryLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
     analysisSummaryLabel.setHelpText("Current analysis settings used by Analyze, Analyze Source A, and Analyze Source B.");
@@ -681,7 +682,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     // --- Unified transport bar ---
     transportSourceLabel.setText("Source", juce::dontSendNotification);
     transportSourceLabel.setJustificationType(juce::Justification::centredLeft);
-    transportSourceLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    transportSourceLabel.setFont(UiFonts::small_());
     addAndMakeVisible(transportSourceLabel);
 
     transportSourceCombo.addItem("Current", 1);
@@ -701,7 +702,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     transportAuditionLabel.setText("Audition", juce::dontSendNotification);
     transportAuditionLabel.setJustificationType(juce::Justification::centredLeft);
-    transportAuditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    transportAuditionLabel.setFont(UiFonts::small_());
     addAndMakeVisible(transportAuditionLabel);
 
     for (auto* button : { &auditionBothButton, &auditionPartialsButton, &auditionResidualButton, &auditionSmearButton })
@@ -749,7 +750,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     auto setupKnobLabel = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centred);
-        l.setFont(juce::Font(12.0f, juce::Font::bold));
+        l.setFont(UiFonts::knobLabel());
+        l.setComponentID("knobLabel");
     };
     setupKnobLabel(partGainLabel, "partGain - Partials (amp)");
     setupKnobLabel(resGainLabel, "resGain - Residual (ramp)");
@@ -793,10 +795,10 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     auto setupTimbreLabel = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centredLeft);
-        l.setFont(juce::Font(11.0f, juce::Font::plain));
+        l.setFont(UiFonts::body());
     };
     timbreSectionLabel.setText("Timbre", juce::dontSendNotification);
-    timbreSectionLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    timbreSectionLabel.setFont(UiFonts::body(12.0f));
     timbreSectionLabel.setJustificationType(juce::Justification::centredLeft);
     setupTimbreLabel(timbreBrightnessLabel, "Brightness");
     setupTimbreLabel(timbreTiltLabel, "Warmth / Tilt");
@@ -830,7 +832,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     auto setupSlotLabel = [](juce::Label& l, const juce::String& text, bool heading) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(heading ? juce::Justification::centredLeft : juce::Justification::topLeft);
-        l.setFont(juce::Font(heading ? 12.5f : 10.5f, heading ? juce::Font::bold : juce::Font::plain));
+        l.setFont(heading ? UiFonts::heading(12.5f) : UiFonts::small_());
         l.setMinimumHorizontalScale(0.72f);
     };
     setupSlotLabel(sourceALabel, "Source A", true);
@@ -896,9 +898,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     morphSnapshotLabel.setText("Morph preview", juce::dontSendNotification);
     morphSnapshotLabel.setJustificationType(juce::Justification::centredLeft);
-    morphSnapshotLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphSnapshotLabel.setFont(UiFonts::body());
     morphSnapshotStatusLabel.setJustificationType(juce::Justification::centredLeft);
-    morphSnapshotStatusLabel.setFont(juce::Font(10.5f));
+    morphSnapshotStatusLabel.setFont(UiFonts::small_());
     morphSnapshotStatusLabel.setMinimumHorizontalScale(0.7f);
     morphSnapshotStatusLabel.setHelpText("Shows whether live morph controls match the last prepared snapshot.");
     controlsContent.addAndMakeVisible(morphSnapshotLabel);
@@ -917,9 +919,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     morphTimelineLabel.setText("Morph Timeline", juce::dontSendNotification);
     morphTimelineLabel.setJustificationType(juce::Justification::centredLeft);
-    morphTimelineLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphTimelineLabel.setFont(UiFonts::body());
     morphTimelineHintLabel.setJustificationType(juce::Justification::centredLeft);
-    morphTimelineHintLabel.setFont(juce::Font(10.5f));
+    morphTimelineHintLabel.setFont(UiFonts::small_());
     morphTimelineHintLabel.setMinimumHorizontalScale(0.7f);
     morphTimelineHintLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
     morphTimelineEditor.setHelpText(
@@ -955,7 +957,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     morphSmoothingLabel.setText("Smooth", juce::dontSendNotification);
     morphSmoothingLabel.setJustificationType(juce::Justification::centredLeft);
-    morphSmoothingLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphSmoothingLabel.setFont(UiFonts::body());
     morphSmoothingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     morphSmoothingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 54, 18);
     morphSmoothingSlider.setName("Morph smoothing");
@@ -968,9 +970,10 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     morphMacroLabel.setText("Depth", juce::dontSendNotification);
     morphMacroLabel.setJustificationType(juce::Justification::centredLeft);
-    morphMacroLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphMacroLabel.setFont(UiFonts::body());
     morphMacroSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     morphMacroSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 42, 18);
+    morphMacroSlider.setLookAndFeel(&morphDepthSliderLookAndFeel);
     morphMacroSlider.setName("Morph depth macro");
     ats_ui::applySliderHint(morphMacroSlider,
                             "Morph depth (0=frozen at midpoint, 0.5=normal, 1=exaggerated). Scales how far "
@@ -988,7 +991,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     {
         morphLaneLabels[i].setText(ats_param::kMorphLaneDisplayNames[i], juce::dontSendNotification);
         morphLaneLabels[i].setJustificationType(juce::Justification::centredLeft);
-        morphLaneLabels[i].setFont(juce::Font(10.5f, juce::Font::bold));
+        morphLaneLabels[i].setFont(UiFonts::small_());
         morphLaneLabels[i].setMinimumHorizontalScale(0.72f);
         morphLaneSliders[i].setSliderStyle(juce::Slider::LinearHorizontal);
         morphLaneSliders[i].setTextBoxStyle(juce::Slider::TextBoxRight, false, 42, 16);
@@ -1018,7 +1021,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     };
     morphPolicyLabel.setText("Policy", juce::dontSendNotification);
     morphPolicyLabel.setJustificationType(juce::Justification::centredLeft);
-    morphPolicyLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphPolicyLabel.setFont(UiFonts::body());
     controlsContent.addAndMakeVisible(morphPolicyLabel);
 
     setupPolicyCombo(morphGridTypeCombo, { "Bark", "Mel" }, "Perceptual frequency grid.");
@@ -1074,9 +1077,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     morphBandLabel.setText("Bands", juce::dontSendNotification);
     morphBandLabel.setJustificationType(juce::Justification::centredLeft);
-    morphBandLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    morphBandLabel.setFont(UiFonts::body());
     morphBandInspectorLabel.setJustificationType(juce::Justification::topLeft);
-    morphBandInspectorLabel.setFont(juce::Font(10.5f));
+    morphBandInspectorLabel.setFont(UiFonts::small_());
     morphBandInspectorLabel.setMinimumHorizontalScale(0.72f);
     morphBandInspectorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
     morphBandInspectorLabel.setHelpText("Selected band correspondence, energy, policy, and transient diagnostics.");
@@ -1108,7 +1111,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
                                  const juce::String& title, const juce::String& help) {
         lab.setText(title, juce::dontSendNotification);
         lab.setJustificationType(juce::Justification::centred);
-        lab.setFont(juce::Font(10.5f, juce::Font::bold));
+        lab.setFont(UiFonts::knobLabel());
+        lab.setComponentID("knobLabel");
         lab.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
         sld.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         sld.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 16);
@@ -1155,7 +1159,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
                                   const juce::String& help) {
         lab.setText(title, juce::dontSendNotification);
         lab.setJustificationType(juce::Justification::centredLeft);
-        lab.setFont(juce::Font(10.5f, juce::Font::bold));
+        lab.setFont(UiFonts::small_());
         for (int i = 0; i < items.size(); ++i)
             combo.addItem(items[i], i + 1);
         combo.setHelpText(help);
@@ -1176,7 +1180,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     smearApplyButton.onClick = [this] { runSmearnovApply(); };
     controlsContent.addAndMakeVisible(smearApplyButton);
     smearStatusLabel.setJustificationType(juce::Justification::centredLeft);
-    smearStatusLabel.setFont(juce::Font(10.5f));
+    smearStatusLabel.setFont(UiFonts::small_());
     smearStatusLabel.setMinimumHorizontalScale(0.7f);
     smearStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
     controlsContent.addAndMakeVisible(smearStatusLabel);
@@ -1193,7 +1197,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
                                  const juce::String& title, const juce::String& help) {
         lab.setText(title, juce::dontSendNotification);
         lab.setJustificationType(juce::Justification::centredLeft);
-        lab.setFont(juce::Font(10.0f, juce::Font::bold));
+        lab.setFont(UiFonts::small_(10.0f));
         lab.setMinimumHorizontalScale(0.7f);
         sld.setSliderStyle(juce::Slider::LinearHorizontal);
         sld.setTextBoxStyle(juce::Slider::TextBoxRight, false, 46, 16);
@@ -1282,6 +1286,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     rebuildPresetList();
     setActiveControlTab(audioProcessor.getActiveControlTab());
+}
+
+SessionTabPanel::~SessionTabPanel()
+{
+    morphMacroSlider.setLookAndFeel(nullptr);
 }
 
 void SessionTabPanel::rebuildPresetList()
@@ -1667,13 +1676,14 @@ void SessionTabPanel::resized()
 
     // Compute scrollable content dimensions
     const int sbW = controlsViewport.getScrollBarThickness();
-    const int contentW = juce::jmax(sc(300), r.getWidth() - sbW);
+    const int contentW = juce::jmax(sc(320), r.getWidth() - sbW);
 
     // Fixed section heights used in the content layout below
     const int timelineSectionH = sc(22) + sc(80); // header + editor
     const int snapshotH        = sc(18);
     const int tabBarH          = sc(24);
-    const int laneH            = sc(24) + sc(2) + sc(78);   // lane header + gap + grid
+    const int laneHeaderH      = sc(24) + sc(4) + sc(28);
+    const int laneH            = laneHeaderH + sc(2) + sc(78);   // lane header + gap + grid
     const int policyH          = sc(20) + sc(2) + sc(90);   // policy header + gap + 3 rows
     const int bandH            = sc(18) + sc(30) + sc(50);  // band header + strip + inspector
     const int morphClusterH    = laneH + sc(4) + policyH + sc(4) + bandH + sc(4);
@@ -1791,14 +1801,17 @@ void SessionTabPanel::resized()
 
         // Morph lanes (2×3 grid)
         auto laneArea = body.removeFromTop(laneH);
-        auto laneHeader = laneArea.removeFromTop(sc(24));
-        morphSmoothingLabel.setBounds(laneHeader.removeFromLeft(sc(58)));
-        morphSmoothingSlider.setBounds(laneHeader.removeFromLeft(sc(130)));
-        laneHeader.removeFromLeft(sc(4));
-        morphMacroLabel.setBounds(laneHeader.removeFromLeft(sc(44)));
-        morphMacroSlider.setBounds(laneHeader.removeFromLeft(sc(110)));
-        laneHeader.removeFromLeft(sc(6));
-        resetMorphLanesButton.setBounds(laneHeader.removeFromLeft(sc(92)));
+        auto laneHeader = laneArea.removeFromTop(laneHeaderH);
+        auto smoothingRow = laneHeader.removeFromTop(sc(24));
+        morphSmoothingLabel.setBounds(smoothingRow.removeFromLeft(sc(58)));
+        morphSmoothingSlider.setBounds(smoothingRow.removeFromLeft(sc(130)));
+        smoothingRow.removeFromLeft(sc(6));
+        resetMorphLanesButton.setBounds(smoothingRow.removeFromLeft(sc(92)).reduced(sc(1)));
+
+        laneHeader.removeFromTop(sc(4));
+        auto depthRow = laneHeader.removeFromTop(sc(28));
+        morphMacroLabel.setBounds(depthRow.removeFromLeft(sc(58)));
+        morphMacroSlider.setBounds(depthRow.removeFromLeft(sc(130)));
         laneArea.removeFromTop(sc(2));
 
         auto laneGrid = laneArea;
@@ -2457,7 +2470,7 @@ void SessionTabPanel::paintOverChildren(juce::Graphics& g)
     g.setColour(juce::Colour(0xff6a9cff));
     g.drawRoundedRectangle(bounds.reduced(1.0f), 5.0f, 2.0f);
 
-    g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setFont(UiFonts::heading());
     g.setColour(juce::Colours::white.withAlpha(0.9f));
     g.drawText("Drop to load", bounds, juce::Justification::centred);
 }

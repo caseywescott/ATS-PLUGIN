@@ -1,4 +1,5 @@
 #include "SpectrogramPanel.h"
+#include "UiFonts.h"
 
 #include <algorithm>
 #include <array>
@@ -356,12 +357,12 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
 
     residualDbLabel.setText("Cell dB", juce::dontSendNotification);
     residualDbLabel.setJustificationType(juce::Justification::centredRight);
-    residualDbLabel.setFont(juce::Font(11.0f));
+    residualDbLabel.setFont(UiFonts::body());
     addChildComponent(residualDbLabel);
 
     residualDbEditor.setInputRestrictions(0, "0123456789.-");
     residualDbEditor.setTooltip("Hovered band/frame level in dB. Double-click the plot or press Enter to apply.");
-    residualDbEditor.setFont(juce::Font(11.0f));
+    residualDbEditor.setFont(UiFonts::body());
     residualDbEditor.onReturnKey = [this] { applyResidualDbFromEditor(); };
     residualDbEditor.onFocusLost = [this] {
         if (residualDbEditorActive)
@@ -370,7 +371,7 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     addChildComponent(residualDbEditor);
 
     selectionLabel.setJustificationType(juce::Justification::centredLeft);
-    selectionLabel.setFont(juce::Font(12.0f, juce::Font::plain));
+    selectionLabel.setFont(UiFonts::body(12.0f));
     selectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc7ffe6));
     addAndMakeVisible(selectionLabel);
     updateSelectionLabel();
@@ -397,7 +398,7 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
 
     envSmoothLabel.setText("Smoothness", juce::dontSendNotification);
     envSmoothLabel.setJustificationType(juce::Justification::centredRight);
-    envSmoothLabel.setFont(juce::Font(11.0f));
+    envSmoothLabel.setFont(UiFonts::body());
     addChildComponent(envSmoothLabel);
 
     envSmoothSlider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -854,7 +855,7 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
         }
     }
 
-    g.setFont(juce::Font(12.0f, juce::Font::plain));
+    g.setFont(UiFonts::body(12.0f));
     g.setColour(juce::Colour(0xff8dffd8));
     g.drawText("ATS TRACE DISPLAY",
                screen.withTrimmedLeft(14.0f).withTrimmedTop(6.0f).withHeight(15.0f),
@@ -863,7 +864,7 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
 
     if (traceSnapshot.frameCount <= 0)
     {
-        g.setFont(juce::Font(15.0f, juce::Font::plain));
+        g.setFont(UiFonts::heading(15.0f));
         g.setColour(juce::Colour(0xff5bffbb));
         g.drawText("NO ATS MODEL", plot.toNearestInt(), juce::Justification::centred);
     }
@@ -1461,7 +1462,7 @@ void SpectrogramPanel::paintEnvelopeRangeSelection(juce::Graphics& g, juce::Rect
         label = juce::String(juce::roundToInt(t0 * 100.0f)) + " - "
                 + juce::String(juce::roundToInt(t1 * 100.0f)) + " %";
 
-    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.setFont(UiFonts::body());
     const float textW = g.getCurrentFont().getStringWidthFloat(label) + 10.0f;
     juce::Rectangle<float> labelBounds(ft0.x - 2.0f, ft0.y - 18.0f, textW, 15.0f);
     g.setColour(juce::Colours::black.withAlpha(0.55f));
@@ -1747,7 +1748,7 @@ void SpectrogramPanel::paintSelectionOverlay(juce::Graphics& g,
                                              juce::Rectangle<float> screen,
                                              juce::Rectangle<float> plot)
 {
-    g.setFont(juce::Font(11.0f, juce::Font::plain));
+    g.setFont(UiFonts::body());
     g.setColour(juce::Colour(0xff70ffd4));
     const auto leftFooter = isResidualDisplayMode(mode)
                                 ? (juce::String((int) traceSnapshot.residualBands.size()) + " residual bands")
@@ -1832,12 +1833,12 @@ void SpectrogramPanel::paintSelectionOverlay(juce::Graphics& g,
         g.fillRoundedRectangle(badgeBounds, 4.0f);
         g.setColour(accent.withAlpha(0.9f));
         g.drawRoundedRectangle(badgeBounds.reduced(0.5f), 4.0f, 0.8f);
-        g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.setFont(UiFonts::body());
         g.drawText(badge,
                    badgeBounds.reduced(6.0f, 1.0f).toNearestInt(),
                    juce::Justification::centredLeft,
                    true);
-        g.setFont(juce::Font(11.0f, juce::Font::plain));
+        g.setFont(UiFonts::body());
     }
 
     const float hoverReadoutY = plot.getY() + (showShapeOverlay ? 29.0f : 7.0f);
@@ -4862,7 +4863,7 @@ void SpectrogramPanel::paintBandLabelGutter(juce::Graphics& g,
     g.setColour(juce::Colour(0xff2b4a3d));
     g.drawVerticalLine(juce::roundToInt(gutter.getRight()), gutter.getY(), gutter.getBottom());
 
-    g.setFont(juce::Font(9.0f));
+    g.setFont(UiFonts::tiny());
     for (const auto& band : traceSnapshot.residualBands)
     {
         const auto yRange = yRangeForBand(band, plot);

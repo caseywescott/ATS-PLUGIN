@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "AnalysisTabPanel.h"
+#include "NeumorphicCheckboxLookAndFeel.h"
 #include "MathExprPanel.h"
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
@@ -28,7 +29,7 @@ private:
 
     AtsAudioProcessor& audioProcessor;
 
-    juce::LookAndFeel_V4 pluginLookAndFeel;
+    NeumorphicCheckboxLookAndFeel pluginLookAndFeel;
     juce::TooltipWindow tooltipWindow;
 
     SessionTabPanel sessionTab;

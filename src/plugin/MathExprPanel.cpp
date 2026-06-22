@@ -1,4 +1,5 @@
 #include "MathExprPanel.h"
+#include "UiFonts.h"
 
 #include "PluginProcessor.h"
 
@@ -10,12 +11,12 @@ MathExprPanel::MathExprPanel(AtsAudioProcessor& p)
                  "grid reads A(p,t) F(p,t) H(p,t). Runs off the audio thread.",
                  juce::dontSendNotification);
     help.setJustificationType(juce::Justification::topLeft);
-    help.setFont(juce::Font(12.5f));
+    help.setFont(UiFonts::heading(12.5f));
     addAndMakeVisible(help);
 
     scriptEditor.setMultiLine(true, true);
     scriptEditor.setReturnKeyStartsNewLine(true);
-    scriptEditor.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
+    scriptEditor.setFont(UiFonts::mono());
     scriptEditor.setText("a = a * 0.95\nf = f");
     addAndMakeVisible(scriptEditor);
 
@@ -26,7 +27,7 @@ MathExprPanel::MathExprPanel(AtsAudioProcessor& p)
     addAndMakeVisible(applyButton);
 
     status.setJustificationType(juce::Justification::centredLeft);
-    status.setFont(juce::Font(12.0f));
+    status.setFont(UiFonts::body(12.0f));
     addAndMakeVisible(status);
 }
 

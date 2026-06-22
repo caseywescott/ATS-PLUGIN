@@ -1,4 +1,5 @@
 #include "AnalysisTabPanel.h"
+#include "UiFonts.h"
 
 #include "PluginProcessor.h"
 
@@ -90,7 +91,7 @@ const std::array<AnalysisProfile, 9> kAnalysisProfiles {{
 void setupSectionLabel(juce::Label& label, const juce::String& text)
 {
     label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::Font(13.0f, juce::Font::bold));
+    label.setFont(UiFonts::heading());
     label.setJustificationType(juce::Justification::centredLeft);
     label.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
 }
@@ -98,7 +99,7 @@ void setupSectionLabel(juce::Label& label, const juce::String& text)
 void setupRowLabel(juce::Label& label, const juce::String& text, const juce::String& tooltip)
 {
     label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::Font(11.5f, juce::Font::bold));
+    label.setFont(UiFonts::body(11.5f));
     label.setJustificationType(juce::Justification::centredLeft);
     label.setMinimumHorizontalScale(0.72f);
     label.setHelpText(tooltip);
@@ -263,16 +264,16 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
 {
     workflowLabel.setText("Analysis workflow", juce::dontSendNotification);
     workflowLabel.setJustificationType(juce::Justification::centredLeft);
-    workflowLabel.setFont(juce::Font(13.0f, juce::Font::bold));
+    workflowLabel.setFont(UiFonts::heading());
     addAndMakeVisible(workflowLabel);
 
     statusLabel.setJustificationType(juce::Justification::centredLeft);
-    statusLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    statusLabel.setFont(UiFonts::body(12.0f));
     statusLabel.setMinimumHorizontalScale(0.72f);
     addAndMakeVisible(statusLabel);
 
     errorLabel.setJustificationType(juce::Justification::centredLeft);
-    errorLabel.setFont(juce::Font(11.0f));
+    errorLabel.setFont(UiFonts::body());
     errorLabel.setMinimumHorizontalScale(0.7f);
     errorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff8a80));
     addAndMakeVisible(errorLabel);
@@ -331,13 +332,13 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
         addAndMakeVisible(group);
 
         meta.setJustificationType(juce::Justification::centredLeft);
-        meta.setFont(juce::Font(11.0f, juce::Font::bold));
+        meta.setFont(UiFonts::body());
         meta.setMinimumHorizontalScale(0.64f);
         meta.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
         addAndMakeVisible(meta);
 
         overview.setJustificationType(juce::Justification::centredLeft);
-        overview.setFont(juce::Font(10.5f));
+        overview.setFont(UiFonts::small_());
         overview.setMinimumHorizontalScale(0.64f);
         overview.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
         addAndMakeVisible(overview);
@@ -360,7 +361,7 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
 
         auditionLabel.setText("Audition", juce::dontSendNotification);
         auditionLabel.setJustificationType(juce::Justification::centredLeft);
-        auditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+        auditionLabel.setFont(UiFonts::small_());
         auditionLabel.setMinimumHorizontalScale(0.7f);
         auditionLabel.setHelpText("Choose which layer to audition when playing this source.");
         auditionLabel.setTooltip("Choose which layer to audition when playing this source.");
@@ -414,7 +415,7 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
 
     profileLabel.setText("Analysis Profile", juce::dontSendNotification);
     profileLabel.setJustificationType(juce::Justification::centredLeft);
-    profileLabel.setFont(juce::Font(11.5f, juce::Font::bold));
+    profileLabel.setFont(UiFonts::body(11.5f));
     profileLabel.setMinimumHorizontalScale(0.7f);
     profileLabel.setHelpText("Factory starting points for common source types. Apply changes parameters only; it does not analyze.");
     profileLabel.setTooltip("Factory starting points for common source types. Apply changes parameters only; it does not analyze.");
@@ -440,7 +441,7 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
                       "For cleaner resynthesis, lower the peak threshold to keep more quiet partials; for cleaner/noisier separation, use analysis type 4 full.",
                       juce::dontSendNotification);
     hintLabel.setJustificationType(juce::Justification::topLeft);
-    hintLabel.setFont(juce::Font(12.5f));
+    hintLabel.setFont(UiFonts::heading(12.5f));
     hintLabel.setMinimumHorizontalScale(0.72f);
     content.addAndMakeVisible(hintLabel);
 
@@ -526,7 +527,7 @@ void AnalysisTabPanel::paintOverChildren(juce::Graphics& g)
 
     auto messageArea = card.reduced(14, 12).removeFromTop(24);
     g.setColour(juce::Colour(0xfff5f8ff));
-    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setFont(UiFonts::body(12.0f));
     g.drawFittedText(juce::String("Drop WAV to analyze Source ") + (dropHoverSlot == 0 ? "A" : "B"),
                      messageArea,
                      juce::Justification::centred,

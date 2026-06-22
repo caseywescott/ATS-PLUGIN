@@ -6,6 +6,7 @@
 
 #include <JuceHeader.h>
 
+#include "NeumorphicSliderLookAndFeel.h"
 #include "PluginProcessor.h"
 #include "SpectrogramPanel.h"
 #include "TimbreMotionPanel.h"
@@ -88,6 +89,7 @@ class SessionTabPanel : public juce::Component,
 {
 public:
     explicit SessionTabPanel(AtsAudioProcessor&);
+    ~SessionTabPanel() override;
     void resized() override;
     void paintOverChildren(juce::Graphics&) override;
 
@@ -195,6 +197,7 @@ private:
     juce::Label morphSmoothingLabel;
     juce::Slider morphSmoothingSlider;
     juce::Label morphMacroLabel;
+    NeumorphicSliderLookAndFeel morphDepthSliderLookAndFeel;
     juce::Slider morphMacroSlider;
     juce::TextButton resetMorphLanesButton { "Link lanes" };
     juce::Label morphPolicyLabel;

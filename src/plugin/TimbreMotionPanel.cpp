@@ -1,4 +1,5 @@
 #include "TimbreMotionPanel.h"
+#include "UiFonts.h"
 
 #include <algorithm>
 
@@ -262,7 +263,7 @@ void TimbreMacroCard::paint(juce::Graphics& g)
 
     const bool on = enableButton.getToggleState();
     g.setColour(on ? juce::Colours::white : juce::Colour(0xff6b7886));
-    g.setFont(juce::Font(11.5f, juce::Font::bold));
+    g.setFont(UiFonts::body(11.5f));
     auto titleArea = getLocalBounds().reduced(4).removeFromTop(18);
     titleArea.removeFromLeft(22);
     g.drawText(title, titleArea, juce::Justification::centredLeft, true);
@@ -302,7 +303,7 @@ TimbreMotionPanel::axes()
 TimbreMotionPanel::TimbreMotionPanel()
 {
     titleLabel.setText("Timbre Motion", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    titleLabel.setFont(UiFonts::body());
     titleLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(titleLabel);
 
@@ -328,12 +329,12 @@ TimbreMotionPanel::TimbreMotionPanel()
         addAndMakeVisible(card);
     }
 
-    editorTitleLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    editorTitleLabel.setFont(UiFonts::body());
     editorTitleLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(editorTitleLabel);
 
     modeLabel.setText("Mode", juce::dontSendNotification);
-    modeLabel.setFont(juce::Font(10.5f));
+    modeLabel.setFont(UiFonts::small_());
     modeLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(modeLabel);
 
@@ -361,7 +362,7 @@ TimbreMotionPanel::TimbreMotionPanel()
     legendLabel.setText("Drag points to shape the curve. Double-click to add/remove. "
                         "Solid = requested target over normalized time.",
                         juce::dontSendNotification);
-    legendLabel.setFont(juce::Font(10.0f));
+    legendLabel.setFont(UiFonts::small_(10.0f));
     legendLabel.setColour(juce::Label::textColourId, juce::Colour(0xff8a98a8));
     legendLabel.setMinimumHorizontalScale(0.7f);
     addAndMakeVisible(legendLabel);

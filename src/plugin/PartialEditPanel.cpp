@@ -1,4 +1,5 @@
 #include "PartialEditPanel.h"
+#include "UiFonts.h"
 
 #include "PluginProcessor.h"
 
@@ -9,7 +10,7 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
                  "Amplitude must be non-negative; frequency must be positive. Phase is not edited here.",
                  juce::dontSendNotification);
     help.setJustificationType(juce::Justification::topLeft);
-    help.setFont(juce::Font(13.0f));
+    help.setFont(UiFonts::heading());
     addAndMakeVisible(help);
 
     partialLab.setText("Partial index (partial #)", juce::dontSendNotification);
@@ -35,7 +36,7 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
     addAndMakeVisible(frameSlider);
 
     readout.setJustificationType(juce::Justification::topLeft);
-    readout.setFont(juce::Font(12.0f, juce::Font::italic));
+    readout.setFont(UiFonts::body(12.0f));
     addAndMakeVisible(readout);
 
     ampLab.setText("Amplitude", juce::dontSendNotification);

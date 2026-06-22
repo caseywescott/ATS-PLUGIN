@@ -1,4 +1,5 @@
 #include "SynthTabPanel.h"
+#include "UiFonts.h"
 
 #include "AtsFrequencyShape.h"
 #include "PluginProcessor.h"
@@ -11,13 +12,14 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
                  "Use the Analysis tab to tune the next analyze pass.",
                  juce::dontSendNotification);
     hint.setJustificationType(juce::Justification::topLeft);
-    hint.setFont(juce::Font(13.0f));
+    hint.setFont(UiFonts::heading());
     addAndMakeVisible(hint);
 
     auto setupLab = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
         l.setJustificationType(juce::Justification::centred);
-        l.setFont(juce::Font(11.0f, juce::Font::bold));
+        l.setFont(UiFonts::knobLabel());
+        l.setComponentID("knobLabel");
         l.setMinimumHorizontalScale(0.65f);
     };
     setupLab(freqLabel, "freq - Frequency factor");
@@ -115,7 +117,7 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
                                    juce::dontSendNotification);
     classicPreviewModeHint.setJustificationType(juce::Justification::centredLeft);
     classicPreviewModeHint.setMinimumHorizontalScale(0.7f);
-    classicPreviewModeHint.setFont(juce::Font(11.0f));
+    classicPreviewModeHint.setFont(UiFonts::body());
     classicPreviewModeHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
     classicPreviewModeHint.setHelpText(classicPreviewModeHint.getText());
     classicPreviewModeHint.setTooltip(classicPreviewModeHint.getText());

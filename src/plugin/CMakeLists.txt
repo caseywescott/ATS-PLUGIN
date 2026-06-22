@@ -33,12 +33,38 @@ juce_add_plugin(
 
 juce_generate_juce_header(AtsResynth)
 
+juce_add_binary_data(
+  AtsResynthAssets
+  SOURCES
+    "${CMAKE_SOURCE_DIR}/slider/manifest.json"
+    "${CMAKE_SOURCE_DIR}/slider/static/track_recess_1x.png"
+    "${CMAKE_SOURCE_DIR}/slider/static/track_recess_2x.png"
+    "${CMAKE_SOURCE_DIR}/slider/static/active_fill_1x.png"
+    "${CMAKE_SOURCE_DIR}/slider/static/active_fill_2x.png"
+    "${CMAKE_SOURCE_DIR}/slider/static/handle_1x.png"
+    "${CMAKE_SOURCE_DIR}/slider/static/handle_2x.png"
+    # Checkbox neumorphic assets (assets/checkbox/static/)
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/outer_bevel_1x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/outer_bevel_2x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/main_body_1x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/main_body_2x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/inner_cap_1x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/inner_cap_2x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/checkmark_1x.png"
+    "${CMAKE_SOURCE_DIR}/assets/checkbox/static/checkmark_2x.png"
+    # Embedded fonts
+    "${CMAKE_SOURCE_DIR}/assets/fonts/Outfit-SemiBold.ttf"
+    "${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Medium.ttf")
+
 target_sources(
   AtsResynth
-  PRIVATE PluginEntry.cpp
+  PRIVATE UiFonts.h
+          PluginEntry.cpp
           PluginProcessor.cpp
           PluginEditor.cpp
           SessionTabPanel.cpp
+          NeumorphicSliderLookAndFeel.cpp
+          NeumorphicCheckboxLookAndFeel.cpp
           AnalysisTabPanel.cpp
           SynthTabPanel.cpp
           PartialEditPanel.cpp
@@ -61,7 +87,7 @@ target_sources(
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"
                                               "${ATS_ATSA_SOURCE_DIR}")
 
-target_link_libraries(AtsResynth PRIVATE juce::juce_audio_utils atsa)
+target_link_libraries(AtsResynth PRIVATE juce::juce_audio_utils atsa AtsResynthAssets)
 
 target_compile_definitions(AtsResynth PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
                                              JUCE_MODAL_LOOPS_PERMITTED=1
