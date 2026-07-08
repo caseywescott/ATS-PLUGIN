@@ -10,6 +10,7 @@ class SynthTabPanel : public juce::Component,
 {
 public:
     explicit SynthTabPanel(AtsAudioProcessor&);
+    void paint(juce::Graphics&) override;
     void resized() override;
 
 private:
