@@ -7,6 +7,7 @@
 #include "PartialEditPanel.h"
 #include "SessionTabPanel.h"
 #include "SynthTabPanel.h"
+#include "UiComposites.h"
 #include "UiConstants.h"
 
 class AtsAudioProcessor;
@@ -40,6 +41,9 @@ public:
                       juce::ComboBox&) override;
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
+    juce::Font getPopupMenuFont() override;
+    juce::Font getLabelFont(juce::Label&) override;
+    juce::Label* createSliderTextBox(juce::Slider&) override;
     void drawLinearSlider(juce::Graphics&,
                           int x,
                           int y,
@@ -65,6 +69,21 @@ public:
                                    const juce::String& text,
                                    const juce::Justification& position,
                                    juce::GroupComponent&) override;
+    void drawAlertBox(juce::Graphics&,
+                      juce::AlertWindow&,
+                      const juce::Rectangle<int>& textArea,
+                      juce::TextLayout&) override;
+    int getAlertWindowButtonHeight() override;
+    juce::Font getAlertWindowTitleFont() override;
+    juce::Font getAlertWindowMessageFont() override;
+    void drawPopupMenuItem(juce::Graphics&,
+                           const juce::Rectangle<int>& area,
+                           bool isSeparator, bool isActive,
+                           bool isHighlighted, bool isTicked,
+                           bool hasSubMenu, const juce::String& text,
+                           const juce::String& shortcutKeyText,
+                           const juce::Drawable* icon,
+                           const juce::Colour* textColour) override;
 };
 
 class HistoryButton : public juce::Button
@@ -101,6 +120,8 @@ public:
 private:
     void timerCallback() override;
     void refreshUndoButtons();
+    void applyTheme(int theme);
+    void showPage(int page);
 
     AtsAudioProcessor& audioProcessor;
 
@@ -113,10 +134,14 @@ private:
     PartialEditPanel partialTab;
     MathExprPanel mathTab;
 
-    juce::TabbedComponent tabs;
+    ats_ui::SegmentedRadio pageStrip;
+    int currentPage = 0;
 
     juce::Label titleLabel;
     juce::Label contextLabel;
+
+    juce::ComboBox themeBox;
+    ats_ui::ActivityDots engineDots;
 
     HistoryButton undoButton { HistoryButton::Direction::Undo };
     HistoryButton redoButton { HistoryButton::Direction::Redo };

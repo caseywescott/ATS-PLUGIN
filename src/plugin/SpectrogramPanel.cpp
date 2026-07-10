@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "AtsFrequencyShape.h"
+#include "SpectrumRender.h"
 
 namespace
 {
@@ -15,6 +16,9 @@ constexpr int kResidualColumns = 220;
 constexpr float kMinZoom = 1.0f;
 constexpr float kMaxZoom = 32.0f;
 constexpr float kZoomBarWidth = 204.0f;
+// Match JUCE Viewport's wheel scaling (14 steps of 16 px) so precise
+// trackpad/Magic Mouse deltas traverse at the same familiar rate.
+constexpr float kWheelPanPixelsPerDelta = 14.0f * 16.0f;
 
 float zoomFromSlider(double sliderValue)
 {
@@ -266,12 +270,6 @@ juce::Rectangle<float> normalisedRect(juce::Point<float> a, juce::Point<float> b
              std::abs(a.y - b.y) };
 }
 
-juce::Colour traceColour(float ampNorm)
-{
-    const auto green = juce::Colour(0xff10ff77);
-    const auto cyan = juce::Colour(0xff6ffff0);
-    return green.interpolatedWith(cyan, juce::jlimit(0.0f, 1.0f, ampNorm * 0.85f));
-}
 } // namespace
 
 SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
@@ -279,8 +277,8 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
 {
     setTitle("Spectral trace display");
     setName("Spectral trace display");
-    setHelpText("Selectable ATS partial/residual traces. Scroll wheel zooms; bottom/right "
-                "scrollbars pan time/frequency when zoomed; Alt-drag pans; 0 or Home fits full source.");
+    setHelpText("Selectable ATS partial/residual traces. Two-finger or wheel scrolling pans the "
+                "zoomed view; pinch or Ctrl/Cmd-scroll zooms; Alt-drag pans; 0 or Home fits full source.");
     setWantsKeyboardFocus(true);
 
     styleTraceScrollBars();
@@ -310,7 +308,7 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
         draggingOnsetHandle = OnsetHandle::None;
         hoveredOnsetIndex = -1;
         hoveredOnsetHandle = OnsetHandle::None;
-        repaint();
+        repaintDisplay(); // overlay lives in the cached image
     };
     addChildComponent(onsetEditButton);
 
@@ -388,8 +386,8 @@ SpectrogramPanel::SpectrogramPanel(AtsAudioProcessor& p)
     // Envelope overlay toggles
     envSourceABtn.setToggleState(true, juce::dontSendNotification);
     envSourceBBtn.setToggleState(false, juce::dontSendNotification);
-    envSourceABtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff4090d0));
-    envSourceBBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd08030));
+    envSourceABtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff3fe8b0));
+    envSourceBBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffe8a04a));
     envSourceABtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC) repaint(); };
     envSourceBBtn.onStateChange = [this] { if (mode == Mode::IsometricEnvelope || mode == Mode::IsometricEnvelopeRDC) repaint(); };
     addChildComponent(envSourceABtn);
@@ -804,36 +802,68 @@ void SpectrogramPanel::paint(juce::Graphics& g)
     if (bounds.isEmpty())
         return;
 
+    // The cache must match the physical pixel density: a logical-resolution
+    // image gets upscaled on retina displays, which blurs small text.
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const int cacheW = juce::jmax(1, juce::roundToInt((float) bounds.getWidth() * scale));
+    const int cacheH = juce::jmax(1, juce::roundToInt((float) bounds.getHeight() * scale));
+
     if (displayCache.isNull()
-        || displayCache.getWidth() != bounds.getWidth()
-        || displayCache.getHeight() != bounds.getHeight()
+        || displayCache.getWidth() != cacheW
+        || displayCache.getHeight() != cacheH
         || displayCacheDirty)
     {
-        displayCache = juce::Image(juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+        displayCache = juce::Image(juce::Image::ARGB, cacheW, cacheH, true);
         juce::Graphics cacheGraphics(displayCache);
-        cacheGraphics.fillAll(juce::Colour(0xff070a08));
+        cacheGraphics.addTransform(juce::AffineTransform::scale(scale));
+        cacheGraphics.fillAll(ats_spectrum::theme::background());
         paintScreen(cacheGraphics, getScreenBounds());
         displayCacheDirty = false;
     }
 
-    g.drawImageAt(displayCache, 0, 0);
+    g.drawImage(displayCache, bounds.toFloat());
 }
 
 void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> screen)
 {
-    g.setColour(juce::Colour(0xff050705));
+    namespace sr = ats_spectrum;
+
+    g.setColour(sr::theme::background());
     g.fillRoundedRectangle(screen, 5.0f);
-    g.setColour(juce::Colour(0xff0d3f32));
+    g.setColour(sr::theme::axisFrame());
     g.drawRoundedRectangle(screen.reduced(0.5f), 5.0f, 1.0f);
-    g.setColour(juce::Colour(0x443fffc0));
-    g.drawRoundedRectangle(screen.reduced(3.0f), 4.0f, 1.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.drawRoundedRectangle(screen.reduced(1.5f).withTrimmedBottom(screen.getHeight() - 3.0f), 4.0f, 1.0f);
 
     auto plot = getPlotBounds();
     g.saveState();
     g.reduceClipRegion(plot.toNearestInt());
 
-    g.setColour(juce::Colour(0xff020302));
-    g.fillRect(plot);
+    // Vignette: subtle radial falloff instead of a flat fill (spec §2.4).
+    {
+        juce::ColourGradient vignette(sr::theme::background(), plot.getCentre(),
+                                      sr::theme::bgVignetteEdge(), plot.getTopLeft(), true);
+        g.setGradientFill(vignette);
+        g.fillRect(plot);
+    }
+
+    // Sparse static dust gives the backdrop depth without competing with the
+    // data (fixed seed: the pattern must not shimmer across cache rebuilds).
+    {
+        juce::Random dustRng(0x5eed);
+        const int dots = (int) (plot.getWidth() * plot.getHeight() / 2600.0f);
+        for (int i = 0; i < dots; ++i)
+        {
+            const float x = plot.getX() + dustRng.nextFloat() * plot.getWidth();
+            const float y = plot.getY() + dustRng.nextFloat() * plot.getHeight();
+            const float r = 0.4f + dustRng.nextFloat() * 0.9f;
+            const float a = 0.02f + dustRng.nextFloat() * 0.07f;
+            const auto dustCol = dustRng.nextFloat() < 0.3f ? juce::Colour(0xff58c9a8)
+                                                            : juce::Colour(0xff4f7fd9);
+            g.setColour(dustCol.withAlpha(a));
+            g.fillEllipse(x - r, y - r, r * 2.0f, r * 2.0f);
+        }
+    }
 
     if (isIsometricDisplayMode(mode))
     {
@@ -841,21 +871,52 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
     }
     else
     {
-        g.setColour(juce::Colour(0x183cffb3));
-        for (int i = 0; i <= 8; ++i)
+        for (int i = 0; i <= 16; ++i)
         {
-            const float x = plot.getX() + plot.getWidth() * (float) i / 8.0f;
+            g.setColour((i % 4 == 0) ? sr::theme::gridMajor() : sr::theme::gridMinor());
+            const float x = plot.getX() + plot.getWidth() * (float) i / 16.0f;
             g.drawVerticalLine(juce::roundToInt(x), plot.getY(), plot.getBottom());
         }
-        for (int i = 0; i <= 6; ++i)
+        for (int i = 0; i <= 12; ++i)
         {
-            const float y = plot.getY() + plot.getHeight() * (float) i / 6.0f;
+            g.setColour((i % 4 == 0) ? sr::theme::gridMajor() : sr::theme::gridMinor());
+            const float y = plot.getY() + plot.getHeight() * (float) i / 12.0f;
             g.drawHorizontalLine(juce::roundToInt(y), plot.getX(), plot.getRight());
+        }
+
+        // Time reference along the bottom edge.
+        if (traceSnapshot.frameCount > 0 && traceSnapshot.durationSeconds > 0.0)
+        {
+            const auto timeRange = visibleTimeRange();
+            const double visSpanSec = traceSnapshot.durationSeconds * timeRange.getLength();
+            const int decimals = visSpanSec < 2.0 ? 2 : (visSpanSec < 20.0 ? 1 : 0);
+            g.setFont(juce::Font(8.5f, juce::Font::plain));
+
+            for (int i = 0; i <= 16; i += 4)
+            {
+                const float x = plot.getX() + plot.getWidth() * (float) i / 16.0f;
+                g.setColour(sr::theme::axisFrame().withAlpha(0.35f));
+                g.drawLine({ { x, plot.getBottom() - 5.0f }, { x, plot.getBottom() } }, 0.8f);
+
+                const double sec = traceSnapshot.durationSeconds
+                                   * (timeRange.getStart() + timeRange.getLength() * (float) i / 16.0f);
+                const auto text = juce::String(sec, decimals) + "s";
+                g.setColour(juce::Colour(0xff6fa3b0).withAlpha(0.75f));
+                if (i == 0)
+                    g.drawText(text, juce::Rectangle<float>(x + 3.0f, plot.getBottom() - 17.0f, 44.0f, 10.0f),
+                               juce::Justification::centredLeft, false);
+                else if (i == 16)
+                    g.drawText(text, juce::Rectangle<float>(x - 47.0f, plot.getBottom() - 17.0f, 44.0f, 10.0f),
+                               juce::Justification::centredRight, false);
+                else
+                    g.drawText(text, juce::Rectangle<float>(x - 22.0f, plot.getBottom() - 17.0f, 44.0f, 10.0f),
+                               juce::Justification::centred, false);
+            }
         }
     }
 
     g.setFont(juce::Font(12.0f, juce::Font::plain));
-    g.setColour(juce::Colour(0xff8dffd8));
+    g.setColour(juce::Colour(0xff6fa3b0));
     g.drawText("ATS TRACE DISPLAY",
                screen.withTrimmedLeft(14.0f).withTrimmedTop(6.0f).withHeight(15.0f),
                juce::Justification::centredLeft,
@@ -885,6 +946,8 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
         else if (mode != Mode::Residual)
             paintPartialTraces(g, plot);
 
+        paintAmpLegend(g, plot);
+
         paintSmearnovOverlay(g, plot);
         paintSelectionOverlay(g, screen, plot);
     }
@@ -893,10 +956,9 @@ void SpectrogramPanel::paintScreen(juce::Graphics& g, juce::Rectangle<float> scr
 
     if (showsBandLabelGutter())
         paintBandLabelGutter(g, getBandLabelGutterBounds(), plot);
+    else if (showsFreqLabelGutter())
+        paintFreqLabelGutter(g, getBandLabelGutterBounds(), plot);
 
-    g.setColour(juce::Colour(0x25000000));
-    for (int y = juce::roundToInt(screen.getY()) + 2; y < juce::roundToInt(screen.getBottom()); y += 3)
-        g.drawHorizontalLine(y, screen.getX() + 2.0f, screen.getRight() - 2.0f);
 }
 
 void SpectrogramPanel::paintResidualBackdrop(juce::Graphics& g, juce::Rectangle<float> plot, bool foreground)
@@ -904,102 +966,189 @@ void SpectrogramPanel::paintResidualBackdrop(juce::Graphics& g, juce::Rectangle<
     if (traceSnapshot.residualBands.empty())
         return;
 
-    if (foreground)
-    {
-        g.setColour(juce::Colour(0x2210ff77));
-        for (const auto& band : traceSnapshot.residualBands)
-        {
-            const auto yRange = yRangeForBand(band, plot);
-            const float centreY = yRange.getStart() + yRange.getLength() * 0.5f;
-            g.drawHorizontalLine(juce::roundToInt(centreY), plot.getX(), plot.getRight());
-        }
-    }
+    namespace sr = ats_spectrum;
+    const auto timeRange = visibleTimeRange();
 
+    // Residual is context, not signal: soft filled ridges per band (spec §3.3),
+    // never brighter than a mid-amplitude partial. Ridge colour follows band
+    // energy through the shared amp LUT so the legend applies here too.
     for (const auto& band : traceSnapshot.residualBands)
     {
         const auto yRange = yRangeForBand(band, plot);
-        const float y = yRange.getStart();
+        const float baseY = yRange.getEnd();
         const float h = juce::jmax(1.0f, yRange.getLength());
         const int columns = (int) band.energyNorm.size();
-        if (columns <= 0)
+        if (columns <= 1)
             continue;
 
-        const float columnW = plot.getWidth() / (float) columns;
-        if (foreground)
-        {
-            const float centreY = y + h * 0.5f;
-            juce::Path ridge;
-            juce::Path fill;
-            fill.startNewSubPath(plot.getX(), centreY);
-            bool started = false;
-            for (int column = 0; column < columns; ++column)
-            {
-                const float e = band.energyNorm[(size_t) column];
-                const float columnTimeNorm = ((float) column + 0.5f) / (float) columns;
-                const float x = plot.getX() + plot.getWidth()
-                                * ((columnTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
-                const float ridgeY = centreY - e * h * 0.46f;
-                if (!started)
-                {
-                    ridge.startNewSubPath(x, ridgeY);
-                    started = true;
-                }
-                else
-                {
-                    ridge.lineTo(x, ridgeY);
-                }
-                fill.lineTo(x, ridgeY);
-            }
-            fill.lineTo(plot.getRight(), centreY);
-            fill.closeSubPath();
+        auto energyAt = [&](int c) {
+            return band.energyNorm[(size_t) juce::jlimit(0, columns - 1, c)];
+        };
 
-            g.setColour(juce::Colour(0xff12ff88).withAlpha(0.055f));
-            g.fillPath(fill);
-            g.setColour(juce::Colour(0xff77fff1).withAlpha(0.28f));
-            g.strokePath(ridge, juce::PathStrokeType(3.2f));
-            g.setColour(juce::Colour(0xff16ff80).withAlpha(0.82f));
-            g.strokePath(ridge, juce::PathStrokeType(1.15f));
-        }
+        std::vector<sr::TraceVertex> ridgeVerts;
+        juce::Path fill;
+        bool started = false;
+        float lastX = 0.0f;
+        float peakE = 0.0f;
 
         for (int column = 0; column < columns; ++column)
         {
-            const float e = band.energyNorm[(size_t) column];
-            if (e <= 0.01f)
-                continue;
-
+            // 3-tap smoothing removes the column-to-column flicker.
+            const float e = (energyAt(column - 1) + 2.0f * energyAt(column) + energyAt(column + 1)) * 0.25f;
             const float columnTimeNorm = ((float) column + 0.5f) / (float) columns;
             const float x = plot.getX() + plot.getWidth()
-                          * ((columnTimeNorm - visibleTimeRange().getStart()) / visibleTimeRange().getLength());
-            if (x + columnW < plot.getX() || x > plot.getRight())
+                            * ((columnTimeNorm - timeRange.getStart()) / timeRange.getLength());
+            if (x < plot.getX() - 24.0f || x > plot.getRight() + 24.0f)
                 continue;
 
-            const float alpha = foreground ? (0.035f + e * 0.18f) : (0.025f + e * 0.19f);
-            const auto colour = juce::Colour(0xff36ffbf).interpolatedWith(juce::Colour(0xffbaff6a), e * 0.55f)
-                                    .withAlpha(alpha);
-            g.setColour(colour);
-            if (foreground)
+            const float eNorm = juce::jlimit(0.0f, 1.0f, e);
+            const float ridgeY = baseY - eNorm * h * 0.92f;
+            if (!started)
             {
-                const float centreY = y + h * 0.5f;
-                const float barH = juce::jmax(1.0f, e * h * 0.88f);
-                g.fillRect(juce::Rectangle<float>(x - columnW * 0.5f,
-                                                  centreY - barH * 0.5f,
-                                                  juce::jmax(1.0f, columnW + 0.5f),
-                                                  barH));
+                fill.startNewSubPath(x, baseY);
+                started = true;
             }
-            else
-            {
-                g.fillRect(juce::Rectangle<float>(x - columnW * 0.5f,
-                                                  y,
-                                                  juce::jmax(1.0f, columnW + 0.5f),
-                                                  h));
-            }
+            fill.lineTo(x, ridgeY);
+            ridgeVerts.push_back({ { x, ridgeY }, eNorm, 1.0f });
+            peakE = juce::jmax(peakE, eNorm);
+            lastX = x;
+        }
+
+        if (!started || ridgeVerts.size() < 2)
+            continue;
+
+        fill.lineTo(lastX, baseY);
+        fill.closeSubPath();
+
+        const float fillAlpha = foreground ? 0.16f : 0.06f;
+        juce::ColourGradient grad(sr::ampColour(peakE).withAlpha(fillAlpha),
+                                  { plot.getX(), baseY - h },
+                                  sr::ampColour(0.0f).withAlpha(0.0f),
+                                  { plot.getX(), baseY },
+                                  false);
+        g.setGradientFill(grad);
+        g.fillPath(fill);
+
+        const auto trace = sr::buildGradientTrace(ridgeVerts);
+
+        if (foreground)
+        {
+            g.setColour(juce::Colour(0x1a53d6c2));
+            g.drawHorizontalLine(juce::roundToInt(baseY), plot.getX(), plot.getRight());
+            sr::strokeGradientTrace(g, trace, 1.1f, [](const sr::TraceStop& s) {
+                const float eVis = juce::jmin(1.0f, s.amp);
+                return sr::ampColour(eVis).withAlpha((0.34f + eVis * 0.56f) * s.fade);
+            });
+        }
+        else
+        {
+            sr::strokeGradientTrace(g, trace, 1.0f, [](const sr::TraceStop& s) {
+                const float eVis = juce::jmin(1.0f, s.amp);
+                return sr::ampColour(eVis).withAlpha((0.10f + eVis * 0.16f) * s.fade);
+            }, false);
         }
     }
 }
 
 void SpectrogramPanel::paintPartialTraces(juce::Graphics& g, juce::Rectangle<float> plot)
 {
+    namespace sr = ats_spectrum;
+
+    // Harmonic guides: with a single partial selected, mark integer multiples
+    // of its mean frequency so (in)harmonicity is visible at a glance.
+    if (selectedPartials.size() == 1)
+    {
+        const AtsPartialTrace* sel = nullptr;
+        for (const auto& trace : traceSnapshot.partials)
+        {
+            if (trace.partialIndex == selectedPartials.front())
+            {
+                sel = &trace;
+                break;
+            }
+        }
+
+        if (sel != nullptr && sel->meanFrequencyHz > 0.0)
+        {
+            const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+            const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+            const double logRange = std::log(maxHz / minHz);
+            const auto freqRange = visibleFreqRange();
+            const float freqSpan = juce::jmax(1.0e-6f, freqRange.getLength());
+            const float dashes[] = { 5.0f, 5.0f };
+            g.setFont(juce::Font(10.0f, juce::Font::plain));
+
+            for (int k = 2; k <= 32; ++k)
+            {
+                const double hz = sel->meanFrequencyHz * k;
+                if (hz > maxHz)
+                    break;
+                const float freqNorm = (float) (std::log(hz / minHz) / logRange);
+                const float yNorm = (freqNorm - freqRange.getStart()) / freqSpan;
+                if (yNorm < 0.0f || yNorm > 1.0f)
+                    continue;
+                const float y = plot.getBottom() - plot.getHeight() * yNorm;
+
+                g.setColour(sr::theme::selection().withAlpha(0.14f));
+                g.drawDashedLine({ { plot.getX(), y }, { plot.getRight(), y } }, dashes, 2, 0.8f);
+                g.setColour(sr::theme::selection().withAlpha(0.38f));
+                g.drawText(juce::String(k) + "f",
+                           (int) plot.getX() + 4, (int) y - 11, 26, 10,
+                           juce::Justification::centredLeft, false);
+            }
+        }
+    }
+
+    auto drawChunks = [&](std::vector<sr::TraceVertex>& run, bool selected, bool hovered) {
+        if (run.size() < 2)
+        {
+            run.clear();
+            return;
+        }
+
+        // Display-only culling: frame-scale low-amp fragments render as
+        // confetti, not information. Bright blips are kept.
+        float peakAmp = 0.0f;
+        for (const auto& vert : run)
+            peakAmp = juce::jmax(peakAmp, vert.amp);
+        if (run.size() <= 4 && peakAmp < 0.3f && !selected && !hovered)
+        {
+            run.clear();
+            return;
+        }
+
+        sr::smoothInPlace(run, 2);
+        sr::decimateInPlace(run);
+        const auto trace = sr::buildGradientTrace(run);
+        run.clear();
+        if (!trace.path.getBounds().intersects(plot))
+            return;
+
+        if (selected || hovered)
+        {
+            const auto base = selected ? sr::theme::selection() : sr::theme::hover();
+            g.setColour(base.withAlpha(0.18f));
+            g.strokePath(trace.path,
+                         juce::PathStrokeType(selected ? 6.0f : 4.0f,
+                                              juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+            g.setColour(base.withAlpha(juce::jmin(1.0f, 0.72f + trace.maxAmp * 0.2f)));
+            g.strokePath(trace.path,
+                         juce::PathStrokeType(1.7f,
+                                              juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+            return;
+        }
+
+        // Constant-width stroke: loudness lives in the colour/alpha ramp only.
+        sr::strokeGradientTrace(g, trace, 1.0f, [](const sr::TraceStop& s) {
+            const float ampVis = juce::jmin(1.0f, s.amp);
+            return sr::ampColour(ampVis).withAlpha((0.28f + ampVis * 0.62f) * s.fade);
+        });
+    };
+
     auto drawPass = [&](bool selectedPass) {
+        std::vector<sr::TraceVertex> run;
         for (const auto& trace : traceSnapshot.partials)
         {
             const bool selected = isPartialSelected(trace.partialIndex);
@@ -1007,41 +1156,64 @@ void SpectrogramPanel::paintPartialTraces(juce::Graphics& g, juce::Rectangle<flo
             if (selected != selectedPass)
                 continue;
 
-            for (size_t i = 1; i < trace.points.size(); ++i)
+            run.clear();
+            run.reserve(trace.points.size());
+            for (const auto& point : trace.points)
             {
-                const auto& prev = trace.points[i - 1];
-                const auto& cur = trace.points[i];
-                if (!prev.active || !cur.active)
-                    continue;
-
-                const auto a = positionForPoint(prev, plot);
-                const auto b = positionForPoint(cur, plot);
-                if (std::max(a.x, b.x) < plot.getX() || std::min(a.x, b.x) > plot.getRight()
-                    || std::max(a.y, b.y) < plot.getY() || std::min(a.y, b.y) > plot.getBottom())
-                    continue;
-
-                const float amp = juce::jlimit(0.0f, 2.0f, (prev.ampNorm + cur.ampNorm) * 0.5f);
-                const float ampVis = juce::jmin(1.0f, amp);
-                const auto line = juce::Line<float>(a, b);
-
-                if (selected || hovered)
+                if (!point.active)
                 {
-                    g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffcffff6)).withAlpha(0.18f));
-                    g.drawLine(line, selected ? 6.0f : 4.0f);
+                    drawChunks(run, selected, hovered);
+                    continue;
                 }
-
-                auto colour = selected ? juce::Colour(0xfffff3a0) : traceColour(ampVis);
-                if (hovered && !selected)
-                    colour = juce::Colour(0xffe9fff7);
-                g.setColour(colour.withAlpha(selected ? juce::jmin(1.0f, 0.72f + amp * 0.2f)
-                                                     : (0.15f + ampVis * 0.62f)));
-                g.drawLine(line, (selected ? 1.8f : 0.55f) + amp * (selected ? 1.6f : 1.35f));
+                run.push_back({ positionForPoint(point, plot),
+                                juce::jlimit(0.0f, 2.0f, point.ampNorm),
+                                1.0f });
             }
+            drawChunks(run, selected, hovered);
         }
     };
 
     drawPass(false);
     drawPass(true);
+}
+
+void SpectrogramPanel::paintAmpLegend(juce::Graphics& g, juce::Rectangle<float> plot) const
+{
+    namespace sr = ats_spectrum;
+
+    const auto area = juce::Rectangle<float>(plot.getRight() - 140.0f, plot.getY() + 8.0f, 132.0f, 38.0f);
+    if (area.getX() < plot.getX() + 4.0f)
+        return;
+
+    g.setColour(sr::theme::background().withAlpha(0.78f));
+    g.fillRoundedRectangle(area, 4.0f);
+    g.setColour(sr::theme::axisFrame().withAlpha(0.45f));
+    g.drawRoundedRectangle(area, 4.0f, 1.0f);
+
+    // Residual views colour by normalized band energy, not the dB amp ramp.
+    const bool residualLegend = mode == Mode::Residual || mode == Mode::IsometricResidual;
+
+    g.setFont(juce::Font(9.0f, juce::Font::plain));
+    g.setColour(juce::Colour(0xff6fa3b0));
+    g.drawText(residualLegend ? "E N E R G Y" : "A M P",
+               area.reduced(8.0f, 0.0f).withTrimmedTop(3.0f).withHeight(10.0f),
+               juce::Justification::centredLeft, false);
+
+    const auto bar = juce::Rectangle<float>(area.getX() + 8.0f, area.getY() + 16.0f,
+                                            area.getWidth() - 16.0f, 6.0f);
+    juce::ColourGradient ramp(sr::ampColour(0.0f), bar.getTopLeft(),
+                              sr::ampColour(1.0f), bar.getTopRight(), false);
+    for (float p = 0.25f; p < 1.0f; p += 0.25f)
+        ramp.addColour(p, sr::ampColour(p));
+    g.setGradientFill(ramp);
+    g.fillRoundedRectangle(bar, 3.0f);
+
+    // The trace amp ramp spans the model's peak down to peak - 72 dB.
+    g.setFont(juce::Font(8.5f, juce::Font::plain));
+    g.setColour(juce::Colour(0xff6fa3b0).withAlpha(0.85f));
+    const auto labelRow = area.reduced(8.0f, 0.0f).withTrimmedTop(25.0f).withHeight(10.0f);
+    g.drawText(residualLegend ? "lo" : "-72 dB", labelRow, juce::Justification::centredLeft, false);
+    g.drawText(residualLegend ? "hi" : "0", labelRow, juce::Justification::centredRight, false);
 }
 
 void SpectrogramPanel::paintIsometricGrid(juce::Graphics& g, juce::Rectangle<float> plot)
@@ -1070,27 +1242,103 @@ void SpectrogramPanel::paintIsometricGrid(juce::Graphics& g, juce::Rectangle<flo
     const auto backLeft = makePoint(1.0f, 0.0f);
     const auto backRight = makePoint(1.0f, 1.0f);
 
-    g.setColour(juce::Colour(0x1217ff9e));
+    namespace sr = ats_spectrum;
+
     for (int i = 1; i < 8; ++i)
     {
         const float f = (float) i / 8.0f;
+        g.setColour((i % 4 == 0) ? sr::theme::gridMajor() : sr::theme::gridMinor());
         g.drawLine({ makePoint(0.0f, f), makePoint(1.0f, f) }, 0.7f);
     }
     for (int i = 1; i < 10; ++i)
     {
         const float t = (float) i / 10.0f;
+        // Grid recedes with time depth to match the trace shading.
+        const float depthFade = 0.55f + 0.45f * t;
+        const auto base = (i % 5 == 0) ? sr::theme::gridMajor() : sr::theme::gridMinor();
+        g.setColour(base.withAlpha(base.getFloatAlpha() * depthFade));
         g.drawLine({ makePoint(t, 0.0f), makePoint(t, 1.0f) }, 0.65f);
     }
 
-    drawIsoLine(frontLeft, frontRight, juce::Colour(0xff25f7c4).withAlpha(0.48f), 1.15f);
-    drawIsoLine(frontLeft, backLeft, juce::Colour(0xff16dba8).withAlpha(0.40f), 1.0f);
-    drawIsoLine(frontRight, backRight, juce::Colour(0xff16dba8).withAlpha(0.25f), 0.8f);
-    drawIsoLine(backLeft, backRight, juce::Colour(0xff16dba8).withAlpha(0.23f), 0.8f);
+    const auto frame = sr::theme::axisFrame();
+    drawIsoLine(frontLeft, frontRight, frame, 1.15f);
+    drawIsoLine(frontLeft, backLeft, frame.withAlpha(frame.getFloatAlpha() * 0.75f), 1.0f);
+    drawIsoLine(frontRight, backRight, frame.withAlpha(frame.getFloatAlpha() * 0.5f), 0.8f);
+    drawIsoLine(backLeft, backRight, frame.withAlpha(frame.getFloatAlpha() * 0.45f), 0.8f);
 
     for (const auto base : { frontLeft, backLeft, frontRight })
     {
-        const auto top = juce::Point<float>(base.x, base.y - plot.getHeight() * 0.28f);
-        drawIsoLine(base, top, juce::Colour(0xff25f7c4).withAlpha(0.18f), 0.65f);
+        const auto top = juce::Point<float>(base.x, base.y - plot.getHeight() * 0.30f);
+        drawIsoLine(base, top, frame.withAlpha(frame.getFloatAlpha() * 0.35f), 0.65f);
+    }
+
+    // Axis reference outside the ground square: faint ticks + labels along the
+    // front (frequency) and left (time) floor edges. Nothing inside the floor.
+    if (traceSnapshot.frameCount > 0)
+    {
+        auto unit = [](juce::Point<float> v) {
+            const float len = v.getDistanceFromOrigin();
+            return len > 1.0e-3f ? v / len : juce::Point<float>();
+        };
+        const auto freqOut = unit(frontLeft - backLeft);
+        const auto timeOut = unit(frontRight - frontLeft);
+
+        const auto tickCol = frame.withAlpha(frame.getFloatAlpha() * 0.4f);
+        const auto labelCol = juce::Colour(0xff6fa3b0).withAlpha(0.75f);
+        g.setFont(juce::Font(8.5f, juce::Font::plain));
+
+        const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+        const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+        const auto freqRange = visibleFreqRange();
+        const auto timeRange = visibleTimeRange();
+
+        auto hzLabel = [](double hz) {
+            if (hz >= 1000.0)
+            {
+                const double k = hz / 1000.0;
+                return k >= 10.0 ? juce::String(juce::roundToInt(k)) + "k"
+                                 : juce::String(k, 1) + "k";
+            }
+            return juce::String(juce::roundToInt(hz));
+        };
+
+        for (int i = 0; i <= 8; ++i)
+        {
+            const float f = (float) i / 8.0f;
+            const auto p = makePoint(0.0f, f);
+            g.setColour(tickCol);
+            g.drawLine({ p, p + freqOut * 5.0f }, 0.8f);
+            if (i % 2 == 0)
+            {
+                const float freqNorm = freqRange.getStart() + freqRange.getLength() * f;
+                const double hz = minHz * std::pow(maxHz / minHz, (double) freqNorm);
+                const auto c = p + freqOut * 16.0f;
+                g.setColour(labelCol);
+                g.drawText(hzLabel(hz),
+                           juce::Rectangle<float>(c.x - 22.0f, c.y - 6.0f, 44.0f, 12.0f),
+                           juce::Justification::centred, false);
+            }
+        }
+
+        const double visSpanSec = traceSnapshot.durationSeconds * timeRange.getLength();
+        const int decimals = visSpanSec < 2.0 ? 2 : (visSpanSec < 20.0 ? 1 : 0);
+        for (int i = 0; i <= 10; ++i)
+        {
+            const float t = (float) i / 10.0f;
+            const auto p = makePoint(t, 1.0f);
+            g.setColour(tickCol);
+            g.drawLine({ p, p + timeOut * 5.0f }, 0.8f);
+            if (i % 2 == 0 && i > 0)
+            {
+                const double sec = traceSnapshot.durationSeconds
+                                   * (timeRange.getStart() + timeRange.getLength() * t);
+                const auto c = p + timeOut * 18.0f;
+                g.setColour(labelCol);
+                g.drawText(juce::String(sec, decimals) + "s",
+                           juce::Rectangle<float>(c.x - 22.0f, c.y - 6.0f, 44.0f, 12.0f),
+                           juce::Justification::centred, false);
+            }
+        }
     }
 }
 
@@ -1111,46 +1359,153 @@ void SpectrogramPanel::paintIsometricPartials(juce::Graphics& g, juce::Rectangle
                && point.freqNorm <= freqRange.getEnd() + freqPad;
     };
 
-    auto drawTracePass = [&](bool selectedPass) {
+    namespace sr = ats_spectrum;
+
+    // Depth factor: later time projects toward the viewer, so it draws brighter
+    // and later (painter's algorithm).
+    auto shadeForTime = [&](float timeNorm) {
+        const float rel = (timeNorm - timeRange.getStart())
+                          / juce::jmax(1.0e-6f, timeRange.getLength());
+        return 0.55f + 0.45f * juce::jlimit(0.0f, 1.0f, rel);
+    };
+
+    // Back-to-front trace order by mean time of active points.
+    std::vector<std::pair<float, const AtsPartialTrace*>> ordered;
+    ordered.reserve(traceSnapshot.partials.size());
+    for (const auto& trace : traceSnapshot.partials)
+    {
+        float sum = 0.0f;
+        int count = 0;
+        for (const auto& point : trace.points)
+        {
+            if (!point.active)
+                continue;
+            sum += point.timeNorm;
+            ++count;
+        }
+        ordered.push_back({ count > 0 ? sum / (float) count : 0.0f, &trace });
+    }
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Floor shadows: each trace projected onto the ground plane (amp = 0) as a
+    // faint line, anchoring ridges to their time/freq cell instead of floating.
+    {
+        juce::Path shadow;
+        float peakAmp = 0.0f, shadeSum = 0.0f;
+        int pointCount = 0;
+
+        auto flushShadow = [&] {
+            if (pointCount >= 2 && !(pointCount <= 4 && peakAmp < 0.3f))
+            {
+                const float ampVis = juce::jmin(1.0f, peakAmp);
+                const float shade = shadeSum / (float) pointCount;
+                g.setColour(sr::ampColour(ampVis)
+                                .withAlpha((0.05f + 0.10f * ampVis) * shade));
+                g.strokePath(shadow, juce::PathStrokeType(1.0f));
+            }
+            shadow.clear();
+            peakAmp = shadeSum = 0.0f;
+            pointCount = 0;
+        };
+
         for (const auto& trace : traceSnapshot.partials)
         {
+            for (const auto& point : trace.points)
+            {
+                if (!pointIsVisible(point))
+                {
+                    flushShadow();
+                    continue;
+                }
+                const auto pos = positionForIsoCoords(point.timeNorm, point.freqNorm, 0.0f, plot);
+                if (pointCount == 0)
+                    shadow.startNewSubPath(pos);
+                else
+                    shadow.lineTo(pos);
+                peakAmp = juce::jmax(peakAmp, point.ampNorm);
+                shadeSum += shadeForTime(point.timeNorm);
+                ++pointCount;
+            }
+            flushShadow();
+        }
+    }
+
+    auto drawChunks = [&](std::vector<sr::TraceVertex>& run, bool selected, bool hovered) {
+        if (run.size() < 2)
+        {
+            run.clear();
+            return;
+        }
+
+        // Display-only culling: frame-scale low-amp fragments render as
+        // confetti, not information. Bright blips are kept.
+        float peakAmp = 0.0f;
+        for (const auto& vert : run)
+            peakAmp = juce::jmax(peakAmp, vert.amp);
+        if (run.size() <= 4 && peakAmp < 0.3f && !selected && !hovered)
+        {
+            run.clear();
+            return;
+        }
+
+        sr::smoothInPlace(run, 3);
+        sr::decimateInPlace(run);
+        const auto trace = sr::buildGradientTrace(run);
+        run.clear();
+        if (!trace.path.getBounds().intersects(plot))
+            return;
+
+        if (selected || hovered)
+        {
+            const auto base = selected ? sr::theme::selection() : sr::theme::hover();
+            g.setColour(base.withAlpha(0.22f));
+            g.strokePath(trace.path,
+                         juce::PathStrokeType(selected ? 6.4f : 4.5f,
+                                              juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+            g.setColour(base.withAlpha(juce::jmin(1.0f, 0.78f + trace.maxAmp * 0.16f)));
+            g.strokePath(trace.path,
+                         juce::PathStrokeType(1.7f,
+                                              juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+            return;
+        }
+
+        // Constant-width stroke; colour is a pure amplitude readout (legend
+        // stays exact) and depth is conveyed by alpha dimming only.
+        sr::strokeGradientTrace(g, trace, 1.0f, [](const sr::TraceStop& s) {
+            const float ampVis = juce::jmin(1.0f, s.amp);
+            const float shade = juce::jlimit(0.0f, 1.0f, s.shade);
+            return sr::ampColour(ampVis)
+                .withAlpha((0.28f + ampVis * 0.58f) * shade * s.fade);
+        });
+    };
+
+    auto drawTracePass = [&](bool selectedPass) {
+        std::vector<sr::TraceVertex> run;
+        for (const auto& [meanTime, tracePtr] : ordered)
+        {
+            const auto& trace = *tracePtr;
             const bool selected = isPartialSelected(trace.partialIndex);
             const bool hovered = trace.partialIndex == hoveredPartial;
             if (selected != selectedPass)
                 continue;
 
-            for (size_t i = 1; i < trace.points.size(); ++i)
+            run.clear();
+            run.reserve(trace.points.size());
+            for (const auto& point : trace.points)
             {
-                const auto& prev = trace.points[i - 1];
-                const auto& cur = trace.points[i];
-                if (!pointIsVisible(prev) || !pointIsVisible(cur))
-                    continue;
-
-                const auto a = positionForIsoPoint(prev, plot);
-                const auto b = positionForIsoPoint(cur, plot);
-                if (std::max(a.x, b.x) < plot.getX() || std::min(a.x, b.x) > plot.getRight()
-                    || std::max(a.y, b.y) < plot.getY() || std::min(a.y, b.y) > plot.getBottom())
-                    continue;
-
-                const float amp = juce::jlimit(0.0f, 2.0f, (prev.ampNorm + cur.ampNorm) * 0.5f);
-                const float ampVis = juce::jmin(1.0f, amp);
-                const auto line = juce::Line<float>(a, b);
-
-                if (selected || hovered)
+                if (!pointIsVisible(point))
                 {
-                    g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffd9fff8)).withAlpha(0.22f));
-                    g.drawLine(line, selected ? 6.4f : 4.5f);
+                    drawChunks(run, selected, hovered);
+                    continue;
                 }
-
-                auto colour = selected ? juce::Colour(0xfffff3a0)
-                                       : juce::Colour(0xff2ffff0).interpolatedWith(juce::Colour(0xff6aff8d), ampVis * 0.55f);
-                if (hovered && !selected)
-                    colour = juce::Colour(0xffeffffb);
-
-                g.setColour(colour.withAlpha(selected ? juce::jmin(1.0f, 0.78f + amp * 0.16f)
-                                                     : (0.18f + ampVis * 0.58f)));
-                g.drawLine(line, (selected ? 1.75f : 0.65f) + amp * (selected ? 1.45f : 1.1f));
+                run.push_back({ positionForIsoPoint(point, plot),
+                                juce::jlimit(0.0f, 2.0f, point.ampNorm),
+                                shadeForTime(point.timeNorm) });
             }
+            drawChunks(run, selected, hovered);
         }
     };
 
@@ -1173,6 +1528,14 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
         return (float) juce::jlimit(0.0, 1.0, std::log(clamped / minHz) / logRange);
     };
 
+    // Same depth dimming as the other isometric views: later time projects
+    // toward the viewer and draws brighter (matches paintIsometricPartials).
+    auto shadeForTime = [&](float timeNorm) {
+        const float rel = (timeNorm - timeRange.getStart())
+                          / juce::jmax(1.0e-6f, timeRange.getLength());
+        return 0.55f + 0.45f * juce::jlimit(0.0f, 1.0f, rel);
+    };
+
     for (const auto& band : traceSnapshot.residualBands)
     {
         const float lowNorm = normForHz(band.lowHz);
@@ -1190,9 +1553,15 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
         if (columns <= 1)
             continue;
 
-        juce::Path baseLine;
-        juce::Path ridgeLine;
-        bool started = false;
+        namespace sr = ats_spectrum;
+        auto energyAt = [&](int c) {
+            return band.energyNorm[(size_t) juce::jlimit(0, columns - 1, c)];
+        };
+
+        std::vector<sr::TraceVertex> ridgeVerts;
+        std::vector<sr::TraceVertex> baseVerts;
+        std::vector<juce::Point<float>> basePoints;
+        float peakE = 0.0f;
 
         for (int column = 0; column < columns; ++column)
         {
@@ -1201,6 +1570,9 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
                 || timeNorm > timeRange.getEnd() + timeRange.getLength() * 0.03f)
                 continue;
 
+            const float e = (energyAt(column - 1) + 2.0f * energyAt(column) + energyAt(column + 1)) * 0.25f;
+            const float eNorm = juce::jlimit(0.0f, 1.0f, e);
+
             AtsPartialTracePoint basePoint;
             basePoint.timeNorm = timeNorm;
             basePoint.freqNorm = freqNorm;
@@ -1208,41 +1580,233 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
             basePoint.active = true;
 
             AtsPartialTracePoint ridgePoint = basePoint;
-            ridgePoint.ampNorm = juce::jlimit(0.0f, 1.15f, band.energyNorm[(size_t) column] * 1.15f);
+            ridgePoint.ampNorm = juce::jlimit(0.0f, 1.15f, e * 1.15f);
 
             const auto p0 = positionForIsoPoint(basePoint, plot);
             const auto p1 = positionForIsoPoint(ridgePoint, plot);
 
-            if (!started)
+            const float shade = shadeForTime(timeNorm);
+            ridgeVerts.push_back({ p1, eNorm, shade });
+            baseVerts.push_back({ p0, eNorm, shade });
+            basePoints.push_back(p0);
+            peakE = juce::jmax(peakE, eNorm);
+        }
+
+        if (basePoints.size() < 2)
+            continue;
+
+        // Silent bands would render as straight lines lying on the floor.
+        if (peakE < 0.02f && !selected && !hovered)
+            continue;
+
+        const auto ridgeTrace = sr::buildGradientTrace(ridgeVerts);
+        const auto baseTrace = sr::buildGradientTrace(baseVerts);
+
+        // Filled ridge: translucent energy-tinted gradient between crest and baseline.
+        juce::Path fill = ridgeTrace.path;
+        for (auto it = basePoints.rbegin(); it != basePoints.rend(); ++it)
+            fill.lineTo(*it);
+        fill.closeSubPath();
+
+        // Fill gradient runs perpendicular to the (diagonal) baseline and hits
+        // zero alpha at 30% of the crest height, so the fill's floor edge never
+        // shows as a hard line across the ground plane.
+        {
+            const auto baseStart = basePoints.front();
+            const auto baseEnd = basePoints.back();
+            const auto dir = baseEnd - baseStart;
+            const float len = dir.getDistanceFromOrigin();
+            if (len > 1.0f)
             {
-                baseLine.startNewSubPath(p0);
-                ridgeLine.startNewSubPath(p1);
-                started = true;
-            }
-            else
-            {
-                baseLine.lineTo(p0);
-                ridgeLine.lineTo(p1);
+                juce::Point<float> n(dir.y / len, -dir.x / len);
+                float crestH = 0.0f;
+                for (const auto& v : ridgeVerts)
+                    crestH = juce::jmax(crestH,
+                                        (v.pos.x - baseStart.x) * n.x + (v.pos.y - baseStart.y) * n.y);
+                if (crestH < 0.5f)
+                {
+                    n = { -n.x, -n.y };
+                    for (const auto& v : ridgeVerts)
+                        crestH = juce::jmax(crestH,
+                                            (v.pos.x - baseStart.x) * n.x + (v.pos.y - baseStart.y) * n.y);
+                }
+
+                if (crestH > 2.0f)
+                {
+                    const float fillAlpha = selected ? 0.26f : (hovered ? 0.20f : 0.12f);
+                    juce::ColourGradient grad(sr::ampColour(0.0f).withAlpha(0.0f),
+                                              baseStart + n * (crestH * 0.30f),
+                                              (selected ? sr::theme::selection() : sr::ampColour(peakE))
+                                                  .withAlpha(fillAlpha),
+                                              baseStart + n * crestH,
+                                              false);
+                    g.setGradientFill(grad);
+                    g.fillPath(fill);
+                }
             }
         }
 
-        if (!started)
-            continue;
+        const auto strokeType = [](float w) {
+            return juce::PathStrokeType(w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        };
+
+        // Band baselines are perfectly straight (fixed frequency), so any
+        // always-on ground stroke reads as a grid across the floor. Only show
+        // the baseline as a hover/selection affordance.
+        if (hovered || selected)
+        {
+            g.setColour(sr::theme::axisFrame().withAlpha(hovered ? 0.58f : 0.44f));
+            g.strokePath(baseTrace.path, strokeType(hovered ? 2.2f : 1.7f));
+        }
 
         if (hovered || selected)
         {
-            g.setColour((selected ? juce::Colour(0xfffff6a2) : juce::Colour(0xffd9fff8)).withAlpha(0.24f));
-            g.strokePath(ridgeLine, juce::PathStrokeType(selected ? 7.0f : 5.0f));
+            g.setColour((selected ? sr::theme::selection() : sr::theme::hover()).withAlpha(0.24f));
+            g.strokePath(ridgeTrace.path, strokeType(selected ? 6.0f : 4.0f));
+            g.setColour((selected ? sr::theme::selection() : sr::theme::hover())
+                            .withAlpha(juce::jmin(1.0f, 0.72f + peakE * 0.2f)));
+            g.strokePath(ridgeTrace.path, strokeType(1.7f));
         }
-
-        g.setColour(juce::Colour(0xff22dba7).withAlpha(hovered ? 0.58f : (selected ? 0.44f : 0.20f)));
-        g.strokePath(baseLine, juce::PathStrokeType(hovered ? 2.2f : (selected ? 1.7f : 1.0f)));
-
-        g.setColour((selected ? juce::Colour(0xfffff3a0) : juce::Colour(0xff74fff0))
-                        .withAlpha(hovered ? 1.0f : (selected ? 0.82f : 0.62f)));
-        g.strokePath(ridgeLine, juce::PathStrokeType(hovered ? 3.2f : (selected ? 2.6f : 1.75f)));
+        else
+        {
+            sr::strokeGradientTrace(g, ridgeTrace, 1.2f, [](const sr::TraceStop& s) {
+                const float eVis = juce::jmin(1.0f, s.amp);
+                // Quiet stretches sit on the ground plane; fade them out so
+                // they don't draw straight lines across the floor.
+                const float gate = juce::jlimit(0.0f, 1.0f, (eVis - 0.03f) / 0.10f);
+                const float shade = juce::jlimit(0.0f, 1.0f, s.shade);
+                return sr::ampColour(eVis).withAlpha((0.30f + eVis * 0.58f) * gate * shade * s.fade);
+            });
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+namespace
+{
+// Sample every partial trace at each ascending slice time in one monotonic
+// sweep per trace (per-trace cursor), instead of rescanning every trace from
+// its first point for every slice: O(partials * (points + slices)) rather
+// than O(slices * partials * points). Returns per-slice (freqNorm, ampNorm)
+// samples. With fadeInactive, a segment with exactly one inactive endpoint
+// fades amplitude to 0 there (frequency held at the active endpoint) so dying
+// partials decay between slices instead of popping out; otherwise such
+// segments are skipped.
+static std::vector<std::vector<std::pair<float, float>>>
+sampleTracesAtSliceTimes(const AtsSpectralTraceSnapshot& snap,
+                         const std::vector<float>& sliceTimes,
+                         bool fadeInactive)
+{
+    std::vector<std::vector<std::pair<float, float>>> out(sliceTimes.size());
+
+    for (const auto& trace : snap.partials)
+    {
+        if (trace.points.size() < 2)
+            continue;
+
+        const float tFirst = trace.points.front().timeNorm;
+        const float tLast  = trace.points.back().timeNorm;
+        std::size_t pi = 1;
+
+        for (std::size_t si = 0; si < sliceTimes.size(); ++si)
+        {
+            const float timeNorm = sliceTimes[si];
+            if (timeNorm < tFirst)
+                continue;
+            if (timeNorm > tLast)
+                break;
+
+            while (pi < trace.points.size() && trace.points[pi].timeNorm < timeNorm)
+                ++pi;
+            if (pi >= trace.points.size())
+                break;
+
+            const auto& prev = trace.points[pi - 1];
+            const auto& cur  = trace.points[pi];
+            if (prev.timeNorm > timeNorm)
+                continue;
+
+            float ampAtTime  = 0.0f;
+            float freqAtTime = -1.0f;
+            const float span = cur.timeNorm - prev.timeNorm;
+            const float t = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
+
+            if (prev.active && cur.active)
+            {
+                ampAtTime  = prev.ampNorm  + t * (cur.ampNorm  - prev.ampNorm);
+                freqAtTime = prev.freqNorm + t * (cur.freqNorm - prev.freqNorm);
+            }
+            else if (fadeInactive && (prev.active || cur.active))
+            {
+                const float prevAmp = prev.active ? prev.ampNorm : 0.0f;
+                const float curAmp  = cur.active  ? cur.ampNorm  : 0.0f;
+                ampAtTime  = prevAmp + t * (curAmp - prevAmp);
+                freqAtTime = prev.active ? prev.freqNorm : cur.freqNorm;
+            }
+
+            if (ampAtTime > 0.0f && freqAtTime >= 0.0f)
+                out[si].push_back({ freqAtTime, ampAtTime });
+        }
+    }
+
+    return out;
+}
+
+// Three successive box blurs approximate a Gaussian (central limit theorem);
+// box widths per Kovesi's "Fast Almost-Gaussian Filtering". Each pass is O(n)
+// via a running sum, so total cost is independent of sigma — unlike per-sample
+// Gaussian splats, whose cost grows with both sample count and kernel width.
+static std::array<int, 3> boxRadiiForGauss(float sigma)
+{
+    const float wIdeal = std::sqrt(12.0f * sigma * sigma / 3.0f + 1.0f);
+    int wl = (int) wIdeal;
+    if (wl % 2 == 0)
+        --wl;
+    wl = std::max(1, wl);
+    const int wu = wl + 2;
+    const float mIdeal = (12.0f * sigma * sigma - 3.0f * (float) wl * (float) wl
+                          - 12.0f * (float) wl - 9.0f)
+                         / (-4.0f * (float) wl - 4.0f);
+    const int m = juce::jlimit(0, 3, (int) std::round(mIdeal));
+    std::array<int, 3> radii;
+    for (int i = 0; i < 3; ++i)
+        radii[static_cast<std::size_t>(i)] = ((i < m ? wl : wu) - 1) / 2;
+    return radii;
+}
+
+// Zero-padded box blur (mass beyond the edges is lost, matching the old
+// truncated-Gaussian splat behaviour at the frequency bounds).
+static void boxBlurInPlace(std::vector<float>& data, int radius, std::vector<float>& scratch)
+{
+    if (radius <= 0)
+        return;
+    const int n = (int) data.size();
+    scratch = data;
+    const float inv = 1.0f / (float) (2 * radius + 1);
+    float acc = 0.0f;
+    for (int i = 0; i <= std::min(radius, n - 1); ++i)
+        acc += scratch[static_cast<std::size_t>(i)];
+    for (int i = 0; i < n; ++i)
+    {
+        data[static_cast<std::size_t>(i)] = acc * inv;
+        const int add = i + radius + 1;
+        const int sub = i - radius;
+        if (add < n)
+            acc += scratch[static_cast<std::size_t>(add)];
+        if (sub >= 0)
+            acc -= scratch[static_cast<std::size_t>(sub)];
+    }
+}
+
+static std::vector<float> makeSliceTimes(juce::Range<float> timeRange, int count)
+{
+    std::vector<float> times(static_cast<std::size_t>(count));
+    for (int si = 0; si < count; ++si)
+        times[static_cast<std::size_t>(si)] =
+            timeRange.getStart() + timeRange.getLength() * (float) si / (float) (count - 1);
+    return times;
+}
+} // anonymous namespace
 
 // ---------------------------------------------------------------------------
 // Envelope surface helper — draws a smoothed spectral envelope waterfall from
@@ -1252,7 +1816,7 @@ void SpectrogramPanel::paintIsometricResidual(juce::Graphics& g, juce::Rectangle
 void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
                                             juce::Rectangle<float> plot,
                                             const AtsSpectralTraceSnapshot& snap,
-                                            juce::Colour colour,
+                                            juce::Colour (*ampToColour)(float),
                                             float alphaScale) const
 {
     if (snap.partials.empty())
@@ -1260,51 +1824,29 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
 
     const auto timeRange = visibleTimeRange();
     const auto freqRange = visibleFreqRange();
-    constexpr int   kSlices   = 40;    // time columns
+    constexpr int   kSlices   = 30;    // fewer, better-separated ribs (spec §3.2)
     constexpr int   kFreqBins = 128;   // freq resolution per slice
-    constexpr float kSigma    = 6.5f;  // wider Gaussian → smoother envelope
+    constexpr float kSigma    = 7.5f;  // wider Gaussian → smoother envelope
     constexpr int   kTaperBins = 14;   // wider fade-in/out → no steep box edges
 
-
-    // Pre-build all slice paths so we can do clearance + colour in two passes.
-    struct SliceData { juce::Path path; float depthAlpha; };
-    std::vector<SliceData> slices;
+    std::vector<ats_spectrum::RidgeSlice> slices;
     slices.reserve(static_cast<std::size_t>(kSlices));
+
+    const auto sliceTimes = makeSliceTimes(timeRange, kSlices);
+    const auto sliceSamples = sampleTracesAtSliceTimes(snap, sliceTimes, true);
+
+    std::vector<float> sumW, sumWA, blurScratch;
 
     for (int si = 0; si < kSlices; ++si)
     {
-        const float timeNorm = timeRange.getStart()
-                               + timeRange.getLength() * (float) si / (float) (kSlices - 1);
+        const float timeNorm = sliceTimes[static_cast<std::size_t>(si)];
 
-        // Collect (visFreqNorm, ampNorm) for every active partial at this time.
+        // Map (freqNorm, ampNorm) samples to visible-range coordinates.
         std::vector<std::pair<float, float>> samples;
-        samples.reserve(snap.partials.size());
+        samples.reserve(sliceSamples[static_cast<std::size_t>(si)].size());
 
-        for (const auto& trace : snap.partials)
+        for (const auto& [freqAtTime, ampAtTime] : sliceSamples[static_cast<std::size_t>(si)])
         {
-            float ampAtTime  = 0.0f;
-            float freqAtTime = -1.0f;
-
-            for (std::size_t pi = 1; pi < trace.points.size(); ++pi)
-            {
-                const auto& prev = trace.points[pi - 1];
-                const auto& cur  = trace.points[pi];
-                if (cur.timeNorm < timeNorm)
-                    continue;
-                if (prev.timeNorm > timeNorm)
-                    break;
-                if (!prev.active || !cur.active)
-                    continue;
-                const float span = cur.timeNorm - prev.timeNorm;
-                const float t = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
-                ampAtTime  = prev.ampNorm  + t * (cur.ampNorm  - prev.ampNorm);
-                freqAtTime = prev.freqNorm + t * (cur.freqNorm - prev.freqNorm);
-                break;
-            }
-
-            if (ampAtTime <= 0.0f || freqAtTime < 0.0f)
-                continue;
-
             const float fVis = (freqAtTime - freqRange.getStart())
                                / juce::jmax(1.0e-6f, freqRange.getLength());
             if (fVis >= -0.1f && fVis <= 1.1f)
@@ -1315,28 +1857,48 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
             continue;
 
         // Gaussian kernel regression — wider sigma fills harmonic gaps smoothly.
-        std::vector<float> sumW (static_cast<std::size_t>(kFreqBins), 0.0f);
-        std::vector<float> sumWA(static_cast<std::size_t>(kFreqBins), 0.0f);
+        // Sparse frames (late in a decaying sound) widen the kernel so isolated
+        // survivors merge into a smooth ridge instead of plateau/step artifacts.
+        constexpr float kRefCount = 24.0f;
+        const float density = juce::jlimit(0.08f, 1.0f, (float) samples.size() / kRefCount);
+        const float effSigma = kSigma / std::sqrt(density);
 
+        // Scatter each sample into its two neighbouring bins, then blur both
+        // accumulators with the same Gaussian-approximating box passes. The
+        // Nadaraya-Watson ratio sumWA/sumW is preserved because both arrays
+        // see the identical kernel. Each sample carries mass sigma*sqrt(2pi)
+        // (the integral of the old unit-peak Gaussian splat) so sumW keeps the
+        // same scale relative to kPriorW as before.
+        sumW .assign(static_cast<std::size_t>(kFreqBins), 0.0f);
+        sumWA.assign(static_cast<std::size_t>(kFreqBins), 0.0f);
+
+        const float mass = effSigma * std::sqrt(juce::MathConstants<float>::twoPi);
         for (const auto& [fVis, amp] : samples)
         {
-            const float binF = juce::jlimit(-0.5f, kFreqBins - 0.5f, fVis * kFreqBins);
-            const int lo = juce::jmax(0, (int) (binF - 4.0f * kSigma));
-            const int hi = juce::jmin(kFreqBins - 1, (int) (binF + 4.0f * kSigma) + 1);
-            for (int b = lo; b <= hi; ++b)
-            {
-                const float dist = (float) b - binF;
-                const float w = std::exp(-0.5f * dist * dist / (kSigma * kSigma));
-                sumW [static_cast<std::size_t>(b)] += w;
-                sumWA[static_cast<std::size_t>(b)] += w * amp;
-            }
+            const float binF = juce::jlimit(0.0f, (float) (kFreqBins - 1), fVis * kFreqBins);
+            const int   b0   = juce::jmin((int) binF, kFreqBins - 2);
+            const float frac = binF - (float) b0;
+            sumW [static_cast<std::size_t>(b0)]     += mass * (1.0f - frac);
+            sumWA[static_cast<std::size_t>(b0)]     += mass * (1.0f - frac) * amp;
+            sumW [static_cast<std::size_t>(b0 + 1)] += mass * frac;
+            sumWA[static_cast<std::size_t>(b0 + 1)] += mass * frac * amp;
+        }
+
+        for (const int r : boxRadiiForGauss(effSigma))
+        {
+            boxBlurInPlace(sumW,  r, blurScratch);
+            boxBlurInPlace(sumWA, r, blurScratch);
         }
 
         // Cosine taper over wider edge region → gentler slopes, no box silhouette.
+        // The zero-prior in the denominator makes the estimate decay smoothly to
+        // the floor as kernel weight thins out; a bare sumWA/sumW would hold the
+        // nearest sample's amplitude as a flat plateau and then cliff to 0 at the
+        // 4-sigma truncation boundary.
+        constexpr float kPriorW = 0.02f;
         auto getAmpN = [&](int b) -> float {
-            if (sumW[static_cast<std::size_t>(b)] <= 1.0e-6f)
-                return 0.0f;
-            float val = sumWA[static_cast<std::size_t>(b)] / sumW[static_cast<std::size_t>(b)];
+            float val = sumWA[static_cast<std::size_t>(b)]
+                        / (sumW[static_cast<std::size_t>(b)] + kPriorW);
             const int edgeDist = std::min(b, kFreqBins - 1 - b);
             if (edgeDist < kTaperBins)
             {
@@ -1349,6 +1911,7 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
         // Draw the full frequency span — the cosine taper already decays the
         // edges to exactly 0, so there is no box-outline silhouette.
         juce::Path topPath;
+        std::vector<ats_spectrum::TraceStop> stops;
         for (int b = 0; b < kFreqBins; ++b)
         {
             const float ampN  = getAmpN(b);
@@ -1359,31 +1922,25 @@ void SpectrogramPanel::paintEnvelopeSurface(juce::Graphics& g,
                 topPath.startNewSubPath(pt);
             else
                 topPath.lineTo(pt);
+
+            const float prop = (float) b / (float) (kFreqBins - 1);
+            if (b == 0 || b == kFreqBins - 1 || std::abs(ampN - stops.back().amp) >= 0.02f)
+                stops.push_back({ prop, ampN, 1.0f, 1.0f });
         }
 
         if (topPath.isEmpty())
             continue;
 
-        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
-        slices.push_back({ std::move(topPath), depthAlpha });
+        ats_spectrum::RidgeSlice slice;
+        slice.top = std::move(topPath);
+        slice.floorStart = positionForIsoCoords(timeNorm, freqRange.getStart(), 0.0f, plot);
+        slice.floorEnd = positionForIsoCoords(timeNorm, freqRange.getEnd(), 0.0f, plot);
+        slice.depth = (float) si / (float) (kSlices - 1);
+        slice.stops = std::move(stops);
+        slices.push_back(std::move(slice));
     }
 
-    // Painter's algorithm: two passes back-to-front.
-    // Pass 1 — thick near-black clearance stroke so front slices occlude back slices.
-    const juce::Colour clearCol = juce::Colour(0xff050a0e);
-    for (const auto& s : slices)
-        g.setColour(clearCol.withAlpha(s.depthAlpha * 0.92f)),
-        g.strokePath(s.path, juce::PathStrokeType(4.5f));
-
-    // Pass 2 — glow + crisp coloured line.
-    for (const auto& s : slices)
-    {
-        const juce::Colour lineCol = colour.withAlpha(s.depthAlpha * alphaScale);
-        g.setColour(lineCol.withAlpha(lineCol.getFloatAlpha() * 0.25f));
-        g.strokePath(s.path, juce::PathStrokeType(3.5f));
-        g.setColour(lineCol);
-        g.strokePath(s.path, juce::PathStrokeType(1.5f));
-    }
+    ats_spectrum::drawRidgeSlices(g, slices, alphaScale, ampToColour);
 }
 
 void SpectrogramPanel::paintEnvelopeRangeSelection(juce::Graphics& g, juce::Rectangle<float> plot) const
@@ -1472,12 +2029,20 @@ void SpectrogramPanel::paintEnvelopeRangeSelection(juce::Graphics& g, juce::Rect
 
 void SpectrogramPanel::paintIsometricEnvelope(juce::Graphics& g, juce::Rectangle<float> plot)
 {
-    // Draw secondary source first (behind primary).
+    // Draw secondary source first (behind primary). Source B keeps a distinct
+    // purple->orange ramp so an A+B overlay stays readable; both ramps are
+    // driven by amplitude.
     if (envSourceBBtn.getToggleState() && !secondarySnapshot.partials.empty())
-        paintEnvelopeSurface(g, plot, secondarySnapshot, juce::Colour(0xffd08030), 0.85f);
+        paintEnvelopeSurface(g, plot, secondarySnapshot,
+                             [](float a) {
+                                 return juce::Colour(0xff8a2f8e)
+                                     .interpolatedWith(juce::Colour(0xffe8a04a),
+                                                       juce::jlimit(0.0f, 1.0f, a));
+                             },
+                             0.75f);
 
     if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
-        paintEnvelopeSurface(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+        paintEnvelopeSurface(g, plot, traceSnapshot, ats_spectrum::ampColour, 1.0f);
 
     paintEnvelopeRangeSelection(g, plot);
 }
@@ -1500,12 +2065,22 @@ static float barkNorm(float hz, float minHz, float maxHz)
 }
 
 // Cosine basis row: [1, 2cos(π·pos), 2cos(2π·pos), ..., 2cos(order·π·pos)].
+// cos(kθ) via the Chebyshev recurrence cos((k+1)θ) = 2cosθ·cos(kθ) − cos((k−1)θ):
+// one std::cos call per row instead of one per coefficient.
 static void buildBasisRow(float pos, int order, float* row)
 {
     row[0] = 1.0f;
     const float theta = juce::MathConstants<float>::pi * juce::jlimit(0.0f, 1.0f, pos);
+    const float c1 = std::cos(theta);
+    float ckm1 = 1.0f; // cos(0·θ)
+    float ck   = c1;   // cos(1·θ)
     for (int k = 1; k <= order; ++k)
-        row[k] = 2.0f * std::cos((float) k * theta);
+    {
+        row[k] = 2.0f * ck;
+        const float next = 2.0f * c1 * ck - ckm1;
+        ckm1 = ck;
+        ck   = next;
+    }
 }
 
 // Gaussian elimination with partial pivoting for a small n×n system.
@@ -1577,17 +2152,6 @@ static bool fitRDC(const std::vector<std::pair<float, float>>& pts,
     return solveGaussian(n, A, rhs, coeffs);
 }
 
-// Evaluate fitted RDC envelope at barkPos.
-static float evalRDC(float barkPos, const float* coeffs, int order)
-{
-    constexpr int kMaxN = 16;
-    float row[kMaxN];
-    buildBasisRow(barkPos, order, row);
-    float val = 0.0f;
-    for (int k = 0; k <= order; ++k)
-        val += coeffs[k] * row[k];
-    return val;
-}
 } // namespace rdcDisplay
 } // anonymous namespace
 
@@ -1595,9 +2159,15 @@ static float evalRDC(float barkPos, const float* coeffs, int order)
 void SpectrogramPanel::paintIsometricEnvelopeRDC(juce::Graphics& g, juce::Rectangle<float> plot)
 {
     if (envSourceBBtn.getToggleState() && !secondarySnapshot.partials.empty())
-        paintEnvelopeSurfaceRDC(g, plot, secondarySnapshot, juce::Colour(0xffd08030), 0.85f);
+        paintEnvelopeSurfaceRDC(g, plot, secondarySnapshot,
+                                [](float a) {
+                                    return juce::Colour(0xff8a2f8e)
+                                        .interpolatedWith(juce::Colour(0xffe8a04a),
+                                                          juce::jlimit(0.0f, 1.0f, a));
+                                },
+                                0.75f);
     if (envSourceABtn.getToggleState() && !traceSnapshot.partials.empty())
-        paintEnvelopeSurfaceRDC(g, plot, traceSnapshot, juce::Colour(0xff4090d0), 1.0f);
+        paintEnvelopeSurfaceRDC(g, plot, traceSnapshot, ats_spectrum::ampColour, 1.0f);
 
     paintEnvelopeRangeSelection(g, plot);
 }
@@ -1609,7 +2179,7 @@ void SpectrogramPanel::paintIsometricEnvelopeRDC(juce::Graphics& g, juce::Rectan
 void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
                                                juce::Rectangle<float> plot,
                                                const AtsSpectralTraceSnapshot& snap,
-                                               juce::Colour colour,
+                                               juce::Colour (*ampToColour)(float),
                                                float alphaScale) const
 {
     if (snap.partials.empty())
@@ -1617,7 +2187,7 @@ void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
 
     const auto timeRange = visibleTimeRange();
     const auto freqRange = visibleFreqRange();
-    constexpr int   kSlices    = 40;
+    constexpr int   kSlices    = 30;
     constexpr int   kGridSize  = 128;
     constexpr int   kOrder     = 10;       // cosine series order
     constexpr float kReg       = 8.0e-3f;  // second-derivative Tikhonov lambda
@@ -1636,44 +2206,40 @@ void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
         return minHz * std::exp(fn * logRange);
     };
 
-    // Pre-build all slice paths for painter's algorithm (back-to-front two-pass draw).
-    struct SliceData { juce::Path path; float depthAlpha; };
-    std::vector<SliceData> slices;
+    // The evaluation grid is identical for every slice — precompute each grid
+    // point's freqNorm and cosine basis row once per rebuild, so the per-slice
+    // evaluation reduces to a dot product against the fitted coefficients.
+    std::vector<float> gridFreqN(static_cast<std::size_t>(kGridSize));
+    std::vector<float> gridBasis(static_cast<std::size_t>(kGridSize * (kOrder + 1)));
+    for (int b = 0; b < kGridSize; ++b)
+    {
+        const float freqN = freqRange.getStart()
+                            + freqRange.getLength() * (float) b / (float) (kGridSize - 1);
+        gridFreqN[static_cast<std::size_t>(b)] = freqN;
+        const float barkPos = rdcDisplay::barkNorm(freqNormToHz(freqN), minHz, maxHz);
+        rdcDisplay::buildBasisRow(barkPos, kOrder,
+                                  &gridBasis[static_cast<std::size_t>(b * (kOrder + 1))]);
+    }
+
+    // Pre-build all slice paths for painter's algorithm (back-to-front draw).
+    std::vector<ats_spectrum::RidgeSlice> slices;
     slices.reserve(static_cast<std::size_t>(kSlices));
+
+    const auto sliceTimes = makeSliceTimes(timeRange, kSlices);
+    const auto sliceSamples = sampleTracesAtSliceTimes(snap, sliceTimes, false);
 
     for (int si = 0; si < kSlices; ++si)
     {
-        const float timeNorm = timeRange.getStart()
-                               + timeRange.getLength() * (float) si / (float) (kSlices - 1);
+        const float timeNorm = sliceTimes[static_cast<std::size_t>(si)];
 
-        // Collect (barkPos, dB, weight) from all active partials at this time.
+        // Map (freqNorm, ampNorm) samples to (barkPos, dB, weight) fit points.
         std::vector<std::pair<float, float>> fitPts;
         std::vector<float> fitWeights;
-        fitPts.reserve(snap.partials.size());
-        fitWeights.reserve(snap.partials.size());
+        fitPts.reserve(sliceSamples[static_cast<std::size_t>(si)].size());
+        fitWeights.reserve(sliceSamples[static_cast<std::size_t>(si)].size());
 
-        for (const auto& trace : snap.partials)
+        for (const auto& [freqAtTime, ampAtTime] : sliceSamples[static_cast<std::size_t>(si)])
         {
-            float ampAtTime  = 0.0f;
-            float freqAtTime = -1.0f;
-
-            for (std::size_t pi = 1; pi < trace.points.size(); ++pi)
-            {
-                const auto& prev = trace.points[pi - 1];
-                const auto& cur  = trace.points[pi];
-                if (cur.timeNorm < timeNorm)  continue;
-                if (prev.timeNorm > timeNorm) break;
-                if (!prev.active || !cur.active) continue;
-                const float span = cur.timeNorm - prev.timeNorm;
-                const float t = span > 1.0e-6f ? (timeNorm - prev.timeNorm) / span : 0.0f;
-                ampAtTime  = prev.ampNorm  + t * (cur.ampNorm  - prev.ampNorm);
-                freqAtTime = prev.freqNorm + t * (cur.freqNorm - prev.freqNorm);
-                break;
-            }
-
-            if (ampAtTime <= 0.0f || freqAtTime < 0.0f)
-                continue;
-
             const float hz      = freqNormToHz(freqAtTime);
             const float barkPos = rdcDisplay::barkNorm(hz, minHz, maxHz);
             const float dB      = kMinDb + ampAtTime * kDbRange;
@@ -1693,13 +2259,14 @@ void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
         // Evaluate RDC on a dense grid spanning the visible frequency range.
         // Draw the full span — the cosine taper decays edges to 0, avoiding box silhouettes.
         juce::Path topPath;
+        std::vector<ats_spectrum::TraceStop> stops;
         for (int b = 0; b < kGridSize; ++b)
         {
-            const float freqN   = freqRange.getStart()
-                                  + freqRange.getLength() * (float) b / (float) (kGridSize - 1);
-            const float hz      = freqNormToHz(freqN);
-            const float barkPos = rdcDisplay::barkNorm(hz, minHz, maxHz);
-            const float rawDb   = rdcDisplay::evalRDC(barkPos, coeffs, effOrder);
+            const float freqN = gridFreqN[static_cast<std::size_t>(b)];
+            const float* row  = &gridBasis[static_cast<std::size_t>(b * (kOrder + 1))];
+            float rawDb = 0.0f;
+            for (int k = 0; k <= effOrder; ++k)
+                rawDb += coeffs[k] * row[k];
             float ampN = juce::jlimit(0.0f, 1.0f, (rawDb - kMinDb) / kDbRange);
 
             // Wider cosine edge taper → smooth fade at frequency boundaries.
@@ -1715,31 +2282,25 @@ void SpectrogramPanel::paintEnvelopeSurfaceRDC(juce::Graphics& g,
                 topPath.startNewSubPath(pt);
             else
                 topPath.lineTo(pt);
+
+            const float prop = (float) b / (float) (kGridSize - 1);
+            if (b == 0 || b == kGridSize - 1 || std::abs(ampN - stops.back().amp) >= 0.02f)
+                stops.push_back({ prop, ampN, 1.0f, 1.0f });
         }
 
         if (topPath.isEmpty())
             continue;
 
-        const float depthAlpha = 0.35f + 0.65f * (float) si / (float) (kSlices - 1);
-        slices.push_back({ std::move(topPath), depthAlpha });
+        ats_spectrum::RidgeSlice slice;
+        slice.top = std::move(topPath);
+        slice.floorStart = positionForIsoCoords(timeNorm, freqRange.getStart(), 0.0f, plot);
+        slice.floorEnd = positionForIsoCoords(timeNorm, freqRange.getEnd(), 0.0f, plot);
+        slice.depth = (float) si / (float) (kSlices - 1);
+        slice.stops = std::move(stops);
+        slices.push_back(std::move(slice));
     }
 
-    // Painter's algorithm: two passes back-to-front.
-    // Pass 1 — thick near-black clearance stroke so front slices occlude back slices.
-    const juce::Colour clearCol = juce::Colour(0xff050a0e);
-    for (const auto& s : slices)
-        g.setColour(clearCol.withAlpha(s.depthAlpha * 0.92f)),
-        g.strokePath(s.path, juce::PathStrokeType(4.5f));
-
-    // Pass 2 — glow + crisp coloured line.
-    for (const auto& s : slices)
-    {
-        const juce::Colour lineCol = colour.withAlpha(s.depthAlpha * alphaScale);
-        g.setColour(lineCol.withAlpha(lineCol.getFloatAlpha() * 0.25f));
-        g.strokePath(s.path, juce::PathStrokeType(3.5f));
-        g.setColour(lineCol);
-        g.strokePath(s.path, juce::PathStrokeType(1.5f));
-    }
+    ats_spectrum::drawRidgeSlices(g, slices, alphaScale, ampToColour);
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,13 +2566,20 @@ void SpectrogramPanel::paintPlanarPlaybackPlayhead(juce::Graphics& g,
     const float y0 = plot.getY();
     const float y1 = plot.getBottom();
 
+    const auto ph = ats_spectrum::theme::playhead();
+
+    // Trailing wake: fades in over ~24 px behind the leading edge (spec §3.5).
+    const float wakeW = 24.0f;
+    juce::ColourGradient wake(ph.withAlpha(0.0f), { x - wakeW, y0 },
+                              ph.withAlpha(0.14f), { x, y0 }, false);
+    g.setGradientFill(wake);
+    g.fillRect(juce::Rectangle<float>(x - wakeW, y0, wakeW, y1 - y0));
+
     const auto line = juce::Line<float>({ x, y0 }, { x, y1 });
-    g.setColour(juce::Colour(0x28cffff6));
-    g.drawLine(line, 6.0f);
-    g.setColour(juce::Colour(0x74cffff6));
+    g.setColour(ph.withAlpha(0.45f));
     g.drawLine(line, 2.6f);
-    g.setColour(juce::Colour(0xfff3ffb2));
-    g.drawLine(line, 1.15f);
+    g.setColour(ph);
+    g.drawLine(line, 1.1f);
 
     const float headW = 7.0f;
     juce::Path head;
@@ -2019,7 +2587,7 @@ void SpectrogramPanel::paintPlanarPlaybackPlayhead(juce::Graphics& g,
     head.lineTo(x + headW * 0.5f, y0 + 1.0f);
     head.lineTo(x, y0 + 8.5f);
     head.closeSubPath();
-    g.setColour(juce::Colour(0xfff3ffb2).withAlpha(0.88f));
+    g.setColour(ph.withAlpha(0.88f));
     g.fillPath(head);
 }
 
@@ -2035,91 +2603,47 @@ void SpectrogramPanel::paintIsometricPlaybackPlayhead(juce::Graphics& g,
         return;
     }
 
-    constexpr float topAmp = 1.12f;
+    // Subtle floor marker: a faint line across the ground plane at the
+    // playhead time, with a short trailing wake fading out behind it.
     const float frontFreq = freqRange.getStart();
     const float backFreq = freqRange.getEnd();
-    const float halfDepth = timeRange.getLength() * 0.04f;
-    const float t0 = juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth);
-    const float t1 = juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth);
 
-    const auto frontCentreBase = positionForIsoCoords(playheadNorm, frontFreq, 0.0f, plot);
-    const auto frontCentreTop = positionForIsoCoords(playheadNorm, frontFreq, topAmp, plot);
-    const auto backCentreBase = positionForIsoCoords(playheadNorm, backFreq, 0.0f, plot);
-    const auto backCentreTop = positionForIsoCoords(playheadNorm, backFreq, topAmp, plot);
-    const auto frontCentreMid = positionForIsoCoords(playheadNorm, frontFreq, topAmp * 0.52f, plot);
-    const auto backCentreMid = positionForIsoCoords(playheadNorm, backFreq, topAmp * 0.52f, plot);
+    const auto frontBase = positionForIsoCoords(playheadNorm, frontFreq, 0.0f, plot);
+    const auto backBase = positionForIsoCoords(playheadNorm, backFreq, 0.0f, plot);
 
-    juce::Path scanPlane;
-    scanPlane.startNewSubPath(frontCentreBase);
-    scanPlane.lineTo(backCentreBase);
-    scanPlane.lineTo(backCentreTop);
-    scanPlane.lineTo(frontCentreTop);
-    scanPlane.closeSubPath();
+    const auto ph = ats_spectrum::theme::playhead();
 
-    g.setColour(juce::Colour(0x12f3ffb2));
-    g.fillPath(scanPlane);
+    const float wakeDepth = timeRange.getLength() * 0.03f;
+    const float tWake = juce::jlimit(0.0f, 1.0f, playheadNorm - wakeDepth);
+    if (tWake < playheadNorm)
+    {
+        const auto frontWake = positionForIsoCoords(tWake, frontFreq, 0.0f, plot);
+        const auto backWake = positionForIsoCoords(tWake, backFreq, 0.0f, plot);
 
-    auto drawGlow = [&g](juce::Point<float> a, juce::Point<float> b, float coreAlpha) {
-        const auto line = juce::Line<float>(a, b);
-        g.setColour(juce::Colour(0x36cffff6));
-        g.drawLine(line, 7.0f);
-        g.setColour(juce::Colour(0x88cffff6));
-        g.drawLine(line, 3.0f);
-        g.setColour(juce::Colour(0xfff3ffb2).withAlpha(coreAlpha));
-        g.drawLine(line, 1.25f);
-    };
+        juce::Path wake;
+        wake.startNewSubPath(frontWake);
+        wake.lineTo(backWake);
+        wake.lineTo(backBase);
+        wake.lineTo(frontBase);
+        wake.closeSubPath();
 
-    auto drawDepthMarker = [&](float freqNorm, float alphaScale) {
-        const auto baseStart = positionForIsoCoords(t0, freqNorm, 0.0f, plot);
-        const auto baseEnd = positionForIsoCoords(t1, freqNorm, 0.0f, plot);
-        const auto topStart = positionForIsoCoords(t0, freqNorm, topAmp, plot);
-        const auto topEnd = positionForIsoCoords(t1, freqNorm, topAmp, plot);
-        const auto centreBase = positionForIsoCoords(playheadNorm, freqNorm, 0.0f, plot);
-        const auto centreTop = positionForIsoCoords(playheadNorm, freqNorm, topAmp, plot);
+        juce::ColourGradient wakeGrad(ph.withAlpha(0.0f),
+                                      (frontWake + backWake) * 0.5f,
+                                      ph.withAlpha(0.07f),
+                                      (frontBase + backBase) * 0.5f,
+                                      false);
+        g.setGradientFill(wakeGrad);
+        g.fillPath(wake);
+    }
 
-        juce::Path depthRibbon;
-        depthRibbon.startNewSubPath(baseStart);
-        depthRibbon.lineTo(baseEnd);
-        depthRibbon.lineTo(topEnd);
-        depthRibbon.lineTo(topStart);
-        depthRibbon.closeSubPath();
+    const auto line = juce::Line<float>(frontBase, backBase);
+    g.setColour(ph.withAlpha(0.10f));
+    g.drawLine(line, 3.4f);
+    g.setColour(ph.withAlpha(0.42f));
+    g.drawLine(line, 1.1f);
 
-        g.setColour(juce::Colour(0x18f3ffb2).withMultipliedAlpha(alphaScale));
-        g.fillPath(depthRibbon);
-
-        drawGlow(baseStart, baseEnd, 0.95f * alphaScale);
-        drawGlow(topStart, topEnd, 0.68f * alphaScale);
-        drawGlow(centreBase, centreTop, 0.94f * alphaScale);
-
-        juce::Path head;
-        const auto headBack = positionForIsoCoords(juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth * 0.42f),
-                                                   freqNorm,
-                                                   topAmp,
-                                                   plot);
-        const auto headFront = positionForIsoCoords(juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth * 0.42f),
-                                                    freqNorm,
-                                                    topAmp,
-                                                    plot);
-        const auto headTip = positionForIsoCoords(playheadNorm, freqNorm, topAmp + 0.16f, plot);
-        head.startNewSubPath(headBack);
-        head.lineTo(headFront);
-        head.lineTo(headTip);
-        head.closeSubPath();
-        g.setColour(juce::Colour(0xfff3ffb2).withAlpha(0.78f * alphaScale));
-        g.fillPath(head);
-    };
-
-    drawDepthMarker(backFreq, 0.82f);
-    drawDepthMarker(frontFreq, 1.0f);
-
-    drawGlow(frontCentreBase, backCentreBase, 0.82f);
-    drawGlow(frontCentreTop, backCentreTop, 0.56f);
-
-    const auto throughLine = juce::Line<float>(frontCentreMid, backCentreMid);
-    g.setColour(juce::Colour(0x99f3ffb2));
-    g.drawLine(throughLine, 6.0f);
-    g.setColour(juce::Colour(0xfffff3b2));
-    g.drawLine(throughLine, 2.2f);
+    g.setColour(ph.withAlpha(0.70f));
+    g.fillEllipse(frontBase.x - 2.0f, frontBase.y - 2.0f, 4.0f, 4.0f);
 }
 
 void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<float> plot) const
@@ -2130,19 +2654,20 @@ void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<f
     if (traceSnapshot.onsets.empty() && traceSnapshot.smearnovDetectionCurve.empty())
         return;
 
+    // Onset markers only appear while editing them; as a passive overlay they
+    // tiled the whole view with columns and buried the partial data.
+    const bool onsetEditActive = onsetEditButton.getToggleState();
+    if (!onsetEditActive)
+        return;
+
     g.saveState();
     g.reduceClipRegion(plot.toNearestInt());
 
-    // When onset editing is off the markers are click-through; dim them so they read as a
-    // passive reference and let the partial/residual data underneath stay legible.
-    const bool onsetEditActive = onsetEditButton.getToggleState();
-    if (!onsetEditActive)
-        g.beginTransparencyLayer(0.4f);
-
+    // Desaturated amber so passive markers recede behind the teal partial data.
     const auto spanColour = isResidualDisplayMode(mode) ? juce::Colour(0xff74fff0)
-                                                        : juce::Colour(0xfffff3a0);
+                                                        : juce::Colour(0xffcfb87a);
     const auto markerColour = isResidualDisplayMode(mode) ? juce::Colour(0xffbaffea)
-                                                          : juce::Colour(0xfffff3a0);
+                                                          : juce::Colour(0xffd8c489);
 
     double maxStrength = 0.0;
     for (const auto& onset : traceSnapshot.onsets)
@@ -2232,9 +2757,6 @@ void SpectrogramPanel::paintSmearnovOverlay(juce::Graphics& g, juce::Rectangle<f
         g.fillPath(topHead);
         g.fillPath(bottomHead);
     }
-
-    if (!onsetEditActive)
-        g.endTransparencyLayer();
 
     g.restoreState();
 }
@@ -2349,9 +2871,10 @@ juce::Rectangle<int> SpectrogramPanel::playheadPaintBounds(juce::Rectangle<float
             return {};
 
         const float x = plot.getX() + plot.getWidth() * xNorm;
-        return juce::Rectangle<float>(x - 14.0f,
+        // Left-expanded to cover the trailing wake gradient.
+        return juce::Rectangle<float>(x - 40.0f,
                                       plot.getY() - 14.0f,
-                                      28.0f,
+                                      54.0f,
                                       plot.getHeight() + 28.0f)
             .getSmallestIntegerContainer();
     }
@@ -2364,26 +2887,16 @@ juce::Rectangle<int> SpectrogramPanel::playheadPaintBounds(juce::Rectangle<float
     }
 
     const auto freqRange = visibleFreqRange();
-    constexpr float topAmp = 1.30f;
     const float frontFreq = freqRange.getStart();
     const float backFreq = freqRange.getEnd();
-    const float halfDepth = timeRange.getLength() * 0.055f;
-    const float t0 = juce::jlimit(0.0f, 1.0f, playheadNorm - halfDepth);
-    const float t1 = juce::jlimit(0.0f, 1.0f, playheadNorm + halfDepth);
+    const float wakeDepth = timeRange.getLength() * 0.05f;
+    const float t0 = juce::jlimit(0.0f, 1.0f, playheadNorm - wakeDepth);
 
-    std::array<juce::Point<float>, 12> points {
+    std::array<juce::Point<float>, 4> points {
         positionForIsoCoords(t0, frontFreq, 0.0f, plot),
-        positionForIsoCoords(t1, frontFreq, 0.0f, plot),
-        positionForIsoCoords(t0, frontFreq, topAmp, plot),
-        positionForIsoCoords(t1, frontFreq, topAmp, plot),
-        positionForIsoCoords(playheadNorm, frontFreq, topAmp + 0.16f, plot),
-        positionForIsoCoords(playheadNorm, frontFreq, topAmp * 0.52f, plot),
+        positionForIsoCoords(playheadNorm, frontFreq, 0.0f, plot),
         positionForIsoCoords(t0, backFreq, 0.0f, plot),
-        positionForIsoCoords(t1, backFreq, 0.0f, plot),
-        positionForIsoCoords(t0, backFreq, topAmp, plot),
-        positionForIsoCoords(t1, backFreq, topAmp, plot),
-        positionForIsoCoords(playheadNorm, backFreq, topAmp + 0.16f, plot),
-        positionForIsoCoords(playheadNorm, backFreq, topAmp * 0.52f, plot),
+        positionForIsoCoords(playheadNorm, backFreq, 0.0f, plot),
     };
 
     juce::Rectangle<float> bounds(points.front().x, points.front().y, 1.0f, 1.0f);
@@ -3325,9 +3838,17 @@ void SpectrogramPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::Mou
     if (! plot.contains(e.position))
         return;
 
-    if (wheel.deltaY != 0.0f)
+    // Pinch gestures arrive through mouseMagnify(). Keep modified wheel input as
+    // a zoom fallback for mice/hosts that cannot report magnification gestures.
+    if (e.mods.isCommandDown() || e.mods.isCtrlDown())
     {
-        const float factor = std::pow(1.12f, wheel.deltaY);
+        const float zoomDelta = std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
+                                    ? wheel.deltaY
+                                    : wheel.deltaX;
+        if (zoomDelta == 0.0f)
+            return;
+
+        const float factor = std::pow(1.12f, zoomDelta);
         if (e.mods.isShiftDown())
             applyZoomAtScreenPoint(e.position, factor, 1.0f);
         else if (e.mods.isAltDown())
@@ -3337,8 +3858,47 @@ void SpectrogramPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::Mou
         return;
     }
 
-    if (wheel.deltaX != 0.0f && timeZoom > 1.0f)
-        panView(-wheel.deltaX * 0.04f / timeZoom, 0.0f);
+    float scrollX = wheel.deltaX;
+    float scrollY = wheel.deltaY;
+    const bool isometric = isIsometricDisplayMode(mode);
+    const bool canPanHorizontally = isometric ? freqZoom > 1.001f : timeZoom > 1.001f;
+    const bool canPanVertically = isometric ? timeZoom > 1.001f : freqZoom > 1.001f;
+
+    // Shift-wheel is the conventional horizontal-scroll fallback for mice that
+    // only provide a vertical wheel. If just one viewport axis is zoomed, let
+    // either wheel axis traverse it, as JUCE Viewport does.
+    if (e.mods.isShiftDown() && scrollX == 0.0f)
+    {
+        scrollX = scrollY;
+        scrollY = 0.0f;
+    }
+    else if (canPanHorizontally && !canPanVertically && scrollX == 0.0f)
+    {
+        scrollX = scrollY;
+        scrollY = 0.0f;
+    }
+    else if (!canPanHorizontally && canPanVertically && scrollY == 0.0f)
+    {
+        scrollY = scrollX;
+        scrollX = 0.0f;
+    }
+
+    const float screenDeltaX = scrollX * kWheelPanPixelsPerDelta;
+    const float screenDeltaY = scrollY * kWheelPanPixelsPerDelta;
+    const auto timeRange = visibleTimeRange();
+    const auto freqRange = visibleFreqRange();
+
+    if (isometric)
+    {
+        // Isometric views expose frequency on screen X and time on screen Y.
+        panView(screenDeltaY / plot.getHeight() * timeRange.getLength(),
+                -screenDeltaX / plot.getWidth() * freqRange.getLength());
+    }
+    else
+    {
+        panView(-screenDeltaX / plot.getWidth() * timeRange.getLength(),
+                screenDeltaY / plot.getHeight() * freqRange.getLength());
+    }
 }
 
 void SpectrogramPanel::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
@@ -3591,7 +4151,7 @@ void SpectrogramPanel::deleteSelectedPartials()
     if (!processor.mutePartials(traceSource, selectedPartials, error))
     {
         if (error.isNotEmpty())
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete partials", error);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete partials", error);
         return;
     }
 
@@ -3612,7 +4172,7 @@ void SpectrogramPanel::deleteSelectedResidual()
                                      error))
     {
         if (error.isNotEmpty())
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete residual", error);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Delete residual", error);
         return;
     }
 
@@ -3760,19 +4320,23 @@ juce::Rectangle<float> SpectrogramPanel::getScreenBounds() const
 
 bool SpectrogramPanel::showsBandLabelGutter() const
 {
-    return isResidualDisplayMode(mode) && traceSnapshot.frameCount > 0 && !traceSnapshot.residualBands.empty();
+    // Iso residual labels its floor edges instead; the gutter is 2D-only.
+    return mode == Mode::Residual && traceSnapshot.frameCount > 0 && !traceSnapshot.residualBands.empty();
+}
+
+bool SpectrogramPanel::showsFreqLabelGutter() const
+{
+    return !isIsometricDisplayMode(mode) && !isResidualDisplayMode(mode)
+           && traceSnapshot.frameCount > 0;
 }
 
 juce::Rectangle<float> SpectrogramPanel::getBandLabelGutterBounds() const
 {
     auto content = getTraceContentBounds();
-    if (!showsBandLabelGutter())
+    if (!showsBandLabelGutter() && !showsFreqLabelGutter())
         return {};
 
-    auto gutter = content.removeFromLeft((float) kBandLabelGutterWidth);
-    gutter.removeFromTop(18.0f);
-    gutter.removeFromBottom(18.0f);
-    return gutter;
+    return content.removeFromLeft((float) kBandLabelGutterWidth);
 }
 
 juce::Rectangle<float> SpectrogramPanel::getTraceContentBounds() const
@@ -3787,7 +4351,7 @@ juce::Rectangle<float> SpectrogramPanel::getTraceContentBounds() const
 juce::Rectangle<float> SpectrogramPanel::getPlotBounds() const
 {
     auto plot = getTraceContentBounds();
-    if (showsBandLabelGutter())
+    if (showsBandLabelGutter() || showsFreqLabelGutter())
         plot.removeFromLeft((float) kBandLabelGutterWidth);
     plot.removeFromRight(10.0f);
     return plot;
@@ -3841,10 +4405,12 @@ juce::Point<float> SpectrogramPanel::positionForIsoCoords(float pointTimeNorm,
                                            plot.getBottom() - plot.getHeight() * 0.085f);
     const auto freqAxis = juce::Point<float>(plot.getWidth() * 0.66f,
                                              -plot.getHeight() * 0.055f);
+    // Axis heights must satisfy: 0.085 (origin inset) + 0.055 (freq) + time
+    // + amp * 1.25 (clamp above) <= 1.0, or peaks at the back clip past the top.
     const auto timeAxis = juce::Point<float>(plot.getWidth() * 0.255f,
-                                             -plot.getHeight() * 0.49f);
+                                             -plot.getHeight() * 0.44f);
     const auto ampAxis = juce::Point<float>(0.0f,
-                                            -plot.getHeight() * 0.28f);
+                                            -plot.getHeight() * 0.30f);
 
     return { origin.x + freqAxis.x * freqNorm + timeAxis.x * timeNorm + ampAxis.x * ampNorm,
              origin.y + freqAxis.y * freqNorm + timeAxis.y * timeNorm + ampAxis.y * ampNorm };
@@ -4392,7 +4958,7 @@ int SpectrogramPanel::getSelectionLastFrame() const
 void SpectrogramPanel::showResidualEditError(const juce::String& error)
 {
     if (error.isNotEmpty())
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Residual band edit", error);
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Residual band edit", error);
 }
 
 double SpectrogramPanel::dbFromPlotYInBand(int bandIndex, float y, juce::Rectangle<float> plot) const
@@ -4550,7 +5116,7 @@ void SpectrogramPanel::commitPartialFreqDraw()
                                          painted,
                                          error))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     "Paint Partial Frequency", error);
         return;
     }
@@ -4562,7 +5128,7 @@ void SpectrogramPanel::runSmoothEnvelope()
 {
     if (traceSnapshot.partials.empty() || traceSnapshot.frameCount <= 0)
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
                                                     "Analyze a source before smoothing its envelope.");
         return;
     }
@@ -4584,7 +5150,7 @@ void SpectrogramPanel::runSmoothEnvelope()
     juce::String error;
     if (!processor.smoothPartialEnvelope(traceSource, f0, f1, envSmoothSlider.getValue(), error))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Smooth envelope",
                                                     error.isEmpty() ? juce::String("Could not smooth envelope.") : error);
         return;
     }
@@ -4661,7 +5227,7 @@ void SpectrogramPanel::runPartialTilt()
     juce::String error;
     if (!processor.tiltPartialEnvelope(traceSource, f0, f1, loHz, hiHz, tilt, error))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     "Tilt Partial Envelope",
                                                     error.isEmpty() ? "Could not apply tilt." : error);
         return;
@@ -4675,7 +5241,7 @@ void SpectrogramPanel::runPartialSolo()
 {
     if (selectedPartials.empty())
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials",
                                                     "Select one or more partials before soloing.");
         return;
     }
@@ -4684,7 +5250,7 @@ void SpectrogramPanel::runPartialSolo()
     if (!processor.playSelectedPartialsPreview(traceSource, selectedPartials, error))
     {
         if (error.isNotEmpty())
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials", error);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Solo Partials", error);
     }
 }
 
@@ -4692,7 +5258,7 @@ void SpectrogramPanel::runPartialFreeze()
 {
     if (traceSnapshot.frameCount <= 0)
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
                                                     "No model loaded.");
         return;
     }
@@ -4710,7 +5276,7 @@ void SpectrogramPanel::runPartialFreeze()
     juce::String error;
     if (!processor.freezePartialAtFrame(traceSource, frame, error))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Freeze Partials",
                                                     error.isEmpty() ? "Could not freeze." : error);
         return;
     }
@@ -4857,9 +5423,8 @@ void SpectrogramPanel::paintBandLabelGutter(juce::Graphics& g,
     if (gutter.isEmpty() || traceSnapshot.residualBands.empty())
         return;
 
-    g.setColour(juce::Colour(0xff0a1210));
-    g.fillRect(gutter);
-    g.setColour(juce::Colour(0xff2b4a3d));
+    namespace sr = ats_spectrum;
+    g.setColour(sr::theme::axisFrame().withAlpha(0.35f));
     g.drawVerticalLine(juce::roundToInt(gutter.getRight()), gutter.getY(), gutter.getBottom());
 
     g.setFont(juce::Font(9.0f));
@@ -4869,18 +5434,89 @@ void SpectrogramPanel::paintBandLabelGutter(juce::Graphics& g,
         if (yRange.getEnd() < plot.getY() - 2.0f || yRange.getStart() > plot.getBottom() + 2.0f)
             continue;
 
-        const float centreY = (yRange.getStart() + yRange.getEnd()) * 0.5f;
         const bool hot = band.bandIndex == hoveredResidualBand
                          || std::find(selectedResidualBands.begin(),
                                       selectedResidualBands.end(),
                                       band.bandIndex) != selectedResidualBands.end();
-        g.setColour(hot ? juce::Colour(0xffd8fff0) : juce::Colour(0xff7aa896));
-        g.drawText("B" + juce::String(band.bandIndex),
-                   juce::Rectangle<float>(gutter.getX() + 2.0f, centreY - 8.0f, 18.0f, 10.0f).toNearestInt(),
-                   juce::Justification::centredLeft);
-        g.drawText(juce::String(band.lowHz, 0),
-                   juce::Rectangle<float>(gutter.getX() + 2.0f, centreY + 1.0f, gutter.getWidth() - 4.0f, 10.0f)
-                       .toNearestInt(),
-                   juce::Justification::centredLeft);
+
+        // Declutter (spec §3.4): only label bands with room, unless hot.
+        const bool twoLines = yRange.getLength() >= 22.0f;
+        if (yRange.getLength() < 12.0f && !hot)
+            continue;
+
+        const float centreY = (yRange.getStart() + yRange.getEnd()) * 0.5f;
+        g.setColour(hot ? sr::theme::hover() : juce::Colour(0xff5f7f8a));
+        if (twoLines)
+        {
+            g.drawText("B" + juce::String(band.bandIndex),
+                       juce::Rectangle<float>(gutter.getX() + 2.0f, centreY - 9.0f, 18.0f, 10.0f).toNearestInt(),
+                       juce::Justification::centredLeft);
+            g.drawText(juce::String(band.lowHz, 0),
+                       juce::Rectangle<float>(gutter.getX() + 2.0f, centreY, gutter.getWidth() - 6.0f, 10.0f)
+                           .toNearestInt(),
+                       juce::Justification::centredLeft);
+        }
+        else
+        {
+            g.drawText(juce::String(band.lowHz, 0),
+                       juce::Rectangle<float>(gutter.getX() + 2.0f, centreY - 5.0f, gutter.getWidth() - 6.0f, 10.0f)
+                           .toNearestInt(),
+                       juce::Justification::centredLeft);
+        }
+    }
+}
+
+void SpectrogramPanel::paintFreqLabelGutter(juce::Graphics& g,
+                                            juce::Rectangle<float> gutter,
+                                            juce::Rectangle<float> plot)
+{
+    if (gutter.isEmpty() || traceSnapshot.frameCount <= 0)
+        return;
+
+    namespace sr = ats_spectrum;
+    g.setColour(sr::theme::axisFrame().withAlpha(0.35f));
+    g.drawVerticalLine(juce::roundToInt(gutter.getRight()), gutter.getY(), gutter.getBottom());
+
+    const double minHz = juce::jmax(1.0, traceSnapshot.minFrequencyHz);
+    const double maxHz = juce::jmax(minHz * 1.2, traceSnapshot.maxFrequencyHz);
+    const double logRange = std::log(maxHz / minHz);
+    const auto freqRange = visibleFreqRange();
+    const float freqSpan = juce::jmax(1.0e-6f, freqRange.getLength());
+
+    g.setFont(juce::Font(9.0f));
+    float lastLabelY = 1.0e9f;
+
+    // 1-2-5 series along the log frequency axis.
+    static constexpr double mantissas[] = { 1.0, 2.0, 5.0 };
+    for (double decade = 10.0; decade <= 100000.0; decade *= 10.0)
+    {
+        for (const double m : mantissas)
+        {
+            const double hz = decade * m;
+            if (hz < minHz || hz > maxHz)
+                continue;
+
+            const float freqNorm = (float) (std::log(hz / minHz) / logRange);
+            const float yNorm = (freqNorm - freqRange.getStart()) / freqSpan;
+            if (yNorm < -0.001f || yNorm > 1.001f)
+                continue;
+
+            const float y = plot.getBottom() - plot.getHeight() * yNorm;
+
+            g.setColour(sr::theme::axisFrame().withAlpha(0.4f));
+            g.drawLine({ { gutter.getRight() - 4.0f, y }, { gutter.getRight(), y } }, 0.8f);
+
+            if (lastLabelY - y < 13.0f)
+                continue;
+            lastLabelY = y;
+
+            const auto text = hz >= 1000.0 ? juce::String(juce::roundToInt(hz / 1000.0)) + "k"
+                                           : juce::String(juce::roundToInt(hz));
+            g.setColour(juce::Colour(0xff5f7f8a));
+            g.drawText(text,
+                       juce::Rectangle<float>(gutter.getX() + 2.0f, y - 5.0f, gutter.getWidth() - 10.0f, 10.0f)
+                           .toNearestInt(),
+                       juce::Justification::centredLeft);
+        }
     }
 }

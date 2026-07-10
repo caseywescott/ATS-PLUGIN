@@ -62,6 +62,7 @@ private:
     void paintScreen(juce::Graphics&, juce::Rectangle<float> screen);
     void paintResidualBackdrop(juce::Graphics&, juce::Rectangle<float> plot, bool foreground);
     void paintPartialTraces(juce::Graphics&, juce::Rectangle<float> plot);
+    void paintAmpLegend(juce::Graphics&, juce::Rectangle<float> plot) const;
     void paintIsometricGrid(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricPartials(juce::Graphics&, juce::Rectangle<float> plot);
     void paintIsometricResidual(juce::Graphics&, juce::Rectangle<float> plot);
@@ -70,12 +71,12 @@ private:
     void paintEnvelopeSurfaceRDC(juce::Graphics& g,
                                  juce::Rectangle<float> plot,
                                  const AtsSpectralTraceSnapshot& snap,
-                                 juce::Colour colour,
+                                 juce::Colour (*ampToColour)(float),
                                  float alphaScale) const;
     void paintEnvelopeSurface(juce::Graphics& g,
                               juce::Rectangle<float> plot,
                               const AtsSpectralTraceSnapshot& snap,
-                              juce::Colour colour,
+                              juce::Colour (*ampToColour)(float),
                               float alphaScale) const;
     void paintPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot);
     void paintPlanarPlaybackPlayhead(juce::Graphics&, juce::Rectangle<float> plot, float playheadNorm);
@@ -95,6 +96,7 @@ private:
     void commitEditedOnsets();
     void paintSelectionOverlay(juce::Graphics&, juce::Rectangle<float> screen, juce::Rectangle<float> plot);
     void paintBandLabelGutter(juce::Graphics&, juce::Rectangle<float> gutter, juce::Rectangle<float> plot);
+    void paintFreqLabelGutter(juce::Graphics&, juce::Rectangle<float> gutter, juce::Rectangle<float> plot);
     void updateSelectionLabel();
     void updateResidualToolbarVisibility();
     void refreshHoveredDbReadout();
@@ -130,6 +132,7 @@ private:
     [[nodiscard]] double dbFromPlotYInBand(int bandIndex, float y, juce::Rectangle<float> plot) const;
     [[nodiscard]] juce::Rectangle<float> getBandLabelGutterBounds() const;
     [[nodiscard]] bool showsBandLabelGutter() const;
+    [[nodiscard]] bool showsFreqLabelGutter() const;
     [[nodiscard]] int getSelectionFirstFrame() const;
     [[nodiscard]] int getSelectionLastFrame() const;
     void deleteSelection();
@@ -221,7 +224,7 @@ private:
     juce::ScrollBar freqScrollBar { true };
 
     static constexpr int traceScrollBarThickness = 13;
-    static constexpr int kBandLabelGutterWidth = 54;
+    static constexpr int kBandLabelGutterWidth = 34;
     static constexpr int kResidualToolbarHeight = 24;
 
     float timeZoom = 1.0f;

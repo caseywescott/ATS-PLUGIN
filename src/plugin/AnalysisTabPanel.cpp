@@ -1,6 +1,9 @@
 #include "AnalysisTabPanel.h"
 
 #include "PluginProcessor.h"
+#include "UiConstants.h"
+
+#include <BinaryData.h>
 
 #include <cmath>
 
@@ -89,18 +92,19 @@ const std::array<AnalysisProfile, 9> kAnalysisProfiles {{
 
 void setupSectionLabel(juce::Label& label, const juce::String& text)
 {
-    label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::Font(13.0f, juce::Font::bold));
-    label.setJustificationType(juce::Justification::centredLeft);
-    label.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+    label.setText(text.toUpperCase(), juce::dontSendNotification);
+    label.setFont(ats_ui::font::section());
+    label.setJustificationType(juce::Justification::bottomLeft);
+    label.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
 }
 
 void setupRowLabel(juce::Label& label, const juce::String& text, const juce::String& tooltip)
 {
     label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::Font(11.5f, juce::Font::bold));
+    label.setFont(ats_ui::font::ui(12.0f));
     label.setJustificationType(juce::Justification::centredLeft);
     label.setMinimumHorizontalScale(0.72f);
+    label.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     label.setHelpText(tooltip);
     label.setTooltip(tooltip);
 }
@@ -256,25 +260,55 @@ juce::File getFirstSupportedDropFile(const juce::StringArray& files)
 
     return {};
 }
+
+std::unique_ptr<juce::Drawable> createDrawableFromData(const void* data, int size)
+{
+    return juce::Drawable::createFromImageData(data, (size_t) size);
+}
+
+void setupSourcePlayButton(juce::DrawableButton& button)
+{
+    auto idle = createDrawableFromData(BinaryData::play_idle_square_svg,
+                                       BinaryData::play_idle_square_svgSize);
+    auto active = createDrawableFromData(BinaryData::stop_active_square_svg,
+                                         BinaryData::stop_active_square_svgSize);
+
+    if (idle != nullptr && active != nullptr)
+    {
+        button.setImages(idle.get(),
+                         idle.get(),
+                         active.get(),
+                         nullptr,
+                         active.get(),
+                         active.get(),
+                         active.get(),
+                         nullptr);
+    }
+
+    button.setClickingTogglesState(false);
+    button.setEdgeIndent(0);
+}
 } // namespace
 
 AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
     : audioProcessor(p)
 {
-    workflowLabel.setText("Analysis workflow", juce::dontSendNotification);
+    workflowLabel.setText("ANALYSIS WORKFLOW", juce::dontSendNotification);
     workflowLabel.setJustificationType(juce::Justification::centredLeft);
-    workflowLabel.setFont(juce::Font(13.0f, juce::Font::bold));
+    workflowLabel.setFont(ats_ui::font::section());
+    workflowLabel.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
     addAndMakeVisible(workflowLabel);
 
     statusLabel.setJustificationType(juce::Justification::centredLeft);
-    statusLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    statusLabel.setFont(ats_ui::font::ui(12.0f));
+    statusLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     statusLabel.setMinimumHorizontalScale(0.72f);
     addAndMakeVisible(statusLabel);
 
     errorLabel.setJustificationType(juce::Justification::centredLeft);
-    errorLabel.setFont(juce::Font(11.0f));
+    errorLabel.setFont(ats_ui::font::ui(11.5f));
     errorLabel.setMinimumHorizontalScale(0.7f);
-    errorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff8a80));
+    errorLabel.setColour(juce::Label::textColourId, ats_ui::colour::error());
     addAndMakeVisible(errorLabel);
 
     importWavButton.setHelpText("Choose a WAV file as the current analysis source.");
@@ -320,7 +354,7 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
                                   juce::Label& overview,
                                   juce::TextButton& chooseButton,
                                   juce::TextButton& reanalyzeButton,
-                                  juce::TextButton& playButton,
+                                  juce::DrawableButton& playButton,
                                   juce::Label& auditionLabel,
                                   juce::ToggleButton& bothButton,
                                   juce::ToggleButton& partialsButton,
@@ -331,15 +365,15 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
         addAndMakeVisible(group);
 
         meta.setJustificationType(juce::Justification::centredLeft);
-        meta.setFont(juce::Font(11.0f, juce::Font::bold));
+        meta.setFont(ats_ui::font::uiBold(11.0f));
         meta.setMinimumHorizontalScale(0.64f);
-        meta.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+        meta.setColour(juce::Label::textColourId, ats_ui::colour::textPrimary());
         addAndMakeVisible(meta);
 
         overview.setJustificationType(juce::Justification::centredLeft);
-        overview.setFont(juce::Font(10.5f));
+        overview.setFont(ats_ui::font::ui(10.5f));
         overview.setMinimumHorizontalScale(0.64f);
-        overview.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+        overview.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
         addAndMakeVisible(overview);
 
         chooseButton.setButtonText(slotIndex == 0 ? "Choose A" : "Choose B");
@@ -355,12 +389,14 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
 
         playButton.setHelpText("Play this analyzed source from the beginning.");
         playButton.setTooltip("Play this analyzed source from the beginning.");
+        setupSourcePlayButton(playButton);
         playButton.onClick = [this, slotIndex] { playMorphSourceFile(slotIndex); };
         addAndMakeVisible(playButton);
 
         auditionLabel.setText("Audition", juce::dontSendNotification);
         auditionLabel.setJustificationType(juce::Justification::centredLeft);
-        auditionLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+        auditionLabel.setFont(ats_ui::font::section());
+        auditionLabel.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
         auditionLabel.setMinimumHorizontalScale(0.7f);
         auditionLabel.setHelpText("Choose which layer to audition when playing this source.");
         auditionLabel.setTooltip("Choose which layer to audition when playing this source.");
@@ -375,6 +411,9 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
             button->setTooltip("Choose which layer to audition when playing this source.");
             addAndMakeVisible(button);
         }
+        bothButton.setConnectedEdges(juce::Button::ConnectedOnRight);
+        partialsButton.setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        residualButton.setConnectedEdges(juce::Button::ConnectedOnLeft);
         bothButton.setToggleState(true, juce::dontSendNotification);
         partialsButton.setHelpText("Play only the sinusoidal partial reconstruction for this source.");
         partialsButton.setTooltip("Play only the sinusoidal partial reconstruction for this source.");
@@ -414,7 +453,8 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
 
     profileLabel.setText("Analysis Profile", juce::dontSendNotification);
     profileLabel.setJustificationType(juce::Justification::centredLeft);
-    profileLabel.setFont(juce::Font(11.5f, juce::Font::bold));
+    profileLabel.setFont(ats_ui::font::ui(12.0f));
+    profileLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     profileLabel.setMinimumHorizontalScale(0.7f);
     profileLabel.setHelpText("Factory starting points for common source types. Apply changes parameters only; it does not analyze.");
     profileLabel.setTooltip("Factory starting points for common source types. Apply changes parameters only; it does not analyze.");
@@ -440,7 +480,8 @@ AnalysisTabPanel::AnalysisTabPanel(AtsAudioProcessor& p)
                       "For cleaner resynthesis, lower the peak threshold to keep more quiet partials; for cleaner/noisier separation, use analysis type 4 full.",
                       juce::dontSendNotification);
     hintLabel.setJustificationType(juce::Justification::topLeft);
-    hintLabel.setFont(juce::Font(12.5f));
+    hintLabel.setFont(ats_ui::font::ui(12.5f));
+    hintLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     hintLabel.setMinimumHorizontalScale(0.72f);
     content.addAndMakeVisible(hintLabel);
 
@@ -516,17 +557,18 @@ void AnalysisTabPanel::paintOverChildren(juce::Graphics& g)
     if (card.isEmpty())
         return;
 
+    const auto accent = ats_ui::colour::accent();
     auto highlight = card.toFloat().reduced(2.0f);
     g.saveState();
     g.reduceClipRegion(card);
-    g.setColour(juce::Colour(0xff6f9eff).withAlpha(0.16f));
+    g.setColour(accent.withAlpha(0.16f));
     g.fillRoundedRectangle(highlight, 7.0f);
-    g.setColour(juce::Colour(0xff8fb6ff).withAlpha(0.95f));
+    g.setColour(accent.withAlpha(0.95f));
     g.drawRoundedRectangle(highlight, 7.0f, 2.0f);
 
     auto messageArea = card.reduced(14, 12).removeFromTop(24);
-    g.setColour(juce::Colour(0xfff5f8ff));
-    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setColour(ats_ui::colour::textPrimary());
+    g.setFont(ats_ui::font::uiBold(12.0f));
     g.drawFittedText(juce::String("Drop WAV to analyze Source ") + (dropHoverSlot == 0 ? "A" : "B"),
                      messageArea,
                      juce::Justification::centred,
@@ -544,20 +586,32 @@ void AnalysisTabPanel::resized()
     cancelButton.setBounds({});
     stopPreviewButton.setBounds({});
 
-    const bool narrow = outer.getWidth() < 680;
+    const bool narrow = outer.getWidth() < 1020;
     progressBar.setBounds(outer.removeFromTop(12));
     outer.removeFromTop(6);
     errorLabel.setBounds(outer.removeFromTop(18));
     outer.removeFromTop(8);
 
     auto sourceCards = outer.removeFromTop(narrow ? 232 : 112);
+    constexpr int sourceCardGap = 8;
+    constexpr int maxSourceCardWidth = 420;
+    const int sourceCardWidth = juce::jmin(maxSourceCardWidth,
+                                           (sourceCards.getWidth() - sourceCardGap) / 2);
+    if (!narrow)
+    {
+        const int sourcePairWidth = 2 * sourceCardWidth + sourceCardGap;
+        sourceCards.setBounds(sourceCards.getX() + (sourceCards.getWidth() - sourcePairWidth) / 2,
+                              sourceCards.getY(),
+                              sourcePairWidth,
+                              sourceCards.getHeight());
+    }
     auto placeSourceCard = [&](juce::Rectangle<int> card,
                                juce::GroupComponent& group,
                                juce::Label& meta,
                                juce::Label& overview,
                                juce::TextButton& chooseButton,
                                juce::TextButton& reanalyzeButton,
-                               juce::TextButton& playButton,
+                               juce::DrawableButton& playButton,
                                juce::TextButton& exportButton,
                                juce::Label& auditionLabel,
                                juce::ToggleButton& bothButton,
@@ -565,12 +619,10 @@ void AnalysisTabPanel::resized()
                                juce::ToggleButton& residualButton) {
         group.setBounds(card);
         auto inner = card.reduced(10, 14);
-        auto buttonRow = inner.removeFromRight(narrow ? 132 : 192);
+        auto buttonRow = inner.removeFromRight(narrow ? 132 : 156);
         chooseButton.setBounds(buttonRow.removeFromTop(24).reduced(2));
         buttonRow.removeFromTop(4);
         reanalyzeButton.setBounds(buttonRow.removeFromTop(24).reduced(2));
-        buttonRow.removeFromTop(4);
-        playButton.setBounds(buttonRow.removeFromTop(24).reduced(2));
         buttonRow.removeFromTop(4);
         exportButton.setBounds(buttonRow.removeFromTop(18).reduced(2));
         inner.removeFromRight(6);
@@ -582,6 +634,8 @@ void AnalysisTabPanel::resized()
         bothButton.setBounds(auditionRow.removeFromLeft(narrow ? 54 : 62));
         partialsButton.setBounds(auditionRow.removeFromLeft(narrow ? 72 : 82));
         residualButton.setBounds(auditionRow.removeFromLeft(narrow ? 78 : 88));
+        auditionRow.removeFromLeft(4);
+        playButton.setBounds(auditionRow.removeFromLeft(auditionRow.getHeight()));
     };
 
     if (narrow)
@@ -614,8 +668,8 @@ void AnalysisTabPanel::resized()
     }
     else
     {
-        auto sourceA = sourceCards.removeFromLeft(sourceCards.getWidth() / 2).reduced(0, 1);
-        sourceCards.removeFromLeft(8);
+        auto sourceA = sourceCards.removeFromLeft(sourceCardWidth).reduced(0, 1);
+        sourceCards.removeFromLeft(sourceCardGap);
         auto sourceB = sourceCards.reduced(0, 1);
         placeSourceCard(sourceA,
                         sourceAGroup,
@@ -751,8 +805,13 @@ void AnalysisTabPanel::refreshFromProcessor()
         sourceBBothButton.setToggleState(true, juce::dontSendNotification);
     reanalyzeSourceAButton.setEnabled(hasSourceAFile && !workerBusy);
     reanalyzeSourceBButton.setEnabled(hasSourceBFile && !workerBusy);
-    playSourceAButton.setEnabled(sourceA.hasModel && !workerBusy);
-    playSourceBButton.setEnabled(sourceB.hasModel && !workerBusy);
+    const auto playbackKind = audioProcessor.getPreviewPlaybackKind();
+    const bool sourceAPlaying = audioProcessor.isPreviewPlaying() && playbackKind == AtsPreviewPlaybackKind::SourceA;
+    const bool sourceBPlaying = audioProcessor.isPreviewPlaying() && playbackKind == AtsPreviewPlaybackKind::SourceB;
+    playSourceAButton.setToggleState(sourceAPlaying, juce::dontSendNotification);
+    playSourceBButton.setToggleState(sourceBPlaying, juce::dontSendNotification);
+    playSourceAButton.setEnabled((sourceA.hasModel && !workerBusy) || sourceAPlaying);
+    playSourceBButton.setEnabled((sourceB.hasModel && !workerBusy) || sourceBPlaying);
     exportSourceAButton.setEnabled(sourceA.hasModel && !workerBusy);
     exportSourceBButton.setEnabled(sourceB.hasModel && !workerBusy);
     sourceAResidualButton.setEnabled(!sourceA.hasModel || sourceA.hasResidual);
@@ -826,7 +885,7 @@ void AnalysisTabPanel::pickMorphSourceFile(int slotIndex)
             if (!audioProcessor.importAtsFile(f, err)
                 || !audioProcessor.setCurrentModelAsMorphSourceSlot(slotIndex, err))
             {
-                juce::NativeMessageBox::showMessageBoxAsync(
+                juce::AlertWindow::showMessageBoxAsync(
                     juce::AlertWindow::WarningIcon,
                     slotIndex == 0 ? "Source A" : "Source B",
                     err.isEmpty() ? juce::String("Could not load ATS source.") : err);
@@ -844,7 +903,7 @@ void AnalysisTabPanel::analyzeMorphSourceFile(int slotIndex, const juce::File& f
     const auto slotName = slotIndex == 0 ? juce::String("Source A") : juce::String("Source B");
     juce::String err;
     if (!audioProcessor.loadAndAnalyzeMorphSourceSlot(slotIndex, file, err))
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     slotName,
                                                     err.isEmpty() ? juce::String("Could not analyze morph source.") : err);
     refreshFromProcessor();
@@ -854,7 +913,7 @@ void AnalysisTabPanel::reanalyzeMorphSourceFile(int slotIndex)
 {
     juce::String err;
     if (!audioProcessor.reanalyzeMorphSourceSlot(slotIndex, err))
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     slotIndex == 0 ? "Re-analyze Source A" : "Re-analyze Source B",
                                                     err.isEmpty() ? juce::String("Could not re-analyze source.") : err);
     refreshFromProcessor();
@@ -862,10 +921,23 @@ void AnalysisTabPanel::reanalyzeMorphSourceFile(int slotIndex)
 
 void AnalysisTabPanel::playMorphSourceFile(int slotIndex)
 {
+    const auto activeKind = audioProcessor.getPreviewPlaybackKind();
+    const bool clickedActivePreview =
+        audioProcessor.isPreviewPlaying()
+        && ((slotIndex == 0 && activeKind == AtsPreviewPlaybackKind::SourceA)
+            || (slotIndex == 1 && activeKind == AtsPreviewPlaybackKind::SourceB));
+
+    if (clickedActivePreview)
+    {
+        audioProcessor.stopPreviewPlayback();
+        refreshFromProcessor();
+        return;
+    }
+
     juce::String err;
     const auto mode = (AtsSourceAuditionMode) getSourceAuditionModeIndex(slotIndex);
     if (!audioProcessor.listenMorphSourceSlot(slotIndex, mode, err))
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     slotIndex == 0 ? "Play Source A" : "Play Source B",
                                                     err.isEmpty() ? juce::String("Could not play source.") : err);
     refreshFromProcessor();
@@ -888,7 +960,7 @@ void AnalysisTabPanel::exportMorphSourceFileAts(int slotIndex)
         juce::String err;
         if (!audioProcessor.exportMorphSourceSlotAts(slotIndex, file, err))
         {
-            juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon,
                 slotIndex == 0 ? "Export Source A" : "Export Source B",
                 err.isEmpty() ? juce::String("Could not export source ATS.") : err);
@@ -946,7 +1018,7 @@ void AnalysisTabPanel::filesDropped(const juce::StringArray& files, int x, int y
     auto file = getFirstSupportedDropFile(files);
     if (!file.existsAsFile())
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     "Analyze Source",
                                                     "Drop a WAV file onto Source A or Source B.");
         return;
@@ -983,10 +1055,11 @@ void AnalysisTabPanel::cancelCurrentJob()
         return;
     }
 
-    const bool yes = juce::NativeMessageBox::showYesNoBox(
+    const bool yes = juce::AlertWindow::showOkCancelBox(
         juce::AlertWindow::QuestionIcon,
         "Cancel background work?",
-        "Analysis or resynthesis is running. Stop the current job?");
+        "Analysis or resynthesis is running. Stop the current job?",
+        "Yes", "No");
     if (yes)
         audioProcessor.cancelJobs();
     refreshFromProcessor();

@@ -552,6 +552,13 @@ public:
 
     bool isWorkerBusy() const;
 
+    /** Worker-activity taps for the ENGINE dots (§8.4). */
+    bool isAnalysisRunning() const { return analysisThreadRunning.load(); }
+    bool isRenderRunning() const
+    {
+        return resynthThreadRunning.load() || transformThreadRunning.load();
+    }
+
     /** Returns false if no model. */
     bool getModelFootprint(int& partials, int& frames, bool& hasResidualBands) const;
 

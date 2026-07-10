@@ -220,6 +220,9 @@ MorphTimelineEditor::MorphTimelineEditor()
     morphModeBtn.setRadioGroupId(101);
     hybridModeBtn.setRadioGroupId(101);
     envMorphModeBtn.setRadioGroupId(101);
+    morphModeBtn.setConnectedEdges(juce::Button::ConnectedOnRight);
+    hybridModeBtn.setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    envMorphModeBtn.setConnectedEdges(juce::Button::ConnectedOnLeft);
     morphModeBtn.setToggleState(true, juce::dontSendNotification);
 
     morphModeBtn.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffb8d4ff));
@@ -650,7 +653,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     statusLabel.setHelpText("Current high-level plugin state.");
     addAndMakeVisible(statusLabel);
 
-    errorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff8a80));
+    errorLabel.setColour(juce::Label::textColourId, ats_ui::colour::error());
     errorLabel.setJustificationType(juce::Justification::topLeft);
     errorLabel.setExplicitFocusOrder(7);
     errorLabel.setHelpText("Most recent error from analysis, resynthesis, or file I/O.");
@@ -668,7 +671,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     analysisSummaryLabel.setJustificationType(juce::Justification::centredLeft);
     analysisSummaryLabel.setFont(juce::Font(11.0f, juce::Font::bold));
     analysisSummaryLabel.setMinimumHorizontalScale(0.64f);
-    analysisSummaryLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
+    analysisSummaryLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     analysisSummaryLabel.setHelpText("Current analysis settings used by Analyze, Analyze Source A, and Analyze Source B.");
     addAndMakeVisible(analysisSummaryLabel);
 
@@ -711,6 +714,10 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         button->setHelpText("Choose which layer to audition: full mix, partials only, residual only, or the isolated smear contribution.");
         button->onClick = [this] { refreshFromProcessor(); };
     }
+    auditionBothButton.setConnectedEdges(juce::Button::ConnectedOnRight);
+    auditionPartialsButton.setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    auditionResidualButton.setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    auditionSmearButton.setConnectedEdges(juce::Button::ConnectedOnLeft);
     auditionSmearButton.setHelpText("Audition only the smear contribution in isolation: the difference between the smeared and dry render.");
     auditionBothButton.setToggleState(true, juce::dontSendNotification);
     addAndMakeVisible(auditionBothButton);
@@ -731,10 +738,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
             return;
         }
 
-        const bool yes = juce::NativeMessageBox::showYesNoBox(
+        const bool yes = juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::QuestionIcon,
             "Cancel background work?",
-            "Analysis or resynthesis is running. Stop the current job?");
+            "Analysis or resynthesis is running. Stop the current job?",
+            "Yes", "No");
         if (yes)
             audioProcessor.cancelJobs();
     };
@@ -742,6 +750,9 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
 
     auto setupSlider = [](juce::Slider& s, const juce::String& name, int order) {
         s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        s.setRotaryParameters(juce::MathConstants<float>::pi * 1.25f,
+                              juce::MathConstants<float>::pi * 2.75f,
+                              true);
         s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 18);
         s.setName(name);
         s.setExplicitFocusOrder(order);
@@ -758,7 +769,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     controlsContent.addAndMakeVisible(resGainLabel);
     controlsContent.addAndMakeVisible(outputTrimLabel);
 
-    const juce::Colour knobLabCol(0xfff0f0f5);
+    const juce::Colour knobLabCol = ats_ui::colour::textPrimary();
     partGainLabel.setColour(juce::Label::textColourId, knobLabCol);
     resGainLabel.setColour(juce::Label::textColourId, knobLabCol);
     outputTrimLabel.setColour(juce::Label::textColourId, knobLabCol);
@@ -839,8 +850,8 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     setupSlotLabel(sourceBMetaLabel, "Empty", false);
     setupSlotLabel(sourceAOverviewLabel, "Overview empty", false);
     setupSlotLabel(sourceBOverviewLabel, "Overview empty", false);
-    sourceAOverviewLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
-    sourceBOverviewLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    sourceAOverviewLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
+    sourceBOverviewLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
 
     sourceAGroup.setText("Source A");
     sourceAGroup.setTextLabelPosition(juce::Justification::centredLeft);
@@ -875,13 +886,13 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     sourceAUseCurrentButton.onClick = [this] {
         juce::String err;
         if (!audioProcessor.reanalyzeMorphSourceSlot(0, err))
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source A", err);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source A", err);
         refreshFromProcessor();
     };
     sourceBUseCurrentButton.onClick = [this] {
         juce::String err;
         if (!audioProcessor.reanalyzeMorphSourceSlot(1, err))
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source B", err);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Re-analyze Source B", err);
         refreshFromProcessor();
     };
     exportSourceAButton.onClick = [this] { exportMorphSourceSlotAts(0); };
@@ -921,7 +932,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphTimelineHintLabel.setJustificationType(juce::Justification::centredLeft);
     morphTimelineHintLabel.setFont(juce::Font(10.5f));
     morphTimelineHintLabel.setMinimumHorizontalScale(0.7f);
-    morphTimelineHintLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    morphTimelineHintLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     morphTimelineEditor.setHelpText(
         "Morph breakpoints (circles): blend Source A toward B. "
         "Hybrid breakpoints (diamonds): scale Source A amplitudes by Source B's Bark envelope - "
@@ -1078,7 +1089,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     morphBandInspectorLabel.setJustificationType(juce::Justification::topLeft);
     morphBandInspectorLabel.setFont(juce::Font(10.5f));
     morphBandInspectorLabel.setMinimumHorizontalScale(0.72f);
-    morphBandInspectorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd8e4f2));
+    morphBandInspectorLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     morphBandInspectorLabel.setHelpText("Selected band correspondence, energy, policy, and transient diagnostics.");
     morphBandStrip.setHelpText("Perceptual band strip: blue source A, green source B, amber output, red warnings.");
     morphBandStrip.onBandSelected = [this](int bandIndex) {
@@ -1109,8 +1120,11 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
         lab.setText(title, juce::dontSendNotification);
         lab.setJustificationType(juce::Justification::centred);
         lab.setFont(juce::Font(10.5f, juce::Font::bold));
-        lab.setColour(juce::Label::textColourId, juce::Colour(0xfff0f0f5));
+        lab.setColour(juce::Label::textColourId, ats_ui::colour::textPrimary());
         sld.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        sld.setRotaryParameters(juce::MathConstants<float>::pi * 1.25f,
+                                juce::MathConstants<float>::pi * 2.75f,
+                                true);
         sld.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 16);
         sld.setName(title);
         controlsContent.addAndMakeVisible(lab);
@@ -1178,7 +1192,7 @@ SessionTabPanel::SessionTabPanel(AtsAudioProcessor& p)
     smearStatusLabel.setJustificationType(juce::Justification::centredLeft);
     smearStatusLabel.setFont(juce::Font(10.5f));
     smearStatusLabel.setMinimumHorizontalScale(0.7f);
-    smearStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb8c7d9));
+    smearStatusLabel.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     controlsContent.addAndMakeVisible(smearStatusLabel);
 
     smearAdvancedDisclosure.setClickingTogglesState(true);
@@ -1380,7 +1394,7 @@ void SessionTabPanel::saveMorphVariation(size_t index)
     juce::String err;
     if (!audioProcessor.saveCurrentMorphVariation((int) index, err))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     "Save variation",
                                                     err);
     }
@@ -1392,7 +1406,7 @@ void SessionTabPanel::recallMorphVariation(size_t index)
     juce::String err;
     if (!audioProcessor.recallMorphVariation((int) index, err))
     {
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                     "Recall variation",
                                                     err);
     }
@@ -1524,7 +1538,7 @@ void SessionTabPanel::transportPlay()
 
     if (!ok)
     {
-        juce::NativeMessageBox::showMessageBoxAsync(
+        juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon,
             title,
             err.isEmpty() ? juce::String("Could not start playback.") : err);
@@ -1550,7 +1564,7 @@ void SessionTabPanel::bounceMorphTimeline()
                                                       (AtsSourceAuditionMode) getAuditionModeIndex(),
                                                       err))
         {
-            juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon,
                 "Bounce Timeline",
                 err.isEmpty() ? juce::String("Could not bounce morph timeline.") : err);
@@ -1589,7 +1603,7 @@ void SessionTabPanel::exportMorphSourceSlotAts(int slotIndex)
 
         juce::String err;
         if (!audioProcessor.exportMorphSourceSlotAts(slotIndex, file, err))
-            juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon,
                 slotIndex == 0 ? "Export Source A" : "Export Source B",
                 err.isEmpty() ? juce::String("Could not export source ATS.") : err);
@@ -1658,6 +1672,17 @@ void SessionTabPanel::resized()
 
     const bool narrowSourceCards = r.getWidth() < sc(680);
     auto sourceCards = r.removeFromTop(narrowSourceCards ? sc(232) : sc(112));
+    const int sourceCardGap = sc(8);
+    const int sourceCardWidth = juce::jmin(sc(420),
+                                           (sourceCards.getWidth() - sourceCardGap) / 2);
+    if (!narrowSourceCards)
+    {
+        const int sourcePairWidth = 2 * sourceCardWidth + sourceCardGap;
+        sourceCards.setBounds(sourceCards.getX() + (sourceCards.getWidth() - sourcePairWidth) / 2,
+                              sourceCards.getY(),
+                              sourcePairWidth,
+                              sourceCards.getHeight());
+    }
     r.removeFromTop(sc(6));
 
     // Split remaining area: spectrogram on right, scrollable controls viewport on left
@@ -1702,7 +1727,8 @@ void SessionTabPanel::resized()
 
     controlsContent.setSize(contentW, juce::jmax(r.getHeight(), contentH));
 
-    // Place source cards (direct children — they still span their full-width rect)
+    // Keep the source cards compact on wide windows so their actions remain close
+    // to the metadata rather than leaving a large empty centre area.
     auto placeSourceSlot = [&](juce::Rectangle<int> area,
                                juce::GroupComponent& group,
                                juce::Label& heading,
@@ -1730,15 +1756,15 @@ void SessionTabPanel::resized()
         placeSourceSlot(sourceCards.removeFromTop(sc(112)).reduced(0, 1),
                         sourceAGroup, sourceALabel, sourceAMetaLabel, sourceAOverviewLabel,
                         sourceALoadAnalyzeButton, sourceAUseCurrentButton, exportSourceAButton);
-        sourceCards.removeFromTop(sc(8));
+        sourceCards.removeFromTop(sourceCardGap);
         placeSourceSlot(sourceCards.removeFromTop(sc(112)).reduced(0, 1),
                         sourceBGroup, sourceBLabel, sourceBMetaLabel, sourceBOverviewLabel,
                         sourceBLoadAnalyzeButton, sourceBUseCurrentButton, exportSourceBButton);
     }
     else
     {
-        auto sourceA = sourceCards.removeFromLeft(sourceCards.getWidth() / 2).reduced(0, 1);
-        sourceCards.removeFromLeft(8);
+        auto sourceA = sourceCards.removeFromLeft(sourceCardWidth).reduced(0, 1);
+        sourceCards.removeFromLeft(sourceCardGap);
         auto sourceB = sourceCards.reduced(0, 1);
         placeSourceSlot(sourceA,
                         sourceAGroup, sourceALabel, sourceAMetaLabel, sourceAOverviewLabel,
@@ -2326,7 +2352,7 @@ void SessionTabPanel::pickImportAts()
             return;
         juce::String err;
         if (!audioProcessor.importAtsFile(f, err))
-            juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon, "Import ATS", err.isEmpty() ? juce::String("Import failed.") : err);
     });
 }
@@ -2341,7 +2367,7 @@ void SessionTabPanel::pickExportAts()
             return;
         juce::String err;
         if (!audioProcessor.exportAtsFile(f, err))
-            juce::NativeMessageBox::showMessageBoxAsync(
+            juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon, "Export ATS", err.isEmpty() ? juce::String("Export failed.") : err);
     });
 }
@@ -2430,7 +2456,7 @@ void SessionTabPanel::loadDroppedFileToSlot(int slotIndex, const juce::File& f)
             refreshFromProcessor();
             return;
         }
-        juce::NativeMessageBox::showMessageBoxAsync(
+        juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, slotName,
             err.isEmpty() ? juce::String("Could not load ATS source.") : err);
         refreshFromProcessor();
@@ -2438,7 +2464,7 @@ void SessionTabPanel::loadDroppedFileToSlot(int slotIndex, const juce::File& f)
     }
 
     if (!audioProcessor.loadAndAnalyzeMorphSourceSlot(slotIndex, f, err))
-        juce::NativeMessageBox::showMessageBoxAsync(
+        juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, slotName,
             err.isEmpty() ? juce::String("Could not analyze morph source.") : err);
     refreshFromProcessor();
@@ -2484,7 +2510,7 @@ void SessionTabPanel::pickMorphSourceFile(int slotIndex)
                 return;
             }
 
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                         slotName,
                                                         err.isEmpty() ? juce::String("Could not load ATS source.") : err);
             refreshFromProcessor();
@@ -2492,7 +2518,7 @@ void SessionTabPanel::pickMorphSourceFile(int slotIndex)
         }
 
         if (!audioProcessor.loadAndAnalyzeMorphSourceSlot(slotIndex, f, err))
-            juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                         slotName,
                                                         err.isEmpty() ? juce::String("Could not analyze morph source.") : err);
         refreshFromProcessor();

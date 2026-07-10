@@ -63,8 +63,8 @@ private:
     juce::Label sourceBOverviewLabel;
     juce::TextButton reanalyzeSourceAButton { "Re-analyze A" };
     juce::TextButton reanalyzeSourceBButton { "Re-analyze B" };
-    juce::TextButton playSourceAButton { "Play A" };
-    juce::TextButton playSourceBButton { "Play B" };
+    juce::DrawableButton playSourceAButton { "Play Source A", juce::DrawableButton::ImageStretched };
+    juce::DrawableButton playSourceBButton { "Play Source B", juce::DrawableButton::ImageStretched };
     juce::TextButton exportSourceAButton { "Export ATS" };
     juce::TextButton exportSourceBButton { "Export ATS" };
     juce::Label sourceAAuditionLabel;

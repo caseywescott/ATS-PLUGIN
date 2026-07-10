@@ -9,6 +9,7 @@ class PartialEditPanel : public juce::Component
 {
 public:
     explicit PartialEditPanel(AtsAudioProcessor&);
+    void paint(juce::Graphics&) override;
     void resized() override;
 
     /** Update slider ranges from model; refresh displayed cell values. */

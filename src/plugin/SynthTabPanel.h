@@ -21,6 +21,10 @@ private:
 
     juce::Label hint;
 
+    juce::Label pitchSectionLabel;
+    juce::Label timeSectionLabel;
+    juce::Label renderSectionLabel;
+
     juce::Label freqLabel;
     juce::Label timeStretchLabel;
     juce::Label synStartLabel;

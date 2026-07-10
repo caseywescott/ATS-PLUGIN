@@ -1,6 +1,22 @@
 #include "PartialEditPanel.h"
 
 #include "PluginProcessor.h"
+#include "UiConstants.h"
+
+namespace
+{
+void styleCellEditor(juce::TextEditor& e)
+{
+    e.setFont(ats_ui::font::mono(11.5f));
+    e.setJustification(juce::Justification::centredRight);
+    e.setColour(juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    e.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    e.setColour(juce::TextEditor::focusedOutlineColourId, ats_ui::colour::accent());
+    e.setColour(juce::TextEditor::textColourId, ats_ui::colour::textPrimary());
+    e.setColour(juce::TextEditor::highlightColourId, ats_ui::colour::accent().withAlpha(0.30f));
+    e.setColour(juce::CaretComponent::caretColourId, ats_ui::colour::accent());
+}
+}
 
 PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
     : audioProcessor(p)
@@ -9,11 +25,14 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
                  "Amplitude must be non-negative; frequency must be positive. Phase is not edited here.",
                  juce::dontSendNotification);
     help.setJustificationType(juce::Justification::topLeft);
-    help.setFont(juce::Font(13.0f));
+    help.setFont(ats_ui::font::ui(12.5f));
+    help.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     addAndMakeVisible(help);
 
     partialLab.setText("Partial index (partial #)", juce::dontSendNotification);
     partialLab.setJustificationType(juce::Justification::centredLeft);
+    partialLab.setFont(ats_ui::font::ui(12.5f));
+    partialLab.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     addAndMakeVisible(partialLab);
 
     partialSlider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -25,6 +44,8 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
 
     frameLab.setText("Frame index (time frame #)", juce::dontSendNotification);
     frameLab.setJustificationType(juce::Justification::centredLeft);
+    frameLab.setFont(ats_ui::font::ui(12.5f));
+    frameLab.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     addAndMakeVisible(frameLab);
 
     frameSlider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -35,21 +56,35 @@ PartialEditPanel::PartialEditPanel(AtsAudioProcessor& p)
     addAndMakeVisible(frameSlider);
 
     readout.setJustificationType(juce::Justification::topLeft);
-    readout.setFont(juce::Font(12.0f, juce::Font::italic));
+    readout.setFont(ats_ui::font::mono(10.5f));
+    readout.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
     addAndMakeVisible(readout);
 
     ampLab.setText("Amplitude", juce::dontSendNotification);
     ampLab.setJustificationType(juce::Justification::centredLeft);
+    ampLab.setFont(ats_ui::font::section());
+    ampLab.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
     addAndMakeVisible(ampLab);
+    styleCellEditor(ampEditor);
     addAndMakeVisible(ampEditor);
 
     freqLab.setText("Frequency (Hz)", juce::dontSendNotification);
     freqLab.setJustificationType(juce::Justification::centredLeft);
+    freqLab.setFont(ats_ui::font::section());
+    freqLab.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
     addAndMakeVisible(freqLab);
+    styleCellEditor(freqEditor);
     addAndMakeVisible(freqEditor);
 
+    applyButton.setButtonText("APPLY TO CELL");
     applyButton.onClick = [this] { applyEdits(); };
     addAndMakeVisible(applyButton);
+}
+
+void PartialEditPanel::paint(juce::Graphics& g)
+{
+    ats_ui::drawWell(g, ampEditor.getBounds().toFloat().expanded(2.0f), 6.0f);
+    ats_ui::drawWell(g, freqEditor.getBounds().toFloat().expanded(2.0f), 6.0f);
 }
 
 void PartialEditPanel::tick()
@@ -121,7 +156,7 @@ void PartialEditPanel::applyEdits()
 
     juce::String err;
     if (!audioProcessor.writePartialCell(pi, ti, a, f, err))
-        juce::NativeMessageBox::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Partial edit", err);
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Partial edit", err);
     else
         refreshDisplayedCell();
 }
@@ -145,15 +180,15 @@ void PartialEditPanel::resized()
     readout.setBounds(r.removeFromTop(22));
     r.removeFromTop(8);
 
-    auto rowA = r.removeFromTop(28);
-    ampLab.setBounds(rowA.removeFromLeft(110));
-    ampEditor.setBounds(rowA);
+    auto rowA = r.removeFromTop(42);
+    ampLab.setBounds(rowA.removeFromTop(15));
+    ampEditor.setBounds(rowA.removeFromTop(24).reduced(4, 0));
 
     r.removeFromTop(6);
-    auto rowFr = r.removeFromTop(28);
-    freqLab.setBounds(rowFr.removeFromLeft(110));
-    freqEditor.setBounds(rowFr);
+    auto rowFr = r.removeFromTop(42);
+    freqLab.setBounds(rowFr.removeFromTop(15));
+    freqEditor.setBounds(rowFr.removeFromTop(24).reduced(4, 0));
 
     r.removeFromTop(12);
-    applyButton.setBounds(r.removeFromTop(32).removeFromLeft(160));
+    applyButton.setBounds(r.removeFromTop(30));
 }

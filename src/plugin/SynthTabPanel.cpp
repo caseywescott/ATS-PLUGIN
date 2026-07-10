@@ -14,50 +14,62 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
                  "Use the Analysis tab to tune the next analyze pass.",
                  juce::dontSendNotification);
     hint.setJustificationType(juce::Justification::topLeft);
-    hint.setFont(juce::Font(13.0f));
-    hint.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
+    hint.setFont(ats_ui::font::ui(12.5f));
+    hint.setColour(juce::Label::textColourId, ats_ui::colour::textSecondary());
     hint.setMinimumHorizontalScale(0.72f);
     addAndMakeVisible(hint);
 
+    auto setupSection = [](juce::Label& l, const juce::String& text) {
+        l.setText(text.toUpperCase(), juce::dontSendNotification);
+        l.setJustificationType(juce::Justification::bottomLeft);
+        l.setFont(ats_ui::font::section());
+        l.setColour(juce::Label::textColourId, ats_ui::colour::textMuted());
+    };
+    setupSection(pitchSectionLabel, "Pitch");
+    setupSection(timeSectionLabel, "Time");
+    setupSection(renderSectionLabel, "Render");
+    addAndMakeVisible(pitchSectionLabel);
+    addAndMakeVisible(timeSectionLabel);
+    addAndMakeVisible(renderSectionLabel);
+
     auto setupLab = [](juce::Label& l, const juce::String& text) {
         l.setText(text, juce::dontSendNotification);
-        l.setJustificationType(juce::Justification::centred);
-        l.setFont(juce::Font(11.0f, juce::Font::bold));
-        l.setMinimumHorizontalScale(0.65f);
+        l.setJustificationType(juce::Justification::centredLeft);
+        l.setFont(ats_ui::font::ui(12.0f));
+        l.setMinimumHorizontalScale(0.7f);
     };
-    setupLab(freqLabel, "freq - Frequency factor");
-    setupLab(timeStretchLabel, "timeStretch - Time factor");
-    setupLab(synStartLabel, "synStart - Synth start (s)");
-    setupLab(synDurLabel, "synDur - Duration (s, 0=full)");
-    setupLab(freqShapeSectionLabel, "Frequency shaping");
-    setupLab(freqShapeModeLabel, "Mode");
+    setupLab(freqLabel, "Freq factor");
+    setupLab(timeStretchLabel, "Time factor");
+    setupLab(synStartLabel, "Synth start");
+    setupLab(synDurLabel, "Duration");
+    setupLab(freqShapeModeLabel, "Shape");
     setupLab(freqShapeAmountLabel, "Amount");
-    setupLab(freqShapePivotLabel, "Pivot (Hz)");
+    setupLab(freqShapePivotLabel, "Pivot");
     setupLab(classicPreviewModeLabel, "Both playback");
     addAndMakeVisible(freqLabel);
     addAndMakeVisible(timeStretchLabel);
     addAndMakeVisible(synStartLabel);
     addAndMakeVisible(synDurLabel);
-    addAndMakeVisible(freqShapeSectionLabel);
     addAndMakeVisible(freqShapeModeLabel);
     addAndMakeVisible(freqShapeAmountLabel);
     addAndMakeVisible(freqShapePivotLabel);
     addAndMakeVisible(classicPreviewModeLabel);
 
-    const auto knobLabCol = ats_ui::colour::text();
+    const auto knobLabCol = ats_ui::colour::textSecondary();
     freqLabel.setColour(juce::Label::textColourId, knobLabCol);
     timeStretchLabel.setColour(juce::Label::textColourId, knobLabCol);
     synStartLabel.setColour(juce::Label::textColourId, knobLabCol);
     synDurLabel.setColour(juce::Label::textColourId, knobLabCol);
-    freqShapeSectionLabel.setColour(juce::Label::textColourId, ats_ui::colour::accent());
     freqShapeModeLabel.setColour(juce::Label::textColourId, knobLabCol);
     freqShapeAmountLabel.setColour(juce::Label::textColourId, knobLabCol);
     freqShapePivotLabel.setColour(juce::Label::textColourId, knobLabCol);
     classicPreviewModeLabel.setColour(juce::Label::textColourId, knobLabCol);
 
+    freqShapeSectionLabel.setVisible(false);   // superseded by pitch/time headings
+
     auto setup = [](juce::Slider& s, const juce::String& name) {
-        s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 18);
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 22);
         s.setName(name);
     };
     setup(freqSlider, "freq");
@@ -65,11 +77,18 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     setup(synStartSlider, "synStart");
     setup(synDurSlider, "synDur");
 
+    synDurSlider.textFromValueFunction = [](double value) {
+        return value <= 0.0005 ? juce::String("FULL") : juce::String(value, 2) + " s";
+    };
+    synDurSlider.valueFromTextFunction = [](const juce::String& text) {
+        return text.trim().startsWithIgnoreCase("full") ? 0.0 : text.getDoubleValue();
+    };
+
     freqShapeAmountSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    freqShapeAmountSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 22);
+    freqShapeAmountSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 22);
     freqShapeAmountSlider.setName("Frequency shaping amount");
     freqShapePivotSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    freqShapePivotSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 22);
+    freqShapePivotSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 22);
     freqShapePivotSlider.setName("Frequency shaping pivot");
     freqSlider.setHelpText("Frequency factor (SPARAMS frec), before MIDI transpose.");
     timeStretchSlider.setHelpText("Time stretch factor (SPARAMS max_stretch).");
@@ -155,147 +174,74 @@ SynthTabPanel::SynthTabPanel(AtsAudioProcessor& p)
     startTimerHz(4);
 }
 
-void SynthTabPanel::paint(juce::Graphics& g)
+void SynthTabPanel::paint(juce::Graphics&)
 {
-    auto area = getLocalBounds().reduced(16).toFloat();
-    const bool compact = area.getWidth() < 620.0f;
-    const bool stackShape = area.getWidth() < 720.0f;
-
-    g.setColour(ats_ui::colour::surface().withAlpha(0.28f));
-    g.fillRoundedRectangle(area.removeFromTop(compact ? 72.0f : 58.0f), 6.0f);
-
-    area.removeFromTop(10.0f);
-    const int knobRows = compact ? 2 : 1;
-    area.removeFromTop((float) (knobRows * (30 + 108) + (knobRows - 1) * 8));
-    area.removeFromTop(12.0f);
-    g.setColour(ats_ui::colour::surface().withAlpha(0.18f));
-    g.fillRoundedRectangle(area.removeFromTop(stackShape ? 176.0f : 118.0f), 6.0f);
+    // Controls sit directly on the window background (spec §10.6); section
+    // headings are Labels, so nothing to paint here.
 }
 
 void SynthTabPanel::resized()
 {
+    // A compact control row: caption on the left, control filling the rest.
+    auto placeRow = [](juce::Rectangle<int>& col, juce::Label& cap, juce::Component& ctl,
+                       int capW = 96) {
+        auto row = col.removeFromTop(ats_ui::kCompactRowH);
+        cap.setBounds(row.removeFromLeft(capW));
+        ctl.setBounds(row.reduced(0, 6));
+        col.removeFromTop(4);
+    };
+    auto placeHeading = [](juce::Rectangle<int>& col, juce::Label& h) {
+        col.removeFromTop(ats_ui::kSectionTopPad);
+        h.setBounds(col.removeFromTop(ats_ui::kSectionLabelH + 2));
+    };
+
     auto r = getLocalBounds().reduced(16);
-    const bool compact = r.getWidth() < 620;
-    const bool stackShape = r.getWidth() < 720;
+    const bool narrow = r.getWidth() < 620;
 
-    hint.setBounds(r.removeFromTop(compact ? 72 : 58).reduced(8, 5));
-    r.removeFromTop(10);
+    hint.setBounds(r.removeFromTop(narrow ? 68 : 52));
+    r.removeFromTop(8);
 
-    const int labelH = 30;
-    const int knobBlockH = 108;
-    const int knobCols = compact ? 2 : 4;
-    const int knobRows = compact ? 2 : 1;
-    auto knobArea = r.removeFromTop(knobRows * (labelH + knobBlockH) + (knobRows - 1) * 8);
+    const int gutter = 20;
+    auto left = r.removeFromLeft((r.getWidth() - gutter) / 2);
+    r.removeFromLeft(gutter);
+    auto right = r;
 
-    std::array<juce::Label*, 4> knobLabels {
-        &freqLabel,
-        &timeStretchLabel,
-        &synStartLabel,
-        &synDurLabel,
-    };
-    std::array<juce::Slider*, 4> knobSliders {
-        &freqSlider,
-        &timeStretchSlider,
-        &synStartSlider,
-        &synDurSlider,
-    };
+    // ---- Left column: PITCH + TIME ----
+    placeHeading(left, pitchSectionLabel);
+    placeRow(left, freqLabel, freqSlider);
 
-    for (int row = 0; row < knobRows; ++row)
     {
-        auto knobRow = knobArea.removeFromTop(labelH + knobBlockH);
-        for (int col = 0; col < knobCols; ++col)
-        {
-            const int index = row * knobCols + col;
-            if (index >= (int) knobLabels.size())
-                break;
-
-            auto cell = knobRow.removeFromLeft(knobRow.getWidth() / (knobCols - col)).reduced(5, 0);
-            knobLabels[(size_t) index]->setBounds(cell.removeFromTop(labelH));
-            knobSliders[(size_t) index]->setBounds(cell);
-        }
-        knobArea.removeFromTop(8);
+        auto row = left.removeFromTop(ats_ui::kCompactRowH);
+        freqShapeModeLabel.setBounds(row.removeFromLeft(96));
+        freqShapeModeBox.setBounds(row.reduced(0, 6));
+        left.removeFromTop(4);
     }
+    placeRow(left, freqShapeAmountLabel, freqShapeAmountSlider);
+    placeRow(left, freqShapePivotLabel, freqShapePivotSlider);
 
-    r.removeFromTop(12);
-    auto shapeRow = r.removeFromTop(stackShape ? 176 : 118);
-    freqShapeSectionLabel.setBounds(shapeRow.removeFromTop(22));
-    shapeRow.removeFromTop(6);
+    placeHeading(left, timeSectionLabel);
+    placeRow(left, timeStretchLabel, timeStretchSlider);
+    placeRow(left, synStartLabel, synStartSlider);
+    placeRow(left, synDurLabel, synDurSlider);
 
-    if (stackShape)
+    // ---- Right column: RENDER ----
+    placeHeading(right, renderSectionLabel);
+    usePhaseButton.setBounds(right.removeFromTop(26));
+    right.removeFromTop(4);
+    useAllPartialsButton.setBounds(right.removeFromTop(26));
+    right.removeFromTop(4);
+    residualOnlyButton.setBounds(right.removeFromTop(26));
+    right.removeFromTop(4);
+    useIfftSynthButton.setBounds(right.removeFromTop(26));
+    right.removeFromTop(8);
+
     {
-        auto modeRow = shapeRow.removeFromTop(42);
-        freqShapeModeLabel.setBounds(modeRow.removeFromLeft(112));
-        freqShapeModeBox.setBounds(modeRow.reduced(2, 5));
-        shapeRow.removeFromTop(6);
-
-        auto amountRow = shapeRow.removeFromTop(42);
-        freqShapeAmountLabel.setBounds(amountRow.removeFromLeft(112));
-        freqShapeAmountSlider.setBounds(amountRow.reduced(2, 3));
-        shapeRow.removeFromTop(6);
-
-        auto pivotRow = shapeRow.removeFromTop(42);
-        freqShapePivotLabel.setBounds(pivotRow.removeFromLeft(112));
-        freqShapePivotSlider.setBounds(pivotRow.reduced(2, 3));
+        auto row = right.removeFromTop(ats_ui::kCompactRowH);
+        classicPreviewModeLabel.setBounds(row.removeFromLeft(110));
+        classicPreviewModeBox.setBounds(row.reduced(0, 6));
+        right.removeFromTop(6);
     }
-    else
-    {
-        auto modeCol = shapeRow.removeFromLeft(180).reduced(4);
-        freqShapeModeLabel.setBounds(modeCol.removeFromTop(26));
-        freqShapeModeBox.setBounds(modeCol.removeFromTop(30));
-        shapeRow.removeFromLeft(12);
-
-        auto amountCol = shapeRow.removeFromLeft(shapeRow.getWidth() / 2).reduced(4);
-        freqShapeAmountLabel.setBounds(amountCol.removeFromTop(24));
-        freqShapeAmountSlider.setBounds(amountCol.removeFromTop(38));
-        shapeRow.removeFromLeft(12);
-
-        auto pivotCol = shapeRow.reduced(4);
-        freqShapePivotLabel.setBounds(pivotCol.removeFromTop(24));
-        freqShapePivotSlider.setBounds(pivotCol.removeFromTop(38));
-    }
-
-    r.removeFromTop(12);
-    std::array<juce::ToggleButton*, 4> toggles {
-        &usePhaseButton,
-        &useAllPartialsButton,
-        &useIfftSynthButton,
-        &residualOnlyButton,
-    };
-    auto toggleArea = r.removeFromTop(compact ? 70 : 30);
-    const int toggleCols = compact ? 2 : 4;
-    const int toggleRows = compact ? 2 : 1;
-    for (int row = 0; row < toggleRows; ++row)
-    {
-        auto toggleRow = toggleArea.removeFromTop(30);
-        for (int col = 0; col < toggleCols; ++col)
-        {
-            const int index = row * toggleCols + col;
-            if (index >= (int) toggles.size())
-                break;
-
-            auto cell = toggleRow.removeFromLeft(toggleRow.getWidth() / (toggleCols - col));
-            toggles[(size_t) index]->setBounds(cell.reduced(3, 1));
-        }
-        toggleArea.removeFromTop(8);
-    }
-
-    r.removeFromTop(12);
-    auto preview = r.removeFromTop(compact ? 66 : 34);
-    if (compact)
-    {
-        auto top = preview.removeFromTop(30);
-        classicPreviewModeLabel.setBounds(top.removeFromLeft(120));
-        classicPreviewModeBox.setBounds(top.reduced(2, 1));
-        classicPreviewModeHint.setBounds(preview.reduced(2, 2));
-    }
-    else
-    {
-        classicPreviewModeLabel.setBounds(preview.removeFromLeft(130));
-        preview.removeFromLeft(8);
-        classicPreviewModeBox.setBounds(preview.removeFromLeft(260).reduced(1));
-        preview.removeFromLeft(10);
-        classicPreviewModeHint.setBounds(preview);
-    }
+    classicPreviewModeHint.setBounds(right.removeFromTop(juce::jmin(48, right.getHeight())));
 }
 
 void SynthTabPanel::timerCallback()

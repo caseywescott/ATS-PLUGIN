@@ -1835,7 +1835,15 @@ void AtsAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     juce::ignoreUnused(samplesPerBlock);
 }
 
-void AtsAudioProcessor::releaseResources() {}
+void AtsAudioProcessor::releaseResources()
+{
+    // Logic calls this when it stops the audio engine (sleep/wake, device change).
+    // Cancel any in-flight background jobs so joinWorkers() in setStateInformation
+    // (and the destructor) doesn't block the message thread for 10–60 seconds
+    // waiting for a long tracker() run to finish.
+    cancelJobs();
+    joinWorkers();
+}
 
 bool AtsAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
@@ -4244,7 +4252,7 @@ static juce::AudioBuffer<float> renderMorphTrajectoryBuffer(
 
     // Multiple carriers per critical band, each at a distinct (jittered) frequency inside the
     // band and driven by independent band-limited noise. A single band-center carrier collapses
-    // each band's energy into a narrow tone, leaving spectral gaps that read as a watery/phasey
+    // each band's energy into a narrow tone, leaving spectral gaps that read as a hollow/phasey
     // texture on sustained residual (pads). Spreading carriers across the band fills it with
     // smoother broadband noise. Mirrors the recipe's residual component layout.
     constexpr int kResCarriers = 5;
@@ -6573,13 +6581,24 @@ void AtsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 
     juce::MemoryBlock atsData;
     {
-        const juce::ScopedLock ml(modelLock);
-        if (analyzedModel.get() != nullptr)
+        // Snapshot the model under a brief lock so ats_save (disk I/O + many
+        // fprintf calls) never blocks the resynth thread on modelLock.
+        ats::AtsSoundPtr modelSnapshot;
+        {
+            const juce::ScopedLock ml(modelLock);
+            if (analyzedModel.get() != nullptr)
+                modelSnapshot.reset(copy_sound(analyzedModel.get()));
+        }
+        if (modelSnapshot.get() != nullptr)
         {
             juce::File tmp = juce::File::createTempFile("atsstate");
             tmp.deleteFile();
             const juce::String path = tmp.getFullPathName();
-            if (ats_save(analyzedModel.get(), path.toUTF8(), ap.SMR_thres, ap.type) >= 0
+            // Verbatim session snapshot: never apply the analysis SMR threshold here.
+            // Models loaded from .ats files carry all-zero SMR data, so any positive
+            // threshold silently drops every partial from the saved state (and the
+            // restored 0-partial model then renders residual-only).
+            if (ats_save(modelSnapshot.get(), path.toUTF8(), 0.0, ap.type) >= 0
                 && tmp.existsAsFile() && tmp.getSize() > 0)
             {
                 juce::FileInputStream fis(path);

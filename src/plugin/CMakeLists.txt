@@ -33,6 +33,11 @@ juce_add_plugin(
 
 juce_generate_juce_header(AtsResynth)
 
+juce_add_binary_data(AtsResynthAssets
+  SOURCES
+    "${CMAKE_SOURCE_DIR}/assets/transport/play_idle_square.svg"
+    "${CMAKE_SOURCE_DIR}/assets/transport/stop_active_square.svg")
+
 target_sources(
   AtsResynth
   PRIVATE PluginEntry.cpp
@@ -61,7 +66,7 @@ target_sources(
 target_include_directories(AtsResynth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core"
                                               "${ATS_ATSA_SOURCE_DIR}")
 
-target_link_libraries(AtsResynth PRIVATE juce::juce_audio_utils atsa)
+target_link_libraries(AtsResynth PRIVATE juce::juce_audio_utils atsa AtsResynthAssets)
 
 target_compile_definitions(AtsResynth PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
                                              JUCE_MODAL_LOOPS_PERMITTED=1
