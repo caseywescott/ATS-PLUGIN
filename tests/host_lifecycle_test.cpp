@@ -15,6 +15,15 @@ int main()
     assert(host.identity().latencySeconds == 0.0);
     assert(host.identity().tailSeconds == 0.0);
     assert(host.identity().midiInput && !host.identity().midiOutput);
+    const auto parameterInfo = host.parameterInfo();
+    assert(parameterInfo.size() == 81);
+    assert(parameterInfo.front().hostNumericId == 1);
+    assert(parameterInfo.front().id == "partGain");
+    assert(host.setParameterNormalized(parameterInfo.front().hostNumericId, 0.5f));
+    assert(host.parameters().read("partGain") > 0.0f);
+    assert(host.setParameterText("partGain", "2"));
+    assert(host.parameterText("partGain") == "2");
+    assert(!host.setParameterText("missing", "1"));
     assert(host.initialize(ats::host::HostFormat::vst3));
     assert(host.format() == ats::host::HostFormat::vst3);
     const bool invalidPrepare = host.prepare({ 0.0, 64, 2 });

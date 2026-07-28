@@ -6,6 +6,9 @@
 #include "../ui/Editor.h"
 
 #include <algorithm>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace ats::host
 {
@@ -44,6 +47,24 @@ struct HostPrepareSpec
     std::uint32_t inputChannels = 0;
 };
 
+struct HostParameterInfo
+{
+    std::string_view id;
+    std::string_view name;
+    std::string_view group;
+    ParameterType type = ParameterType::floatValue;
+    float minimum = 0.0f;
+    float maximum = 1.0f;
+    float defaultValue = 0.0f;
+    float interval = 0.0001f;
+    float skew = 1.0f;
+    std::uint32_t hostNumericId = 0;
+    bool automatable = true;
+    bool readOnly = false;
+    const std::string_view* choices = nullptr;
+    std::uint16_t choiceCount = 0;
+};
+
 class HostAdapter
 {
 public:
@@ -64,6 +85,61 @@ public:
     { return { editorWidth_, editorHeight_ }; }
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
+
+    [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
+    { return ParameterRegistry::descriptors(); }
+
+    [[nodiscard]] std::vector<HostParameterInfo> parameterInfo() const
+    {
+        std::vector<HostParameterInfo> result;
+        const auto& descriptors = ParameterRegistry::descriptors();
+        result.reserve(descriptors.size());
+        for (const auto& descriptor : descriptors)
+            result.push_back({ descriptor.id, descriptor.name, descriptor.group, descriptor.type,
+                               descriptor.minimum, descriptor.maximum, descriptor.defaultValue,
+                               descriptor.interval, descriptor.skew, descriptor.hostNumericId,
+                               descriptor.automatable, descriptor.readOnly, descriptor.choices,
+                               descriptor.choiceCount });
+        return result;
+    }
+
+    bool applyParameterChange(const ParameterChange& change) noexcept
+    {
+        if (change.index >= parameters_.size())
+            return false;
+        const auto& descriptor = ParameterRegistry::descriptors()[change.index];
+        return descriptor.automatable && !descriptor.readOnly
+            && parameters_.write(change.index, change.value);
+    }
+
+    bool setParameterNormalized(std::uint32_t hostNumericId, float normalized) noexcept
+    {
+        if (!std::isfinite(normalized))
+            return false;
+        const auto& descriptors = ParameterRegistry::descriptors();
+        const auto it = std::find_if(descriptors.begin(), descriptors.end(),
+                                     [hostNumericId](const auto& descriptor) {
+                                         return descriptor.hostNumericId == hostNumericId;
+                                     });
+        if (it == descriptors.end() || !it->automatable || it->readOnly)
+            return false;
+        return parameters_.write(it->denseIndex, it->denormalize(normalized));
+    }
+
+    [[nodiscard]] std::string parameterText(std::string_view id) const
+    {
+        const auto* descriptor = ParameterRegistry::find(id);
+        return descriptor == nullptr ? std::string {} : descriptor->text(parameters_.read(id));
+    }
+
+    bool setParameterText(std::string_view id, std::string_view text) noexcept
+    {
+        const auto* descriptor = ParameterRegistry::find(id);
+        if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
+            return false;
+        float value = 0.0f;
+        return descriptor->fromText(text, value) && parameters_.write(id, value);
+    }
 
     bool initialize(HostFormat format) noexcept
     {
