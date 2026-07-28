@@ -28,8 +28,12 @@ Task ID: RMJ-070 / commit 20
   standalone editor creation, bounded state restore, and preservation after
   rejected input.
 - Expected evidence: `host_lifecycle_test` and headless build.
-- Known blocker: actual VST3/AU/Standalone wrappers and host scans require a
-  pinned native SDK/toolchain not present in this checkout.
+- Production-format boundary: the pinned VST3 SDK is now available through the
+  Mearcstapa precedent (`steinbergmedia/vst3sdk` commit
+  `05c4a9763f311a58fe3f34b68a199e5eea92e2b4`, tag `v3.7.6_build_18`). The
+  neutral adapter remains the wrapper owner; the first real VST3 projection is
+  recorded separately. AU/standalone projections and native editor callbacks
+  remain later gates.
 
 ## Evidence
 
@@ -46,4 +50,4 @@ editor attachment seam without claiming native window support. Parameter
 enumeration, normalized writes, text conversion, and invalid-ID rejection are
 also covered. The host state bridge now validates the ATSP magic/version and
 64 MiB bound before replacing its opaque chunk; the full legacy payload codec
-and actual SDK wrappers/host scans remain the next boundary.
+and AU/standalone wrappers/host scans remain the next boundary.

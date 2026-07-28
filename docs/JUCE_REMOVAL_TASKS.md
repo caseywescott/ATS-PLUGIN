@@ -178,6 +178,17 @@ listed commit supplies the cross-layer proof.
 
 ## Final acceptance checklist
 
+### Current execution status (2026-07-28)
+
+- [x] Commit 21 VST3 format slice: exact SDK commit pinned in CMake and a real
+  artifact/lifecycle/process test passes.
+- [ ] Commit 21 completion gates: host automation/state-reopen stress,
+  pluginval-equivalent scan, and VST3 `IPlugView` editor callbacks.
+- [ ] Commit 22 AU and standalone wrappers, including native-window/editor
+  smoke evidence.
+- [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
+  JUCE removal remain open.
+
 - [ ] Baseline, backend revision, source inventory, copy manifest, fixtures,
   hashes, and decisions are frozen.
 - [ ] Every `ARCH-*`/`DSP-*` row has one owner, typed API, thread domain,

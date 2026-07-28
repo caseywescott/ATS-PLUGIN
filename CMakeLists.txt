@@ -16,6 +16,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
+option(ATS_BUILD_NATIVE_VST3 "Build the JUCE-free ATS VST3 wrapper" OFF)
+set(ATS_VST3_SDK_VERSION "05c4a9763f311a58fe3f34b68a199e5eea92e2b4"
+    CACHE STRING "Pinned Steinberg VST3 SDK commit for the native wrapper")
+set(ATS_VST3_SDK_DIR "" CACHE PATH
+    "Path to a standalone Steinberg VST3 SDK checkout (overrides download)")
 option(ATS_BUILD_VISAGE_UI_PROBE "Build the pinned Visage native editor probe" OFF)
 set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
@@ -343,6 +348,10 @@ set(_ATSA_FULL "")
 foreach(_f IN LISTS _ATSA_SRCS)
   list(APPEND _ATSA_FULL "${ATS_ATSA_SOURCE_DIR}/${_f}")
 endforeach()
+
+if(ATS_BUILD_NATIVE_VST3)
+  add_subdirectory(src/host/vst3)
+endif()
 
 add_library(atsa STATIC ${_ATSA_FULL})
 target_include_directories(atsa PUBLIC "${ATS_ATSA_SOURCE_DIR}")

@@ -19,6 +19,8 @@ The latest implementation commits are:
 - `ac111be` native spectrum wheel/drag navigation wiring
 - `f4d9943` source-current ANL/RND activity indicators
 - `e343c1d` backend-neutral macOS native file-dialog bridge
+- current native VST3 wrapper slice: pinned Steinberg SDK artifact and
+  lifecycle/process test
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -51,11 +53,18 @@ Validation on 2026-07-28:
   backend-neutral result seam and macOS `NSOpenPanel`/`NSSavePanel`; automated
   modal accept/cancel evidence remains open.
 
+- The first real JUCE-free VST3 artifact now builds against Steinberg VST3 SDK
+  commit `05c4a9763f311a58fe3f34b68a199e5eea92e2b4` (tag
+  `v3.7.6_build_18`) and passes `ats_vst3_artifact_test` for identity, 81
+  parameters, no-input stereo setup, state header, lifecycle, and process
+  silence. This follows the Mearcstapa pinned-dependency pattern and removes
+  the former “no native SDK” blocker for VST3 only.
+
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
-integration, the full widget parity port, and the complete real-dispatch
-matrix remain open. Neutral host state, parameter, and lifecycle seams now
+integration, the VST3 `IPlugView` bridge, AU/standalone wrappers, the full
+widget parity port, and the complete real-dispatch matrix remain open. Neutral host state, parameter, and lifecycle seams now
 compile through explicit format targets, and the real popup path is covered.
 The JUCE removal/build-artifact gates must not be claimed complete until those
 follow-on gates pass.
