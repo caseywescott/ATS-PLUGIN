@@ -3,6 +3,7 @@
 #include "EditorHost.h"
 #include "EditorPageModels.h"
 #include "SessionPageModel.h"
+#include "SpectrumInteractionModel.h"
 #include "ThemeTokens.h"
 
 #include <array>
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] const SynthesisPageModel& synthesis() const noexcept { return synthesis_; }
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
+    [[nodiscard]] const SpectrumInteractionModel& spectrum() const noexcept { return spectrum_; }
 
     bool selectPage(std::size_t index) noexcept
     {
@@ -71,6 +73,7 @@ private:
     SynthesisPageModel synthesis_{};
     PartialPageModel partials_{};
     MathPageModel math_{};
+    SpectrumInteractionModel spectrum_{};
 };
 
 } // namespace ats::ui

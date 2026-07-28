@@ -22,5 +22,6 @@ int main()
     assert(labels[4] == std::string("MATH"));
     assert(shell.session().state().morph.timeline.size() == 2);
     assert(!shell.session().state().sources[0].hasModel);
+    assert(shell.spectrum().mode() == ats::ui::SpectralTraceMode::combined);
     return 0;
 }

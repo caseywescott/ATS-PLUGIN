@@ -106,7 +106,7 @@ public:
                         258.0f, 112.0f, 170.0f, 18.0f);
             canvas.text(session.sources[1].hasModel ? "READY" : "DROP WAV / ATS",
                         labelFont, visage::Font::kLeft, 258.0f, 132.0f, 220.0f, 18.0f);
-            canvas.text("PLAY  BOTH  |  SMEAR OFF  |  MORPH TIMELINE  A -> B",
+            canvas.text("PLAY  BOTH  |  SMEAR OFF  |  SPECTRUM  COMBINED  |  A -> B",
                         labelFont, visage::Font::kLeft, 18.0f, 176.0f, 520.0f, 18.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 204.0f, 380.0f, 3.0f);
