@@ -113,6 +113,15 @@ public:
                 requestKeyboardFocus();
                 return;
             }
+            if (shell_.state().page == EditorPage::session && isSpectrumPoint(point))
+            {
+                spectrumDragging_ = true;
+                spectrumLastX_ = point.x;
+                spectrumLastY_ = point.y;
+                shell_.spectrum().setPointerCaptured(true);
+                requestKeyboardFocus();
+                return;
+            }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
@@ -139,6 +148,16 @@ public:
             requestKeyboardFocus();
         };
         onMouseDrag() += [this](const visage::MouseEvent& event) {
+            if (spectrumDragging_)
+            {
+                const auto point = event.relativePosition();
+                shell_.spectrum().pan((spectrumLastX_ - point.x) / 608.0f,
+                                       (spectrumLastY_ - point.y) / 184.0f);
+                spectrumLastX_ = point.x;
+                spectrumLastY_ = point.y;
+                redraw();
+                return;
+            }
             if (!parameterDragging_)
                 return;
             parameterValue_ = parameterAt(event.relativePosition().x);
@@ -146,6 +165,12 @@ public:
             redraw();
         };
         onMouseUp() += [this](const visage::MouseEvent&) {
+            if (spectrumDragging_)
+            {
+                spectrumDragging_ = false;
+                shell_.spectrum().setPointerCaptured(false);
+                return;
+            }
             if (parameterDragging_)
             {
                 emitParameterGesture(parameterValue_, false, true);
@@ -154,6 +179,20 @@ public:
             }
             if (sink_.mouseUp)
                 sink_.mouseUp(sink_.context);
+        };
+        onMouseWheel() += [this](const visage::MouseEvent& event) {
+            const auto point = event.relativePosition();
+            if (!isSpectrumPoint(point))
+                return false;
+            const auto delta = event.precise_wheel_delta_y != 0.0f
+                ? event.precise_wheel_delta_y : event.wheel_delta_y;
+            if (delta == 0.0f)
+                return true;
+            const auto factor = delta > 0.0f ? 1.15f : 1.0f / 1.15f;
+            shell_.spectrum().zoom(factor, (point.x - 24.0f) / 608.0f,
+                                   (point.y - 250.0f) / 184.0f);
+            redraw();
+            return true;
         };
     }
 
@@ -325,6 +364,11 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool isSpectrumPoint(const visage::Point& point) noexcept
+    {
+        return point.x >= 24.0f && point.x < 632.0f && point.y >= 250.0f && point.y < 434.0f;
+    }
+
     [[nodiscard]] float parameterAt(float x) const noexcept
     {
         return std::clamp((x - 18.0f) / 420.0f, 0.0f, 1.0f);
@@ -368,6 +412,9 @@ private:
     SpectralTraceSnapshot spectrumSnapshot_{};
     bool parameterDragging_ = false;
     float parameterValue_ = 0.5f;
+    bool spectrumDragging_ = false;
+    float spectrumLastX_ = 0.0f;
+    float spectrumLastY_ = 0.0f;
 };
 
 } // namespace
