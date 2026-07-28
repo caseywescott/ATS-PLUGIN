@@ -423,7 +423,7 @@
           "proves": "Superseded generations cancel and stale completion callbacks are converted to typed cancellation."
         },
         {
-          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
+          "path": "tests/ui/real_dispatch_harness_test.mm",
           "state": "required",
           "proves": "Worker results and UI actions traverse the target backend."
         }
@@ -432,7 +432,8 @@
         "required: scheduler event trace"
       ],
       "evidence": [
-        "cmake --build build-review --target job_coordinator_test job_scheduler_test -j2 && ctest --test-dir build-review -R 'job_coordinator_test|job_scheduler_test' --output-on-failure"
+        "cmake --build build-review --target job_coordinator_test job_scheduler_test -j2 && ctest --test-dir build-review -R 'job_coordinator_test|job_scheduler_test' --output-on-failure",
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
       ],
       "status": "implemented",
       "deviation_id": null,
@@ -607,7 +608,7 @@
           "proves": "The required UI surface inventory is checked in."
         },
         {
-          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
+          "path": "tests/ui/real_dispatch_harness_test.mm",
           "state": "required",
           "proves": "Target-backend hit testing, focus, popup, keyboard, and action dispatch."
         }
@@ -616,8 +617,10 @@
         "required: deterministic screenshot set",
         "required: geometry/hit-region manifest"
       ],
-      "evidence": [],
-      "status": "implemented",
+      "evidence": [
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
+      ],
+      "status": "mapped",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1803,7 +1806,7 @@
           "proves": "Cadence, ownership, focused text/pointer capture/pending gesture protection, and teardown cancellation."
         },
         {
-          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
+          "path": "tests/ui/real_dispatch_harness_test.mm",
           "state": "required",
           "proves": "The refresh action traverses a real target backend and preserves target ownership."
         }
@@ -1812,7 +1815,8 @@
         "required: deterministic scheduler/timer trace"
       ],
       "evidence": [
-        "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure"
+        "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure",
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
       ],
       "status": "mapped",
       "deviation_id": null,

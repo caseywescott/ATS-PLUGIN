@@ -25,7 +25,8 @@ Validation on 2026-07-28:
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
-integration, the full widget parity port, and the real-dispatch matrix remain
-open. The UI/editor and scheduler rows are therefore unblocked but still
-planned, and the JUCE removal/build-artifact gates must not be claimed complete
-until those follow-on gates pass.
+integration, the full widget parity port, and the complete real-dispatch
+matrix remain open. The foundational native dispatch harness now passes, so
+the UI/editor and scheduler rows are unblocked but still mapped, and the JUCE
+removal/build-artifact gates must not be claimed complete until those follow-on
+gates pass.
