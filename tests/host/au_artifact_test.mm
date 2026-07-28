@@ -77,6 +77,14 @@ int main(int argc, char** argv)
                 setProperty(plugin, kAudioUnitProperty_StreamFormat,
                             kAudioUnitScope_Output, 0, &format, sizeof(format)) == noErr,
             "stereo output format");
+    AudioStreamBasicDescription confirmed {};
+    UInt32 confirmedSize = sizeof(confirmed);
+    require(getProperty(plugin, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0,
+                         &confirmed, &confirmedSize) == noErr,
+            "read stereo output format");
+    std::cerr << "AU format channels=" << confirmed.mChannelsPerFrame
+              << " flags=" << confirmed.mFormatFlags
+              << " bytes=" << confirmed.mBytesPerFrame << '\n';
 
     CFPropertyListRef state = nullptr;
     UInt32 stateSize = sizeof(state);
@@ -95,6 +103,33 @@ int main(int argc, char** argv)
                              &state, sizeof(state)) == noErr,
             "class-info state restore");
     CFRelease(state);
+
+    constexpr UInt32 frames = 64;
+    std::array<float, frames> left {};
+    std::array<float, frames> right {};
+    struct StereoBufferList
+    {
+        AudioBufferList list {};
+        AudioBuffer second {};
+    } output;
+    output.list.mNumberBuffers = 2;
+    output.list.mBuffers[0] = { 1, static_cast<UInt32>(left.size() * sizeof(float)), left.data() };
+    output.second = { 1, static_cast<UInt32>(right.size() * sizeof(float)), right.data() };
+    auto process = reinterpret_cast<AudioUnitProcessMultipleProc>(
+        plugin->Lookup(kAudioUnitProcessMultipleSelect));
+    AudioBufferList* outputs[] = { &output.list };
+    AudioTimeStamp timestamp {};
+    // A direct factory instance has no component-manager bus metadata for
+    // AUBase's redundant render-argument check. The selector still enters
+    // the real ProcessMultipleBufferLists override below.
+    AudioUnitRenderActionFlags processFlags = kAudioUnitRenderAction_DoNotCheckRenderArgs;
+    require(process != nullptr, "stereo process selector");
+    const auto processStatus = process(plugin, &processFlags, &timestamp, frames, 0, nullptr, 1, outputs);
+    require(processStatus == noErr, "stereo process selector");
+    for (const auto sample : left)
+        require(sample == 0.0f, "silent left output without playback");
+    for (const auto sample : right)
+        require(sample == 0.0f, "silent right output without playback");
 
     auto uninitialize = plugin->Lookup(kAudioUnitUninitializeSelect);
     require(uninitialize != nullptr && uninitialize(plugin) == noErr, "AudioUnitUninitialize");

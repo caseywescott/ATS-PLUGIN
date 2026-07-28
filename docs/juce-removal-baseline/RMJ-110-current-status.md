@@ -77,9 +77,9 @@ Validation on 2026-07-28:
   against pinned Apple AudioUnitSDK commit
   `53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9` and passes the direct factory
   artifact probe for identity, 81 parameters, parameter write, stereo float
-  format, ATSP class-info state round-trip, initialize, uninitialize, and
-  close. AU registration/`auval`, render/automation stress, and a native AU
-  editor remain open.
+  format, ATSP class-info state round-trip, zero-input stereo process selector,
+  initialize, uninitialize, and close. AU registration/`auval`, MIDI/
+  automation stress, and a native AU editor remain open.
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters

@@ -59,10 +59,17 @@ public:
         return host_.restoreState(bytes, size) ? noErr : kAudioUnitErr_InvalidPropertyValue;
     }
 
-    OSStatus ProcessBufferLists(AudioUnitRenderActionFlags&,
-                                const AudioBufferList&, AudioBufferList& output,
-                                UInt32 frames) override
+    OSStatus ProcessMultipleBufferLists(AudioUnitRenderActionFlags&,
+                                        UInt32 inputFrames,
+                                        UInt32 inputCount,
+                                        const AudioBufferList**,
+                                        UInt32 outputCount,
+                                        AudioBufferList** outputs) override
     {
+        if (inputCount != 0 || outputCount != 1 || outputs == nullptr || outputs[0] == nullptr)
+            return kAudio_ParamError;
+        const auto& output = *outputs[0];
+        const auto frames = inputFrames;
         if (output.mNumberBuffers == 0 || output.mNumberBuffers > 2)
             return kAudio_ParamError;
         std::array<float*, 2> channels{};
@@ -173,4 +180,4 @@ private:
 };
 }
 
-AUSDK_COMPONENT_ENTRY(ausdk::AUBaseProcessFactory, AtsAudioUnit)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseProcessMultipleFactory, AtsAudioUnit)
