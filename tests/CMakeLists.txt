@@ -80,6 +80,13 @@ target_include_directories(ui_backend_contract_test PRIVATE
 target_compile_features(ui_backend_contract_test PRIVATE cxx_std_17)
 add_test(NAME ui_backend_contract_test COMMAND ui_backend_contract_test)
 
+add_executable(editor_shell_test editor_shell_test.cpp)
+target_include_directories(editor_shell_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(editor_shell_test PRIVATE cxx_std_17)
+add_test(NAME editor_shell_test COMMAND editor_shell_test)
+
 add_executable(dsp_service_contract_test dsp_service_contract_test.cpp)
 target_include_directories(dsp_service_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"

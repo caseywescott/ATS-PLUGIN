@@ -1,6 +1,8 @@
 #include "VisageEditor.h"
+#include "EditorShell.h"
 #include "VisageNativeMac.h"
 
+#include <embedded/fonts.h>
 #include <visage/app.h>
 #include <visage_ui/popup_menu.h>
 
@@ -40,6 +42,13 @@ public:
                 popup.show(this, { 40, 40 });
                 return;
             }
+            const auto point = event.relativePosition();
+            if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
+            {
+                const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
+                if (shell_.selectPage(page))
+                    redraw();
+            }
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
             requestKeyboardFocus();
@@ -48,6 +57,42 @@ public:
             if (sink_.mouseUp)
                 sink_.mouseUp(sink_.context);
         };
+    }
+
+    void draw(visage::Canvas& canvas) override
+    {
+        const auto tokens = visageTokens();
+        canvas.setColor(tokens.background);
+        canvas.fill(0.0f, 0.0f, width(), height());
+        canvas.setColor(tokens.panel);
+        canvas.rectangle(0.0f, 0.0f, width(), 48.0f);
+        canvas.setColor(tokens.surface);
+        canvas.rectangle(16.0f, 56.0f, std::min(width() - 32.0f, 640.0f), 36.0f);
+
+        const visage::Font titleFont(17.0f, visage::fonts::Lato_Regular_ttf);
+        const visage::Font labelFont(10.0f, visage::fonts::Lato_Regular_ttf);
+        canvas.setColor(tokens.accent);
+        canvas.text("ATS RESYNTH", titleFont, visage::Font::kLeft, 16.0f, 7.0f, 220.0f, 22.0f);
+        canvas.setColor(tokens.secondaryText);
+        canvas.text("SPECTRAL MODEL EDITOR", labelFont, visage::Font::kLeft,
+                    16.0f, 28.0f, 220.0f, 14.0f);
+
+        const auto labels = EditorShellModel::pageLabels();
+        const auto selected = static_cast<std::size_t>(shell_.state().page);
+        const float segmentWidth = 126.0f;
+        for (std::size_t i = 0; i < labels.size(); ++i)
+        {
+            if (i == selected)
+            {
+                canvas.setColor(tokens.accent);
+                canvas.roundedRectangle(18.0f + segmentWidth * static_cast<float>(i),
+                                       58.0f, segmentWidth - 4.0f, 32.0f, 5.0f);
+            }
+            canvas.setColor(i == selected ? tokens.background : tokens.text);
+            canvas.text(labels[i], labelFont, visage::Font::kCenter,
+                        18.0f + segmentWidth * static_cast<float>(i), 58.0f,
+                        segmentWidth - 4.0f, 32.0f);
+        }
     }
 
     bool receivesTextInput() override { return true; }
@@ -65,7 +110,25 @@ public:
     }
 
 private:
+    struct VisageTokens
+    {
+        std::uint32_t background;
+        std::uint32_t panel;
+        std::uint32_t surface;
+        std::uint32_t text;
+        std::uint32_t secondaryText;
+        std::uint32_t accent;
+    };
+
+    [[nodiscard]] VisageTokens visageTokens() const noexcept
+    {
+        const auto tokens = ThemeTokens::forTheme(shell_.state().theme);
+        return { tokens.background.argb, tokens.panel.argb, tokens.surface.argb,
+                 tokens.text.argb, tokens.secondaryText.argb, tokens.accent.argb };
+    }
+
     EditorEventSink sink_{};
+    EditorShellModel shell_{};
 };
 
 } // namespace

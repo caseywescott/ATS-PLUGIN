@@ -7,6 +7,8 @@ sends native mouse and keyboard events to the embedded view.
 
 The harness verifies that:
 
+- the framework-free `EditorShellModel` preserves the five hard-swapped pages,
+  Ember/Porcelain theme selection, history enablement, and activity indicators;
 - host attach, scale, resize, show/hide, detach, and destruction forward through
   the neutral `IEditor` seam;
 - a native mouse gesture becomes typed `SetParameterAction` begin/end events;
@@ -24,8 +26,10 @@ cmake --build /tmp/ats-visage-probe-arm64-release \
   --target real_dispatch_harness_test -j2
 ctest --test-dir /tmp/ats-visage-probe-arm64-release \
   --output-on-failure -R real_dispatch_harness_test
+ctest --test-dir build-review --output-on-failure -R editor_shell_test
 ```
 
-Result: `1/1` passed. This is the foundational real-dispatch proof; popup row
+Result: native probes `2/2` passed and the shell model test passed. This is the
+foundational real-dispatch proof; popup row
 selection, dialogs, pointer capture, widget parity, and production host-wrapper
 artifacts remain follow-on work.
