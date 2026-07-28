@@ -467,7 +467,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE)
   add_executable(visage_editor_probe tests/ui/visage_editor_probe.mm)
   target_include_directories(visage_editor_probe PRIVATE "${CMAKE_SOURCE_DIR}/src/ui")
   target_compile_features(visage_editor_probe PRIVATE cxx_std_17)
-  target_link_libraries(visage_editor_probe PRIVATE ats_visage_editor visage "-framework Cocoa")
+  target_link_libraries(visage_editor_probe PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
   add_test(NAME visage_editor_probe COMMAND visage_editor_probe)
 
   add_executable(real_dispatch_harness_test tests/ui/real_dispatch_harness_test.mm)

@@ -1,4 +1,5 @@
 #include "../../src/ui/VisageEditor.h"
+#include "../../src/host/HostAdapter.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -138,7 +139,19 @@ int main()
         [hostWindow orderOut:nil];
         [hostWindow close];
 
-        std::cout << "Visage native editor probe passed: attach, resize, scale, focus, mouse, text, hide, teardown\n";
+        ats::host::HostAdapter standaloneHost;
+        REQUIRE(standaloneHost.initialize(ats::host::HostFormat::standalone));
+        auto standaloneEditor = std::make_unique<ats::ui::VisageEditor>();
+        REQUIRE(standaloneHost.attachStandaloneEditor(*standaloneEditor, 1.0f, 480.0f, 320.0f));
+        REQUIRE(standaloneHost.editorAttached() && standaloneHost.editorVisible());
+        REQUIRE(standaloneEditor->nativeHandle() != nullptr);
+        drainEvents(application);
+        REQUIRE(standaloneHost.setEditorVisible(false));
+        REQUIRE(!standaloneEditor->isShowing());
+        standaloneHost.detachEditor();
+        standaloneEditor.reset();
+
+        std::cout << "Visage native editor probe passed: embedded and standalone attach, resize, scale, focus, mouse, text, hide, teardown\n";
     }
     return 0;
 }

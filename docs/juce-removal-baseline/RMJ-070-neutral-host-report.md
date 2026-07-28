@@ -11,7 +11,8 @@ Task ID: RMJ-070 / commit 20
   editor attach/resize calls in `src/plugin/`.
 - Replacement owner/API: `ats::host::HostIdentity`, `HostBusLayout`,
   `HostStateChunk`, and
-  `HostAdapter::{initialize,prepare,process,release,restoreState,...}`.
+  `HostAdapter::{initialize,prepare,process,release,restoreState,
+  attachStandaloneEditor,...}`.
 - Thread domain: host callback for lifecycle/process; editor seam is host/UI
   controlled and contains no platform window object.
 - State/format impact: identity, bus, MIDI, zero-latency, zero-tail, and
@@ -24,7 +25,8 @@ Task ID: RMJ-070 / commit 20
 - Scope: source-current neutral adapter. No SDK types are introduced.
 - Required tests: identity fields, stereo/no-input bus contract, repeated
   lifecycle, MIDI/process smoke, editor attach/detach and logical sizing,
-  bounded state restore and preservation after rejected input.
+  standalone editor creation, bounded state restore, and preservation after
+  rejected input.
 - Expected evidence: `host_lifecycle_test` and headless build.
 - Known blocker: actual VST3/AU/Standalone wrappers and host scans require a
   pinned native SDK/toolchain not present in this checkout.

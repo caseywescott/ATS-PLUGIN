@@ -42,6 +42,8 @@ public:
         return nativeParent != nullptr;
     }
 
+    bool showStandalone() override { return false; }
+
     void show() override { showing_ = parent_ != nullptr; }
     void hide() override { showing_ = false; }
     bool isShowing() const override { return showing_; }

@@ -238,6 +238,28 @@ public:
         return true;
     }
 
+    bool attachStandaloneEditor(ui::IEditor& editor, float scale,
+                                float logicalWidth, float logicalHeight) noexcept
+    {
+        if (format_ != HostFormat::standalone || scale <= 0.0f ||
+            logicalWidth <= 0.0f || logicalHeight <= 0.0f)
+            return false;
+        if (!editor.setSize(static_cast<std::uint32_t>(logicalWidth),
+                            static_cast<std::uint32_t>(logicalHeight)))
+            return false;
+        editor.setScale(scale);
+        if (!editor.showStandalone())
+            return false;
+
+        editor_ = &editor;
+        editorAttached_ = true;
+        editorVisible_ = editor.isShowing();
+        editorScale_ = scale;
+        editorWidth_ = logicalWidth;
+        editorHeight_ = logicalHeight;
+        return editorVisible_;
+    }
+
     void detachEditor() noexcept
     {
         if (editor_ != nullptr)

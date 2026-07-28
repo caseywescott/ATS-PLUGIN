@@ -25,6 +25,7 @@ The arm64 macOS probe creates an `NSWindow`, embeds the Visage view into its
 `contentView`, then exercises:
 
 - create and native parent attachment;
+- create and standalone native window attachment;
 - logical resize at 640×480 and scale 1.25;
 - visibility and native focus;
 - native mouse-down dispatch;

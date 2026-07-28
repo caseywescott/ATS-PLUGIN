@@ -21,6 +21,7 @@ public:
     bool canResize() const override;
     void setScale(double scale) override;
     bool setParent(void* nativeParent) override;
+    bool showStandalone() override;
     void show() override;
     void hide() override;
     bool isShowing() const override;

@@ -274,6 +274,18 @@ bool VisageEditor::setParent(void* nativeParent)
     return impl_->app.window() != nullptr;
 }
 
+bool VisageEditor::showStandalone()
+{
+    if (!impl_->app.window())
+        impl_->app.show();
+    else
+        impl_->app.window()->show();
+    impl_->attached = impl_->app.window() != nullptr;
+    impl_->visible = impl_->attached && impl_->app.isShowing();
+    detail::setNativeViewHidden(nativeHandle(), false);
+    return impl_->visible;
+}
+
 void VisageEditor::show()
 {
     if (impl_->app.window())

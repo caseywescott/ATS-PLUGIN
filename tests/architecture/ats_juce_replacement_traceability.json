@@ -28,7 +28,7 @@
         "src/plugin/PluginEntry.cpp::createPluginFilter"
       ],
       "replacement_owner": "HostAdapter and thin VST3/AU/native entry shims",
-      "replacement_api": "HostAdapter::initialize, prepare, process(AudioBufferView, MidiEventList), release, restoreState(HostStateChunk); wrapper-specific entry points translate to neutral types only.",
+      "replacement_api": "HostAdapter::initialize, prepare, process(AudioBufferView, MidiEventList), release, restoreState(HostStateChunk), attachStandaloneEditor; wrapper-specific entry points translate to neutral types only.",
       "algorithm_or_dsp": "none",
       "data_flow": "Host lifecycle, audio buffers, MIDI events, bus/layout information, and state requests cross into neutral engine services.",
       "thread_domain": "host_callback",
@@ -549,7 +549,7 @@
         {
           "path": "tests/ui/visage_editor_probe.mm",
           "state": "required",
-          "proves": "Pinned Visage ApplicationWindow attaches to a native NSView, resizes, scales, receives mouse/text/focus events, hides, and tears down without a stale child view."
+          "proves": "Pinned Visage ApplicationWindow attaches to a native NSView and standalone window, resizes, scales, receives mouse/text/focus events, hides, and tears down without a stale child view."
         }
       ],
       "fixtures_or_goldens": [

@@ -30,6 +30,7 @@ public:
     virtual bool canResize() const = 0;
     virtual void setScale(double scale) = 0;
     virtual bool setParent(void* nativeParent) = 0;
+    virtual bool showStandalone() = 0;
     virtual void show() = 0;
     virtual void hide() = 0;
     virtual bool isShowing() const = 0;
