@@ -19,16 +19,16 @@ Task ID: RMJ-070 / commit 22
 - State/format impact: the component advertises ATS Resynth / ATSPlugin,
   `com.atsplugin.resynth`, `aufx` / `Atr1` / `AtPl`, no audio input, stereo
   float output, and zero latency/tail. The neutral bounded ATSP state seam is
-  present, but AU class-info state callbacks are a follow-on task and are not
-  claimed by this slice.
+  serialized as a bounded ATSP `CFData` class-info payload; malformed or
+  non-data restores are rejected before replacing the published chunk.
 - Dependency pin: Apple AudioUnitSDK commit
   `53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9` is selected in CMake. A local
   checkout may be supplied with `ATS_AUDIO_UNIT_SDK_DIR`; otherwise the exact
   commit is fetched.
 - Scope: JUCE-free AUv2 component artifact, identity, parameter list/info,
-  parameter write, output format, initialization, and teardown. No CLAP
-  dependency is added. AU host scan, native editor, state round-trip, and
-  automation/render stress remain separate gates.
+  parameter write, output format, bounded ATSP class-info state round-trip,
+  initialization, and teardown. No CLAP dependency is added. AU host scan,
+  native editor, and automation/render stress remain separate gates.
 
 ## Evidence
 
@@ -45,10 +45,11 @@ ctest --test-dir /private/tmp/ats-au --output-on-failure \
 Result: the component built as a macOS `ATS Resynth.component`; the direct
 factory probe passed. It opened and initialized the component, verified the
 81-entry parameter list and a parameter write, set 48 kHz non-interleaved
-stereo float output, uninitialized, and closed the component. The test uses
-the real pinned Apple AudioUnitSDK factory/dispatch path and does not register
-a process-global component as a substitute for an AU host scan.
+stereo float output, read and restored a valid ATSP class-info payload,
+uninitialized, and closed the component. The test uses the real pinned Apple
+AudioUnitSDK factory/dispatch path and does not register a process-global
+component as a substitute for an AU host scan.
 
-This advances commit 22's AU artifact gate. It does not yet clear the full
-native host gate: AU registration/`auval` scan, class-info state restore,
-render/MIDI/automation stress, and a real AU editor attachment remain open.
+This advances commit 22's AU artifact and state gates. It does not yet clear
+the full native host gate: AU registration/`auval` scan, render/MIDI/
+automation stress, and a real AU editor attachment remain open.

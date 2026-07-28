@@ -87,7 +87,7 @@ contract in a broad “port” commit.
 | `19` `feat(telemetry): expose model actions and immutable UI snapshots` | RMJ-080 | Define typed actions/results for import/analyze/cancel/play/stop/seek/timeline/bounce/presets/ATS/undo/edit/MathExpr/Smearnov/timbre/note actions; publish UI state, progress/errors, worker flags, revisions, source/residual/morph/MathExpr/preview/history telemetry. | Headless action/result tests for success/failure/cancel/stale/destroy; injected telemetry snapshots; no direct model-array or widget truth. | 08, 14–18 |
 | `20` `feat(host): implement neutral native host adapter` | RMJ-070 | Translate VST3/AU/Standalone lifecycle, buses, buffers, MIDI, parameter enumeration/text/automation, state streaming, editor attach/scale/resize/show/hide, host notifications, zero latency/tail, standalone device setup. Keep ATS decisions out of wrappers. | Neutral host lifecycle/process tests, channel/sample/MIDI offset tests, sanitizer and repeated create/prepare/release tests. | 05, 18, 19 |
 | `21` `feat(host): ship VST3 identity and process wrapper` | RMJ-070 | Implement VST3 first with ATS Resynth/ATSPlugin identity, `com.atsplugin.resynth`, `AtPl`/`Atr1`, effect classification, stereo/no-input negotiation, MIDI input only, no output MIDI, state, zero latency/tail, and a Visage-backed `IPlugView`. | Actual artifact metadata; native `NSView` attach, focus, logical resize, remove, and teardown probe; pinned-Visage mouse/text/popup/parameter/scale/standalone evidence. VST3 automation/stress and DAW/pluginval-equivalent scan remain follow-on evidence. | 20 |
-| `22` `feat(host): add AU and standalone wrappers` | RMJ-070 | Preserve macOS AU projection and standalone lifecycle/window/device setup; preserve supported Windows standalone/VST3 matrix; implement failure cleanup, signing-time resource lifecycle, logical sizing. Pin Apple AudioUnitSDK exactly. The standalone slice uses a real Visage `ApplicationWindow` and remains independent of JUCE/CLAP. | AU factory artifact verifies identity, 81 parameters, format, parameter write, initialize/uninitialize/close; standalone targets build. AU scan/load, class-info state, render/automation stress, native AU editor, and runtime standalone smoke remain open. | 20, 21 |
+| `22` `feat(host): add AU and standalone wrappers` | RMJ-070 | Preserve macOS AU projection and standalone lifecycle/window/device setup; preserve supported Windows standalone/VST3 matrix; implement failure cleanup, signing-time resource lifecycle, logical sizing. Pin Apple AudioUnitSDK exactly. The standalone slice uses a real Visage `ApplicationWindow` and remains independent of JUCE/CLAP. | AU factory artifact verifies identity, 81 parameters, format, parameter write, ATSP class-info state round-trip, initialize/uninitialize/close; standalone targets build. AU scan/load, render/automation stress, native AU editor, and runtime standalone smoke remain open. | 20, 21 |
 
 ### Neutral editor and UI implementation
 
@@ -184,8 +184,8 @@ listed commit supplies the cross-layer proof.
   artifact/lifecycle/process test passes.
 - [ ] Commit 21 completion gates: host automation/state-reopen stress,
   pluginval-equivalent scan, and VST3 `IPlugView` editor callbacks.
-- [ ] Commit 22 completion gates: AU scan/load, class-info state,
-  render/automation stress, native AU editor, and standalone native-window
+- [ ] Commit 22 completion gates: AU scan/load, render/automation stress,
+  native AU editor, and standalone native-window
   smoke evidence remain open; the JUCE-free AU artifact and standalone targets
   are implemented.
 - [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and

@@ -1,4 +1,7 @@
 #include <AudioToolbox/AudioToolbox.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+#include "../../src/core/AtsStateCodec.h"
 
 #include <dlfcn.h>
 
@@ -74,6 +77,24 @@ int main(int argc, char** argv)
                 setProperty(plugin, kAudioUnitProperty_StreamFormat,
                             kAudioUnitScope_Output, 0, &format, sizeof(format)) == noErr,
             "stereo output format");
+
+    CFPropertyListRef state = nullptr;
+    UInt32 stateSize = sizeof(state);
+    require(getProperty(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,
+                         &state, &stateSize) == noErr && state != nullptr,
+            "class-info state read");
+    require(CFGetTypeID(state) == CFDataGetTypeID(), "ATSP class-info data");
+    require(ats::AtsStateCodec::decodeHeader(
+                CFDataGetBytePtr(static_cast<CFDataRef>(state)),
+                static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(state))))
+                 .has_value(),
+            "ATSP class-info header");
+    auto setClassInfo = plugin->Lookup(kAudioUnitSetPropertySelect);
+    require(setClassInfo != nullptr &&
+                setClassInfo(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,
+                             &state, sizeof(state)) == noErr,
+            "class-info state restore");
+    CFRelease(state);
 
     auto uninitialize = plugin->Lookup(kAudioUnitUninitializeSelect);
     require(uninitialize != nullptr && uninitialize(plugin) == noErr, "AudioUnitUninitialize");

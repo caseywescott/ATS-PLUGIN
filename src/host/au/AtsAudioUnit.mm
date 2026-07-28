@@ -1,6 +1,8 @@
 #include "../../core/ParameterRegistry.h"
 #include "../../host/HostAdapter.h"
 
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <AudioUnitSDK/AUBase.h>
 #include <AudioUnitSDK/AUPlugInDispatch.h>
 #include <AudioUnitSDK/ComponentBase.h>
@@ -34,6 +36,28 @@ public:
     }
 
     void Cleanup() override { host_.release(); }
+
+    OSStatus SaveState(CFPropertyListRef* data) override
+    {
+        if (data == nullptr)
+            return kAudio_ParamError;
+        const auto fallback = ats::AtsStateCodec::encodeHeader();
+        const auto& chunk = host_.stateChunk();
+        const auto* bytes = chunk.empty() ? &fallback : &chunk;
+        const auto* raw = reinterpret_cast<const UInt8*>(bytes->data());
+        *data = CFDataCreate(kCFAllocatorDefault, raw,
+                             static_cast<CFIndex>(bytes->size()));
+        return *data == nullptr ? kAudio_ParamError : noErr;
+    }
+
+    OSStatus RestoreState(CFPropertyListRef data) override
+    {
+        if (data == nullptr || CFGetTypeID(data) != CFDataGetTypeID())
+            return kAudioUnitErr_InvalidPropertyValue;
+        const auto* bytes = CFDataGetBytePtr(static_cast<CFDataRef>(data));
+        const auto size = static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(data)));
+        return host_.restoreState(bytes, size) ? noErr : kAudioUnitErr_InvalidPropertyValue;
+    }
 
     OSStatus ProcessBufferLists(AudioUnitRenderActionFlags&,
                                 const AudioBufferList&, AudioBufferList& output,
