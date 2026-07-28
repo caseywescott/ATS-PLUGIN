@@ -1,4 +1,5 @@
 #include "../src/host/HostAdapter.h"
+#include "../src/ui/HeadlessEditor.h"
 
 #include <cassert>
 
@@ -27,6 +28,20 @@ int main()
     assert(host.setEditorVisible(true));
     assert(host.setEditorLogicalSize(960.0f, 680.0f));
     assert(host.editorLogicalSize()[0] == 960.0f);
+
+    // The headless object verifies the supplemental contract. The native
+    // Visage probe separately proves that the same calls reach a real window.
+    ats::ui::HeadlessEditor editor;
+    assert(host.attachEditor(editor, reinterpret_cast<void*>(1), 1.25f, 640.0f, 480.0f));
+    assert(host.editorAttached() && !editor.isShowing());
+    assert(host.setEditorVisible(false) && !editor.isShowing());
+    assert(host.setEditorVisible(true) && editor.isShowing());
+    host.detachEditor();
+    assert(!editor.isShowing());
+
+    assert(host.attachEditor(2.0f, 1280.0f, 940.0f));
+    assert(host.setEditorVisible(true));
+    assert(host.setEditorLogicalSize(960.0f, 680.0f));
     const auto slot = host.acquirePlaybackWriteSlot();
     assert(slot != ats::PlaybackBufferPool::kNoBuffer);
     auto write = host.playbackWriteView(slot);

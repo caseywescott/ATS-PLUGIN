@@ -3,6 +3,7 @@
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
+#include "../ui/Editor.h"
 
 #include <algorithm>
 
@@ -91,9 +92,34 @@ public:
 
     void release() noexcept
     {
+        detachEditor();
         state_ = HostState::released;
         midi_.reset();
-        editorVisible_ = false;
+    }
+
+    // Native lifecycle entry point. The host owns the editor object; this
+    // adapter owns only the attachment/visibility state and forwards every
+    // operation through the backend-neutral seam.
+    bool attachEditor(ui::IEditor& editor, void* nativeParent, float scale,
+                      float logicalWidth, float logicalHeight) noexcept
+    {
+        if (nativeParent == nullptr || scale <= 0.0f || logicalWidth <= 0.0f || logicalHeight <= 0.0f)
+            return false;
+
+        if (!editor.setSize(static_cast<std::uint32_t>(logicalWidth),
+                            static_cast<std::uint32_t>(logicalHeight)))
+            return false;
+        editor.setScale(scale);
+        if (!editor.setParent(nativeParent))
+            return false;
+
+        editor_ = &editor;
+        editorAttached_ = true;
+        editorVisible_ = editor.isShowing();
+        editorScale_ = scale;
+        editorWidth_ = logicalWidth;
+        editorHeight_ = logicalHeight;
+        return true;
     }
 
     bool attachEditor(float scale, float logicalWidth, float logicalHeight) noexcept
@@ -110,6 +136,9 @@ public:
 
     void detachEditor() noexcept
     {
+        if (editor_ != nullptr)
+            editor_->hide();
+        editor_ = nullptr;
         editorVisible_ = false;
         editorAttached_ = false;
     }
@@ -117,6 +146,13 @@ public:
     bool setEditorVisible(bool visible) noexcept
     {
         if (visible && !editorAttached_) return false;
+        if (editor_ != nullptr)
+        {
+            if (visible)
+                editor_->show();
+            else
+                editor_->hide();
+        }
         editorVisible_ = visible;
         return true;
     }
@@ -124,6 +160,10 @@ public:
     bool setEditorLogicalSize(float width, float height) noexcept
     {
         if (!editorAttached_ || width <= 0.0f || height <= 0.0f) return false;
+        if (editor_ != nullptr &&
+            !editor_->setSize(static_cast<std::uint32_t>(width),
+                              static_cast<std::uint32_t>(height)))
+            return false;
         editorWidth_ = width;
         editorHeight_ = height;
         return true;
@@ -186,6 +226,7 @@ private:
     PlaybackBufferPool playback_;
     MidiNoteRouter midi_;
     OnePoleSmoother outputTrim_;
+    ui::IEditor* editor_ = nullptr;
     bool editorAttached_ = false;
     bool editorVisible_ = false;
     float editorScale_ = 1.0f;

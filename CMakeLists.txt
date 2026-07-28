@@ -16,6 +16,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
+option(ATS_BUILD_VISAGE_UI_PROBE "Build the pinned Visage native editor probe" OFF)
+set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
+    CACHE STRING "Pinned Visage commit for the native editor backend")
+set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
+
+if(APPLE AND ATS_BUILD_VISAGE_UI_PROBE)
+  # Visage's native macOS windowing implementation contains Objective-C++
+  # sources. Enable the language at the top-level project so CMake also
+  # initializes its compile rule variables for the nested dependency.
+  enable_language(OBJC)
+  enable_language(OBJCXX)
+endif()
 option(ATS_REQUIRE_QATSH_RESIDUAL_FIXES "Require local Qatsh ATSA residual fixes before building" ON)
 option(ATS_REQUIRE_QATSH_PROGRESS "Require local Qatsh ATSA analysis-progress patch before building" ON)
 option(ATS_REQUIRE_QATSH_REASSIGNMENT "Require local Qatsh ATSA frequency-reassignment patch before building" ON)
@@ -411,6 +423,36 @@ target_link_libraries(ats_preset_service PUBLIC ats_file_service)
 add_library(ats_editor INTERFACE)
 target_include_directories(ats_editor INTERFACE "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_editor INTERFACE ats_core)
+
+if(ATS_BUILD_VISAGE_UI_PROBE)
+  if(NOT APPLE)
+    message(FATAL_ERROR "ATS_BUILD_VISAGE_UI_PROBE currently requires macOS native host embedding")
+  endif()
+
+  include(FetchContent)
+  set(VISAGE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(VISAGE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VISAGE_ENABLE_WIDGETS ON CACHE BOOL "" FORCE)
+  if(ATS_VISAGE_DIR AND EXISTS "${ATS_VISAGE_DIR}/CMakeLists.txt")
+    add_subdirectory("${ATS_VISAGE_DIR}" "${CMAKE_BINARY_DIR}/visage")
+  else()
+    FetchContent_Declare(visage
+      GIT_REPOSITORY https://github.com/VitalAudio/visage.git
+      GIT_TAG ${ATS_VISAGE_VERSION})
+    FetchContent_MakeAvailable(visage)
+  endif()
+
+  add_library(ats_visage_editor STATIC src/ui/VisageEditor.cpp)
+  target_include_directories(ats_visage_editor PUBLIC "${CMAKE_SOURCE_DIR}/src/ui")
+  target_compile_features(ats_visage_editor PUBLIC cxx_std_17)
+  target_link_libraries(ats_visage_editor PUBLIC visage)
+
+  add_executable(visage_editor_probe tests/ui/visage_editor_probe.mm)
+  target_include_directories(visage_editor_probe PRIVATE "${CMAKE_SOURCE_DIR}/src/ui")
+  target_compile_features(visage_editor_probe PRIVATE cxx_std_17)
+  target_link_libraries(visage_editor_probe PRIVATE ats_visage_editor visage "-framework Cocoa")
+  add_test(NAME visage_editor_probe COMMAND visage_editor_probe)
+endif()
 
 add_subdirectory(tools)
 
