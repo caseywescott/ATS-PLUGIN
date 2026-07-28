@@ -12,6 +12,7 @@ struct EditorEventSink
 {
     void* context = nullptr;
     void (*mouseDown)(void* context) = nullptr;
+    void (*mouseUp)(void* context) = nullptr;
     void (*textInput)(void* context, const char* text) = nullptr;
     void (*focusChanged)(void* context, bool focused) = nullptr;
 };

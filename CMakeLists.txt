@@ -442,7 +442,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE)
     FetchContent_MakeAvailable(visage)
   endif()
 
-  add_library(ats_visage_editor STATIC src/ui/VisageEditor.cpp)
+  add_library(ats_visage_editor STATIC src/ui/VisageEditor.cpp src/ui/VisageNativeMac.mm)
   target_include_directories(ats_visage_editor PUBLIC "${CMAKE_SOURCE_DIR}/src/ui")
   target_compile_features(ats_visage_editor PUBLIC cxx_std_17)
   target_link_libraries(ats_visage_editor PUBLIC visage)

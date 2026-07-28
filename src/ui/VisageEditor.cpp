@@ -1,4 +1,5 @@
 #include "VisageEditor.h"
+#include "VisageNativeMac.h"
 
 #include <visage/app.h>
 
@@ -20,6 +21,10 @@ public:
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
             requestKeyboardFocus();
+        };
+        onMouseUp() += [this](const visage::MouseEvent&) {
+            if (sink_.mouseUp)
+                sink_.mouseUp(sink_.context);
         };
     }
 
@@ -78,6 +83,7 @@ struct VisageEditor::Impl
     std::uint32_t width = 1280;
     std::uint32_t height = 940;
     bool attached = false;
+    bool visible = false;
 };
 
 VisageEditor::VisageEditor(EditorEventSink sink) : impl_(std::make_unique<Impl>(sink)) {}
@@ -120,24 +126,35 @@ bool VisageEditor::setParent(void* nativeParent)
         return false;
     impl_->app.show(nativeParent);
     impl_->attached = true;
+    impl_->visible = true;
+    detail::setNativeViewHidden(nativeHandle(), false);
     return impl_->app.window() != nullptr;
 }
 
 void VisageEditor::show()
 {
     if (impl_->app.window())
+    {
         impl_->app.window()->show();
+        impl_->visible = true;
+        detail::setNativeViewHidden(nativeHandle(), false);
+    }
 }
 
 void VisageEditor::hide()
 {
     if (impl_->app.window())
+    {
         impl_->app.window()->hide();
+        impl_->visible = false;
+        detail::setNativeViewHidden(nativeHandle(), true);
+    }
 }
 
 bool VisageEditor::isShowing() const
 {
-    return impl_->app.isShowing();
+    return impl_->attached && impl_->visible && impl_->app.isShowing()
+        && !detail::nativeViewIsHidden(nativeHandle());
 }
 
 void* VisageEditor::nativeHandle() const
