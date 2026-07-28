@@ -81,6 +81,38 @@ public:
                 requestKeyboardFocus();
                 return;
             }
+            if (shell_.state().page == EditorPage::session && point.y >= 212.0f &&
+                point.y < 250.0f && point.x >= 18.0f && point.x < 182.0f)
+            {
+                visage::PopupMenu popup("Spectrum view");
+                const auto items = shell_.spectrum().menu(true, false);
+                for (const auto& item : items)
+                    if (item.enabled)
+                        popup.addOption(item.id, std::string(item.label));
+                popup.onSelection() += [this, items](int optionId) {
+                    if (optionId < 0 || optionId >= static_cast<int>(items.size()) ||
+                        !items[static_cast<std::size_t>(optionId)].enabled)
+                        return;
+                    const auto action = shell_.spectrum().selectMenuItem(optionId, true, false);
+                    if (action.mode < 0)
+                        return;
+                    shell_.spectrum().setMode(items[static_cast<std::size_t>(optionId)].mode);
+                    if (sink_.spectrumModeSelected)
+                        sink_.spectrumModeSelected(sink_.context, action.source, action.mode);
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                    redraw();
+                };
+                popup.onCancel() += [this] {
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                if (sink_.popupShown)
+                    sink_.popupShown(sink_.context);
+                popup.show(this, { 18.0f, 244.0f });
+                requestKeyboardFocus();
+                return;
+            }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
@@ -201,6 +233,34 @@ public:
                         labelFont, visage::Font::kLeft, 18.0f, 176.0f, 520.0f, 18.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 204.0f, 380.0f, 3.0f);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("SPECTRUM VIEW", labelFont, visage::Font::kLeft,
+                        18.0f, 216.0f, 164.0f, 18.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 244.0f, 620.0f, 214.0f, 5.0f);
+            const UiRect spectrumBounds { 24.0f, 250.0f, 608.0f, 184.0f };
+            spectrumSnapshot_.mode = shell_.spectrum().mode();
+            const auto commands = SpectrumRenderer::render(
+                spectrumSnapshot_, spectrumBounds,
+                { shell_.state().theme, shell_.spectrum().navigation().selectedPartial,
+                  0.0f, false });
+            for (const auto& command : commands)
+            {
+                if (command.kind == SpectrumDrawKind::background ||
+                    command.kind == SpectrumDrawKind::grid ||
+                    command.kind == SpectrumDrawKind::residualBand ||
+                    command.kind == SpectrumDrawKind::playhead)
+                {
+                    canvas.setColor(command.color);
+                    canvas.rectangle(command.bounds.x, command.bounds.y,
+                                    command.bounds.width, command.bounds.height);
+                }
+            }
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("VIEW", labelFont, visage::Font::kCenter,
+                        18.0f, 216.0f, 164.0f, 18.0f);
+            canvas.text(spectrumModeLabel(), labelFont, visage::Font::kLeft,
+                        30.0f, 438.0f, 240.0f, 14.0f);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::analysis))
         {
@@ -270,6 +330,16 @@ private:
         return std::clamp((x - 18.0f) / 420.0f, 0.0f, 1.0f);
     }
 
+    [[nodiscard]] const char* spectrumModeLabel() const noexcept
+    {
+        const auto items = shell_.spectrum().menu(true, false);
+        const auto mode = shell_.spectrum().mode();
+        for (const auto& item : items)
+            if (item.mode == mode)
+                return item.label.data();
+        return "Combined";
+    }
+
     void emitParameterGesture(float value, bool begin, bool end)
     {
         if (sink_.parameterGesture)
@@ -295,6 +365,7 @@ private:
 
     EditorEventSink sink_{};
     EditorShellModel shell_{};
+    SpectralTraceSnapshot spectrumSnapshot_{};
     bool parameterDragging_ = false;
     float parameterValue_ = 0.5f;
 };

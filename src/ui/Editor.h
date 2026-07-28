@@ -23,6 +23,7 @@ struct EditorEventSink
                              bool begin, bool end) = nullptr;
     void (*historyAction)(void* context, bool redo) = nullptr;
     void (*themeSelected)(void* context, int themeIndex) = nullptr;
+    void (*spectrumModeSelected)(void* context, int sourceIndex, int mode) = nullptr;
 };
 
 class IEditor

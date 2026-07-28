@@ -36,6 +36,7 @@ public:
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
     [[nodiscard]] const SpectrumInteractionModel& spectrum() const noexcept { return spectrum_; }
+    [[nodiscard]] SpectrumInteractionModel& spectrum() noexcept { return spectrum_; }
     [[nodiscard]] const EditorLifecycleModel& lifecycle() const noexcept { return lifecycle_; }
 
     bool selectPage(std::size_t index) noexcept
