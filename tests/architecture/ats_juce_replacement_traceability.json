@@ -1660,9 +1660,9 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#28.7"
       ],
       "replacement_refs": [
-        "planned: src/host/HostAdapter.h",
-        "planned: src/audio/MidiEventList.h",
-        "planned: src/audio/PlaybackEngine.h"
+        "src/host/HostAdapter.h::HostAdapter",
+        "src/core/AtsPrimitives.h::MidiEventList",
+        "src/engine/PlaybackEngine.h::PlaybackEngine"
       ],
       "tests": [
         {
@@ -1943,7 +1943,9 @@
       ],
       "replacement_refs": [
         "src/core/MidiNoteRouter.h::MidiNoteRouter",
-        "tests/midi_note_router_test.cpp"
+        "src/engine/PlaybackEngine.h::PlaybackEngine",
+        "tests/midi_note_router_test.cpp",
+        "tests/midi_process_block_test.cpp"
       ],
       "tests": [
         {

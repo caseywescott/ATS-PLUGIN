@@ -155,6 +155,14 @@ target_include_directories(host_lifecycle_test PRIVATE
 target_compile_features(host_lifecycle_test PRIVATE cxx_std_17)
 add_test(NAME host_lifecycle_test COMMAND host_lifecycle_test)
 
+add_executable(midi_process_block_test midi_process_block_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(midi_process_block_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(midi_process_block_test PRIVATE cxx_std_17)
+add_test(NAME midi_process_block_test COMMAND midi_process_block_test)
+
 add_executable(morph_recipe_test morph_recipe_test.cpp ../src/core/AtsMorphRecipe.cpp)
 target_include_directories(morph_recipe_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(morph_recipe_test PRIVATE cxx_std_17)
