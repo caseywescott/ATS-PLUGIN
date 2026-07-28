@@ -18,6 +18,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
 option(ATS_BUILD_NATIVE_VST3 "Build the JUCE-free ATS VST3 wrapper" OFF)
 option(ATS_BUILD_NATIVE_STANDALONE "Build the JUCE-free ATS standalone wrapper" OFF)
+option(ATS_BUILD_NATIVE_AU "Build the JUCE-free ATS AUv2 wrapper" OFF)
+set(ATS_AUDIO_UNIT_SDK_VERSION "53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9"
+    CACHE STRING "Pinned Apple AudioUnitSDK commit for the native AUv2 wrapper")
+set(ATS_AUDIO_UNIT_SDK_DIR "" CACHE PATH
+    "Path to a standalone Apple AudioUnitSDK checkout (overrides download)")
 set(ATS_VST3_SDK_VERSION "05c4a9763f311a58fe3f34b68a199e5eea92e2b4"
     CACHE STRING "Pinned Steinberg VST3 SDK commit for the native wrapper")
 set(ATS_VST3_SDK_DIR "" CACHE PATH
@@ -492,6 +497,10 @@ endif()
 
 if(ATS_BUILD_NATIVE_STANDALONE)
   add_subdirectory(src/host/standalone)
+endif()
+
+if(ATS_BUILD_NATIVE_AU)
+  add_subdirectory(src/host/au)
 endif()
 
 add_subdirectory(tools)
