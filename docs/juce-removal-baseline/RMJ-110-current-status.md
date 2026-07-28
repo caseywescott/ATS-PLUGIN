@@ -14,6 +14,7 @@ The latest implementation commits are:
 - `0a9b336` replacement-editor detach invariant
 - `05a1fcb` stale RMJ-010 backend-blocker correction
 - `ee8d3ee` native Visage page-selector and parameter-gesture dispatch proof
+- `d0aae9a` model-driven Visage shell top-bar state for history, theme, and activity
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -33,6 +34,10 @@ Validation on 2026-07-28:
 - Visage real-dispatch harness: passed with parameter gestures, text input,
   native page selection, analysis-frequency begin/drag/end, popup
   creation/focus, native popup row selection, and dismissal
+- Visage shell top-bar state now renders history enablement, theme selection,
+  and analysis/render activity from the neutral shell model; native history and
+  theme click dispatch remain a follow-on probe because their coordinate path
+  is not yet stable enough to claim as native evidence
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters

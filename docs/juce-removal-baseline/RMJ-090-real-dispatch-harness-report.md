@@ -22,6 +22,8 @@ The harness verifies that:
 - a native click on the Visage page selector changes the shell page; and
 - a native analysis-frequency mouse down/drag/up produces a bounded parameter
   gesture with begin/end markers; and
+- the real shell top bar renders model-driven undo/redo enablement, Ember /
+  Porcelain theme state, and analysis/render activity indicators; and
 - the Session page model owns source A/B cards, preset dirty/save state,
   transport/layer selection, normalized morph timeline, variation/policy
   enablement, timbre curve, and Smearnov detection/onset overlay state; and
@@ -70,5 +72,8 @@ session, including page selection and the analysis-frequency gesture. The
 combined GUI invocation can miss the popup row under LaunchServices timing;
 the native popup scan is therefore rerun in isolation for evidence. The
 shell/session/page/spectrum/lifecycle model and renderer tests also pass.
-This is the foundational real-dispatch proof; dialogs, pointer capture, widget
-parity, and production host-wrapper artifacts remain follow-on work.
+This is the foundational real-dispatch proof. Top-bar history and theme click
+dispatch are intentionally not counted as native evidence yet because the
+coordinate path is not stable across the current native embedding probe;
+dialogs, pointer capture, widget parity, and production host-wrapper artifacts
+remain follow-on work.
