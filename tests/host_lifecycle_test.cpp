@@ -71,8 +71,14 @@ int main()
     assert(host.editorAttached() && !editor.isShowing());
     assert(host.setEditorVisible(false) && !editor.isShowing());
     assert(host.setEditorVisible(true) && editor.isShowing());
+    ats::ui::HeadlessEditor replacementEditor;
+    assert(host.attachEditor(replacementEditor, reinterpret_cast<void*>(1), 1.0f, 800.0f, 600.0f));
+    assert(!editor.isShowing());
+    assert(host.editorAttached() && !replacementEditor.isShowing());
+    assert(host.setEditorVisible(true) && replacementEditor.isShowing());
     assert(host.initialize(ats::host::HostFormat::au));
-    assert(!host.editorAttached() && !host.editorVisible() && !editor.isShowing());
+    assert(!host.editorAttached() && !host.editorVisible());
+    assert(!editor.isShowing() && !replacementEditor.isShowing());
     assert(host.initialize(ats::host::HostFormat::vst3));
     assert(host.prepare({ 48000.0, 64, 2 }));
     host.detachEditor();

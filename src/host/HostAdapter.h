@@ -212,6 +212,12 @@ public:
         if (nativeParent == nullptr || scale <= 0.0f || logicalWidth <= 0.0f || logicalHeight <= 0.0f)
             return false;
 
+        // A wrapper may recreate or reparent its editor during a host view
+        // transition. Never leave the previous editor visible or retained by
+        // the neutral adapter while installing the replacement.
+        if (editor_ != nullptr)
+            detachEditor();
+
         if (!editor.setSize(static_cast<std::uint32_t>(logicalWidth),
                             static_cast<std::uint32_t>(logicalHeight)))
             return false;
@@ -246,6 +252,8 @@ public:
         if (format_ != HostFormat::standalone || scale <= 0.0f ||
             logicalWidth <= 0.0f || logicalHeight <= 0.0f)
             return false;
+        if (editor_ != nullptr)
+            detachEditor();
         if (!editor.setSize(static_cast<std::uint32_t>(logicalWidth),
                             static_cast<std::uint32_t>(logicalHeight)))
             return false;
