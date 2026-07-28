@@ -122,6 +122,22 @@ public:
                 requestKeyboardFocus();
                 return;
             }
+            if (shell_.state().page == EditorPage::session && point.y >= 112.0f &&
+                point.y < 164.0f && point.x >= 18.0f && point.x < 238.0f)
+            {
+                const NativeFileDialogRequest request {
+                    point.x < 128.0f ? NativeFileDialogKind::importWav
+                                     : NativeFileDialogKind::importAts,
+                    dialogParent_, {}};
+                if (sink_.dialogRequested)
+                    sink_.dialogRequested(sink_.context, static_cast<int>(request.kind));
+                const auto result = detail::runNativeFileDialog(request);
+                if (sink_.dialogResolved)
+                    sink_.dialogResolved(sink_.context, static_cast<int>(request.kind),
+                                         result.path.c_str(), result.accepted);
+                requestKeyboardFocus();
+                return;
+            }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
@@ -195,6 +211,8 @@ public:
             return true;
         };
     }
+
+    void setDialogParent(void* nativeParent) noexcept { dialogParent_ = nativeParent; }
 
     void setTheme(ThemeId theme)
     {
@@ -418,6 +436,7 @@ private:
     EditorEventSink sink_{};
     EditorShellModel shell_{};
     SpectralTraceSnapshot spectrumSnapshot_{};
+    void* dialogParent_ = nullptr;
     bool parameterDragging_ = false;
     float parameterValue_ = 0.5f;
     bool spectrumDragging_ = false;
@@ -519,6 +538,7 @@ bool VisageEditor::setParent(void* nativeParent)
     if (nativeParent == nullptr)
         return false;
     impl_->app.show(nativeParent);
+    impl_->frame.setDialogParent(nativeHandle());
     impl_->attached = true;
     impl_->visible = true;
     detail::setNativeViewHidden(nativeHandle(), false);
@@ -532,6 +552,7 @@ bool VisageEditor::showStandalone()
     else
         impl_->app.window()->show();
     impl_->attached = impl_->app.window() != nullptr;
+    impl_->frame.setDialogParent(nativeHandle());
     impl_->visible = impl_->attached && impl_->app.isShowing();
     detail::setNativeViewHidden(nativeHandle(), false);
     return impl_->visible;

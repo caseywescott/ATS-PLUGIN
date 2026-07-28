@@ -24,6 +24,8 @@ struct EditorEventSink
     void (*historyAction)(void* context, bool redo) = nullptr;
     void (*themeSelected)(void* context, int themeIndex) = nullptr;
     void (*spectrumModeSelected)(void* context, int sourceIndex, int mode) = nullptr;
+    void (*dialogRequested)(void* context, int kind) = nullptr;
+    void (*dialogResolved)(void* context, int kind, const char* path, bool accepted) = nullptr;
 };
 
 class IEditor

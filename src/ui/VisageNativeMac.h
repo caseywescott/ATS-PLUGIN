@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NativeFileDialog.h"
+
 namespace ats::ui::detail
 {
 
@@ -8,5 +10,6 @@ namespace ats::ui::detail
 // Keep that native detail behind the backend implementation seam.
 void setNativeViewHidden(void* nativeHandle, bool hidden);
 bool nativeViewIsHidden(void* nativeHandle);
+NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& request);
 
 } // namespace ats::ui::detail
