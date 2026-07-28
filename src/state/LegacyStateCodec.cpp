@@ -107,11 +107,55 @@ bool readResidual(ByteReader& reader, ResidualState& state)
         if (!reader.readI32(band.bandIndex) || !reader.readF64(band.partialNoisePower) || !reader.readF64(band.orphanResidualPower)) return false;
     return true;
 }
+
+bool finite(double value) noexcept { return std::isfinite(value); }
+
+bool validState(const LegacyState& state) noexcept
+{
+    const auto& a = state.analysis;
+    const auto& s = state.synth;
+    if (!finite(a.start) || !finite(a.duration) || !finite(a.lowest_freq) || !finite(a.highest_freq) ||
+        !finite(a.freq_dev) || !finite(a.hop_size) || !finite(a.lowest_mag) || !finite(a.SMR_thres) ||
+        !finite(a.min_seg_SMR) || !finite(a.last_peak_cont) || !finite(a.SMR_cont) || a.type < 1 || a.type > 4)
+        return false;
+    if (!finite(s.startTime) || !finite(s.duration) || !finite(s.partialsGain) || !finite(s.residualGain) ||
+        !finite(s.frequencyFactor) || !finite(s.timeFactor) || !finite(s.sampleRate) ||
+        !finite(state.frequencyShape.amount) || !finite(state.frequencyShape.pivotHz) ||
+        !finite(state.outputTrim) || state.atsModel.size() > kMaxBlobBytes ||
+        state.morphRecipe.size() > kMaxBlobBytes)
+        return false;
+    for (const auto& path : state.morphSourcePaths)
+        if (path.size() > kMaxBlobBytes) return false;
+    for (const auto& slot : state.variations)
+    {
+        if (slot.name.size() > kMaxBlobBytes || !finite(slot.morphAmount) ||
+            !finite(slot.performanceMacro) || !finite(slot.smoothingMs)) return false;
+        for (const auto value : slot.laneAmounts)
+            if (!finite(value)) return false;
+    }
+    for (const auto& residual : state.residualStates)
+    {
+        if (residual.bands.size() > kMaxResidualBands || !finite(residual.totalEnergy) ||
+            !finite(residual.peakBandEnergy)) return false;
+        for (const auto& band : residual.bands)
+            if (!finite(band.partialNoisePower) || !finite(band.orphanResidualPower)) return false;
+    }
+    const auto& smear = state.smearnov;
+    const double smearValues[] { smear.blurMs, smear.sharpen, smear.exaggerateDb, smear.maxDb,
+                                 smear.weightDetFlux, smear.weightResFlux, smear.weightHfcFlux,
+                                 smear.weightBirth, smear.weightPhaseDev, smear.thresholdLambda,
+                                 smear.thresholdAutoScale, smear.preMarginMs, smear.mix };
+    for (const auto value : smearValues)
+        if (!finite(value)) return false;
+    for (const auto& blob : state.morphSoundData)
+        if (blob.size() > kMaxBlobBytes) return false;
+    return true;
+}
 }
 
 std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::uint32_t version)
 {
-    if (version < kMinimumReadableVersion || version > kCurrentVersion) return {};
+    if (version < kMinimumReadableVersion || version > kCurrentVersion || !validState(state)) return {};
     ByteWriter writer;
     writer.reserve(4096);
     writer.writeU32(StateHeader::kMagic); writer.writeU32(version);
@@ -242,6 +286,7 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
     if (version >= 15 && !reader.readF64(state.smearnov.mix)) return std::nullopt;
     if (version >= 16 && !reader.readI32(state.morphQuality)) return std::nullopt;
     if (version >= 17) for (auto& blob : state.morphSoundData) if (!readBlob(reader, blob)) return std::nullopt;
+    if (!validState(state)) return std::nullopt;
     return state;
 }
 

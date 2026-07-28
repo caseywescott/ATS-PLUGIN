@@ -1,7 +1,10 @@
 #include "LegacyStateCodec.h"
 
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 
 int main()
 {
@@ -38,5 +41,20 @@ int main()
         truncated.pop_back();
         assert(!ats::LegacyStateCodec::decode(truncated.data(), truncated.size()));
     }
+
+    auto malformed = source;
+    malformed.outputTrim = std::numeric_limits<double>::quiet_NaN();
+    assert(ats::LegacyStateCodec::encode(malformed).empty());
+
+    auto corrupt = ats::LegacyStateCodec::encode(source);
+    // ATSP v17 stores outputTrim after analysis, synthesis, and
+    // frequency-shape. Corrupting it must reject the whole state.
+    constexpr std::size_t outputTrimOffset = 8 + (5 * 8 + 3 * 4 + 2 * 8 + 3 * 4 + 4 * 8 + 4) +
+                                             (7 * 8 + 2) + (4 + 2 * 8);
+    assert(outputTrimOffset + sizeof(double) <= corrupt.size());
+    constexpr std::uint64_t nanBits = 0x7ff8000000000000ULL;
+    for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
+        corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
+    assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
     std::cout << "legacy_state_codec_test: ATSP v2-v17 payload round-trip ok\n";
 }
