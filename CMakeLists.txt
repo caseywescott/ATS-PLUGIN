@@ -360,7 +360,9 @@ add_library(ats_core STATIC
   src/core/AtsSpectralEnvelope.cpp
   src/core/AtsTransientLayer.cpp
   src/core/AtsTransientSmear.cpp
-  src/core/ParameterRegistry.cpp)
+  src/core/ParameterRegistry.cpp
+  src/core/ResampleLinear.cpp
+  src/core/TimbreMotionPlan.cpp)
 target_include_directories(ats_core PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_core PUBLIC cxx_std_17)
 target_link_libraries(ats_core PUBLIC atsa)

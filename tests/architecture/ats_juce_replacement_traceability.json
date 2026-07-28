@@ -737,8 +737,8 @@
         "tools/ats_offline.c"
       ],
       "replacement_refs": [
-        "planned: src/engine/AtsAnalysisService.h",
-        "planned: src/engine/AnalysisResult.h"
+        "src/engine/AtsAnalysisService.h::AtsAnalysisService",
+        "src/engine/AtsEngine.h::AnalysisOutput"
       ],
       "tests": [
         {
@@ -947,7 +947,7 @@
         "src/plugin/PluginProcessor.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/Resampler.h"
+        "src/dsp/Resampler.h::Resampler"
       ],
       "tests": [
         {
@@ -992,7 +992,7 @@
         "tests/frequency_shape_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/FrequencyShapeProcessor.h"
+        "src/dsp/FrequencyShapeProcessor.h::FrequencyShapeProcessor"
       ],
       "tests": [
         {
@@ -1042,7 +1042,7 @@
         "tests/timbre_motion_plan_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/TimbreMotionService.h"
+        "src/dsp/TimbreMotionService.h::TimbreMotionService"
       ],
       "tests": [
         {
@@ -1091,8 +1091,8 @@
         "tests/morph_recipe_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/MorphRecipeService.h",
-        "planned: src/dsp/MorphRecipeSnapshot.h"
+        "src/dsp/MorphRecipeService.h::MorphRecipeService",
+        "src/core/AtsMorphRecipe.h::MorphRecipe"
       ],
       "tests": [
         {
@@ -1196,8 +1196,8 @@
         "src/core/AtsMorphTransportCorrespondence.h"
       ],
       "replacement_refs": [
-        "planned: src/dsp/TransportPlanner.h",
-        "planned: src/dsp/MorphCorrespondenceBuilder.h"
+        "src/dsp/MorphCorrespondenceBuilder.h::MorphCorrespondenceBuilder",
+        "src/core/AtsMorphTransportCorrespondence.h::buildOptimalTransportCorrespondence"
       ],
       "tests": [
         {
@@ -1244,8 +1244,8 @@
         "tests/morph_metric_harness.py"
       ],
       "replacement_refs": [
-        "planned: src/dsp/MorphEvaluator.h",
-        "planned: src/dsp/MorphResult.h"
+        "src/dsp/MorphEvaluator.h::MorphEvaluator",
+        "src/core/AtsMorphRecipe.h::evaluateMorphRecipeSnapshot"
       ],
       "tests": [
         {
@@ -1295,9 +1295,9 @@
         "src/core/AtsTransientLayer.h"
       ],
       "replacement_refs": [
-        "planned: src/dsp/MorphPhaseService.h",
-        "planned: src/dsp/MorphResidualService.h",
-        "planned: src/dsp/MorphTransientService.h"
+        "src/dsp/MorphPhaseService.h::MorphPhaseService",
+        "src/dsp/MorphResidualService.h::MorphResidualService",
+        "src/dsp/MorphTransientService.h::MorphTransientService"
       ],
       "tests": [
         {
@@ -1345,7 +1345,7 @@
         "tests/ats_transient_smear_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/SmearnovDetector.h"
+        "src/dsp/SmearnovDetector.h::SmearnovDetector"
       ],
       "tests": [
         {
@@ -1393,7 +1393,7 @@
         "tests/ats_transient_smear_accuracy_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/SmearnovTransformer.h"
+        "src/dsp/SmearnovTransformer.h::SmearnovTransformer"
       ],
       "tests": [
         {
@@ -1443,7 +1443,7 @@
         "tests/ats_math_expr_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/MathExpressionService.h"
+        "src/dsp/MathExpressionService.h::MathExpressionService"
       ],
       "tests": [
         {
@@ -1605,10 +1605,15 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#22"
       ],
       "replacement_refs": [
-        "planned: src/audio/MeterPublisher.h",
-        "planned: src/audio/SpectrumDataPublisher.h"
+        "src/audio/MeterPublisher.h::MeterPublisher",
+        "src/audio/SpectrumDataPublisher.h::SpectrumDataPublisher"
       ],
       "tests": [
+        {
+          "path": "tests/telemetry_publishers_test.cpp",
+          "state": "existing",
+          "proves": "Bounded meter and spectrum snapshots publish without audio-thread allocation or UI coupling."
+        },
         {
           "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
           "state": "required",
