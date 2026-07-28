@@ -80,7 +80,7 @@ This is the foundational real-dispatch proof. Top-bar history and theme click
 dispatch are intentionally not counted as native evidence yet because the
 coordinate path is not stable across the current native embedding probe. The
 new spectrum canvas/menu is likewise model- and render-covered in this slice,
-with native wheel/drag wiring compiled and exercised alongside the existing
-lifecycle harness; its native popup coordinate proof remains a follow-on
-probe. Dialogs, widget parity, and production host-wrapper artifacts remain
-follow-on work.
+with native wheel/drag wiring compile-validated alongside the existing
+lifecycle harness; direct spectrum wheel/drag and popup-coordinate evidence
+remain follow-on probes. Dialogs, widget parity, and production host-wrapper
+artifacts remain follow-on work.

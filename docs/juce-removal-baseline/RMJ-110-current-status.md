@@ -39,8 +39,9 @@ Validation on 2026-07-28:
   creation/focus, native popup row selection, and dismissal
 - Visage Session now renders the framework-free spectrum renderer and exposes
   the seven-mode view-menu event path; native popup-coordinate evidence for
-  that path remains a follow-on probe. Native wheel/drag traffic now updates
-  the spectrum model’s zoom, pan, and pointer-capture state.
+  that path remains a follow-on probe. Native wheel/drag traffic is wired to
+  the spectrum model’s zoom, pan, and pointer-capture state, but direct native
+  gesture evidence remains a follow-on probe.
 - Visage shell top-bar state now renders history enablement, theme selection,
   and analysis/render activity from the neutral shell model; native history and
   theme click dispatch remain a follow-on probe because their coordinate path
