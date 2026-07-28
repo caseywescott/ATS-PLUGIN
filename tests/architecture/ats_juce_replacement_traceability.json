@@ -1575,8 +1575,10 @@
         "required: partial-edit model fixtures",
         "required: real-dispatch gesture traces"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target partial_edit_transaction_test -j2 && ctest --test-dir build-review --output-on-failure -R partial_edit_transaction_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1685,8 +1687,8 @@
           "proves": "Meter and playhead scalar snapshots align with the immutable playback revision."
         },
         {
-          "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
-          "state": "required",
+          "path": "tests/spectrum_trace_snapshot_test.cpp",
+          "state": "existing",
           "proves": "Source/mode selection, caps, transforms, revisions, cadence, stale data, and bounded publication."
         },
         {
@@ -1699,8 +1701,10 @@
         "required: spectrum geometry/data fixtures",
         "required: deterministic spectrum screenshots"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target telemetry_publishers_test playback_telemetry_contract_test spectrum_trace_snapshot_test -j2 && ctest --test-dir build-review --output-on-failure -R 'telemetry_publishers_test|playback_telemetry_contract_test|spectrum_trace_snapshot_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1736,16 +1740,18 @@
       ],
       "tests": [
         {
-          "path": "required: tests/audio/midi_process_block_test.cpp",
-          "state": "required",
-          "proves": "MIDI ordering, offsets, dialects, transpose, reset, and live preview routing."
+          "path": "tests/midi_process_block_test.cpp",
+          "state": "existing",
+          "proves": "MIDI ordering, offsets, zero-velocity notes, transpose, and reset event translation."
         }
       ],
       "fixtures_or_goldens": [
         "required: MIDI event process-block trace fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target midi_process_block_test -j2 && ctest --test-dir build-review --output-on-failure -R midi_process_block_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1844,8 +1850,8 @@
           "proves": "Source/mode selection, finite filtering, caps, normalization, revisions, sparse data, and deterministic replay."
         },
         {
-          "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
-          "state": "required",
+          "path": "tests/spectrum_trace_snapshot_test.cpp",
+          "state": "existing",
           "proves": "All sources/modes, caps, transforms, revisions, sparse/empty states, and deterministic replay."
         }
       ],
@@ -1853,8 +1859,10 @@
         "required: dense/sparse/empty spectral trace fixtures",
         "required: source/mode snapshot hash report"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target spectrum_trace_snapshot_test -j2 && ctest --test-dir build-review --output-on-failure -R spectrum_trace_snapshot_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1895,17 +1903,19 @@
           "proves": "Atomic residual operations, selection bounds, clipboard shape, finite/non-negative validation, and redistribution energy behavior."
         },
         {
-          "path": "required: tests/engine/residual_edit_service_test.cpp",
-          "state": "required",
-          "proves": "Each residual operation, selection shape, finite-value and energy invariants, undo, and invalidation."
+          "path": "tests/residual_edit_service_test.cpp",
+          "state": "existing",
+          "proves": "Each neutral residual operation, selection shape, finite-value and energy invariants, undo, and invalidation."
         }
       ],
       "fixtures_or_goldens": [
         "required: residual band/frame edit fixtures",
         "required: clipboard and energy-preservation report"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target residual_edit_service_test -j2 && ctest --test-dir build-review --output-on-failure -R residual_edit_service_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1947,17 +1957,19 @@
           "proves": "Timeline sanitization, endpoint protection, lane/curve evaluation, edits, generation, and cancellation."
         },
         {
-          "path": "required: tests/engine/morph_timeline_service_test.cpp",
-          "state": "required",
-          "proves": "Point editing/evaluation, popup actions, undo grouping, stale generations, preview/bounce parity."
+          "path": "tests/morph_timeline_service_test.cpp",
+          "state": "existing",
+          "proves": "Point editing/evaluation, endpoint rules, stale generations, and cancellation in the neutral timeline service."
         }
       ],
       "fixtures_or_goldens": [
         "required: morph timeline point fixtures",
         "required: preview-versus-bounce audio golden"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target morph_timeline_service_test -j2 && ctest --test-dir build-review --output-on-failure -R morph_timeline_service_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -2043,15 +2055,17 @@
       "tests": [
         {
           "path": "tests/midi_note_router_test.cpp",
-          "state": "required",
+          "state": "existing",
           "proves": "Transpose, note identity, offsets, range/reset, and real-time safety."
         }
       ],
       "fixtures_or_goldens": [
         "required: note routing event fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target midi_note_router_test midi_process_block_test -j2 && ctest --test-dir build-review --output-on-failure -R 'midi_note_router_test|midi_process_block_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
