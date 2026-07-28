@@ -139,6 +139,14 @@ target_include_directories(residual_edit_service_test PRIVATE
 target_compile_features(residual_edit_service_test PRIVATE cxx_std_17)
 add_test(NAME residual_edit_service_test COMMAND residual_edit_service_test)
 
+add_executable(morph_timeline_service_test morph_timeline_service_test.cpp
+  ../src/core/AtsMorphRecipe.cpp)
+target_include_directories(morph_timeline_service_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(morph_timeline_service_test PRIVATE cxx_std_17)
+add_test(NAME morph_timeline_service_test COMMAND morph_timeline_service_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)

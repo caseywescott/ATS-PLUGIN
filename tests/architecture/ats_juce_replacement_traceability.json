@@ -1869,11 +1869,16 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#23.3"
       ],
       "replacement_refs": [
-        "planned: src/engine/MorphTimelineService.h",
-        "planned: src/engine/MorphRenderService.h",
-        "planned: tests/engine/morph_timeline_service_test.cpp"
+        "src/engine/MorphTimelineService.h::MorphTimelineService",
+        "src/engine/MorphRenderService.h::MorphRenderService",
+        "tests/morph_timeline_service_test.cpp"
       ],
       "tests": [
+        {
+          "path": "tests/morph_timeline_service_test.cpp",
+          "state": "existing",
+          "proves": "Timeline sanitization, endpoint protection, lane/curve evaluation, edits, generation, and cancellation."
+        },
         {
           "path": "required: tests/engine/morph_timeline_service_test.cpp",
           "state": "required",
