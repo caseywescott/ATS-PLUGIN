@@ -9,6 +9,30 @@
 namespace ats::host
 {
 
+enum class HostFormat : std::uint8_t { vst3, au, standalone };
+
+struct HostIdentity
+{
+    std::string_view productName = "ATS Resynth";
+    std::string_view company = "ATSPlugin";
+    std::string_view bundleId = "com.atsplugin.resynth";
+    std::string_view vst3ManufacturerCode = "AtPl";
+    std::string_view vst3ProductCode = "Atr1";
+    std::string_view category = "Audio effect";
+    double latencySeconds = 0.0;
+    double tailSeconds = 0.0;
+    bool midiInput = true;
+    bool midiOutput = false;
+
+    [[nodiscard]] static constexpr HostIdentity current() noexcept { return {}; }
+};
+
+struct HostBusLayout
+{
+    std::uint32_t inputChannels = 0;
+    std::uint32_t outputChannels = 2;
+};
+
 enum class HostState : std::uint8_t { cold, prepared, released };
 
 struct HostPrepareSpec
@@ -16,6 +40,7 @@ struct HostPrepareSpec
     double sampleRate = 0.0;
     std::uint32_t maximumBlockSize = 0;
     std::uint32_t outputChannels = 0;
+    std::uint32_t inputChannels = 0;
 };
 
 class HostAdapter
@@ -26,13 +51,34 @@ public:
     HostAdapter& operator=(const HostAdapter&) = delete;
 
     [[nodiscard]] HostState state() const noexcept { return state_; }
+    [[nodiscard]] HostFormat format() const noexcept { return format_; }
+    [[nodiscard]] const HostIdentity& identity() const noexcept { return identity_; }
     [[nodiscard]] const HostPrepareSpec& prepareSpec() const noexcept { return spec_; }
+    [[nodiscard]] HostBusLayout busLayout() const noexcept
+    { return { spec_.inputChannels, spec_.outputChannels }; }
+    [[nodiscard]] bool editorAttached() const noexcept { return editorAttached_; }
+    [[nodiscard]] bool editorVisible() const noexcept { return editorVisible_; }
+    [[nodiscard]] float editorScale() const noexcept { return editorScale_; }
+    [[nodiscard]] std::array<float, 2> editorLogicalSize() const noexcept
+    { return { editorWidth_, editorHeight_ }; }
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
 
+    bool initialize(HostFormat format) noexcept
+    {
+        format_ = format;
+        state_ = HostState::cold;
+        editorAttached_ = false;
+        editorVisible_ = false;
+        return true;
+    }
+
     bool prepare(const HostPrepareSpec& spec)
     {
-        if (spec.sampleRate <= 0.0 || spec.maximumBlockSize == 0 || spec.outputChannels == 0)
+        // Preserve the direct neutral-test entry point while making the
+        // wrapper lifecycle explicit for native adapters.
+        if (spec.sampleRate <= 0.0 || spec.maximumBlockSize == 0 || spec.outputChannels != 2 ||
+            (spec.inputChannels != 0 && spec.inputChannels != 2))
             return false;
         spec_ = spec;
         playback_.prepare(spec.outputChannels, spec.maximumBlockSize);
@@ -47,6 +93,40 @@ public:
     {
         state_ = HostState::released;
         midi_.reset();
+        editorVisible_ = false;
+    }
+
+    bool attachEditor(float scale, float logicalWidth, float logicalHeight) noexcept
+    {
+        if (scale <= 0.0f || logicalWidth <= 0.0f || logicalHeight <= 0.0f)
+            return false;
+        editorAttached_ = true;
+        editorVisible_ = false;
+        editorScale_ = scale;
+        editorWidth_ = logicalWidth;
+        editorHeight_ = logicalHeight;
+        return true;
+    }
+
+    void detachEditor() noexcept
+    {
+        editorVisible_ = false;
+        editorAttached_ = false;
+    }
+
+    bool setEditorVisible(bool visible) noexcept
+    {
+        if (visible && !editorAttached_) return false;
+        editorVisible_ = visible;
+        return true;
+    }
+
+    bool setEditorLogicalSize(float width, float height) noexcept
+    {
+        if (!editorAttached_ || width <= 0.0f || height <= 0.0f) return false;
+        editorWidth_ = width;
+        editorHeight_ = height;
+        return true;
     }
 
     bool publishPlayback(std::int32_t slot, JobGeneration generation) noexcept
@@ -98,12 +178,19 @@ public:
     [[nodiscard]] int semitoneOffset() const noexcept { return midi_.semitoneOffset(); }
 
 private:
+    HostIdentity identity_ = HostIdentity::current();
+    HostFormat format_ = HostFormat::standalone;
     HostPrepareSpec spec_{};
     HostState state_ = HostState::cold;
     ParameterStore parameters_;
     PlaybackBufferPool playback_;
     MidiNoteRouter midi_;
     OnePoleSmoother outputTrim_;
+    bool editorAttached_ = false;
+    bool editorVisible_ = false;
+    float editorScale_ = 1.0f;
+    float editorWidth_ = 0.0f;
+    float editorHeight_ = 0.0f;
 };
 
 } // namespace ats::host

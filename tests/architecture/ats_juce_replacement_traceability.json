@@ -45,14 +45,15 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
       ],
       "replacement_refs": [
-        "planned: src/host/HostAdapter.h::HostAdapter",
+        "src/host/HostAdapter.h::HostIdentity",
+        "src/host/HostAdapter.h::HostAdapter",
         "planned: src/host/PluginEntry.cpp"
       ],
       "tests": [
         {
-          "path": "required: tests/host/host_lifecycle_test.cpp",
-          "state": "required",
-          "proves": "Repeated initialize/prepare/process/release and editor attach/detach are safe."
+          "path": "tests/host_lifecycle_test.cpp",
+          "state": "existing",
+          "proves": "Neutral identity, repeated prepare/process/release, bus contract, and editor attach/detach are safe."
         },
         {
           "path": "required: plugin validation and AU/VST3 scan",
@@ -63,8 +64,10 @@
       "fixtures_or_goldens": [
         "required: host lifecycle/process trace"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target host_lifecycle_test -j2 && ./build-review/tests/host_lifecycle_test"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
