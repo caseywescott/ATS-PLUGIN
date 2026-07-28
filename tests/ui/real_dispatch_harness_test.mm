@@ -173,6 +173,28 @@ int main()
         drainEvents(application);
         REQUIRE(state.popupShown == 1);
 
+        // The probe menu is shown at logical (40, 40). Its first row starts
+        // four pixels below that origin and is 22 pixels high in the pinned
+        // Visage theme, so this is a real native click in option 1 rather
+        // than a direct callback invocation.
+        const NSPoint popupViewPoint = NSMakePoint(60.0 / 1.25,
+                                                   embeddedView.bounds.size.height - 56.0 / 1.25);
+        const NSPoint popupWindowPoint = [embeddedView convertPoint:popupViewPoint toView:nil];
+        NSEvent* popupMouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                 location:popupWindowPoint
+                                            modifierFlags:0 timestamp:0.0
+                                            windowNumber:[hostWindow windowNumber]
+                                                 context:nil eventNumber:3 clickCount:1 pressure:1.0];
+        [embeddedView mouseDown:popupMouse];
+        NSEvent* popupMouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                                   location:popupWindowPoint
+                                              modifierFlags:0 timestamp:0.0
+                                              windowNumber:[hostWindow windowNumber]
+                                                   context:nil eventNumber:3 clickCount:1 pressure:0.0];
+        [embeddedView mouseUp:popupMouseUp];
+        drainEvents(application);
+        REQUIRE(state.popupSelections == 1 && state.popupDismissed == 1);
+
         auto beginAction = state.actions.tryPop();
         REQUIRE(beginAction.has_value() && std::holds_alternative<ats::ui::SetParameterAction>(*beginAction));
         const auto& begin = std::get<ats::ui::SetParameterAction>(*beginAction);

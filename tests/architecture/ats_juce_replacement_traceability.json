@@ -612,7 +612,7 @@
         {
           "path": "tests/ui/real_dispatch_harness_test.mm",
           "state": "required",
-          "proves": "Target-backend hit testing, focus, popup, keyboard, and action dispatch."
+          "proves": "Target-backend hit testing, focus, popup creation and row selection, keyboard, and action dispatch."
         },
         {
           "path": "tests/ui_dispatcher_test.cpp",
