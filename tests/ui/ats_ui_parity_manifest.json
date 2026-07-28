@@ -3,8 +3,8 @@
   "specification": "docs/JUCE_REMOVAL_ATS_SPEC.md",
   "purpose": "Coverage inventory for the complete ATS JUCE-removal UI migration.",
   "status": "planned",
-  "baseline_commit": "TO_BE_FROZEN",
-  "target_backend_revision": "TO_BE_PINNED",
+  "baseline_commit": "36244a3ff041491d9a8cc4f5bf641105b52c8e35",
+  "target_backend_revision": "Visage@20de59464243447816d142e9d38e9723d068f755",
   "allowed_baseline_scopes": ["source_current", "documented_only", "promoted_target", "design_reference"],
   "surface_contract_directory": "docs/juce-removal-baseline/ui-surfaces",
   "records": [
