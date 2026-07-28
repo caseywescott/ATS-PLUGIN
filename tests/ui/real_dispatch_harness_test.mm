@@ -2,6 +2,7 @@
 #include "../../src/ui/EditorActionProtocol.h"
 #include "../../src/ui/UiScheduler.h"
 #include "../../src/ui/VisageEditor.h"
+#include "../../src/host/HostAdapter.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -121,16 +122,25 @@ int main()
         ats::ui::EditorEventSink sink { &state, mouseDown, mouseUp, textInput, focusChanged,
                                         popupShown, popupSelected, popupDismissed };
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
-        REQUIRE(editor->setSize(640, 480));
-        editor->setScale(1.25);
-        REQUIRE(editor->setParent((__bridge void*)[hostWindow contentView]));
-        REQUIRE(editor->isShowing());
+        ats::host::HostAdapter host;
+        REQUIRE(host.initialize(ats::host::HostFormat::standalone));
+        REQUIRE(host.attachEditor(*editor, (__bridge void*)[hostWindow contentView], 1.25f,
+                                  640.0f, 480.0f));
+        REQUIRE(host.editorAttached());
+        REQUIRE(host.editorVisible());
+        REQUIRE(host.editorScale() == 1.25f);
         drainEvents(application);
 
         NSView* embeddedView = (__bridge NSView*)editor->nativeHandle();
         REQUIRE(embeddedView != nil);
         REQUIRE([embeddedView superview] == [hostWindow contentView]);
         REQUIRE([hostWindow makeFirstResponder:embeddedView]);
+
+        REQUIRE(host.setEditorLogicalSize(700.0f, 520.0f));
+        std::uint32_t resizedWidth = 0;
+        std::uint32_t resizedHeight = 0;
+        editor->getSize(resizedWidth, resizedHeight);
+        REQUIRE(resizedWidth == 700 && resizedHeight == 520);
 
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
                                             location:NSMakePoint(40.0, 40.0)
@@ -179,7 +189,14 @@ int main()
         REQUIRE(state.refreshes == 1);
 
         state.scheduler.cancel(state.registration);
-        editor->hide();
+        REQUIRE(host.setEditorVisible(false));
+        REQUIRE(!host.editorVisible());
+        REQUIRE(!editor->isShowing());
+        REQUIRE(host.setEditorVisible(true));
+        REQUIRE(host.editorVisible());
+        REQUIRE(editor->isShowing());
+        host.detachEditor();
+        REQUIRE(!host.editorAttached());
         REQUIRE(!editor->isShowing());
         editor.reset();
         REQUIRE([[hostWindow contentView] subviews].count == 0);

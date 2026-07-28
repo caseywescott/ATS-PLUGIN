@@ -457,7 +457,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE)
   target_include_directories(real_dispatch_harness_test PRIVATE
     "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
   target_compile_features(real_dispatch_harness_test PRIVATE cxx_std_17)
-  target_link_libraries(real_dispatch_harness_test PRIVATE ats_visage_editor visage "-framework Cocoa")
+  target_link_libraries(real_dispatch_harness_test PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
   add_test(NAME real_dispatch_harness_test COMMAND real_dispatch_harness_test)
 endif()
 
