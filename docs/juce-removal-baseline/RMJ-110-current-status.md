@@ -17,6 +17,7 @@ The latest implementation commits are:
 - `d0aae9a` model-driven Visage shell top-bar state for history, theme, and activity
 - `b6b05a1` Visage Session spectrum canvas and seven-mode view-menu implementation
 - `ac111be` native spectrum wheel/drag navigation wiring
+- `f4d9943` source-current ANL/RND activity indicators
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
