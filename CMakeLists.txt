@@ -17,6 +17,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
 option(ATS_BUILD_NATIVE_VST3 "Build the JUCE-free ATS VST3 wrapper" OFF)
+option(ATS_BUILD_NATIVE_STANDALONE "Build the JUCE-free ATS standalone wrapper" OFF)
 set(ATS_VST3_SDK_VERSION "05c4a9763f311a58fe3f34b68a199e5eea92e2b4"
     CACHE STRING "Pinned Steinberg VST3 SDK commit for the native wrapper")
 set(ATS_VST3_SDK_DIR "" CACHE PATH
@@ -26,7 +27,7 @@ set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
 
-if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3))
+if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE))
   # Visage's native macOS windowing implementation contains Objective-C++
   # sources. Enable the language at the top-level project so CMake also
   # initializes its compile rule variables for the nested dependency.
@@ -443,7 +444,7 @@ foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
     ats_core ats_playback ats_state ats_editor)
 endforeach()
 
-if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3)
+if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE)
   if(NOT APPLE)
     message(FATAL_ERROR "ATS_BUILD_VISAGE_UI_PROBE currently requires macOS native host embedding")
   endif()
@@ -487,6 +488,10 @@ endif()
 
 if(ATS_BUILD_NATIVE_VST3)
   add_subdirectory(src/host/vst3)
+endif()
+
+if(ATS_BUILD_NATIVE_STANDALONE)
+  add_subdirectory(src/host/standalone)
 endif()
 
 add_subdirectory(tools)

@@ -67,6 +67,12 @@ Validation on 2026-07-28:
   attachment; AU, standalone, DAW scan, and complete automation/stress gates
   remain open.
 
+- The next host slice adds a JUCE-free `ATS Resynth.app` standalone bundle and
+  a non-bundled smoke entry point using `HostAdapter::attachStandaloneEditor`.
+  Both arm64 targets build. Runtime smoke is not promoted here because this
+  desktop session traps inside Visage native window creation; the existing
+  arm64 Visage standalone probe remains the required window-capable evidence.
+
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
