@@ -1818,10 +1818,15 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#22.4"
       ],
       "replacement_refs": [
-        "planned: src/engine/ResidualEditService.h",
-        "planned: tests/engine/residual_edit_service_test.cpp"
+        "src/engine/ResidualEditService.h::ResidualEditService",
+        "tests/residual_edit_service_test.cpp"
       ],
       "tests": [
+        {
+          "path": "tests/residual_edit_service_test.cpp",
+          "state": "existing",
+          "proves": "Atomic residual operations, selection bounds, clipboard shape, finite/non-negative validation, and redistribution energy behavior."
+        },
         {
           "path": "required: tests/engine/residual_edit_service_test.cpp",
           "state": "required",
