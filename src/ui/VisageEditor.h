@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor.h"
+#include "ThemeTokens.h"
 
 #include <memory>
 
@@ -26,6 +27,10 @@ public:
     void hide() override;
     bool isShowing() const override;
     void* nativeHandle() const override;
+
+    void setTheme(ThemeId theme);
+    void setHistoryAvailability(bool canUndo, bool canRedo);
+    void setActivity(bool analysisRunning, bool renderRunning);
 
 private:
     struct Impl;

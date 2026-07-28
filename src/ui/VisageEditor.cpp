@@ -43,6 +43,44 @@ public:
                 return;
             }
             const auto point = event.relativePosition();
+            if (point.y < 48.0f && point.x >= 248.0f && point.x < 316.0f)
+            {
+                if (shell_.state().canUndo && sink_.historyAction)
+                    sink_.historyAction(sink_.context, false);
+                requestKeyboardFocus();
+                return;
+            }
+            if (point.y < 48.0f && point.x >= 316.0f && point.x < 384.0f)
+            {
+                if (shell_.state().canRedo && sink_.historyAction)
+                    sink_.historyAction(sink_.context, true);
+                requestKeyboardFocus();
+                return;
+            }
+            if (point.y < 48.0f && point.x >= width() - 220.0f)
+            {
+                visage::PopupMenu popup("Theme");
+                popup.addOption(1, "Ember");
+                popup.addOption(2, "Porcelain");
+                popup.onSelection() += [this](int optionId) {
+                    if (optionId == 1 || optionId == 2)
+                    {
+                        shell_.setTheme(optionId == 2 ? ThemeId::porcelain : ThemeId::ember);
+                        if (sink_.themeSelected)
+                            sink_.themeSelected(sink_.context, optionId - 1);
+                        redraw();
+                    }
+                };
+                popup.onCancel() += [this] {
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                if (sink_.popupShown)
+                    sink_.popupShown(sink_.context);
+                popup.show(this, { width() - 208.0f, 8.0f });
+                requestKeyboardFocus();
+                return;
+            }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
@@ -87,6 +125,24 @@ public:
         };
     }
 
+    void setTheme(ThemeId theme)
+    {
+        shell_.setTheme(theme);
+        redraw();
+    }
+
+    void setHistoryAvailability(bool canUndo, bool canRedo)
+    {
+        shell_.setHistoryAvailability(canUndo, canRedo);
+        redraw();
+    }
+
+    void setActivity(bool analysisRunning, bool renderRunning)
+    {
+        shell_.setActivity(analysisRunning, renderRunning);
+        redraw();
+    }
+
     void draw(visage::Canvas& canvas) override
     {
         const auto tokens = visageTokens();
@@ -104,6 +160,13 @@ public:
         canvas.setColor(tokens.secondaryText);
         canvas.text("SPECTRAL MODEL EDITOR", labelFont, visage::Font::kLeft,
                     16.0f, 28.0f, 220.0f, 14.0f);
+        canvas.setColor(shell_.state().canUndo ? tokens.text : tokens.secondaryText);
+        canvas.text("UNDO", labelFont, visage::Font::kCenter, 248.0f, 14.0f, 68.0f, 18.0f);
+        canvas.setColor(shell_.state().canRedo ? tokens.text : tokens.secondaryText);
+        canvas.text("REDO", labelFont, visage::Font::kCenter, 316.0f, 14.0f, 68.0f, 18.0f);
+        canvas.setColor(tokens.secondaryText);
+        canvas.text(shell_.state().theme == ThemeId::porcelain ? "PORCELAIN" : "EMBER",
+                    labelFont, visage::Font::kCenter, width() - 220.0f, 14.0f, 200.0f, 18.0f);
 
         const auto labels = EditorShellModel::pageLabels();
         const auto selected = static_cast<std::size_t>(shell_.state().page);
@@ -279,6 +342,21 @@ struct VisageEditor::Impl
 VisageEditor::VisageEditor(EditorEventSink sink) : impl_(std::make_unique<Impl>(sink)) {}
 
 VisageEditor::~VisageEditor() = default;
+
+void VisageEditor::setTheme(ThemeId theme)
+{
+    impl_->frame.setTheme(theme);
+}
+
+void VisageEditor::setHistoryAvailability(bool canUndo, bool canRedo)
+{
+    impl_->frame.setHistoryAvailability(canUndo, canRedo);
+}
+
+void VisageEditor::setActivity(bool analysisRunning, bool renderRunning)
+{
+    impl_->frame.setActivity(analysisRunning, renderRunning);
+}
 
 void VisageEditor::getSize(std::uint32_t& width, std::uint32_t& height) const
 {

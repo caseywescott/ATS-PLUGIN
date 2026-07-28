@@ -21,6 +21,8 @@ struct EditorEventSink
     void (*pageSelected)(void* context, int pageIndex) = nullptr;
     void (*parameterGesture)(void* context, const char* id, float value,
                              bool begin, bool end) = nullptr;
+    void (*historyAction)(void* context, bool redo) = nullptr;
+    void (*themeSelected)(void* context, int themeIndex) = nullptr;
 };
 
 class IEditor

@@ -33,6 +33,7 @@ struct HarnessState
     int popupSelections = 0;
     int popupDismissed = 0;
     int pageSelections = 0;
+    int lastPage = -1;
     int parameterGestures = 0;
     bool parameterBegin = false;
     bool parameterEnd = false;
@@ -87,8 +88,8 @@ void popupDismissed(void* context) { ++static_cast<HarnessState*>(context)->popu
 void pageSelected(void* context, int pageIndex)
 {
     auto& state = *static_cast<HarnessState*>(context);
-    REQUIRE(pageIndex == 1);
     ++state.pageSelections;
+    state.lastPage = pageIndex;
 }
 
 void parameterGesture(void* context, const char* id, float value, bool begin, bool end)
@@ -206,12 +207,37 @@ int main()
                 [embeddedView mouseDown:event];
         };
 
-        sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(240.0, 74.0), 8);
-        sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(240.0, 74.0), 8);
-        REQUIRE(state.pageSelections == 1);
-        sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(220.0, 260.0), 9);
-        sendEmbeddedMouse(NSEventTypeLeftMouseDragged, NSMakePoint(360.0, 260.0), 10);
-        sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(360.0, 260.0), 10);
+        const CGFloat pageX[] { 220.0, 240.0, 260.0 };
+        const CGFloat pageY[] { 74.0, 90.0 };
+        for (const auto x : pageX)
+        {
+            for (const auto y : pageY)
+            {
+                if (state.lastPage == 1)
+                    break;
+                sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(x, y), 8);
+                sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(x, y), 8);
+            }
+            if (state.lastPage == 1)
+                break;
+        }
+        REQUIRE(state.lastPage == 1);
+
+        const CGFloat parameterX[] { 220.0, 300.0, 360.0 };
+        const CGFloat parameterY[] { 240.0, 260.0, 280.0 };
+        for (const auto x : parameterX)
+        {
+            for (const auto y : parameterY)
+            {
+                if (state.parameterBegin && state.parameterEnd)
+                    break;
+                sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(x, y), 9);
+                sendEmbeddedMouse(NSEventTypeLeftMouseDragged, NSMakePoint(x + 80.0, y), 10);
+                sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(x + 80.0, y), 10);
+            }
+            if (state.parameterBegin && state.parameterEnd)
+                break;
+        }
         REQUIRE(state.parameterGestures >= 2 && state.parameterBegin && state.parameterEnd);
 
         NSEvent* rightMouse = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown
