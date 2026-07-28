@@ -82,6 +82,16 @@ target_compile_features(dsp_service_contract_test PRIVATE cxx_std_17)
 target_link_libraries(dsp_service_contract_test PRIVATE ats_engine)
 add_test(NAME dsp_service_contract_test COMMAND dsp_service_contract_test)
 
+add_executable(dsp_contract_matrix_test dsp/dsp_contract_matrix_test.cpp)
+target_include_directories(dsp_contract_matrix_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/dsp"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(dsp_contract_matrix_test PRIVATE cxx_std_17)
+target_link_libraries(dsp_contract_matrix_test PRIVATE ats_engine)
+add_test(NAME dsp_contract_matrix_test COMMAND dsp_contract_matrix_test)
+
 add_executable(spectral_envelope_service_test spectral_envelope_service_test.cpp
   ../src/core/AtsSpectralEnvelope.cpp)
 target_include_directories(spectral_envelope_service_test PRIVATE

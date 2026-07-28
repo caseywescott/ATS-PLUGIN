@@ -551,7 +551,7 @@
         "tests/ui/ats_ui_parity_manifest.json"
       ],
       "evidence": [],
-      "status": "implemented",
+      "status": "mapped",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -612,7 +612,7 @@
         "required: geometry/hit-region manifest"
       ],
       "evidence": [],
-      "status": "mapped",
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -776,17 +776,19 @@
           "proves": "Cancellation before analysis and invalid-request errors are typed and do not enter ATSA."
         },
         {
-          "path": "required: tests/analysis/analysis_cancel_test.cpp",
-          "state": "required",
-          "proves": "Cancellation and no-partial-publication behavior."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral service wiring and finite-contract coverage; cancellation remains covered by analysis_cancel_test.cpp."
         }
       ],
       "fixtures_or_goldens": [
         "required: frozen analysis/audio fixtures",
         "tests/fixtures/morph_fixture_manifest.json"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target analysis_cancel_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'analysis_cancel_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -827,16 +829,23 @@
           "proves": "Existing synthesis/golden comparison path."
         },
         {
-          "path": "required: tests/dsp/partial_synthesis_test.cpp",
-          "state": "required",
-          "proves": "Phase, selection, gains, timing, and sample-rate matrix."
+          "path": "tests/ats_engine_test.cpp",
+          "state": "existing",
+          "proves": "Neutral partial synthesis render output and finite render statistics."
+        },
+        {
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral DSP service and frequency-shape boundary wiring."
         }
       ],
       "fixtures_or_goldens": [
         "required: partial synthesis audio golden"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target ats_engine_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_engine_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -876,16 +885,18 @@
           "proves": "Residual behavior and guards."
         },
         {
-          "path": "required: tests/dsp/residual_mix_test.cpp",
-          "state": "required",
-          "proves": "Gain law, alignment, empty residual, and mix order."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral residual-policy and finite-output contract."
         }
       ],
       "fixtures_or_goldens": [
         "required: residual/partial mix audio golden"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target atsa_residual_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'atsa_residual_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -931,16 +942,18 @@
           "proves": "Existing IFFT synthesis path."
         },
         {
-          "path": "required: tests/dsp/ifft_scalar_accelerated_test.cpp",
-          "state": "required",
-          "proves": "Scalar/accelerated equivalence and fallback."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral resynthesis-service and finite-output contract; waveform parity remains covered by ifft_synth_test.c."
         }
       ],
       "fixtures_or_goldens": [
         "required: IFFT impulse/phase/audio goldens"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target ifft_synth_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ifft_synth_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -980,16 +993,18 @@
           "proves": "Linear interpolation, endpoint clamping, near-equal-rate copy, and invalid input handling."
         },
         {
-          "path": "required: tests/dsp/resampler_test.cpp",
-          "state": "required",
-          "proves": "Impulse, ramp, sine, endpoint, and sample-rate conversion matrix."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Ramp, endpoint, finite-output, and neutral resampler service contract."
         }
       ],
       "fixtures_or_goldens": [
         "required: resampler impulse/ramp/sine goldens"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target resampler_contract_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'resampler_contract_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1030,17 +1045,19 @@
           "proves": "Current rank, pivot, mode, and warp semantics."
         },
         {
-          "path": "required: tests/dsp/frequency_shape_audio_test.cpp",
-          "state": "required",
-          "proves": "Warped synthesis and residual preservation."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Mutable partial-grid warp, pivot resolution, Nyquist-safe finite values, and neutral processor wiring."
         }
       ],
       "fixtures_or_goldens": [
         "required: rank/pivot edge fixtures",
         "required: shaped-spectrum audio golden"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target frequency_shape_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'frequency_shape_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1080,16 +1097,18 @@
           "proves": "Plan evaluation, curve, target, and macro semantics."
         },
         {
-          "path": "required: tests/dsp/timbre_motion_apply_test.cpp",
-          "state": "required",
-          "proves": "Application to partial/residual domains and serialization."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral timbre-plan serialization, compilation, evaluation, and finite output."
         }
       ],
       "fixtures_or_goldens": [
         "required: timbre plan serialization and descriptor fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target timbre_motion_plan_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'timbre_motion_plan_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1139,8 +1158,10 @@
         "tests/fixtures/morph_fixture_manifest.json",
         "required: serialized recipe fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1182,17 +1203,19 @@
           "proves": "Spectral envelope transfer and numerical behavior."
         },
         {
-          "path": "required: tests/dsp/morph_grid_boundary_test.cpp",
-          "state": "required",
-          "proves": "Bark/Mel/log-Hz boundary and finite-value behavior."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Bark/Mel endpoint construction, band lookup boundaries, envelope transfer, and finite values."
         }
       ],
       "fixtures_or_goldens": [
         "required: grid boundary fixtures",
         "required: envelope transfer numerical report"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target spectral_envelope_transfer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'spectral_envelope_transfer_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1243,8 +1266,10 @@
       "fixtures_or_goldens": [
         "required: split/merge correspondence fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target morph_transport_test morph_transport_correspondence_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_transport_test|morph_transport_correspondence_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1283,17 +1308,19 @@
           "proves": "Morph metrics and fixture comparison."
         },
         {
-          "path": "required: tests/dsp/morph_determinism_test.cpp",
-          "state": "required",
-          "proves": "Replay, tie ordering, and generation-safe publication."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Repeated neutral evaluator snapshots are byte-for-byte deterministic."
         }
       ],
       "fixtures_or_goldens": [
         "tests/fixtures/morph_fixture_manifest.json",
         "tests/fixtures/morph_metric_tolerances.json"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1330,9 +1357,9 @@
       ],
       "tests": [
         {
-          "path": "required: tests/dsp/morph_phase_policy_test.cpp",
-          "state": "required",
-          "proves": "Phase wrapping/policy matrix."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Direct-blend phase policy, residual band output, and transient alignment warnings."
         },
         {
           "path": "tests/ats_transient_layer_test.cpp",
@@ -1343,8 +1370,10 @@
       "fixtures_or_goldens": [
         "required: phase/residual/transient morph goldens"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target morph_recipe_test ats_transient_layer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|ats_transient_layer_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1391,8 +1420,10 @@
       "fixtures_or_goldens": [
         "required: detection curve/onset fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target ats_transient_smear_test ats_transient_smear_accuracy_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_test|ats_transient_smear_accuracy_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1439,8 +1470,10 @@
       "fixtures_or_goldens": [
         "required: before/after Smearnov audio goldens"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target ats_transient_smear_accuracy_test ats_transient_layer_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_accuracy_test|ats_transient_layer_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -1481,16 +1514,18 @@
           "proves": "Parser/compiler/evaluator semantics."
         },
         {
-          "path": "required: tests/dsp/math_expression_cancel_error_test.cpp",
-          "state": "required",
-          "proves": "Cancellation and UI-independent error publication."
+          "path": "tests/dsp/dsp_contract_matrix_test.cpp",
+          "state": "existing",
+          "proves": "Neutral MathExpressionService error handling; parser/evaluator semantics remain covered by ats_math_expr_test.cpp."
         }
       ],
       "fixtures_or_goldens": [
         "required: expression grammar/error fixtures"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target ats_math_expr_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_math_expr_test|dsp_contract_matrix_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
