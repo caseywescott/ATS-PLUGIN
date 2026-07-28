@@ -518,8 +518,9 @@
         "src/ui/EditorHost.h::HeadlessEditorHost",
         "src/ui/UiActionDispatcher.h::UiActionDispatcher",
         "src/engine/PluginModel.h::PluginModel",
-        "planned: src/ui/UiBackend.h",
-        "planned: src/ui/ViewModels.h"
+        "src/ui/UiBackend.h::UiBackend",
+        "src/ui/EditorHost.h::HeadlessEditorHost",
+        "src/ui/SpectrumViewModel.h::SpectrumViewModel"
       ],
       "tests": [
         {
@@ -568,8 +569,8 @@
       "replacement_refs": [
         "src/ui/UiBackend.h::UiBackend",
         "src/ui/UiBackend.h::UiBackendCapabilities",
-        "planned: src/ui/ThemeTokens.h",
-        "planned: src/ui/PopupManager.h"
+        "src/ui/ThemeTokens.h::ThemeTokens",
+        "src/ui/PopupManager.h::PopupManager"
       ],
       "tests": [
         {
