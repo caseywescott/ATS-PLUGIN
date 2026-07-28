@@ -464,9 +464,9 @@
         "src/core/AtsRtSafety.h"
       ],
       "replacement_refs": [
-        "planned: src/engine/SnapshotPublisher.h",
-        "planned: src/audio/AudioBufferPool.h",
-        "planned: src/engine/PlaybackSnapshot.h"
+        "src/engine/SnapshotPublisher.h::SnapshotPublisher",
+        "src/audio/AudioBufferPool.h::AudioBufferPool",
+        "src/engine/PlaybackSnapshot.h::PlaybackSnapshot"
       ],
       "tests": [
         {
@@ -1710,8 +1710,8 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#28.3"
       ],
       "replacement_refs": [
-        "planned: src/ui/UiScheduler.h",
-        "planned: tests/ui/ui_refresh_ownership_test.cpp"
+        "src/ui/UiScheduler.h::UiScheduler",
+        "tests/ui_scheduler_test.cpp"
       ],
       "tests": [
         {

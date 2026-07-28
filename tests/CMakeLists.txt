@@ -88,6 +88,21 @@ target_include_directories(telemetry_publishers_test PRIVATE
 target_compile_features(telemetry_publishers_test PRIVATE cxx_std_17)
 add_test(NAME telemetry_publishers_test COMMAND telemetry_publishers_test)
 
+add_executable(snapshot_publication_test snapshot_publication_test.cpp)
+target_include_directories(snapshot_publication_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(snapshot_publication_test PRIVATE cxx_std_17)
+add_test(NAME snapshot_publication_test COMMAND snapshot_publication_test)
+
+add_executable(ui_scheduler_test ui_scheduler_test.cpp)
+target_include_directories(ui_scheduler_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(ui_scheduler_test PRIVATE cxx_std_17)
+add_test(NAME ui_scheduler_test COMMAND ui_scheduler_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)
