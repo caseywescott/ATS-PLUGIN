@@ -412,6 +412,7 @@
         "src/core/SchedulerPolicy.h::SchedulerCadence",
         "src/core/SchedulerPolicy.h::CadenceGate",
         "src/engine/RenderInvalidationCoordinator.h::RenderInvalidationCoordinator",
+        "src/engine/JobCoordinator.h::JobCoordinator",
         "src/ui/ParameterBinding.h::ParameterActionDispatcher",
         "src/ui/UiActionDispatcher.h::UiActionDispatcher"
       ],
@@ -420,6 +421,11 @@
           "path": "tests/job_scheduler_test.cpp",
           "state": "existing",
           "proves": "Cancellation and stale-result rejection, including token lifetime and mid-work cancellation."
+        },
+        {
+          "path": "tests/job_coordinator_test.cpp",
+          "state": "existing",
+          "proves": "Superseded generations cancel and stale completion callbacks are converted to typed cancellation."
         },
         {
           "path": "required: tests/ui/real_dispatch_harness_test.cpp",
@@ -431,7 +437,7 @@
         "required: scheduler event trace"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R 'job_scheduler_test|playback_cache_generation_test' --output-on-failure"
+        "cmake --build build-review --target job_coordinator_test job_scheduler_test -j2 && ctest --test-dir build-review -R 'job_coordinator_test|job_scheduler_test' --output-on-failure"
       ],
       "status": "implemented",
       "deviation_id": null,
@@ -1726,15 +1732,22 @@
       ],
       "tests": [
         {
-          "path": "required: tests/ui/ui_refresh_ownership_test.cpp",
+          "path": "tests/ui_refresh_ownership_test.cpp",
+          "state": "existing",
+          "proves": "Cadence, ownership, focused text/pointer capture/pending gesture protection, and teardown cancellation."
+        },
+        {
+          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
           "state": "required",
-          "proves": "Cadence, ownership, stale snapshots, focused text protection, and teardown cancellation."
+          "proves": "The refresh action traverses a real target backend and preserves target ownership."
         }
       ],
       "fixtures_or_goldens": [
         "required: deterministic scheduler/timer trace"
       ],
-      "evidence": [],
+      "evidence": [
+        "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure"
+      ],
       "status": "mapped",
       "deviation_id": null,
       "blocked_by": [],

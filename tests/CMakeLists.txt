@@ -127,6 +127,20 @@ target_include_directories(ui_scheduler_test PRIVATE
 target_compile_features(ui_scheduler_test PRIVATE cxx_std_17)
 add_test(NAME ui_scheduler_test COMMAND ui_scheduler_test)
 
+add_executable(job_coordinator_test job_coordinator_test.cpp)
+target_include_directories(job_coordinator_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(job_coordinator_test PRIVATE cxx_std_17)
+add_test(NAME job_coordinator_test COMMAND job_coordinator_test)
+
+add_executable(ui_refresh_ownership_test ui_refresh_ownership_test.cpp)
+target_include_directories(ui_refresh_ownership_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(ui_refresh_ownership_test PRIVATE cxx_std_17)
+add_test(NAME ui_refresh_ownership_test COMMAND ui_refresh_ownership_test)
+
 add_executable(spectrum_trace_snapshot_test spectrum_trace_snapshot_test.cpp)
 target_include_directories(spectrum_trace_snapshot_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
