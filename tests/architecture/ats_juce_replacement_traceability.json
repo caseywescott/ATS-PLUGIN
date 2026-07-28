@@ -405,7 +405,8 @@
       "replacement_refs": [
         "src/core/JobScheduler.h::JobScheduler",
         "src/engine/RenderInvalidationCoordinator.h::RenderInvalidationCoordinator",
-        "src/ui/ParameterBinding.h::ParameterActionDispatcher"
+        "src/ui/ParameterBinding.h::ParameterActionDispatcher",
+        "src/ui/UiActionDispatcher.h::UiActionDispatcher"
       ],
       "tests": [
         {
@@ -506,7 +507,8 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
       ],
       "replacement_refs": [
-        "planned: src/ui/EditorHost.h",
+        "src/ui/EditorHost.h::EditorHost",
+        "src/ui/UiActionDispatcher.h::UiActionDispatcher",
         "planned: src/ui/UiBackend.h",
         "planned: src/ui/ViewModels.h"
       ],
@@ -606,7 +608,7 @@
         "src/plugin/AnalysisTabPanel.cpp"
       ],
       "replacement_refs": [
-        "planned: src/diagnostics/TelemetryPublisher.h",
+        "src/ui/UiActionDispatcher.h::TelemetryPublisher",
         "planned: src/diagnostics/ProgressPublisher.h"
       ],
       "tests": [
@@ -614,6 +616,11 @@
           "path": "required: tests/diagnostics/telemetry_test.cpp",
           "state": "required",
           "proves": "Bounded event delivery, error mapping, and log redirection."
+        },
+        {
+          "path": "tests/ui_action_dispatcher_test.cpp",
+          "state": "existing",
+          "proves": "Bounded typed action delivery and immutable telemetry snapshot publication."
         }
       ],
       "fixtures_or_goldens": [
