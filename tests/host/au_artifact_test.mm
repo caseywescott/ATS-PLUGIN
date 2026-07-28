@@ -60,8 +60,24 @@ int main(int argc, char** argv)
     require(count == 81, "81 parameter list entries");
     auto setParameter = plugin->Lookup(kAudioUnitSetParameterSelect);
     require(setParameter != nullptr, "parameter setter");
-    require(setParameter(plugin, ids[0], kAudioUnitScope_Global, 0, 0.0f, 0) == noErr,
-            "parameter write");
+    auto getParameter = plugin->Lookup(kAudioUnitGetParameterSelect);
+    auto getParameterInfo = plugin->Lookup(kAudioUnitGetPropertySelect);
+    require(getParameter != nullptr && getParameterInfo != nullptr, "parameter readers");
+    for (const auto id : ids)
+    {
+        AudioUnitParameterInfo info {};
+        UInt32 infoSize = sizeof(info);
+        require(getParameterInfo(plugin, kAudioUnitProperty_ParameterInfo,
+                                  kAudioUnitScope_Global, id, &info, &infoSize) == noErr,
+                "parameter info");
+        require(info.maxValue >= info.minValue, "parameter range");
+        require(setParameter(plugin, id, kAudioUnitScope_Global, 0, info.minValue, 0) == noErr,
+                "parameter write");
+        AudioUnitParameterValue value = 0.0f;
+        require(getParameter(plugin, id, kAudioUnitScope_Global, 0, &value) == noErr,
+                "parameter read");
+        require(value >= info.minValue && value <= info.maxValue, "parameter value range");
+    }
 
     AudioStreamBasicDescription format {};
     format.mSampleRate = 48000.0;

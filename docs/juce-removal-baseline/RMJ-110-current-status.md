@@ -76,7 +76,7 @@ Validation on 2026-07-28:
 - The AU half of commit 22 now builds a JUCE-free `ATS Resynth.component`
   against pinned Apple AudioUnitSDK commit
   `53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9` and passes the direct factory
-  artifact probe for identity, 81 parameters, parameter write, stereo float
+  artifact probe for identity, all-81 parameter info/read/write, stereo float
   format, ATSP class-info state round-trip, zero-input stereo process selector,
   initialize, uninitialize, and close. AU registration/`auval`, MIDI/
   automation stress, and a native AU editor remain open.
