@@ -127,6 +127,12 @@ target_include_directories(ui_scheduler_test PRIVATE
 target_compile_features(ui_scheduler_test PRIVATE cxx_std_17)
 add_test(NAME ui_scheduler_test COMMAND ui_scheduler_test)
 
+add_executable(spectrum_trace_snapshot_test spectrum_trace_snapshot_test.cpp)
+target_include_directories(spectrum_trace_snapshot_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_trace_snapshot_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_trace_snapshot_test COMMAND spectrum_trace_snapshot_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)

@@ -1766,10 +1766,16 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#22.3"
       ],
       "replacement_refs": [
-        "planned: src/ui/SpectralTraceBuilder.h",
-        "planned: tests/ui/spectrum_trace_snapshot_test.cpp"
+        "src/ui/SpectralTraceBuilder.h::SpectralTraceBuilder",
+        "src/ui/SpectrumViewModel.h::SpectrumViewModel",
+        "tests/spectrum_trace_snapshot_test.cpp"
       ],
       "tests": [
+        {
+          "path": "tests/spectrum_trace_snapshot_test.cpp",
+          "state": "existing",
+          "proves": "Source/mode selection, finite filtering, caps, normalization, revisions, sparse data, and deterministic replay."
+        },
         {
           "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
           "state": "required",
