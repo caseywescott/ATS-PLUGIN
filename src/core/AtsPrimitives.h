@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -249,11 +250,38 @@ private:
 class CancellationToken
 {
 public:
-    void cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
-    [[nodiscard]] bool isCancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
+    CancellationToken() : state_(std::make_shared<State>()) {}
+
+    void cancel() noexcept { state_->cancelled.store(true, std::memory_order_release); }
+    [[nodiscard]] bool isCancelled() const noexcept
+    { return state_->cancelled.load(std::memory_order_acquire); }
 
 private:
-    std::atomic<bool> cancelled_{false};
+    struct State
+    {
+        std::atomic<bool> cancelled { false };
+    };
+
+    explicit CancellationToken(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+    std::shared_ptr<State> state_;
+
+    friend class CancellationSource;
+};
+
+class CancellationSource
+{
+public:
+    CancellationSource() : state_(std::make_shared<CancellationToken::State>()) {}
+
+    [[nodiscard]] CancellationToken token() const noexcept
+    { return CancellationToken { state_ }; }
+
+    void cancel() noexcept { state_->cancelled.store(true, std::memory_order_release); }
+    [[nodiscard]] bool isCancelled() const noexcept
+    { return state_->cancelled.load(std::memory_order_acquire); }
+
+private:
+    std::shared_ptr<CancellationToken::State> state_;
 };
 
 template <typename T>

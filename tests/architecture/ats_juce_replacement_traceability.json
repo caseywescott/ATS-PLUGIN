@@ -404,6 +404,8 @@
       ],
       "replacement_refs": [
         "src/core/JobScheduler.h::JobScheduler",
+        "src/core/SchedulerPolicy.h::SchedulerCadence",
+        "src/core/SchedulerPolicy.h::CadenceGate",
         "src/engine/RenderInvalidationCoordinator.h::RenderInvalidationCoordinator",
         "src/ui/ParameterBinding.h::ParameterActionDispatcher",
         "src/ui/UiActionDispatcher.h::UiActionDispatcher"
@@ -412,7 +414,7 @@
         {
           "path": "tests/job_scheduler_test.cpp",
           "state": "existing",
-          "proves": "Cancellation and stale-result rejection."
+          "proves": "Cancellation and stale-result rejection, including token lifetime and mid-work cancellation."
         },
         {
           "path": "required: tests/ui/real_dispatch_harness_test.cpp",

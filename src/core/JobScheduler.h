@@ -34,12 +34,12 @@ public:
     {
         using Value = std::invoke_result_t<Work>;
         std::function<void()> task = [generation,
-                                      &token,
+                                      tokenCopy = token,
                                       work = std::forward<Work>(work),
                                       complete = std::forward<Complete>(complete)]() mutable {
             JobResult<Value> result;
             result.generation = generation;
-            if (token.isCancelled())
+            if (tokenCopy.isCancelled())
             {
                 result.status = JobResult<Value>::Status::cancelled;
                 complete(std::move(result));
@@ -48,7 +48,7 @@ public:
             try
             {
                 result.value = work();
-                result.status = token.isCancelled() ? JobResult<Value>::Status::cancelled
+                result.status = tokenCopy.isCancelled() ? JobResult<Value>::Status::cancelled
                                                     : JobResult<Value>::Status::success;
             }
             catch (const std::exception& error)
