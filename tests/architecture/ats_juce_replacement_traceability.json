@@ -154,7 +154,7 @@
       "replacement_refs": [
         "src/core/ParameterRegistry.h::ParameterRegistry",
         "src/core/ParameterRegistry.h::ParameterStore",
-        "planned: src/parameters/ParameterSnapshot.h"
+        "src/parameters/ParameterSnapshot.h::ParameterSnapshot"
       ],
       "tests": [
         {
@@ -626,7 +626,7 @@
         "src/ui/UiActionDispatcher.h::TelemetryPublisher",
         "src/ui/UiActionDispatcher.h::ActionResultDispatcher",
         "src/engine/PluginModel.h::PluginModel",
-        "planned: src/diagnostics/ProgressPublisher.h"
+        "src/diagnostics/ProgressPublisher.h::ProgressPublisher"
       ],
       "tests": [
         {
@@ -1557,7 +1557,7 @@
         "src/core/PlaybackBuffers.h::OwnedAudioBuffer",
         "src/core/PlaybackBuffers.h::PlaybackBufferPool::activeGeneration",
         "src/engine/PlaybackEngine.h::PlaybackEngine",
-        "planned: src/audio/PlayheadPublisher.h"
+        "src/audio/PlayheadPublisher.h::PlayheadPublisher"
       ],
       "tests": [
         {

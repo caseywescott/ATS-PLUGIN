@@ -147,6 +147,16 @@ target_include_directories(morph_timeline_service_test PRIVATE
 target_compile_features(morph_timeline_service_test PRIVATE cxx_std_17)
 add_test(NAME morph_timeline_service_test COMMAND morph_timeline_service_test)
 
+add_executable(snapshot_publisher_contract_test snapshot_publisher_contract_test.cpp
+  ../src/core/ParameterRegistry.cpp)
+target_include_directories(snapshot_publisher_contract_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/diagnostics"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/parameters")
+target_compile_features(snapshot_publisher_contract_test PRIVATE cxx_std_17)
+add_test(NAME snapshot_publisher_contract_test COMMAND snapshot_publisher_contract_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)
