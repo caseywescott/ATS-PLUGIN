@@ -40,6 +40,8 @@ The harness verifies that:
   themes, ordered grid/residual/trace/playhead/legend commands, amplitude
   weighting, selected-trace emphasis, and bounded playhead coordinates.
 - hide/destruction removes the embedded Visage view.
+- dispatcher teardown explicitly clears active pointer capture, popup ownership,
+  and focus before the native editor can be detached.
 
 Evidence:
 

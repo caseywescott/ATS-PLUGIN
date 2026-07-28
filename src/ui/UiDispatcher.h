@@ -115,6 +115,14 @@ public:
 
     void setPopup(Frame* popup) noexcept { popup_ = popup; focus_ = popup; }
     void dismissPopup() noexcept { popup_ = nullptr; focus_ = nullptr; }
+    // Called before the native editor is detached or destroyed. No input or
+    // overlay ownership may survive the backend window lifetime.
+    void resetForTeardown() noexcept
+    {
+        capture_ = nullptr;
+        focus_ = nullptr;
+        popup_ = nullptr;
+    }
     [[nodiscard]] Frame* popup() const noexcept { return popup_; }
     [[nodiscard]] Frame* focused() const noexcept { return focus_; }
     [[nodiscard]] Frame* captured() const noexcept { return capture_; }

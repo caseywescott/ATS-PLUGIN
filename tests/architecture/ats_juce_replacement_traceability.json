@@ -595,7 +595,8 @@
         "src/ui/UiBackend.h::UiBackend",
         "src/ui/UiBackend.h::UiBackendCapabilities",
         "src/ui/ThemeTokens.h::ThemeTokens",
-        "src/ui/PopupManager.h::PopupManager"
+        "src/ui/PopupManager.h::PopupManager",
+        "src/ui/UiDispatcher.h::Dispatcher"
       ],
       "tests": [
         {
@@ -612,6 +613,11 @@
           "path": "tests/ui/real_dispatch_harness_test.mm",
           "state": "required",
           "proves": "Target-backend hit testing, focus, popup, keyboard, and action dispatch."
+        },
+        {
+          "path": "tests/ui_dispatcher_test.cpp",
+          "state": "existing",
+          "proves": "Pointer capture, popup focus, and teardown reset do not outlive the dispatcher window."
         }
       ],
       "fixtures_or_goldens": [

@@ -30,8 +30,15 @@ int main()
     assert(dispatcher.captured() == nullptr);
 
     ats::ui::Frame popup { 20 };
+    dispatcher.dispatch({ ats::ui::PointerEvent::Type::down, { 35, 45 }, {}, {}, 2 });
+    assert(dispatcher.captured() == &child && dispatcher.focused() == &child);
     dispatcher.setPopup(&popup);
     assert(dispatcher.popup() == &popup && dispatcher.focused() == &popup);
+    dispatcher.resetForTeardown();
+    assert(dispatcher.captured() == nullptr);
+    assert(dispatcher.popup() == nullptr && dispatcher.focused() == nullptr);
+
+    dispatcher.setPopup(&popup);
     dispatcher.dismissPopup();
     assert(dispatcher.popup() == nullptr && dispatcher.focused() == nullptr);
     std::cout << "ui_dispatcher_test: local targeting, capture, click-through, popup focus ok\n";
