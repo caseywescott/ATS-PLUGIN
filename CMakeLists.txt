@@ -346,6 +346,55 @@ if(APPLE)
   target_link_libraries(atsa PUBLIC "-framework Accelerate")
 endif()
 
+# Framework-free ATS ownership boundary. This target is intentionally built
+# before the legacy plugin target so core contracts can be compiled and tested
+# with BUILD_PLUGIN=OFF without JUCE or a plugin SDK in the include graph.
+add_library(ats_core STATIC
+  src/core/AtsFrequencyShape.cpp
+  src/core/AtsMathExpr.cpp
+  src/core/AtsModel.cpp
+  src/core/AtsMorphRecipe.cpp
+  src/core/AtsMorphTransport.cpp
+  src/core/AtsMorphTransportCorrespondence.cpp
+  src/core/AtsParams.cpp
+  src/core/AtsSpectralEnvelope.cpp
+  src/core/AtsTransientLayer.cpp
+  src/core/AtsTransientSmear.cpp
+  src/core/ParameterRegistry.cpp)
+target_include_directories(ats_core PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_core PUBLIC cxx_std_17)
+target_link_libraries(ats_core PUBLIC atsa)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(ats_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(ats_engine STATIC src/engine/AtsEngine.cpp)
+target_include_directories(ats_engine PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/engine" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_engine PUBLIC cxx_std_17)
+target_link_libraries(ats_engine PUBLIC ats_core atsa)
+
+add_library(ats_state STATIC src/state/LegacyStateCodec.cpp)
+target_include_directories(ats_state PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/state" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_state PUBLIC cxx_std_17)
+target_link_libraries(ats_state PUBLIC ats_core)
+
+add_library(ats_file_service STATIC src/platform/FileService.cpp)
+target_include_directories(ats_file_service PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/platform")
+target_compile_features(ats_file_service PUBLIC cxx_std_17)
+target_link_libraries(ats_file_service PUBLIC ats_core)
+
+add_library(ats_preset_service STATIC src/state/PresetService.cpp)
+target_include_directories(ats_preset_service PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/core"
+  "${CMAKE_SOURCE_DIR}/src/platform"
+  "${CMAKE_SOURCE_DIR}/src/state")
+target_compile_features(ats_preset_service PUBLIC cxx_std_17)
+target_link_libraries(ats_preset_service PUBLIC ats_file_service)
+
+add_library(ats_editor INTERFACE)
+target_include_directories(ats_editor INTERFACE "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+target_link_libraries(ats_editor INTERFACE ats_core)
+
 add_subdirectory(tools)
 
 if(BUILD_PLUGIN)

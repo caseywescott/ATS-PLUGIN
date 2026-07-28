@@ -1,0 +1,1969 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "ats_juce_replacement_traceability",
+  "specification": "docs/JUCE_REMOVAL_ATS_SPEC.md#27-architecture-and-dsp-contract-traceability",
+  "ui_manifest": "tests/ui/ats_ui_parity_manifest.json",
+  "branch": "remove-juce",
+  "baseline_commit": "36244a3ff041491d9a8cc4f5bf641105b52c8e35",
+  "target_backend_revision": "blocked:D-UI-BACKEND-NOT-PINNED",
+  "allowed_statuses": [
+    "baseline",
+    "mapped",
+    "implemented",
+    "verified",
+    "deviated",
+    "blocked",
+    "retired"
+  ],
+  "records": [
+    {
+      "trace_id": "ARCH-HOST-001",
+      "family": "host.lifecycle",
+      "legacy_surface": "juce::AudioProcessor lifecycle and createPluginFilter",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h::AtsAudioProcessor",
+        "src/plugin/PluginProcessor.cpp::prepareToPlay",
+        "src/plugin/PluginProcessor.cpp::releaseResources",
+        "src/plugin/PluginProcessor.cpp::processBlock",
+        "src/plugin/PluginEntry.cpp::createPluginFilter"
+      ],
+      "replacement_owner": "HostAdapter and thin VST3/AU/native entry shims",
+      "replacement_api": "HostAdapter::initialize, prepare, process(AudioBufferView, MidiEventList), release; wrapper-specific entry points translate to neutral types only.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Host lifecycle, audio buffers, MIDI events, bus/layout information, and state requests cross into neutral engine services.",
+      "thread_domain": "host_callback",
+      "invariants": [
+        "Wrapper lifecycle is format-correct and editor attach/detach is safe.",
+        "No ATS algorithm depends on a host wrapper type.",
+        "Process output has the expected channel count, sample count, and bypass behavior."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginEntry.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "planned: src/host/HostAdapter.h::HostAdapter",
+        "planned: src/host/PluginEntry.cpp"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/host/host_lifecycle_test.cpp",
+          "state": "required",
+          "proves": "Repeated initialize/prepare/process/release and editor attach/detach are safe."
+        },
+        {
+          "path": "required: plugin validation and AU/VST3 scan",
+          "state": "required",
+          "proves": "The shipped wrapper presents the expected plugin identity and buses."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: host lifecycle/process trace"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-HOST-002",
+      "family": "host.audio-midi",
+      "legacy_surface": "juce::AudioBuffer<float>, juce::MidiBuffer, bus/layout helpers",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h::processBlock",
+        "src/plugin/PluginProcessor.cpp::processBlock"
+      ],
+      "replacement_owner": "AudioBufferView, owned AudioBuffer, MidiEventList, and HostAdapter translation",
+      "replacement_api": "AudioBufferView exposes non-owning channel/sample spans; AudioBuffer owns preallocated storage; MidiEventList preserves event bytes and sample offsets.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Host input/output buffers and timestamped MIDI events are translated once at the wrapper boundary and consumed by the audio engine.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "No hidden buffer resize or allocation occurs on the audio thread.",
+        "MIDI ordering and sample offsets are preserved.",
+        "Interleaved/non-interleaved conversion is explicit and tested."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp::processBlock",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "src/core/AtsPrimitives.h::AudioBufferView",
+        "src/core/AtsPrimitives.h::MidiEventList",
+        "src/host/HostAdapter.h::HostAdapter"
+      ],
+      "tests": [
+        {
+          "path": "tests/ats_primitives_test.cpp",
+          "state": "existing",
+          "proves": "Channel, sample-count, block-size, and layout translation."
+        },
+        {
+          "path": "tests/host_lifecycle_test.cpp",
+          "state": "existing",
+          "proves": "MIDI ordering and sample offsets survive the adapter."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: block-size/channel-layout matrix"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R 'ats_primitives_test|host_lifecycle_test' --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-PARAM-001",
+      "family": "parameter.store",
+      "legacy_surface": "juce::AudioProcessorValueTreeState apvts and parameter listeners",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h::apvts",
+        "src/plugin/PluginProcessor.cpp::createParameterLayout",
+        "src/plugin/PluginProcessor.cpp::parameterValueChanged",
+        "src/plugin/PluginProcessor.cpp::syncParametersToModel"
+      ],
+      "replacement_owner": "ParameterRegistry, ParameterStore, ParameterSnapshot, and ParameterChange",
+      "replacement_api": "ParameterRegistry::descriptors(), ParameterStore::read/write, normalized/raw conversion, typed snapshots, and ordered change notifications.",
+      "algorithm_or_dsp": "Parameter normalization, smoothing targets, and descriptor validation; no UI algorithm.",
+      "data_flow": "Host automation/raw values and typed UI actions enter ParameterStore; immutable snapshots feed AtsEngine and view models.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "All 81 effective parameter IDs, defaults, ranges, units, and automation semantics are preserved.",
+        "A widget is never the source of truth.",
+        "One gesture produces the same commit/notification semantics as the baseline."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h::apvts",
+        "src/plugin/PluginProcessor.cpp::createParameterLayout",
+        "src/core/AtsParams.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "src/core/ParameterRegistry.h::ParameterRegistry",
+        "src/core/ParameterRegistry.h::ParameterStore",
+        "planned: src/parameters/ParameterSnapshot.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/parameter_registry_test.cpp",
+          "state": "required",
+          "proves": "The neutral descriptor table matches the baseline parameter contract."
+        },
+        {
+          "path": "tests/parameter_registry_test.cpp",
+          "state": "required",
+          "proves": "Normalized/raw/default conversions and automation writes are stable."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: parameter descriptor dump",
+        "required: normalized-value matrix"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R parameter_registry_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-PARAM-002",
+      "family": "parameter.binding",
+      "legacy_surface": "JUCE parameter attachments and editor callbacks",
+      "legacy_owner": [
+        "src/plugin/PluginEditor.cpp",
+        "src/plugin/UiComposites.h",
+        "src/plugin/AnalysisTabPanel.cpp",
+        "src/plugin/SynthTabPanel.cpp"
+      ],
+      "replacement_owner": "ParameterBinding and UiActionDispatcher",
+      "replacement_api": "ParameterBinding reads a view-model value and emits a typed SetParameter action; dispatcher validates, commits, and returns a result.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Widget gesture -> typed action -> ParameterStore -> immutable snapshot -> widget/view model.",
+      "thread_domain": "ui",
+      "invariants": [
+        "Invalid values are rejected or clamped by descriptors, not widgets.",
+        "Binding teardown cannot leave a dangling listener.",
+        "Host automation and UI writes converge on one store."
+      ],
+      "state_format_impact": "ui_persistence",
+      "source_refs": [
+        "src/plugin/PluginEditor.cpp",
+        "src/plugin/UiComposites.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "src/ui/ParameterBinding.h::ParameterBinding",
+        "src/ui/ParameterBinding.h::ParameterActionDispatcher"
+      ],
+      "tests": [
+        {
+          "path": "tests/parameter_binding_dispatch_test.cpp",
+          "state": "existing",
+          "proves": "Gesture, action, store update, and view refresh are one trace."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "tests/ui/ats_ui_parity_manifest.json"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R parameter_binding_dispatch_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-STATE-001",
+      "family": "state.codec",
+      "legacy_surface": "juce::MemoryOutputStream/InputStream and get/setStateInformation",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::getStateInformation",
+        "src/plugin/PluginProcessor.cpp::setStateInformation",
+        "src/plugin/PluginProcessor.cpp::writeAnalysis",
+        "src/plugin/PluginProcessor.cpp::writeSynth",
+        "src/plugin/PluginProcessor.cpp::writeFrequencyShape",
+        "src/plugin/PluginProcessor.cpp::writeResidualState"
+      ],
+      "replacement_owner": "AtsStateCodec with versioned binary chunks and legacy migration",
+      "replacement_api": "AtsStateCodec::encode(StateSnapshot) -> ByteBuffer and decode(ByteView) -> StateDecodeResult with stable error codes.",
+      "algorithm_or_dsp": "Serialization of analysis, synthesis, frequency-shape, residual, morph, transient, MathExpr, and timbre-motion state.",
+      "data_flow": "Parameter/model snapshots become bounded host chunks or preset payloads; decoded state is validated before publication.",
+      "thread_domain": "state_worker",
+      "invariants": [
+        "Round-trip preserves semantic state and deterministic defaults.",
+        "Truncated/corrupt data fails safely without partial publication.",
+        "Unknown fields are forward-compatible and version migrations are explicit."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp::getStateInformation",
+        "src/plugin/PluginProcessor.cpp::setStateInformation",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "src/state/LegacyStateCodec.h::LegacyStateCodec",
+        "src/state/LegacyStateCodec.cpp"
+      ],
+      "tests": [
+        {
+          "path": "tests/legacy_state_codec_test.cpp",
+          "state": "existing",
+          "proves": "Semantic round-trip across every state group."
+        },
+        {
+          "path": "tests/legacy_state_codec_test.cpp",
+          "state": "existing",
+          "proves": "Bounds, error, and no-partial-apply behavior."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: frozen legacy host-state chunks",
+        "required: preset round-trip fixtures"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R legacy_state_codec_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-PRESET-001",
+      "family": "preset.file",
+      "legacy_surface": "juce::File, FileChooser, PresetLibrary, and path/error callbacks",
+      "legacy_owner": [
+        "src/plugin/PresetLibrary.h",
+        "src/plugin/PresetLibrary.cpp",
+        "src/plugin/PluginProcessor.cpp::atsPlayLog"
+      ],
+      "replacement_owner": "FileService and PresetService",
+      "replacement_api": "Async request/result APIs for browse, load, save, index, overwrite, cancel, and error; core receives byte payloads and logical names only.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "UI request -> non-RT file service -> bytes/metadata -> state codec/model service -> immutable result.",
+      "thread_domain": "state_worker",
+      "invariants": [
+        "No file or platform path access occurs on audio_rt.",
+        "Cancellation and overwrite semantics are explicit.",
+        "Atomic save prevents half-written presets."
+      ],
+      "state_format_impact": "preset_file",
+      "source_refs": [
+        "src/plugin/PresetLibrary.h",
+        "src/plugin/PresetLibrary.cpp",
+        "src/plugin/PluginProcessor.cpp::atsPlayLog"
+      ],
+      "replacement_refs": [
+        "src/platform/FileService.h::FileService",
+        "src/state/PresetService.h::PresetService"
+      ],
+      "tests": [
+        {
+          "path": "tests/file_service_preset_test.cpp",
+          "state": "existing",
+          "proves": "Index, load, save, overwrite, cancellation, and errors."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: temporary preset directory fixture"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R file_service_preset_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-UNDO-001",
+      "family": "model.undo",
+      "legacy_surface": "juce::UndoManager and processor-side edit action classes",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::ModelEditAction",
+        "src/plugin/PluginProcessor.cpp::TimelineEditAction",
+        "src/plugin/PluginProcessor.cpp::TimbreMotionEditAction"
+      ],
+      "replacement_owner": "UndoService and typed model transactions",
+      "replacement_api": "UndoService::beginTransaction, apply, commit, undo, redo; transactions return generation/invalidation metadata.",
+      "algorithm_or_dsp": "Model mutation and invalidation ordering; not a DSP formula.",
+      "data_flow": "Typed UI/worker command -> transaction -> model snapshot/derived invalidation -> playback/UI publication.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "One logical edit is atomic and undoable as one unit.",
+        "Undo/redo restores model and derived invalidation state.",
+        "No half-applied transaction is visible to the audio thread."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp::ModelEditAction",
+        "src/plugin/PluginProcessor.cpp::TimelineEditAction",
+        "src/plugin/PluginProcessor.cpp::TimbreMotionEditAction"
+      ],
+      "replacement_refs": [
+        "src/core/UndoHistory.h::UndoHistory"
+      ],
+      "tests": [
+        {
+          "path": "tests/undo_history_test.cpp",
+          "state": "existing",
+          "proves": "Atomic edit, undo, redo, notification, and invalidation order."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: model edit state fixtures"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R undo_history_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-SCHED-001",
+      "family": "scheduler.dispatch",
+      "legacy_surface": "juce::Timer, juce::AsyncUpdater, timers, and async callbacks",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginEditor.cpp",
+        "src/plugin/AnalysisTabPanel.cpp",
+        "src/plugin/SpectrogramPanel.cpp"
+      ],
+      "replacement_owner": "JobScheduler, UiScheduler, UiActionDispatcher, and generation-tagged queues",
+      "replacement_api": "JobScheduler::submit/cancel; UiScheduler::post; typed worker result queues with generation IDs and explicit cadence per surface.",
+      "algorithm_or_dsp": "Scheduling boundary for analysis, morph, synthesis preview, and UI refresh.",
+      "data_flow": "Command/snapshot -> worker -> Result{generation,status,payload} -> UI/model dispatcher; audio reads only published snapshots.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Stale results cannot overwrite newer generations.",
+        "Cancellation cannot publish partial outputs.",
+        "Editor refresh rates are explicit and retained per surface."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginEditor.cpp",
+        "src/plugin/SpectrogramPanel.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "src/core/JobScheduler.h::JobScheduler",
+        "src/engine/RenderInvalidationCoordinator.h::RenderInvalidationCoordinator",
+        "src/ui/ParameterBinding.h::ParameterActionDispatcher"
+      ],
+      "tests": [
+        {
+          "path": "tests/job_scheduler_test.cpp",
+          "state": "existing",
+          "proves": "Cancellation and stale-result rejection."
+        },
+        {
+          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
+          "state": "required",
+          "proves": "Worker results and UI actions traverse the target backend."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: scheduler event trace"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R 'job_scheduler_test|playback_cache_generation_test' --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-THREAD-001",
+      "family": "threading.publication",
+      "legacy_surface": "juce::CriticalSection, mixed mutexes, atomics, and preview buffer swaps",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/core/AtsRtSafety.h"
+      ],
+      "replacement_owner": "Immutable ModelSnapshot/PlaybackSnapshot, atomic publication, bounded non-RT mutexes",
+      "replacement_api": "SnapshotPublisher::publish/read and preallocated AudioBufferPool ownership protocol.",
+      "algorithm_or_dsp": "Real-time safety and publication ordering around DSP.",
+      "data_flow": "Non-RT model/render results -> immutable snapshot/pool slot -> atomic audio read -> meter/playhead snapshot.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Audio callback never blocks or allocates.",
+        "Readers see complete snapshots only.",
+        "Buffer slots are not reused while audio owns them."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/core/AtsRtSafety.h"
+      ],
+      "replacement_refs": [
+        "planned: src/engine/SnapshotPublisher.h",
+        "planned: src/audio/AudioBufferPool.h",
+        "planned: src/engine/PlaybackSnapshot.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/realtime/audio_thread_safety_test.cpp",
+          "state": "required",
+          "proves": "Allocation, lock, publication, and ownership rules."
+        },
+        {
+          "path": "required: ThreadSanitizer build",
+          "state": "required",
+          "proves": "No data race across model, worker, UI, and audio publication."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: publication stress trace"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-EDITOR-001",
+      "family": "editor.lifecycle",
+      "legacy_surface": "juce::AudioProcessorEditor, PluginEditor component tree, setSize/resized",
+      "legacy_owner": [
+        "src/plugin/PluginEditor.h",
+        "src/plugin/PluginEditor.cpp"
+      ],
+      "replacement_owner": "EditorHost, UiBackend, UiActionDispatcher, and immutable view models",
+      "replacement_api": "EditorHost::create/destroy/resize/render; view-model subscriptions and typed input dispatch.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Host editor lifecycle -> backend window; model snapshots -> view models; input -> typed actions.",
+      "thread_domain": "ui",
+      "invariants": [
+        "Editor can be created/destroyed repeatedly without leaking callbacks or model ownership.",
+        "Engine is usable headlessly.",
+        "Resize/layout does not alter DSP state."
+      ],
+      "state_format_impact": "ui_persistence",
+      "source_refs": [
+        "src/plugin/PluginEditor.h",
+        "src/plugin/PluginEditor.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#27.5"
+      ],
+      "replacement_refs": [
+        "planned: src/ui/EditorHost.h",
+        "planned: src/ui/UiBackend.h",
+        "planned: src/ui/ViewModels.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/ui/editor_lifecycle_test.cpp",
+          "state": "required",
+          "proves": "Create/destroy, resize, focus, and detach behavior."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "tests/ui/ats_ui_parity_manifest.json"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-UI-001",
+      "family": "ui.backend",
+      "legacy_surface": "juce::Graphics, Colour, Font, Path, Image, Component, controls, popup, tooltip, focus",
+      "legacy_owner": [
+        "src/plugin/UiComposites.h",
+        "src/plugin/UiConstants.h",
+        "src/plugin/AtsUiHints.h",
+        "src/plugin/PluginEditor.cpp"
+      ],
+      "replacement_owner": "UiBackend, theme tokens, explicit widget primitives, popup/focus manager, path/image cache",
+      "replacement_api": "Backend-neutral draw/input/focus/popup APIs plus deterministic widget view-model bindings.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "View models and theme tokens -> draw commands; backend pointer/key/text events -> typed UI actions.",
+      "thread_domain": "ui",
+      "invariants": [
+        "Pixel-critical geometry, typography, z-order, clipping, and fixed-dark spectrum canvas are retained.",
+        "Hit testing, capture, focus, popup dismissal, keyboard, and accessibility semantics are explicit.",
+        "UI never becomes the owner of parameter/model truth."
+      ],
+      "state_format_impact": "ui_persistence",
+      "source_refs": [
+        "src/plugin/UiComposites.h",
+        "src/plugin/UiConstants.h",
+        "src/plugin/AtsUiHints.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#20",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#22"
+      ],
+      "replacement_refs": [
+        "planned: src/ui/UiBackend.h",
+        "planned: src/ui/ThemeTokens.h",
+        "planned: src/ui/PopupManager.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/ui/ats_ui_parity_manifest.json",
+          "state": "existing",
+          "proves": "The required UI surface inventory is checked in."
+        },
+        {
+          "path": "required: tests/ui/real_dispatch_harness_test.cpp",
+          "state": "required",
+          "proves": "Target-backend hit testing, focus, popup, keyboard, and action dispatch."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: deterministic screenshot set",
+        "required: geometry/hit-region manifest"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-DIAG-001",
+      "family": "diagnostics",
+      "legacy_surface": "juce::Logger/FileLogger, atsPlayLog, progress and error callbacks",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::atsPlayLog",
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/AnalysisTabPanel.cpp"
+      ],
+      "replacement_owner": "TelemetryPublisher with bounded events and non-RT sinks",
+      "replacement_api": "TelemetryPublisher::emit(Event) and ProgressPublisher::publish(ProgressSnapshot); audio-safe counters only on audio_rt.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Engine/host/worker events -> bounded telemetry queue -> test sink, UI view model, or opt-in file sink.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Diagnostics cannot change audio output or block audio_rt.",
+        "Progress carries generation IDs and cannot update stale UI state.",
+        "Platform paths are not exposed through core APIs."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp::atsPlayLog",
+        "src/plugin/AnalysisTabPanel.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/diagnostics/TelemetryPublisher.h",
+        "planned: src/diagnostics/ProgressPublisher.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/diagnostics/telemetry_test.cpp",
+          "state": "required",
+          "proves": "Bounded event delivery, error mapping, and log redirection."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: progress/error event trace"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-QATSH-001",
+      "family": "qatsh.patch-contract",
+      "legacy_surface": "CMake/JUCE coupling and patched Qatsh/ATSA target assertions",
+      "legacy_owner": [
+        "CMakeLists.txt",
+        "patches/README.md",
+        "patches/qatsh-atsa-*.patch"
+      ],
+      "replacement_owner": "Native qatsh_atsa target and explicit patch/configuration manifest",
+      "replacement_api": "A standalone target exports ATSA analysis/synthesis APIs and records patch fingerprints/configuration assertions.",
+      "algorithm_or_dsp": "ATSA analysis, residual, reassignment, QIFFT, DDM, multires, IFFT, FFT packing, parallelism, synth state, trackstore, SMR, tracking, scratch, and polar magnitudes.",
+      "data_flow": "Analysis/synthesis options and ATS buffers cross a C/C++ ABI boundary into the isolated Qatsh target; no JUCE object crosses it.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Required patches are applied exactly once and in declared order.",
+        "Every patch assertion remains exercised after JUCE target removal.",
+        "Default-off behavior stays compatible with the baseline."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "CMakeLists.txt",
+        "patches/README.md",
+        "patches/qatsh-atsa-*.patch"
+      ],
+      "replacement_refs": [
+        "planned: src/atsa/qatsh_atsa_target.cmake",
+        "planned: tests/architecture/qatsh_patch_fingerprint.json"
+      ],
+      "tests": [
+        {
+          "path": "tests/atsa_residual_test.c",
+          "state": "existing",
+          "proves": "Residual guards/energy behavior remain exercised."
+        },
+        {
+          "path": "tests/ifft_synth_test.c",
+          "state": "existing",
+          "proves": "IFFT path and associated patch behavior."
+        },
+        {
+          "path": "required: configure-time patch assertions",
+          "state": "required",
+          "proves": "Patch presence, order, and target isolation."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: patch fingerprint report",
+        "tests/fixtures/morph_fixture_manifest.json"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-ATSA-001",
+      "family": "dsp.analysis",
+      "legacy_surface": "ATSA analysis invocation and ANARGS mapping",
+      "legacy_owner": [
+        "src/core/AtsParams.h",
+        "src/core/AtsParams.cpp",
+        "src/plugin/PluginProcessor.cpp",
+        "tools/ats_offline.c"
+      ],
+      "replacement_owner": "AtsAnalysisService and AnalysisParams",
+      "replacement_api": "AtsAnalysisService::analyze(AudioSource, AnalysisParams, CancellationToken) -> AnalysisResult containing ATS model, residual, progress, and diagnostics.",
+      "algorithm_or_dsp": "ATSA windowing, peak estimation, tracking, SMR, residual, and optional multires analysis.",
+      "data_flow": "Audio source and AnalysisParams -> ATS_SOUND/analysis result; result is immutable before model publication.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Window, hop, frequency limits, tracking, SMR, output units, and partial indexing match baseline.",
+        "Default multiRes=false remains opt-in.",
+        "Cancellation never publishes a partial model."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsParams.h::AnalysisParams",
+        "src/core/AtsParams.cpp",
+        "src/plugin/PluginProcessor.cpp",
+        "tools/ats_offline.c"
+      ],
+      "replacement_refs": [
+        "planned: src/engine/AtsAnalysisService.h",
+        "planned: src/engine/AnalysisResult.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/estimator_accuracy_test.c",
+          "state": "existing",
+          "proves": "Analysis estimator accuracy on the existing fixture set."
+        },
+        {
+          "path": "tests/multires_resolution_test.c",
+          "state": "existing",
+          "proves": "Optional multires resolution behavior."
+        },
+        {
+          "path": "required: tests/analysis/analysis_cancel_test.cpp",
+          "state": "required",
+          "proves": "Cancellation and no-partial-publication behavior."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: frozen analysis/audio fixtures",
+        "tests/fixtures/morph_fixture_manifest.json"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-SYNTH-001",
+      "family": "dsp.synthesis.partials",
+      "legacy_surface": "runDoSynthesis, ClassicLayerRender, and do_synthesis oscillator path",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::runDoSynthesis",
+        "src/plugin/PluginProcessor.cpp::ClassicLayerRender",
+        "src/core/AtsParams.h::SynthParams"
+      ],
+      "replacement_owner": "AtsResynthesisService::renderPartials",
+      "replacement_api": "renderPartials(immutable ATS model, SynthParams, RenderWindow, AudioBufferView) -> RenderStats; caller owns destination.",
+      "algorithm_or_dsp": "Classic partial oscillator synthesis with phase, frequency/time factors, selection, gain, start, duration, and sample-rate policy.",
+      "data_flow": "ATS partial frames plus SynthParams -> preallocated mono/multichannel partial buffer -> PlaybackEngine mix.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Oscillator phase policy and partial selection remain stable.",
+        "Frequency/time factors, gains, start/duration clipping, and sample-rate handling are applied once.",
+        "No allocation, file access, GUI call, or blocking lock occurs in the render call."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp::runDoSynthesis",
+        "src/plugin/PluginProcessor.cpp::ClassicLayerRender",
+        "src/core/AtsParams.h::SynthParams"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/AtsResynthesisService.h",
+        "planned: src/dsp/PartialOscillatorKernel.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/golden_compare.py",
+          "state": "existing",
+          "proves": "Existing synthesis/golden comparison path."
+        },
+        {
+          "path": "required: tests/dsp/partial_synthesis_test.cpp",
+          "state": "required",
+          "proves": "Phase, selection, gains, timing, and sample-rate matrix."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: partial synthesis audio golden"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-SYNTH-002",
+      "family": "dsp.synthesis.residual",
+      "legacy_surface": "ClassicLayerRender residual buffer and residual/partial mix",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::ClassicLayerRender",
+        "src/plugin/PluginProcessor.cpp::renderClassicSourcePlaybackBuffer"
+      ],
+      "replacement_owner": "AtsResynthesisService::renderResidual and PlaybackEngine::mixLayers",
+      "replacement_api": "renderResidual(ATS residual, SynthParams, RenderWindow, AudioBufferView); mixLayers(partials, residual, gains, output).",
+      "algorithm_or_dsp": "Residual band-energy rendering and partial/residual mix law.",
+      "data_flow": "ATS residual bands plus residualGain -> residual buffer; partial and residual buffers -> deterministic output mix.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Residual-band energy meaning and empty-residual behavior are explicit.",
+        "Residual gain and mix order are preserved.",
+        "Sample alignment matches the partial layer."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp::ClassicLayerRender",
+        "src/plugin/PluginProcessor.cpp::renderClassicSourcePlaybackBuffer",
+        "tests/atsa_residual_test.c"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/AtsResynthesisService.h::renderResidual",
+        "planned: src/audio/PlaybackEngine.h::mixLayers"
+      ],
+      "tests": [
+        {
+          "path": "tests/atsa_residual_test.c",
+          "state": "existing",
+          "proves": "Residual behavior and guards."
+        },
+        {
+          "path": "required: tests/dsp/residual_mix_test.cpp",
+          "state": "required",
+          "proves": "Gain law, alignment, empty residual, and mix order."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: residual/partial mix audio golden"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-SYNTH-003",
+      "family": "dsp.synthesis.ifft",
+      "legacy_surface": "Optional IFFT synthesis and packed RFFT/vDSP branches",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp",
+        "patches/qatsh-atsa-ifft.patch",
+        "patches/qatsh-atsa-ifft-srand.patch",
+        "patches/qatsh-atsa-rfft-pack.patch",
+        "patches/qatsh-atsa-vdsp-fft.patch"
+      ],
+      "replacement_owner": "IfftResynthKernel behind AtsResynthesisService",
+      "replacement_api": "IfftResynthKernel::render(ATS model, IfftOptions, preallocated output) with scalar/accelerated backend selection.",
+      "algorithm_or_dsp": "Overlap-add IFFT resynthesis, phase reconstruction, FFT packing, normalization, latency, and fallback.",
+      "data_flow": "ATS frames and IFFT options -> preallocated overlap-add workspace -> output audio buffer.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "useIfftSynth remains opt-in.",
+        "Window, overlap, phase, normalization, and latency remain stable.",
+        "Scalar and accelerated backends agree within declared tolerance."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "tests/ifft_synth_test.c",
+        "patches/qatsh-atsa-ifft.patch",
+        "patches/qatsh-atsa-ifft-srand.patch",
+        "patches/qatsh-atsa-rfft-pack.patch",
+        "patches/qatsh-atsa-vdsp-fft.patch"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/IfftResynthKernel.h",
+        "planned: src/dsp/FftBackend.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/ifft_synth_test.c",
+          "state": "existing",
+          "proves": "Existing IFFT synthesis path."
+        },
+        {
+          "path": "required: tests/dsp/ifft_scalar_accelerated_test.cpp",
+          "state": "required",
+          "proves": "Scalar/accelerated equivalence and fallback."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: IFFT impulse/phase/audio goldens"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-RESAMPLE-001",
+      "family": "dsp.resampling",
+      "legacy_surface": "ResampleLinear.cpp and processor resampling adapter",
+      "legacy_owner": [
+        "src/core/ResampleLinear.cpp",
+        "src/core/ResampleLinear.h",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "Resampler with explicit interpolation policy",
+      "replacement_api": "Resampler::process(input, inputRate, outputRate, options, output) with reset and endpoint policy.",
+      "algorithm_or_dsp": "Linear resampling and any explicitly retained Lagrange-compatible path.",
+      "data_flow": "Rendered preview audio and source/destination sample rates -> preallocated output buffer.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Duration, channel count, phase, endpoint, gain, and reset semantics are explicit.",
+        "Interpolation changes require an approved deviation.",
+        "No UI or JUCE interpolator type is part of the core API."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/core/ResampleLinear.cpp",
+        "src/core/ResampleLinear.h",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/Resampler.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/dsp/resampler_test.cpp",
+          "state": "required",
+          "proves": "Impulse, ramp, sine, endpoint, and sample-rate conversion matrix."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: resampler impulse/ramp/sine goldens"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-FREQ-001",
+      "family": "dsp.frequency-shape",
+      "legacy_surface": "FrequencyShapeMode, rank building, pivot resolution, and mutable sound warp",
+      "legacy_owner": [
+        "src/core/AtsParams.h::FrequencyShapeMode",
+        "src/core/AtsFrequencyShape.cpp",
+        "src/core/AtsFrequencyShape.h"
+      ],
+      "replacement_owner": "FrequencyShapeProcessor",
+      "replacement_api": "resolve(settings, sound) -> resolved settings; apply(sound copy, settings) -> warped sound copy.",
+      "algorithm_or_dsp": "Linear, Stretch, Compress, and Harmonic partial-frequency warping.",
+      "data_flow": "SynthParams::frequencyShape plus ATS partial grid -> mutable analysis copy; residual bands remain unchanged.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Ranks are one-based and sorted by mean active frequency.",
+        "Pivot/amount/Nyquist clamp and deterministic ties match current code.",
+        "Residual bands are untouched."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/core/AtsParams.h",
+        "src/core/AtsFrequencyShape.cpp",
+        "src/core/AtsFrequencyShape.h",
+        "tests/frequency_shape_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/FrequencyShapeProcessor.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/frequency_shape_test.cpp",
+          "state": "existing",
+          "proves": "Current rank, pivot, mode, and warp semantics."
+        },
+        {
+          "path": "required: tests/dsp/frequency_shape_audio_test.cpp",
+          "state": "required",
+          "proves": "Warped synthesis and residual preservation."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: rank/pivot edge fixtures",
+        "required: shaped-spectrum audio golden"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-TIMBRE-001",
+      "family": "dsp.timbre-motion",
+      "legacy_surface": "TimbreMotionPlan evaluation and processor-side application",
+      "legacy_owner": [
+        "src/core/TimbreMotionPlan.h",
+        "src/core/TimbreMotionPlan.cpp",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "TimbreMotionService",
+      "replacement_api": "compile(plan, descriptors) -> CompiledTimbrePlan; evaluate(compiled, time) -> TimbreRenderParams; apply(model, params) -> model copy.",
+      "algorithm_or_dsp": "Brightness dB, tilt dB/octave, noise balance, curves, target modes, macro routes, smoothing, and endpoint resolution.",
+      "data_flow": "TimbreMotionPlan plus descriptor endpoints -> per-time render params -> partial/residual model transforms.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Units and target modes FollowNatural, InterpolateAB, OffsetNatural, and AbsoluteTarget remain stable.",
+        "Pinned descriptor IDs, curve shapes, macros, endpoint handling, smoothing, and clamping are preserved.",
+        "Partial and residual domains remain distinct."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/core/TimbreMotionPlan.h",
+        "src/core/TimbreMotionPlan.cpp",
+        "tests/timbre_motion_plan_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/TimbreMotionService.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/timbre_motion_plan_test.cpp",
+          "state": "existing",
+          "proves": "Plan evaluation, curve, target, and macro semantics."
+        },
+        {
+          "path": "required: tests/dsp/timbre_motion_apply_test.cpp",
+          "state": "required",
+          "proves": "Application to partial/residual domains and serialization."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: timbre plan serialization and descriptor fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-001",
+      "family": "dsp.morph.recipe",
+      "legacy_surface": "Morph recipe validation, serialization, lifecycle, policies, lanes, curves, and discard opt-in",
+      "legacy_owner": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsMorphRecipe.h",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "MorphRecipeService and immutable MorphRecipeSnapshot",
+      "replacement_api": "validate/buildSnapshot/serialize/deserialize with typed validation errors before worker execution.",
+      "algorithm_or_dsp": "Morph policy validation and immutable recipe construction.",
+      "data_flow": "UI/model recipe edits -> validated immutable snapshot -> morph worker/evaluator -> result snapshot.",
+      "thread_domain": "state_worker",
+      "invariants": [
+        "Schema/version, source identity, lifecycle, unmatched policy, phase/residual/transient policy, lanes, curves, and discard opt-in are validated before execution.",
+        "Invalid recipes cannot publish a render.",
+        "Serialization is deterministic and versioned."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsMorphRecipe.h",
+        "tests/morph_recipe_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/MorphRecipeService.h",
+        "planned: src/dsp/MorphRecipeSnapshot.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/morph_recipe_test.cpp",
+          "state": "existing",
+          "proves": "Recipe validation and serialization behavior."
+        },
+        {
+          "path": "tests/morph_fixture_manifest_check.py",
+          "state": "existing",
+          "proves": "Morph fixture inventory integrity."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "tests/fixtures/morph_fixture_manifest.json",
+        "required: serialized recipe fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-002",
+      "family": "dsp.morph.grids-envelope",
+      "legacy_surface": "Bark/Mel/log-Hz grids, band lookup, spectral envelope interpolation",
+      "legacy_owner": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsSpectralEnvelope.cpp",
+        "src/core/AtsSpectralEnvelope.h"
+      ],
+      "replacement_owner": "MorphGridBuilder and SpectralEnvelopeService",
+      "replacement_api": "buildGrid(axis, bounds, options), findBand, interpolateEnvelope, and transfer(source,target,recipe).",
+      "algorithm_or_dsp": "Bark/Mel conversions, frequency grids, envelope interpolation, power/amplitude/dB conversion, and R-D-Cepstrum basis/solve.",
+      "data_flow": "ATS spectral descriptors -> perceptual grid/envelope -> target partial/residual parameters.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Conversion equations, sorted grids, band boundaries, and interpolation units are unchanged.",
+        "Power/amplitude/dB conversions are explicit and finite.",
+        "RDC workspace/solve behavior remains deterministic."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsSpectralEnvelope.cpp",
+        "src/core/AtsSpectralEnvelope.h",
+        "tests/spectral_envelope_transfer_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/MorphGridBuilder.h",
+        "planned: src/dsp/SpectralEnvelopeService.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/spectral_envelope_transfer_test.cpp",
+          "state": "existing",
+          "proves": "Spectral envelope transfer and numerical behavior."
+        },
+        {
+          "path": "required: tests/dsp/morph_grid_boundary_test.cpp",
+          "state": "required",
+          "proves": "Bark/Mel/log-Hz boundary and finite-value behavior."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: grid boundary fixtures",
+        "required: envelope transfer numerical report"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-003",
+      "family": "dsp.morph.transport",
+      "legacy_surface": "Optimal transport and spectral correspondence",
+      "legacy_owner": [
+        "src/core/AtsMorphTransport.cpp",
+        "src/core/AtsMorphTransport.h",
+        "src/core/AtsMorphTransportCorrespondence.cpp",
+        "src/core/AtsMorphTransportCorrespondence.h"
+      ],
+      "replacement_owner": "TransportPlanner and MorphCorrespondenceBuilder",
+      "replacement_api": "buildOptimalTransportPlan(source, target, options) and buildCorrespondence(source, target, options) return immutable coupling plans.",
+      "algorithm_or_dsp": "Deterministic 1-D monotone optimal transport on a perceptual frequency axis with split/merge mass.",
+      "data_flow": "Weighted source/target partial points -> coupling/correspondence -> morph evaluator.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Non-positive/non-finite masses are ignored.",
+        "Normalized monotone coupling is deterministic, order-preserving, and mass-conserving.",
+        "Transport cost uses the declared axis and mass epsilon."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/core/AtsMorphTransport.cpp",
+        "src/core/AtsMorphTransport.h",
+        "src/core/AtsMorphTransportCorrespondence.cpp",
+        "src/core/AtsMorphTransportCorrespondence.h"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/TransportPlanner.h",
+        "planned: src/dsp/MorphCorrespondenceBuilder.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/morph_transport_test.cpp",
+          "state": "existing",
+          "proves": "Transport coupling, mass, order, and cost."
+        },
+        {
+          "path": "tests/morph_transport_correspondence_test.cpp",
+          "state": "existing",
+          "proves": "Correspondence construction and edge semantics."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: split/merge correspondence fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-004",
+      "family": "dsp.morph.evaluation",
+      "legacy_surface": "evaluateMorphRecipeSnapshot and candidate/rank/cost/search helpers",
+      "legacy_owner": [
+        "src/core/AtsMorphRecipe.cpp::evaluateMorphRecipeSnapshot",
+        "src/core/AtsMorphRecipe.cpp"
+      ],
+      "replacement_owner": "MorphEvaluator",
+      "replacement_api": "MorphEvaluator::evaluate(MorphRecipeSnapshot, source, target, TransportPlan, EvaluationOptions) -> MorphResult.",
+      "algorithm_or_dsp": "Frequency, amplitude-rank/confidence, lifecycle, correspondence, assignment/search, interpolation, and generation-safe result construction.",
+      "data_flow": "Validated recipe plus immutable source/target ATS models -> morph result/model snapshot and metric report.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Invalid candidates fail before publication.",
+        "Weights, assignment/search ordering, and tie handling are deterministic.",
+        "Stale generation results cannot replace a newer morph result."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsMorphRecipe.cpp::evaluateMorphRecipeSnapshot",
+        "tests/morph_metric_harness.py"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/MorphEvaluator.h",
+        "planned: src/dsp/MorphResult.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/morph_metric_harness.py",
+          "state": "existing",
+          "proves": "Morph metrics and fixture comparison."
+        },
+        {
+          "path": "required: tests/dsp/morph_determinism_test.cpp",
+          "state": "required",
+          "proves": "Replay, tie ordering, and generation-safe publication."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "tests/fixtures/morph_fixture_manifest.json",
+        "tests/fixtures/morph_metric_tolerances.json"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-005",
+      "family": "dsp.morph.phase-residual-transient",
+      "legacy_surface": "Morph phase, residual, transient, curve, and unmatched handling in AtsMorphRecipe",
+      "legacy_owner": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsTransientLayer.cpp",
+        "src/core/AtsTransientLayer.h"
+      ],
+      "replacement_owner": "MorphPhaseService, MorphResidualService, and MorphTransientService",
+      "replacement_api": "Independent phase/residual/transient policy evaluators compose into MorphResult without collapsing policies into amplitude interpolation.",
+      "algorithm_or_dsp": "Phase wrapping/unwrapping, residual-band interpolation, transient event handling, curves/lanes, and birth/death policy.",
+      "data_flow": "Source/target ATS event/partial/residual state plus recipe policies -> per-frame morph state.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Phase policy is distinct from amplitude policy.",
+        "Residual and transient state preserve documented energy/time semantics.",
+        "Birth/death/unmatched decisions are explicit and testable."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsMorphRecipe.cpp",
+        "src/core/AtsTransientLayer.cpp",
+        "src/core/AtsTransientLayer.h"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/MorphPhaseService.h",
+        "planned: src/dsp/MorphResidualService.h",
+        "planned: src/dsp/MorphTransientService.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/dsp/morph_phase_policy_test.cpp",
+          "state": "required",
+          "proves": "Phase wrapping/policy matrix."
+        },
+        {
+          "path": "tests/ats_transient_layer_test.cpp",
+          "state": "existing",
+          "proves": "Transient layer energy/time helpers."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: phase/residual/transient morph goldens"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-SMEAR-001",
+      "family": "dsp.smearnov.detection",
+      "legacy_surface": "Smearnov D1-D5 detection, normalization, fusion, threshold, and peak picking",
+      "legacy_owner": [
+        "src/core/AtsTransientSmear.cpp",
+        "src/core/AtsTransientSmear.h"
+      ],
+      "replacement_owner": "SmearnovDetector",
+      "replacement_api": "detectOnsets(ATS_SOUND, SmearnovDetectParams, optional curves) -> vector<AtsOnset>.",
+      "algorithm_or_dsp": "Partial/residual flux, HFC, birth rate, optional phase deviation, SMR weighting, median/MAD normalization, adaptive threshold, refractory gap, and attack-window detection.",
+      "data_flow": "ATS partial/residual model and detector params -> onset list plus optional D/threshold curves.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "D1-D5 weights and optional phase/SMR controls match parameters.",
+        "Onset, preFrame, peakFrame, strength, gap, floor, and max-attack semantics are stable.",
+        "Detection is deterministic and finite for empty/degenerate inputs."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsTransientSmear.cpp",
+        "src/core/AtsTransientSmear.h",
+        "tests/ats_transient_smear_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/SmearnovDetector.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/ats_transient_smear_test.cpp",
+          "state": "existing",
+          "proves": "Smearnov detection behavior."
+        },
+        {
+          "path": "tests/ats_transient_smear_accuracy_test.cpp",
+          "state": "existing",
+          "proves": "Detection accuracy/fixture behavior."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: detection curve/onset fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-SMEAR-002",
+      "family": "dsp.smearnov.transform",
+      "legacy_surface": "Smearnov attack blur/sharpen/exaggerate/mix and target selection",
+      "legacy_owner": [
+        "src/core/AtsTransientSmear.cpp",
+        "src/core/AtsTransientLayer.cpp"
+      ],
+      "replacement_owner": "SmearnovTransformer",
+      "replacement_api": "smearAttacks(ATS_SOUND mutable copy, onsets, SmearnovParams) -> bool with bounded transform report.",
+      "algorithm_or_dsp": "Partial/residual attack envelope transform with blur, sharpen, exaggerate, cap, dry/wet mix, and target selection.",
+      "data_flow": "ATS model copy plus onset windows and transform params -> modified partial/residual amplitudes/band energy.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Attack windows are bounded and inclusive as specified.",
+        "Partials, residual, and Both target semantics are distinct.",
+        "dB cap, mix, finite values, energy safety, and no-onset no-op behavior are preserved."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/core/AtsTransientSmear.cpp",
+        "src/core/AtsTransientLayer.cpp",
+        "tests/ats_transient_smear_accuracy_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/SmearnovTransformer.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/ats_transient_smear_accuracy_test.cpp",
+          "state": "existing",
+          "proves": "Attack transform accuracy."
+        },
+        {
+          "path": "tests/ats_transient_layer_test.cpp",
+          "state": "existing",
+          "proves": "Layer energy/time safety helpers."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: before/after Smearnov audio goldens"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MATHEXPR-001",
+      "family": "dsp.math-expression",
+      "legacy_surface": "MathExpr compiler/parser/evaluator and worker integration",
+      "legacy_owner": [
+        "src/core/AtsMathExpr.cpp",
+        "src/core/AtsMathExpr.h",
+        "src/plugin/MathExprPanel.cpp"
+      ],
+      "replacement_owner": "MathExpressionService",
+      "replacement_api": "compile/evaluate(expression cells, context, cancellation) -> typed expression result with per-cell errors.",
+      "algorithm_or_dsp": "Grammar, variables P/T/p/t/a/f/h, documented functions, multi-pass dependency evaluation, cycle detection, and finite output validation.",
+      "data_flow": "Expression document and ATS evaluation context -> per-cell values/errors -> model edit transaction.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Grammar and function set remain stable.",
+        "Unknown cells, cycles, invalid syntax, non-finite results, and cancellation are explicit errors.",
+        "Worker evaluation is deterministic and never mutates UI state directly."
+      ],
+      "state_format_impact": "host_chunk",
+      "source_refs": [
+        "src/core/AtsMathExpr.cpp",
+        "src/core/AtsMathExpr.h",
+        "src/plugin/MathExprPanel.cpp",
+        "tests/ats_math_expr_test.cpp"
+      ],
+      "replacement_refs": [
+        "planned: src/dsp/MathExpressionService.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/ats_math_expr_test.cpp",
+          "state": "existing",
+          "proves": "Parser/compiler/evaluator semantics."
+        },
+        {
+          "path": "required: tests/dsp/math_expression_cancel_error_test.cpp",
+          "state": "required",
+          "proves": "Cancellation and UI-independent error publication."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: expression grammar/error fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-EDIT-001",
+      "family": "dsp.partial-edit",
+      "legacy_surface": "PartialEditPanel interaction commands and processor-side model mutation/undo",
+      "legacy_owner": [
+        "src/plugin/PartialEditPanel.cpp",
+        "src/plugin/PartialEditPanel.h",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "PartialEditService plus UndoService transaction",
+      "replacement_api": "Typed partial edit commands for selection/lasso/scale/draw/dB/clipboard/onset/box/gain/seek/pan/zoom/keyboard return model edit results.",
+      "algorithm_or_dsp": "Partial/residual model mutation, coordinate-to-domain mapping, clamping, and derived invalidation.",
+      "data_flow": "Target-backend input trace -> typed edit action -> model transaction -> new snapshot/playback/UI view model.",
+      "thread_domain": "ui",
+      "invariants": [
+        "Every documented tool preserves modifiers, hit radii, capture, focus, and command result.",
+        "Model mutation is atomic and undoable.",
+        "UI coordinate conversion is separate from ATS-domain math."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PartialEditPanel.cpp",
+        "src/plugin/PartialEditPanel.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#23"
+      ],
+      "replacement_refs": [
+        "planned: src/model/PartialEditService.h",
+        "planned: src/ui/PartialEditView.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/model/partial_edit_transaction_test.cpp",
+          "state": "required",
+          "proves": "Model mutation, invalidation, undo, and redo."
+        },
+        {
+          "path": "tests/ui/ats_ui_parity_manifest.json",
+          "state": "existing",
+          "proves": "Required interaction surfaces are inventoried."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: partial-edit model fixtures",
+        "required: real-dispatch gesture traces"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-PLAY-001",
+      "family": "dsp.playback",
+      "legacy_surface": "ClassicLayerRender, preview caches, triple playback buffers, playhead, stop/reset",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginEditor.cpp"
+      ],
+      "replacement_owner": "PlaybackEngine, AudioBufferPool, and PlayheadPublisher",
+      "replacement_api": "PlaybackEngine::prepare/render/publish/start/stop/reset; PlayheadPublisher::read returns immutable time/transport state.",
+      "algorithm_or_dsp": "Preview synthesis scheduling, buffer publication, resampling, gain/mix, click-free transitions, and playhead timing.",
+      "data_flow": "Worker render result -> pooled playback slot -> audio callback -> meter/playhead snapshot -> UI.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Generation-safe publication prevents stale preview audio.",
+        "Start/duration/time/frequency/gain are applied once.",
+        "Stop/reset and transitions are click-free and deterministic."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginEditor.cpp"
+      ],
+      "replacement_refs": [
+        "src/core/PlaybackBuffers.h::PlaybackBufferPool",
+        "src/core/PlaybackBuffers.h::OwnedAudioBuffer",
+        "planned: src/audio/PlayheadPublisher.h"
+      ],
+      "tests": [
+        {
+          "path": "tests/playback_buffer_test.cpp",
+          "state": "required",
+          "proves": "Publication ownership, generation rejection, stop/reset, and block-size matrix."
+        },
+        {
+          "path": "required: tests/audio/playback_audio_golden_test.cpp",
+          "state": "required",
+          "proves": "Click-free transitions and output gain/timing."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: preview/playback audio golden",
+        "required: publication stress trace"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-METER-001",
+      "family": "dsp.meter-spectrum-publication",
+      "legacy_surface": "Processor spectrum-trace publication; no current ATS editor output-meter component",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h"
+      ],
+      "replacement_owner": "SpectrumDataPublisher; MeterPublisher only after explicit output-meter promotion",
+      "replacement_api": "Bounded snapshot publication of spectral trace values with explicit cadence, units, revision, and stale-data policy; a promoted meter requires a separate peak/RMS contract.",
+      "algorithm_or_dsp": "Spectral trace snapshot preparation; rendering remains in UI backend. Output-meter smoothing is not inferred from this row.",
+      "data_flow": "Immutable ATS model/preview state -> bounded spectral trace snapshot -> spectrum view model -> target backend draw.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Trace units, source/mode, revision, cadence, and stale behavior are explicit.",
+        "No output meter is claimed until its own surface and telemetry contract is promoted.",
+        "Publication performs no allocation or GUI call on audio_rt."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#22"
+      ],
+      "replacement_refs": [
+        "planned: src/audio/MeterPublisher.h",
+        "planned: src/audio/SpectrumDataPublisher.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
+          "state": "required",
+          "proves": "Source/mode selection, caps, transforms, revisions, cadence, stale data, and bounded publication."
+        },
+        {
+          "path": "required: tests/ui/spectrum_real_dispatch_test.cpp",
+          "state": "required",
+          "proves": "Spectrum view/menu/tools receive and dispatch the published data correctly."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: spectrum geometry/data fixtures",
+        "required: deterministic spectrum screenshots"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-HOST-003",
+      "family": "host.midi",
+      "legacy_surface": "PluginProcessor::processBlock MIDI note and transpose handling",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::processBlock",
+        "src/plugin/PluginProcessor.h::midiSemitoneOffset"
+      ],
+      "replacement_owner": "HostAdapter and PlaybackEngine MIDI event translator",
+      "replacement_api": "HostAdapter::process translates ordered note-on, zero-velocity note-on, note-off, and reset events with sample offsets into MidiEventList; PlaybackEngine applies the current semitone offset.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Host MIDI buffer -> immutable event list -> audio_rt playback state and live preview routing.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Event order, sample offsets, note-on velocity, zero-velocity note-on, and note-off semantics are preserved.",
+        "Semitone offset is applied once at the process boundary and reset/all-notes-off behavior is deterministic.",
+        "No MIDI object or host wrapper type crosses into neutral core code."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginProcessor.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#28.7"
+      ],
+      "replacement_refs": [
+        "planned: src/host/HostAdapter.h",
+        "planned: src/audio/MidiEventList.h",
+        "planned: src/audio/PlaybackEngine.h"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/audio/midi_process_block_test.cpp",
+          "state": "required",
+          "proves": "MIDI ordering, offsets, dialects, transpose, reset, and live preview routing."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: MIDI event process-block trace fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "ARCH-SCHED-002",
+      "family": "ui.refresh-ownership",
+      "legacy_surface": "Processor/editor/page/spectrogram/playhead/synth timer ownership",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::startTimerHz(30)",
+        "src/plugin/PluginEditor.cpp::startTimerHz(10)",
+        "src/plugin/SpectrogramPanel.cpp::startTimerHz(10)",
+        "src/plugin/SpectrogramPanel.cpp::PlayheadOverlay::startTimerHz(60)",
+        "src/plugin/SynthTabPanel.cpp::startTimerHz(4)"
+      ],
+      "replacement_owner": "UiScheduler, TelemetryPublisher, and surface-specific refresh policies",
+      "replacement_api": "Typed scheduler registrations declare owner, cadence, snapshot input, visible-state update, and teardown cancellation; test clocks can drive each registration deterministically.",
+      "algorithm_or_dsp": "none",
+      "data_flow": "Processor/worker/audio snapshots -> bounded UI scheduler queue -> page/view-model refresh -> invalidation/repaint.",
+      "thread_domain": "ui",
+      "invariants": [
+        "30 Hz processor service, 10 Hz editor/spectrogram refresh, 60 Hz playhead overlay, and 4 Hz synth display refresh remain distinct.",
+        "Timer refresh cannot overwrite focused text, active pointer capture, or pending gestures.",
+        "No visible activity is synthesized from elapsed time without a source snapshot."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginEditor.cpp",
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SynthTabPanel.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#28.3"
+      ],
+      "replacement_refs": [
+        "planned: src/ui/UiScheduler.h",
+        "planned: tests/ui/ui_refresh_ownership_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/ui/ui_refresh_ownership_test.cpp",
+          "state": "required",
+          "proves": "Cadence, ownership, stale snapshots, focused text protection, and teardown cancellation."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: deterministic scheduler/timer trace"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-VIS-001",
+      "family": "dsp.spectral-trace",
+      "legacy_surface": "PluginProcessor::buildSpectralTraceSnapshot and SpectrogramPanel display preparation",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::buildSpectralTraceSnapshot",
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h"
+      ],
+      "replacement_owner": "SpectralTraceBuilder and SpectrumViewModel",
+      "replacement_api": "SpectralTraceBuilder::build(snapshot, source, mode, displayShape, limits) returns immutable traces/columns/readouts with source and revision metadata.",
+      "algorithm_or_dsp": "Trace selection, inactive-run handling, amplitude reference, point/column caps, smoothing/decimation, and display-shape preparation.",
+      "data_flow": "Immutable ATS model/morph snapshot -> bounded trace snapshot -> cached renderer and live overlay.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Source/mode selection and source-dependent enablement are deterministic.",
+        "Max visible partials, point caps, residual columns, finite values, and empty/sparse behavior are preserved.",
+        "Snapshot revision and cache invalidation are published before drawing; playhead movement does not rebuild static trace data."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#22.3"
+      ],
+      "replacement_refs": [
+        "planned: src/ui/SpectralTraceBuilder.h",
+        "planned: tests/ui/spectrum_trace_snapshot_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
+          "state": "required",
+          "proves": "All sources/modes, caps, transforms, revisions, sparse/empty states, and deterministic replay."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: dense/sparse/empty spectral trace fixtures",
+        "required: source/mode snapshot hash report"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-EDIT-002",
+      "family": "dsp.residual-edit",
+      "legacy_surface": "SpectrogramPanel residual edit operations and PluginProcessor model mutations",
+      "legacy_owner": [
+        "src/plugin/SpectrogramPanel.cpp::runMuteResidual/runScaleResidual/commitEnvelopeDraw",
+        "src/plugin/SpectrogramPanel.cpp::runSmoothResidual/runResidualTilt/runCopyBand/runPasteBand/runSwapBands/runRedistBands",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "ResidualEditService and UndoService",
+      "replacement_api": "ResidualEditService::apply(operation, selection, clipboard, parameters) returns an atomic model edit/result with validation, energy metrics, and invalidation revisions.",
+      "algorithm_or_dsp": "Residual mute, scale, draw/interpolation, smooth, tilt, copy, paste, swap, and redistribution over selected band/frame ranges.",
+      "data_flow": "UI-local selection/clipboard -> typed residual edit command -> immutable model transaction -> preview/cache/telemetry revisions.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Band/frame coordinate mapping and modifier selection semantics are preserved.",
+        "Draw interpolation, dB validation, smooth/tilt units, clipboard shape, and swap cardinality match the source.",
+        "Redistribution preserves total selected-frame energy; all writes remain finite and one user action has one undo transaction."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/PluginProcessor.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#22.4"
+      ],
+      "replacement_refs": [
+        "planned: src/engine/ResidualEditService.h",
+        "planned: tests/engine/residual_edit_service_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/engine/residual_edit_service_test.cpp",
+          "state": "required",
+          "proves": "Each residual operation, selection shape, finite-value and energy invariants, undo, and invalidation."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: residual band/frame edit fixtures",
+        "required: clipboard and energy-preservation report"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MORPH-006",
+      "family": "dsp.morph-timeline",
+      "legacy_surface": "MorphTimelineEditor, setMorphTimelinePointsUndoable, and timeline bounce/render paths",
+      "legacy_owner": [
+        "src/plugin/SessionTabPanel.cpp::MorphTimelineEditor",
+        "src/plugin/PluginProcessor.cpp::setMorphTimelinePointsUndoable",
+        "src/plugin/PluginProcessor.cpp::startTimelineBounce"
+      ],
+      "replacement_owner": "MorphTimelineService and MorphRenderService",
+      "replacement_api": "MorphTimelineService::edit/evaluate validates sorted normalized points and kinds; MorphRenderService::renderTimeline/bounce consumes immutable evaluated points and returns a generation-tagged result.",
+      "algorithm_or_dsp": "Morph, Hybrid, and Env Morph point evaluation, endpoint protection, normalized-time interpolation, sorting/clamping, and timeline WAV rendering.",
+      "data_flow": "Timeline command/popup -> validated recipe transaction -> morph worker/render cache -> preview or file result.",
+      "thread_domain": "analysis_worker",
+      "invariants": [
+        "Protected endpoints, point hit radius, neighbor time clamp, kind conversion, and removal rules match the source.",
+        "A timeline edit is one undoable transaction and cannot publish stale render output.",
+        "Bounce uses the same evaluated timeline as preview and preserves source sample rate/channel policy."
+      ],
+      "state_format_impact": "preset_file",
+      "source_refs": [
+        "src/plugin/SessionTabPanel.cpp",
+        "src/plugin/PluginProcessor.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#23.3"
+      ],
+      "replacement_refs": [
+        "planned: src/engine/MorphTimelineService.h",
+        "planned: src/engine/MorphRenderService.h",
+        "planned: tests/engine/morph_timeline_service_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "required: tests/engine/morph_timeline_service_test.cpp",
+          "state": "required",
+          "proves": "Point editing/evaluation, popup actions, undo grouping, stale generations, preview/bounce parity."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: morph timeline point fixtures",
+        "required: preview-versus-bounce audio golden"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-PLAY-002",
+      "family": "dsp.playback-cache",
+      "legacy_surface": "Preview/transport render caches, generation revisions, and morph auto-rerender debounce",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp"
+      ],
+      "replacement_owner": "PlaybackCache and RenderInvalidationCoordinator",
+      "replacement_api": "PlaybackCache::lookup/publish/invalidate uses an explicit key containing source/model/morph/display revisions and render options; coordinator schedules the source debounce paths and rejects stale generations.",
+      "algorithm_or_dsp": "Preview cache identity, automatic rerender debounce/coalescing, stop/reset invalidation, and generation-safe publication.",
+      "data_flow": "Parameter/model/morph/display revision -> scheduler/debounce -> worker render -> cache slot -> audio_rt playback snapshot.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "The executable frequency-shape resynth threshold (currently >=80 ms), morph 120/350 ms draft/finalize paths, and drag coalescing are measured and preserved; stale source comments do not override executable behavior.",
+        "A cache hit cannot reuse an audio buffer from a different source/model/morph/display revision.",
+        "Cancelled or stale workers cannot replace a newer preview or mutate UI status."
+      ],
+      "state_format_impact": "internal",
+      "source_refs": [
+        "src/plugin/PluginProcessor.h",
+        "src/plugin/PluginProcessor.cpp",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#28.6"
+      ],
+      "replacement_refs": [
+        "src/audio/PlaybackCache.h::PlaybackCache",
+        "src/engine/RenderInvalidationCoordinator.h::RenderInvalidationCoordinator",
+        "tests/playback_cache_generation_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "tests/playback_cache_generation_test.cpp",
+          "state": "existing",
+          "proves": "Cache keys, invalidation, debounce/coalescing, cancellation, and stale-result rejection."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: cache-key/revision trace",
+        "required: rerender debounce timing report"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R playback_cache_generation_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-MIDI-001",
+      "family": "dsp.midi-transpose",
+      "legacy_surface": "MIDI semitone offset and note routing into preview/audio synthesis",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp::processBlock",
+        "src/plugin/PluginProcessor.h::midiSemitoneOffset"
+      ],
+      "replacement_owner": "MidiNoteRouter and PlaybackEngine",
+      "replacement_api": "MidiNoteRouter::applyTranspose(event, semitoneOffset) returns a bounded note event while preserving velocity, type, and sample offset.",
+      "algorithm_or_dsp": "Note transpose and event routing; no pitch bend or CC behavior may be invented without a source decision.",
+      "data_flow": "Host MIDI events -> translated note events -> synthesis/playback state.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "Note range handling and offset application match the current process-block contract.",
+        "Note-off and zero-velocity note-on match their corresponding note-on identity.",
+        "Reset/all-notes-off clears active note state without allocation or locking."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginProcessor.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#28.7"
+      ],
+      "replacement_refs": [
+        "src/core/MidiNoteRouter.h::MidiNoteRouter",
+        "tests/midi_note_router_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "tests/midi_note_router_test.cpp",
+          "state": "required",
+          "proves": "Transpose, note identity, offsets, range/reset, and real-time safety."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: note routing event fixtures"
+      ],
+      "evidence": [],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    },
+    {
+      "trace_id": "DSP-RT-001",
+      "family": "dsp.realtime-smoothing",
+      "legacy_surface": "Processor gain smoothers for outputTrim, partGain, and resGain",
+      "legacy_owner": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginProcessor.h"
+      ],
+      "replacement_owner": "RealtimeParameterSmoothers and PlaybackEngine",
+      "replacement_api": "RealtimeParameterSmoothers::prepare/reset/setTarget/process applies the canonical 20 ms smoothing policy to the three gain paths without allocation or locks.",
+      "algorithm_or_dsp": "Control-to-audio gain smoothing, reset/prepare behavior, denormal handling, and automation timing.",
+      "data_flow": "Parameter snapshot/automation event -> audio_rt smoother -> partial/residual/output gain multiplication.",
+      "thread_domain": "audio_rt",
+      "invariants": [
+        "All three gain paths use the same documented 20 ms response and reset behavior.",
+        "Automation timing and initial target values match at prepare, state load, stop, and restart.",
+        "The audio path performs bounded arithmetic only and remains finite under NaN/denormal guards."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/PluginProcessor.cpp",
+        "src/plugin/PluginProcessor.h",
+        "docs/JUCE_REMOVAL_ATS_SPEC.md#28.6"
+      ],
+      "replacement_refs": [
+        "src/core/AtsPrimitives.h::OnePoleSmoother",
+        "tests/ats_primitives_test.cpp"
+      ],
+      "tests": [
+        {
+          "path": "tests/ats_primitives_test.cpp",
+          "state": "required",
+          "proves": "20 ms response, reset/prepare, automation timing, finite values, and no allocation/lock."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "required: gain step/automation response fixtures"
+      ],
+      "evidence": [
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R ats_primitives_test --output-on-failure"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "TO_BE_REVIEWED"
+    }
+  ]
+}

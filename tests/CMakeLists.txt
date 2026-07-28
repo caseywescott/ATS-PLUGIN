@@ -1,5 +1,92 @@
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+# These tests use assertions as executable contract checks. Keep them active
+# even though the repository defaults the overall build to Release.
+add_compile_options(-UNDEBUG)
+
+add_executable(ats_primitives_test ats_primitives_test.cpp)
+target_include_directories(ats_primitives_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(ats_primitives_test PRIVATE cxx_std_17)
+add_test(NAME ats_primitives_test COMMAND ats_primitives_test)
+
+add_executable(parameter_registry_test parameter_registry_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(parameter_registry_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(parameter_registry_test PRIVATE cxx_std_17)
+add_test(NAME parameter_registry_test COMMAND parameter_registry_test)
+
+add_executable(parameter_binding_dispatch_test parameter_binding_dispatch_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(parameter_binding_dispatch_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(parameter_binding_dispatch_test PRIVATE cxx_std_17)
+add_test(NAME parameter_binding_dispatch_test COMMAND parameter_binding_dispatch_test)
+
+add_executable(playback_buffer_test playback_buffer_test.cpp)
+target_include_directories(playback_buffer_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(playback_buffer_test PRIVATE cxx_std_17)
+add_test(NAME playback_buffer_test COMMAND playback_buffer_test)
+
+add_executable(midi_note_router_test midi_note_router_test.cpp)
+target_include_directories(midi_note_router_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(midi_note_router_test PRIVATE cxx_std_17)
+add_test(NAME midi_note_router_test COMMAND midi_note_router_test)
+
+add_executable(undo_history_test undo_history_test.cpp)
+target_include_directories(undo_history_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(undo_history_test PRIVATE cxx_std_17)
+add_test(NAME undo_history_test COMMAND undo_history_test)
+
+add_executable(state_header_test state_header_test.cpp)
+target_include_directories(state_header_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(state_header_test PRIVATE cxx_std_17)
+add_test(NAME state_header_test COMMAND state_header_test)
+
+add_executable(job_scheduler_test job_scheduler_test.cpp)
+target_include_directories(job_scheduler_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(job_scheduler_test PRIVATE cxx_std_17)
+add_test(NAME job_scheduler_test COMMAND job_scheduler_test)
+
+add_executable(ui_dispatcher_test ui_dispatcher_test.cpp)
+target_include_directories(ui_dispatcher_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(ui_dispatcher_test PRIVATE cxx_std_17)
+add_test(NAME ui_dispatcher_test COMMAND ui_dispatcher_test)
+
+add_executable(ats_engine_test ats_engine_test.cpp)
+target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_engine_test PRIVATE cxx_std_17)
+target_link_libraries(ats_engine_test PRIVATE ats_engine)
+add_test(NAME ats_engine_test COMMAND ats_engine_test WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(legacy_state_codec_test legacy_state_codec_test.cpp)
+target_include_directories(legacy_state_codec_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/state" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(legacy_state_codec_test PRIVATE cxx_std_17)
+target_link_libraries(legacy_state_codec_test PRIVATE ats_state)
+add_test(NAME legacy_state_codec_test COMMAND legacy_state_codec_test)
+
+add_executable(file_service_preset_test file_service_preset_test.cpp)
+target_include_directories(file_service_preset_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/platform"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/state")
+target_compile_features(file_service_preset_test PRIVATE cxx_std_17)
+target_link_libraries(file_service_preset_test PRIVATE ats_preset_service)
+add_test(NAME file_service_preset_test COMMAND file_service_preset_test)
+
+add_executable(playback_cache_generation_test playback_cache_generation_test.cpp)
+target_include_directories(playback_cache_generation_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(playback_cache_generation_test PRIVATE cxx_std_17)
+add_test(NAME playback_cache_generation_test COMMAND playback_cache_generation_test)
+
+add_executable(host_lifecycle_test host_lifecycle_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(host_lifecycle_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_lifecycle_test PRIVATE cxx_std_17)
+add_test(NAME host_lifecycle_test COMMAND host_lifecycle_test)
+
 add_executable(morph_recipe_test morph_recipe_test.cpp ../src/core/AtsMorphRecipe.cpp)
 target_include_directories(morph_recipe_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(morph_recipe_test PRIVATE cxx_std_17)
@@ -115,6 +202,20 @@ add_test(
           "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/morph_metric_tolerances.json"
           "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/morph_metric_smoke_report.json"
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+add_test(
+  NAME ats_traceability_manifest
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/architecture/traceability_manifest_check.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/architecture/ats_juce_replacement_traceability.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_test(
+  NAME ats_ui_parity_manifest
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/ui/ui_parity_manifest_check.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/ui/ats_ui_parity_manifest.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
