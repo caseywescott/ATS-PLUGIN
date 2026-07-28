@@ -171,10 +171,12 @@ public:
 
     bool initialize(HostFormat format) noexcept
     {
+        // Reinitialization is a valid wrapper lifecycle transition. Detach
+        // before resetting flags so no hidden editor pointer survives with a
+        // logically cold adapter.
+        detachEditor();
         format_ = format;
         state_ = HostState::cold;
-        editorAttached_ = false;
-        editorVisible_ = false;
         return true;
     }
 

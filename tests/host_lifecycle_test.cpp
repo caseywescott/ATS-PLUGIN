@@ -69,6 +69,10 @@ int main()
     assert(host.editorAttached() && !editor.isShowing());
     assert(host.setEditorVisible(false) && !editor.isShowing());
     assert(host.setEditorVisible(true) && editor.isShowing());
+    assert(host.initialize(ats::host::HostFormat::au));
+    assert(!host.editorAttached() && !host.editorVisible() && !editor.isShowing());
+    assert(host.initialize(ats::host::HostFormat::vst3));
+    assert(host.prepare({ 48000.0, 64, 2 }));
     host.detachEditor();
     assert(!editor.isShowing());
 
