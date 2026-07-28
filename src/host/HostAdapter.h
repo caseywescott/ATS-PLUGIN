@@ -185,7 +185,7 @@ public:
         // Preserve the direct neutral-test entry point while making the
         // wrapper lifecycle explicit for native adapters.
         if (spec.sampleRate <= 0.0 || spec.maximumBlockSize == 0 || spec.outputChannels != 2 ||
-            (spec.inputChannels != 0 && spec.inputChannels != 2))
+            spec.inputChannels != 0)
             return false;
         spec_ = spec;
         playback_.prepare(spec.outputChannels, spec.maximumBlockSize);

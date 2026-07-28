@@ -52,6 +52,8 @@ int main()
     assert(host.format() == ats::host::HostFormat::vst3);
     const bool invalidPrepare = host.prepare({ 0.0, 64, 2 });
     assert(!invalidPrepare);
+    const bool inputBusPrepare = host.prepare({ 48000.0, 64, 2, 2 });
+    assert(!inputBusPrepare);
     const bool prepared = host.prepare({ 48000.0, 64, 2 });
     assert(prepared);
     assert(host.busLayout().inputChannels == 0);
