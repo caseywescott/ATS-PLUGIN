@@ -16,6 +16,7 @@ The latest implementation commits are:
 - `ee8d3ee` native Visage page-selector and parameter-gesture dispatch proof
 - `d0aae9a` model-driven Visage shell top-bar state for history, theme, and activity
 - `b6b05a1` Visage Session spectrum canvas and seven-mode view-menu implementation
+- `ac111be` native spectrum wheel/drag navigation wiring
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -37,7 +38,8 @@ Validation on 2026-07-28:
   creation/focus, native popup row selection, and dismissal
 - Visage Session now renders the framework-free spectrum renderer and exposes
   the seven-mode view-menu event path; native popup-coordinate evidence for
-  that path remains a follow-on probe
+  that path remains a follow-on probe. Native wheel/drag traffic now updates
+  the spectrum model’s zoom, pan, and pointer-capture state.
 - Visage shell top-bar state now renders history enablement, theme selection,
   and analysis/render activity from the neutral shell model; native history and
   theme click dispatch remain a follow-on probe because their coordinate path
