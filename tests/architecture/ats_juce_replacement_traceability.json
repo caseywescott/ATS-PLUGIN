@@ -1503,14 +1503,14 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#23"
       ],
       "replacement_refs": [
-        "planned: src/model/PartialEditService.h",
-        "planned: src/ui/PartialEditView.h"
+        "src/engine/PartialEditService.h",
+        "src/ui/PartialEditView.h"
       ],
       "tests": [
         {
-          "path": "required: tests/model/partial_edit_transaction_test.cpp",
-          "state": "required",
-          "proves": "Model mutation, invalidation, undo, and redo."
+          "path": "tests/partial_edit_transaction_test.cpp",
+          "state": "existing",
+          "proves": "Atomic model mutation, validation, invalidation revision, undo, redo, and typed interaction results."
         },
         {
           "path": "tests/ui/ats_ui_parity_manifest.json",

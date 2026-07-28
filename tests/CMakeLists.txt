@@ -163,6 +163,13 @@ target_include_directories(ui_ownership_contract_test PRIVATE
 target_compile_features(ui_ownership_contract_test PRIVATE cxx_std_17)
 add_test(NAME ui_ownership_contract_test COMMAND ui_ownership_contract_test)
 
+add_executable(partial_edit_transaction_test partial_edit_transaction_test.cpp)
+target_include_directories(partial_edit_transaction_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(partial_edit_transaction_test PRIVATE cxx_std_17)
+add_test(NAME partial_edit_transaction_test COMMAND partial_edit_transaction_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)
