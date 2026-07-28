@@ -65,6 +65,13 @@ target_compile_features(plugin_model_test PRIVATE cxx_std_17)
 target_link_libraries(plugin_model_test PRIVATE ats_plugin_model)
 add_test(NAME plugin_model_test COMMAND plugin_model_test)
 
+add_executable(ui_backend_contract_test ui_backend_contract_test.cpp)
+target_include_directories(ui_backend_contract_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(ui_backend_contract_test PRIVATE cxx_std_17)
+add_test(NAME ui_backend_contract_test COMMAND ui_backend_contract_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)

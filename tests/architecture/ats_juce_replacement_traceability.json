@@ -566,11 +566,17 @@
         "docs/JUCE_REMOVAL_ATS_SPEC.md#22"
       ],
       "replacement_refs": [
-        "planned: src/ui/UiBackend.h",
+        "src/ui/UiBackend.h::UiBackend",
+        "src/ui/UiBackend.h::UiBackendCapabilities",
         "planned: src/ui/ThemeTokens.h",
         "planned: src/ui/PopupManager.h"
       ],
       "tests": [
+        {
+          "path": "tests/ui_backend_contract_test.cpp",
+          "state": "existing",
+          "proves": "Logical/device coordinate conversion and the complete backend capability contract are explicit."
+        },
         {
           "path": "tests/ui/ats_ui_parity_manifest.json",
           "state": "existing",
