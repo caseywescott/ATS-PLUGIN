@@ -667,8 +667,9 @@
         "patches/qatsh-atsa-*.patch"
       ],
       "replacement_refs": [
-        "planned: src/atsa/qatsh_atsa_target.cmake",
-        "planned: tests/architecture/qatsh_patch_fingerprint.json"
+        "CMakeLists.txt::atsa",
+        "tests/architecture/qatsh_patch_manifest.json",
+        "tests/architecture/qatsh_patch_manifest_check.py"
       ],
       "tests": [
         {
@@ -682,17 +683,20 @@
           "proves": "IFFT path and associated patch behavior."
         },
         {
-          "path": "required: configure-time patch assertions",
-          "state": "required",
-          "proves": "Patch presence, order, and target isolation."
+      "path": "tests/architecture/qatsh_patch_manifest_check.py",
+          "state": "existing",
+          "proves": "Every declared patch file and source marker remains present."
         }
       ],
       "fixtures_or_goldens": [
         "required: patch fingerprint report",
         "tests/fixtures/morph_fixture_manifest.json"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "python3 tests/architecture/qatsh_patch_manifest_check.py tests/architecture/qatsh_patch_manifest.json qatsh/src/atsa",
+        "ctest --test-dir build-review -R ats_qatsh_patch_manifest --output-on-failure"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"

@@ -233,6 +233,14 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_test(
+  NAME ats_qatsh_patch_manifest
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/architecture/qatsh_patch_manifest_check.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/architecture/qatsh_patch_manifest.json"
+          "${ATS_ATSA_SOURCE_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_test(
   NAME ats_ui_parity_manifest
   COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/ui/ui_parity_manifest_check.py"
