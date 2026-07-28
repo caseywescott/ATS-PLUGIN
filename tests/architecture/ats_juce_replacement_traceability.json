@@ -558,9 +558,11 @@
         "tests/ui/ats_ui_parity_manifest.json"
       ],
       "evidence": [],
-      "status": "mapped",
+      "status": "blocked",
       "deviation_id": null,
-      "blocked_by": [],
+      "blocked_by": [
+        "D-UI-BACKEND-NOT-PINNED"
+      ],
       "last_reviewed": "TO_BE_REVIEWED"
     },
     {
@@ -1814,9 +1816,11 @@
       "evidence": [
         "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure"
       ],
-      "status": "mapped",
+      "status": "blocked",
       "deviation_id": null,
-      "blocked_by": [],
+      "blocked_by": [
+        "D-UI-BACKEND-NOT-PINNED"
+      ],
       "last_reviewed": "TO_BE_REVIEWED"
     },
     {

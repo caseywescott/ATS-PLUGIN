@@ -13,4 +13,7 @@ ctest --test-dir build-review --output-on-failure -R audio_thread_safety_test
 ```
 
 The required ThreadSanitizer build and real native editor/window evidence
-remain release-gate work after the target UI backend is pinned.
+remain release-gate work after the target UI backend is pinned. The
+traceability ledger records the editor lifecycle and scheduler real-dispatch
+rows as blocked by `D-UI-BACKEND-NOT-PINNED`; no neutral implementation is
+being presented as native-window evidence.
