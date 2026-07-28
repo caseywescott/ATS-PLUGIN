@@ -380,6 +380,14 @@ target_include_directories(ats_playback PUBLIC
 target_compile_features(ats_playback PUBLIC cxx_std_17)
 target_link_libraries(ats_playback PUBLIC ats_core)
 
+add_library(ats_plugin_model STATIC src/engine/PluginModel.cpp)
+target_include_directories(ats_plugin_model PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/core"
+  "${CMAKE_SOURCE_DIR}/src/engine"
+  "${CMAKE_SOURCE_DIR}/src/ui")
+target_compile_features(ats_plugin_model PUBLIC cxx_std_17)
+target_link_libraries(ats_plugin_model PUBLIC ats_core)
+
 add_library(ats_state STATIC src/state/LegacyStateCodec.cpp)
 target_include_directories(ats_state PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/state" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_state PUBLIC cxx_std_17)

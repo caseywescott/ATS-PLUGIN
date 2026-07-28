@@ -56,6 +56,15 @@ target_include_directories(ui_action_dispatcher_test PRIVATE "${CMAKE_CURRENT_SO
 target_compile_features(ui_action_dispatcher_test PRIVATE cxx_std_17)
 add_test(NAME ui_action_dispatcher_test COMMAND ui_action_dispatcher_test)
 
+add_executable(plugin_model_test plugin_model_test.cpp)
+target_include_directories(plugin_model_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(plugin_model_test PRIVATE cxx_std_17)
+target_link_libraries(plugin_model_test PRIVATE ats_plugin_model)
+add_test(NAME plugin_model_test COMMAND plugin_model_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)

@@ -514,21 +514,22 @@
       "replacement_refs": [
         "src/ui/EditorHost.h::EditorHost",
         "src/ui/UiActionDispatcher.h::UiActionDispatcher",
+        "src/engine/PluginModel.h::PluginModel",
         "planned: src/ui/UiBackend.h",
         "planned: src/ui/ViewModels.h"
       ],
       "tests": [
         {
-          "path": "required: tests/ui/editor_lifecycle_test.cpp",
-          "state": "required",
-          "proves": "Create/destroy, resize, focus, and detach behavior."
+          "path": "tests/plugin_model_test.cpp",
+          "state": "existing",
+          "proves": "Neutral composition-root action ownership, validation, typed results, and telemetry revisions."
         }
       ],
       "fixtures_or_goldens": [
         "tests/ui/ats_ui_parity_manifest.json"
       ],
       "evidence": [],
-      "status": "mapped",
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
@@ -614,6 +615,8 @@
       ],
       "replacement_refs": [
         "src/ui/UiActionDispatcher.h::TelemetryPublisher",
+        "src/ui/UiActionDispatcher.h::ActionResultDispatcher",
+        "src/engine/PluginModel.h::PluginModel",
         "planned: src/diagnostics/ProgressPublisher.h"
       ],
       "tests": [
@@ -632,7 +635,7 @@
         "required: progress/error event trace"
       ],
       "evidence": [],
-      "status": "mapped",
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
