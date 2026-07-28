@@ -12,6 +12,7 @@ The latest implementation commits are:
 - `b15a91d` native Visage popup row-selection proof
 - `612a15b` standalone editor lifecycle seam and probe
 - `0a9b336` replacement-editor detach invariant
+- `05a1fcb` stale RMJ-010 backend-blocker correction
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -24,7 +25,8 @@ Validation on 2026-07-28:
 - UI parity manifest: 53 records valid
 - UI parity baseline/backend inputs frozen to the ATS baseline commit and
   pinned Visage revision
-- ATS replacement traceability: 39 records valid
+- ATS replacement traceability: 39 records valid; native editor lifecycle
+  verified and UI backend/scheduler seams promoted to implemented
 - Visage native editor probe: passed at arm64 with attachment, resize, scale,
   focus, mouse, text, hide, standalone window creation, and teardown
 - Visage real-dispatch harness: passed with parameter gestures, text input,
