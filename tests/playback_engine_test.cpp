@@ -22,6 +22,7 @@ int main()
     combined.channels[0][0] = 2.0f;
     combined.channels[1][0] = 2.0f;
     assert(engine.publish(ats::engine::PlaybackLayer::combined, combinedSlot, { 2 }));
+    assert(engine.activeGeneration(ats::engine::PlaybackLayer::combined).value == 2);
 
     ats::ParameterStore parameters;
     assert(parameters.write("partGain", 1.0f));

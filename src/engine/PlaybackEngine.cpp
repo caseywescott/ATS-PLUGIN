@@ -52,11 +52,7 @@ bool PlaybackEngine::publish(PlaybackLayer layer, std::int32_t slot, JobGenerati
 JobGeneration PlaybackEngine::activeGeneration(PlaybackLayer layer) const noexcept
 {
     if (!prepared()) return {};
-    auto& pool = const_cast<PlaybackBufferPool&>(layers_[index(layer)]);
-    const auto slot = pool.beginAudioRead();
-    const auto generation = pool.generation(slot);
-    pool.endAudioRead(slot);
-    return generation;
+    return layers_[index(layer)].activeGeneration();
 }
 
 bool PlaybackEngine::process(AudioBufferView output,

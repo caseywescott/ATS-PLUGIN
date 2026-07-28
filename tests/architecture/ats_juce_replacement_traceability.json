@@ -1539,6 +1539,7 @@
       "replacement_refs": [
         "src/core/PlaybackBuffers.h::PlaybackBufferPool",
         "src/core/PlaybackBuffers.h::OwnedAudioBuffer",
+        "src/core/PlaybackBuffers.h::PlaybackBufferPool::activeGeneration",
         "src/engine/PlaybackEngine.h::PlaybackEngine",
         "planned: src/audio/PlayheadPublisher.h"
       ],
@@ -1563,8 +1564,10 @@
         "required: preview/playback audio golden",
         "required: publication stress trace"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "ctest --test-dir build-review -R 'playback_buffer_test|playback_engine_test' --output-on-failure"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"

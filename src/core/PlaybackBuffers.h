@@ -67,6 +67,10 @@ public:
     bool publish(std::int32_t slot, JobGeneration generation) noexcept
     {
         if (!validSlot(slot) || slot == reader_.load(std::memory_order_acquire)) return false;
+        const auto active = active_.load(std::memory_order_acquire);
+        if (validSlot(active) &&
+            generations_[static_cast<std::size_t>(active)].load(std::memory_order_acquire) > generation.value)
+            return false;
         generations_[static_cast<std::size_t>(slot)].store(generation.value, std::memory_order_relaxed);
         active_.store(slot, std::memory_order_release);
         return true;
@@ -92,6 +96,12 @@ public:
 
     [[nodiscard]] JobGeneration generation(std::int32_t slot) const noexcept
     { return validSlot(slot) ? JobGeneration { generations_[static_cast<std::size_t>(slot)].load(std::memory_order_acquire) } : JobGeneration {}; }
+
+    [[nodiscard]] JobGeneration activeGeneration() const noexcept
+    {
+        const auto slot = active_.load(std::memory_order_acquire);
+        return generation(slot);
+    }
 
 private:
     [[nodiscard]] static bool validSlot(std::int32_t slot) noexcept

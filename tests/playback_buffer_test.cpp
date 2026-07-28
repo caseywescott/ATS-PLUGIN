@@ -16,6 +16,9 @@ int main()
     output.channels[0][0] = 0.25f;
     output.channels[1][0] = -0.25f;
     assert(pool.publish(writer, { 7 }));
+    const auto staleWriter = pool.tryAcquireWriteSlot();
+    assert(staleWriter != ats::PlaybackBufferPool::kNoBuffer);
+    assert(!pool.publish(staleWriter, { 6 }));
     // The reader holds the old buffer until the callback releases it.
     assert(pool.readBuffer(firstRead)->channel(0)[0] == 0.0f);
     pool.endAudioRead(firstRead);
@@ -23,6 +26,7 @@ int main()
     assert(secondRead == writer);
     assert(pool.readBuffer(secondRead)->channel(0)[0] == 0.25f);
     assert(pool.generation(secondRead).value == 7);
+    assert(pool.activeGeneration().value == 7);
     pool.endAudioRead(secondRead);
 
     ats::GenerationGate gate;
