@@ -235,6 +235,14 @@ public:
         canvas.text("UNDO", labelFont, visage::Font::kCenter, 248.0f, 14.0f, 68.0f, 18.0f);
         canvas.setColor(shell_.state().canRedo ? tokens.text : tokens.secondaryText);
         canvas.text("REDO", labelFont, visage::Font::kCenter, 316.0f, 14.0f, 68.0f, 18.0f);
+        canvas.setColor(shell_.state().analysisRunning ? tokens.accent : tokens.secondaryText);
+        canvas.circle(402.0f, 17.0f, 8.0f);
+        canvas.setColor(tokens.secondaryText);
+        canvas.text("ANL", labelFont, visage::Font::kLeft, 414.0f, 14.0f, 30.0f, 18.0f);
+        canvas.setColor(shell_.state().renderRunning ? tokens.accent : tokens.secondaryText);
+        canvas.circle(448.0f, 17.0f, 8.0f);
+        canvas.setColor(tokens.secondaryText);
+        canvas.text("RND", labelFont, visage::Font::kLeft, 460.0f, 14.0f, 30.0f, 18.0f);
         canvas.setColor(tokens.secondaryText);
         canvas.text(shell_.state().theme == ThemeId::porcelain ? "PORCELAIN" : "EMBER",
                     labelFont, visage::Font::kCenter, width() - 220.0f, 14.0f, 200.0f, 18.0f);
