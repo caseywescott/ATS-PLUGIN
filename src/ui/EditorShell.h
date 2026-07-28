@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorHost.h"
+#include "SessionPageModel.h"
 #include "ThemeTokens.h"
 
 #include <array>
@@ -25,6 +26,7 @@ public:
     static constexpr std::size_t kPageCount = 5;
 
     [[nodiscard]] const EditorShellState& state() const noexcept { return state_; }
+    [[nodiscard]] const SessionPageModel& session() const noexcept { return session_; }
 
     bool selectPage(std::size_t index) noexcept
     {
@@ -59,6 +61,7 @@ public:
 
 private:
     EditorShellState state_{};
+    SessionPageModel session_{};
 };
 
 } // namespace ats::ui

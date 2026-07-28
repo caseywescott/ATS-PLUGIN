@@ -20,5 +20,7 @@ int main()
     const auto labels = ats::ui::EditorShellModel::pageLabels();
     assert(labels[0] == std::string("SESSION"));
     assert(labels[4] == std::string("MATH"));
+    assert(shell.session().state().morph.timeline.size() == 2);
+    assert(!shell.session().state().sources[0].hasModel);
     return 0;
 }

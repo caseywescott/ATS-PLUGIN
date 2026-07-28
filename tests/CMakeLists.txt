@@ -87,6 +87,13 @@ target_include_directories(editor_shell_test PRIVATE
 target_compile_features(editor_shell_test PRIVATE cxx_std_17)
 add_test(NAME editor_shell_test COMMAND editor_shell_test)
 
+add_executable(session_page_model_test session_page_model_test.cpp)
+target_include_directories(session_page_model_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(session_page_model_test PRIVATE cxx_std_17)
+add_test(NAME session_page_model_test COMMAND session_page_model_test)
+
 add_executable(dsp_service_contract_test dsp_service_contract_test.cpp)
 target_include_directories(dsp_service_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
