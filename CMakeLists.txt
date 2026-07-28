@@ -424,6 +424,20 @@ add_library(ats_editor INTERFACE)
 target_include_directories(ats_editor INTERFACE "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_editor INTERFACE ats_core)
 
+# Format wrappers are deliberately interface-only until their SDK entry points
+# are available. Keeping the three neutral seams in the graph now prevents
+# wrapper code from reaching around HostAdapter and makes the no-JUCE build
+# boundary testable in every configuration.
+foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
+  add_library(${host_target} INTERFACE)
+  target_include_directories(${host_target} INTERFACE
+    "${CMAKE_SOURCE_DIR}/src/core"
+    "${CMAKE_SOURCE_DIR}/src/host"
+    "${CMAKE_SOURCE_DIR}/src/ui")
+  target_link_libraries(${host_target} INTERFACE
+    ats_core ats_playback ats_state ats_editor)
+endforeach()
+
 if(ATS_BUILD_VISAGE_UI_PROBE)
   if(NOT APPLE)
     message(FATAL_ERROR "ATS_BUILD_VISAGE_UI_PROBE currently requires macOS native host embedding")

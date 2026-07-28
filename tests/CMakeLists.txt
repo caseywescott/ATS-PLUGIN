@@ -318,6 +318,7 @@ target_include_directories(host_lifecycle_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
 target_compile_features(host_lifecycle_test PRIVATE cxx_std_17)
+target_link_libraries(host_lifecycle_test PRIVATE ats_host_vst3)
 add_test(NAME host_lifecycle_test COMMAND host_lifecycle_test)
 
 add_executable(midi_process_block_test midi_process_block_test.cpp ../src/core/ParameterRegistry.cpp)
@@ -326,6 +327,7 @@ target_include_directories(midi_process_block_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
 target_compile_features(midi_process_block_test PRIVATE cxx_std_17)
+target_link_libraries(midi_process_block_test PRIVATE ats_standalone)
 add_test(NAME midi_process_block_test COMMAND midi_process_block_test)
 
 add_executable(morph_recipe_test morph_recipe_test.cpp ../src/core/AtsMorphRecipe.cpp)
