@@ -482,6 +482,11 @@
           "proves": "Single-writer publication, complete scalar snapshots, meter/playhead revision alignment, and bounded read ownership."
         },
         {
+          "path": "tests/realtime/audio_thread_safety_test.cpp",
+          "state": "existing",
+          "proves": "Concurrent reader/publication stress for coherent playback, meter, and playhead snapshots."
+        },
+        {
           "path": "required: tests/realtime/audio_thread_safety_test.cpp",
           "state": "required",
           "proves": "Allocation, lock, publication, and ownership rules."
@@ -495,8 +500,10 @@
       "fixtures_or_goldens": [
         "required: publication stress trace"
       ],
-      "evidence": [],
-      "status": "mapped",
+      "evidence": [
+        "cmake --build build-review --target audio_thread_safety_test playback_telemetry_contract_test -j2 && ctest --test-dir build-review --output-on-failure -R 'audio_thread_safety_test|playback_telemetry_contract_test'"
+      ],
+      "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
