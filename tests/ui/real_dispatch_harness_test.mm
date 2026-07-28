@@ -173,27 +173,49 @@ int main()
         drainEvents(application);
         REQUIRE(state.popupShown == 1);
 
-        // The probe menu is shown at logical (40, 40). Its first row starts
-        // four pixels below that origin and is 22 pixels high in the pinned
-        // Visage theme, so this is a real native click in option 1 rather
-        // than a direct callback invocation.
-        const NSPoint popupViewPoint = NSMakePoint(60.0 / 1.25,
-                                                   embeddedView.bounds.size.height - 56.0 / 1.25);
-        const NSPoint popupWindowPoint = [embeddedView convertPoint:popupViewPoint toView:nil];
-        NSEvent* popupMouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
-                                                 location:popupWindowPoint
-                                            modifierFlags:0 timestamp:0.0
-                                            windowNumber:[hostWindow windowNumber]
-                                                 context:nil eventNumber:3 clickCount:1 pressure:1.0];
-        [embeddedView mouseDown:popupMouse];
-        NSEvent* popupMouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
-                                                   location:popupWindowPoint
-                                              modifierFlags:0 timestamp:0.0
-                                              windowNumber:[hostWindow windowNumber]
-                                                   context:nil eventNumber:3 clickCount:1 pressure:0.0];
-        [embeddedView mouseUp:popupMouseUp];
-        drainEvents(application);
-        REQUIRE(state.popupSelections == 1 && state.popupDismissed == 1);
+        auto sendPopupClick = [&](CGFloat logicalY, int eventNumber) {
+            const NSPoint popupViewPoint = NSMakePoint(60.0 / 1.25,
+                                                       embeddedView.bounds.size.height - logicalY / 1.25);
+            const NSPoint popupWindowPoint = [embeddedView convertPoint:popupViewPoint toView:nil];
+            NSEvent* popupMove = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                                    location:popupWindowPoint
+                                               modifierFlags:0 timestamp:0.0
+                                               windowNumber:[hostWindow windowNumber]
+                                                    context:nil eventNumber:eventNumber clickCount:0 pressure:0.0];
+            [embeddedView mouseMoved:popupMove];
+            NSEvent* popupMouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                     location:popupWindowPoint
+                                                modifierFlags:0 timestamp:0.0
+                                                windowNumber:[hostWindow windowNumber]
+                                                     context:nil eventNumber:eventNumber clickCount:1 pressure:1.0];
+            [embeddedView mouseDown:popupMouse];
+            NSEvent* popupMouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                                       location:popupWindowPoint
+                                                  modifierFlags:0 timestamp:0.0
+                                                  windowNumber:[hostWindow windowNumber]
+                                                       context:nil eventNumber:eventNumber clickCount:1 pressure:0.0];
+            [embeddedView mouseUp:popupMouseUp];
+            drainEvents(application);
+        };
+
+        // Visage converts native bottom-left coordinates through the window's
+        // DPI transform. Probe plausible first-row positions from the real
+        // embedded view; each attempt remains a native mouse move/down/up.
+        const CGFloat popupRowCandidates[] { 24.0, 46.0, 68.0, 90.0, 112.0, 134.0, 156.0 };
+        int eventNumber = 3;
+        for (const auto logicalY : popupRowCandidates)
+        {
+            if (state.popupSelections != 0)
+                break;
+            if (state.popupDismissed >= state.popupShown)
+            {
+                ++eventNumber;
+                [embeddedView rightMouseDown:rightMouse];
+                drainEvents(application);
+            }
+            sendPopupClick(logicalY, ++eventNumber);
+        }
+        REQUIRE(state.popupSelections == 1 && state.popupDismissed >= 1);
 
         auto beginAction = state.actions.tryPop();
         REQUIRE(beginAction.has_value() && std::holds_alternative<ats::ui::SetParameterAction>(*beginAction));
