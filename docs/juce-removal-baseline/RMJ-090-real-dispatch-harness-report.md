@@ -24,6 +24,9 @@ The harness verifies that:
   gesture with begin/end markers; and
 - the real shell top bar renders model-driven undo/redo enablement, Ember /
   Porcelain theme state, and analysis/render activity indicators; and
+- the Session surface now owns a real Visage spectrum canvas using the
+  framework-free renderer, fixed-dark palette, empty-safe grid, and seven-mode
+  interaction model with a view-menu event path; and
 - the Session page model owns source A/B cards, preset dirty/save state,
   transport/layer selection, normalized morph timeline, variation/policy
   enablement, timbre curve, and Smearnov detection/onset overlay state; and
@@ -74,6 +77,8 @@ the native popup scan is therefore rerun in isolation for evidence. The
 shell/session/page/spectrum/lifecycle model and renderer tests also pass.
 This is the foundational real-dispatch proof. Top-bar history and theme click
 dispatch are intentionally not counted as native evidence yet because the
-coordinate path is not stable across the current native embedding probe;
-dialogs, pointer capture, widget parity, and production host-wrapper artifacts
-remain follow-on work.
+coordinate path is not stable across the current native embedding probe. The
+new spectrum canvas/menu is likewise model- and render-covered in this slice;
+its native popup coordinate proof remains a follow-on probe. Dialogs, pointer
+capture, widget parity, and production host-wrapper artifacts remain follow-on
+work.
