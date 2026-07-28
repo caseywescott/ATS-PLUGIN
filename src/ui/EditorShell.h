@@ -5,6 +5,7 @@
 #include "EditorPageModels.h"
 #include "SessionPageModel.h"
 #include "SpectrumInteractionModel.h"
+#include "SpectrumRenderer.h"
 #include "ThemeTokens.h"
 
 #include <array>

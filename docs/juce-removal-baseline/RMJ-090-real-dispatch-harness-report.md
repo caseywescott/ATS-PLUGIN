@@ -36,6 +36,9 @@ The harness verifies that:
 - dialog requests now map import/export/preset/bounce selections to typed
   actions with cancellation and duplicate-open guards; close transitions clear
   dialogs, popup ownership, pointer capture, and focus before detaching.
+- the deterministic spectrum renderer emits a fixed-dark canvas for both
+  themes, ordered grid/residual/trace/playhead/legend commands, amplitude
+  weighting, selected-trace emphasis, and bounded playhead coordinates.
 - hide/destruction removes the embedded Visage view.
 
 Evidence:
@@ -52,10 +55,11 @@ ctest --test-dir build-review --output-on-failure -R spectrum_interaction_model_
 ctest --test-dir build-review --output-on-failure -R spectrum_trace_snapshot_test
 ctest --test-dir build-review --output-on-failure -R editor_lifecycle_model_test
 ctest --test-dir build-review --output-on-failure -R ui_ownership_contract_test
+ctest --test-dir build-review --output-on-failure -R spectrum_renderer_test
 ```
 
 Result: native probes `2/2` passed and the shell/session/page/spectrum/lifecycle
-model tests passed.
+model and renderer tests passed.
 This is the foundational real-dispatch proof; popup row
 selection, dialogs, pointer capture, widget parity, and production host-wrapper
 artifacts remain follow-on work.
