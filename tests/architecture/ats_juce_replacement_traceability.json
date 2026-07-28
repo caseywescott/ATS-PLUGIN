@@ -515,6 +515,7 @@
       ],
       "replacement_refs": [
         "src/ui/EditorHost.h::EditorHost",
+        "src/ui/EditorHost.h::HeadlessEditorHost",
         "src/ui/UiActionDispatcher.h::UiActionDispatcher",
         "src/engine/PluginModel.h::PluginModel",
         "planned: src/ui/UiBackend.h",
@@ -524,7 +525,7 @@
         {
           "path": "tests/plugin_model_test.cpp",
           "state": "existing",
-          "proves": "Neutral composition-root action ownership, validation, typed results, and telemetry revisions."
+          "proves": "Neutral composition-root action ownership, renderer-free editor lifecycle, validation, typed results, and telemetry revisions."
         }
       ],
       "fixtures_or_goldens": [

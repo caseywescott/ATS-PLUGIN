@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <array>
 #include <string>
+#include <mutex>
 #include <variant>
 #include <vector>
 
@@ -110,6 +111,26 @@ public:
     virtual void dispatch(EditorAction action) = 0;
 };
 
+class TelemetryPublisher
+{
+public:
+    void publish(TelemetrySnapshot snapshot)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_ = std::move(snapshot);
+    }
+
+    [[nodiscard]] TelemetrySnapshot snapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return snapshot_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    TelemetrySnapshot snapshot_;
+};
+
 class EditorHost
 {
 public:
@@ -119,6 +140,86 @@ public:
     [[nodiscard]] virtual float scale() const noexcept = 0;
     [[nodiscard]] virtual TelemetrySnapshot telemetry() const = 0;
     virtual void dispatch(EditorAction action) = 0;
+};
+
+enum class EditorPage : std::uint8_t { session, analysis, synthesis, partials, math };
+enum class EditorLifecycle : std::uint8_t { detached, attached, closing };
+enum class FocusOwner : std::uint8_t { none, parameter, textEntry, popup };
+enum class PopupKind : std::uint8_t { none, sourceMenu, presetMenu, viewMenu, timelineMenu };
+
+// Renderer-free editor state. A backend maps this state to windows and
+// widgets; it does not become a second source of model truth.
+class HeadlessEditorHost final : public EditorHost
+{
+public:
+    HeadlessEditorHost(ActionSink& sink, const TelemetryPublisher& telemetry) noexcept
+        : sink_(sink), telemetry_(telemetry) {}
+
+    bool attach(float scale, float width, float height) noexcept
+    {
+        if (scale <= 0.0f || width <= 0.0f || height <= 0.0f) return false;
+        lifecycle_ = EditorLifecycle::attached;
+        scale_ = scale;
+        width_ = width;
+        height_ = height;
+        return true;
+    }
+
+    void close() noexcept
+    {
+        lifecycle_ = EditorLifecycle::closing;
+        popup_ = PopupKind::none;
+        focus_ = FocusOwner::none;
+        lifecycle_ = EditorLifecycle::detached;
+    }
+
+    [[nodiscard]] EditorLifecycle lifecycle() const noexcept { return lifecycle_; }
+    [[nodiscard]] EditorPage page() const noexcept { return page_; }
+    [[nodiscard]] PopupKind popup() const noexcept { return popup_; }
+    [[nodiscard]] FocusOwner focus() const noexcept { return focus_; }
+    [[nodiscard]] std::array<float, 2> logicalSize() const noexcept { return { width_, height_ }; }
+    [[nodiscard]] std::array<float, 2> requestedSize() const noexcept
+    { return { requestedWidth_, requestedHeight_ }; }
+
+    void setPage(EditorPage page) noexcept { if (lifecycle_ == EditorLifecycle::attached) page_ = page; }
+    void setFocus(FocusOwner focus) noexcept { if (lifecycle_ == EditorLifecycle::attached) focus_ = focus; }
+    void openPopup(PopupKind popup) noexcept
+    {
+        if (lifecycle_ == EditorLifecycle::attached)
+        {
+            popup_ = popup;
+            if (popup != PopupKind::none) focus_ = FocusOwner::popup;
+        }
+    }
+    void dismissPopup() noexcept
+    {
+        popup_ = PopupKind::none;
+        if (focus_ == FocusOwner::popup) focus_ = FocusOwner::none;
+    }
+
+    void setLogicalSize(float width, float height) override
+    { if (width > 0.0f && height > 0.0f) { width_ = width; height_ = height; } }
+
+    void requestResize(float width, float height) override
+    { if (width > 0.0f && height > 0.0f) { requestedWidth_ = width; requestedHeight_ = height; } }
+
+    [[nodiscard]] float scale() const noexcept override { return scale_; }
+    [[nodiscard]] TelemetrySnapshot telemetry() const override { return telemetry_.snapshot(); }
+    void dispatch(EditorAction action) override
+    { if (lifecycle_ == EditorLifecycle::attached) sink_.dispatch(std::move(action)); }
+
+private:
+    ActionSink& sink_;
+    const TelemetryPublisher& telemetry_;
+    EditorLifecycle lifecycle_ = EditorLifecycle::detached;
+    EditorPage page_ = EditorPage::session;
+    FocusOwner focus_ = FocusOwner::none;
+    PopupKind popup_ = PopupKind::none;
+    float scale_ = 1.0f;
+    float width_ = 0.0f;
+    float height_ = 0.0f;
+    float requestedWidth_ = 0.0f;
+    float requestedHeight_ = 0.0f;
 };
 
 } // namespace ats::ui

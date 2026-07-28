@@ -8,6 +8,21 @@
 int main()
 {
     ats::engine::PluginModel model(1, 8);
+    ats::ui::HeadlessEditorHost editor(model, model.telemetry());
+    assert(editor.lifecycle() == ats::ui::EditorLifecycle::detached);
+    assert(!editor.attach(0.0f, 1280.0f, 940.0f));
+    assert(editor.attach(2.0f, 1280.0f, 940.0f));
+    editor.setPage(ats::ui::EditorPage::synthesis);
+    editor.setFocus(ats::ui::FocusOwner::textEntry);
+    editor.openPopup(ats::ui::PopupKind::presetMenu);
+    assert(editor.page() == ats::ui::EditorPage::synthesis);
+    assert(editor.popup() == ats::ui::PopupKind::presetMenu);
+    assert(editor.focus() == ats::ui::FocusOwner::popup);
+    editor.dismissPopup();
+    assert(editor.focus() == ats::ui::FocusOwner::none);
+    editor.requestResize(960.0f, 680.0f);
+    assert(editor.requestedSize()[0] == 960.0f);
+
     ats::ui::ParameterBinding binding(model.parameters(), "outputTrim", model);
     assert(binding.beginGesture(1.0f));
     assert(binding.updateGesture(1.25f));
@@ -47,5 +62,7 @@ int main()
     assert(result && result->status == ats::ui::ActionStatus::failed);
     assert(result->code == "action_not_bound");
     assert(model.results().tryPop() == std::nullopt);
+    editor.close();
+    assert(editor.lifecycle() == ats::ui::EditorLifecycle::detached);
     std::cout << "plugin_model_test: typed action ownership and results ok\n";
 }

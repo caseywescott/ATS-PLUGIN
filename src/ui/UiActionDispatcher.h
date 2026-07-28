@@ -85,24 +85,4 @@ private:
     std::deque<ActionResult> results_;
 };
 
-class TelemetryPublisher
-{
-public:
-    void publish(TelemetrySnapshot snapshot)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_ = std::move(snapshot);
-    }
-
-    [[nodiscard]] TelemetrySnapshot snapshot() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return snapshot_;
-    }
-
-private:
-    mutable std::mutex mutex_;
-    TelemetrySnapshot snapshot_;
-};
-
 } // namespace ats::ui
