@@ -9,24 +9,28 @@ renderer-neutral UI scheduler.
 
 The latest implementation commits are:
 
-- `3965590` neutral DSP services and telemetry publishers
-- `a14d729` snapshot publication and UI scheduler contracts
-- `bfc5a2c` spectral-envelope service boundary
-- `bcc6227` neutral MIDI process-block routing
-- `8491bc2` analysis cancellation and resampler contracts
+- `b15a91d` native Visage popup row-selection proof
+- `45d06c4` neutral VST3/AU/standalone target seams
+- `664aee0` bounded versioned host-state chunk bridge
+- `6110ccf` explicit dispatcher teardown reset
+- `706ac4f` neutral 81-parameter host contract
 
 Validation on 2026-07-28:
 
-- `ctest --test-dir build-review --output-on-failure`: 47/47 passed
+- `ctest --test-dir build-review --output-on-failure`: 67/67 passed
 - Qatsh manifest: 20/20 patch/source marker sets verified
 - UI parity manifest: 53 records valid
 - ATS replacement traceability: 39 records valid
+- Visage native editor probe: passed at arm64 with attachment, resize, scale,
+  focus, mouse, text, hide, and teardown
+- Visage real-dispatch harness: passed with parameter gestures, text input,
+  popup creation/focus, native popup row selection, and dismissal
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
 integration, the full widget parity port, and the complete real-dispatch
-matrix remain open. The foundational native dispatch harness now passes, so
-the UI/editor and scheduler rows are unblocked but still mapped, and the JUCE
-removal/build-artifact gates must not be claimed complete until those follow-on
-gates pass.
+matrix remain open. Neutral host state, parameter, and lifecycle seams now
+compile through explicit format targets, and the real popup path is covered.
+The JUCE removal/build-artifact gates must not be claimed complete until those
+follow-on gates pass.
