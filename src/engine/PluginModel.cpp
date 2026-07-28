@@ -70,7 +70,8 @@ ats::ui::ActionResult PluginModel::handle(const ats::ui::EditorAction& action)
         }
 
         ++modelRevision_;
-        invalidation_.request(InvalidationKind::preview, MonotonicClock::now());
+        const auto invalidationGeneration = invalidation_.request(InvalidationKind::preview, MonotonicClock::now());
+        (void)invalidationGeneration;
         auto snapshot = telemetry_.snapshot();
         snapshot.modelRevision = modelRevision_;
         snapshot.displayRevision = modelRevision_;

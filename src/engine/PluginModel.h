@@ -7,13 +7,14 @@
 #include "../ui/UiActionDispatcher.h"
 
 #include <cstddef>
+#include <utility>
 
 namespace ats::engine
 {
 
 // Composition root for the host-neutral processor model. It is deliberately
 // independent of a plugin ABI, UI backend, and filesystem implementation.
-class PluginModel
+class PluginModel final : public ats::ui::ActionSink
 {
 public:
     explicit PluginModel(std::size_t workerCount = 1, std::size_t actionCapacity = 256);
@@ -28,6 +29,9 @@ public:
     [[nodiscard]] const ats::ui::TelemetryPublisher& telemetry() const noexcept { return telemetry_; }
     [[nodiscard]] RenderInvalidationCoordinator& invalidation() noexcept { return invalidation_; }
     [[nodiscard]] JobScheduler& scheduler() noexcept { return scheduler_; }
+
+    void dispatch(ats::ui::EditorAction action) override
+    { actions_.submit(std::move(action)); }
 
     // Runs on the model/UI dispatcher domain. Each consumed action produces
     // exactly one result, including validation and unsupported-action errors.

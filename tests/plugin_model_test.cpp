@@ -1,4 +1,5 @@
 #include "../src/engine/PluginModel.h"
+#include "../src/ui/ParameterBinding.h"
 
 #include <cassert>
 #include <cmath>
@@ -7,13 +8,20 @@
 int main()
 {
     ats::engine::PluginModel model(1, 8);
-    assert(model.actions().submit(ats::ui::SetParameterAction { "outputTrim", 1.25f, true, true }));
-    assert(model.processActions() == 1);
+    ats::ui::ParameterBinding binding(model.parameters(), "outputTrim", model);
+    assert(binding.beginGesture(1.0f));
+    assert(binding.updateGesture(1.25f));
+    assert(binding.endGesture(1.25f));
+    assert(model.processActions() == 3);
     auto result = model.results().tryPop();
+    assert(result && result->status == ats::ui::ActionStatus::success);
+    result = model.results().tryPop();
+    assert(result && result->status == ats::ui::ActionStatus::success);
+    result = model.results().tryPop();
     assert(result && result->status == ats::ui::ActionStatus::success);
     assert(std::abs(model.parameters().read("outputTrim") - 1.25f) < 1.0e-6f);
     const auto revision = model.telemetry().snapshot().modelRevision;
-    assert(revision == 1);
+    assert(revision == 3);
 
     assert(model.actions().submit(ats::ui::SetParameterAction { "missing", 0.5f }));
     assert(model.processActions() == 1);

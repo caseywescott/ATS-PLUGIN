@@ -208,13 +208,14 @@
       ],
       "replacement_refs": [
         "src/ui/ParameterBinding.h::ParameterBinding",
-        "src/ui/ParameterBinding.h::ParameterActionDispatcher"
+        "src/ui/ParameterBinding.h::ParameterActionDispatcher",
+        "src/engine/PluginModel.h::PluginModel::dispatch"
       ],
       "tests": [
         {
           "path": "tests/parameter_binding_dispatch_test.cpp",
           "state": "existing",
-          "proves": "Gesture, action, store update, and view refresh are one trace."
+          "proves": "Gesture actions enter the model queue, update the store once consumed, and publish typed results/telemetry."
         }
       ],
       "fixtures_or_goldens": [
