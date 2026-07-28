@@ -60,11 +60,18 @@ Validation on 2026-07-28:
   silence. This follows the Mearcstapa pinned-dependency pattern and removes
   the former “no native SDK” blocker for VST3 only.
 
+- The VST3 controller now creates a Visage-backed `IPlugView`. The native
+  `ats_vst3_editor_view_probe` attaches that view to a Cocoa `NSView`, verifies
+  focus and logical resize, and removes it cleanly. Together with the pinned
+  Visage editor and real-dispatch probes, this clears native VST3 editor
+  attachment; AU, standalone, DAW scan, and complete automation/stress gates
+  remain open.
+
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
-integration, the VST3 `IPlugView` bridge, AU/standalone wrappers, the full
-widget parity port, and the complete real-dispatch matrix remain open. Neutral host state, parameter, and lifecycle seams now
+integration, AU/standalone wrappers, the full widget parity port, and the
+complete real-dispatch matrix remain open. Neutral host state, parameter, and lifecycle seams now
 compile through explicit format targets, and the real popup path is covered.
 The JUCE removal/build-artifact gates must not be claimed complete until those
 follow-on gates pass.

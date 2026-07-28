@@ -26,7 +26,7 @@ set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
 
-if(APPLE AND ATS_BUILD_VISAGE_UI_PROBE)
+if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3))
   # Visage's native macOS windowing implementation contains Objective-C++
   # sources. Enable the language at the top-level project so CMake also
   # initializes its compile rule variables for the nested dependency.
@@ -349,10 +349,6 @@ foreach(_f IN LISTS _ATSA_SRCS)
   list(APPEND _ATSA_FULL "${ATS_ATSA_SOURCE_DIR}/${_f}")
 endforeach()
 
-if(ATS_BUILD_NATIVE_VST3)
-  add_subdirectory(src/host/vst3)
-endif()
-
 add_library(atsa STATIC ${_ATSA_FULL})
 target_include_directories(atsa PUBLIC "${ATS_ATSA_SOURCE_DIR}")
 if(MSVC)
@@ -447,7 +443,7 @@ foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
     ats_core ats_playback ats_state ats_editor)
 endforeach()
 
-if(ATS_BUILD_VISAGE_UI_PROBE)
+if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3)
   if(NOT APPLE)
     message(FATAL_ERROR "ATS_BUILD_VISAGE_UI_PROBE currently requires macOS native host embedding")
   endif()
@@ -473,18 +469,24 @@ if(ATS_BUILD_VISAGE_UI_PROBE)
   target_compile_features(ats_visage_editor PUBLIC cxx_std_17)
   target_link_libraries(ats_visage_editor PUBLIC visage)
 
-  add_executable(visage_editor_probe tests/ui/visage_editor_probe.mm)
-  target_include_directories(visage_editor_probe PRIVATE "${CMAKE_SOURCE_DIR}/src/ui")
-  target_compile_features(visage_editor_probe PRIVATE cxx_std_17)
-  target_link_libraries(visage_editor_probe PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
-  add_test(NAME visage_editor_probe COMMAND visage_editor_probe)
+  if(ATS_BUILD_VISAGE_UI_PROBE)
+    add_executable(visage_editor_probe tests/ui/visage_editor_probe.mm)
+    target_include_directories(visage_editor_probe PRIVATE "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(visage_editor_probe PRIVATE cxx_std_17)
+    target_link_libraries(visage_editor_probe PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME visage_editor_probe COMMAND visage_editor_probe)
 
-  add_executable(real_dispatch_harness_test tests/ui/real_dispatch_harness_test.mm)
-  target_include_directories(real_dispatch_harness_test PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
-  target_compile_features(real_dispatch_harness_test PRIVATE cxx_std_17)
-  target_link_libraries(real_dispatch_harness_test PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
-  add_test(NAME real_dispatch_harness_test COMMAND real_dispatch_harness_test)
+    add_executable(real_dispatch_harness_test tests/ui/real_dispatch_harness_test.mm)
+    target_include_directories(real_dispatch_harness_test PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(real_dispatch_harness_test PRIVATE cxx_std_17)
+    target_link_libraries(real_dispatch_harness_test PRIVATE ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME real_dispatch_harness_test COMMAND real_dispatch_harness_test)
+  endif()
+endif()
+
+if(ATS_BUILD_NATIVE_VST3)
+  add_subdirectory(src/host/vst3)
 endif()
 
 add_subdirectory(tools)

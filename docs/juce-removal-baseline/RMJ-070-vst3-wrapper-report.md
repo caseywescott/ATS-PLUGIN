@@ -26,9 +26,9 @@ Task ID: RMJ-070 / commit 21
   `05c4a9763f311a58fe3f34b68a199e5eea92e2b4` (tag `v3.7.6_build_18`) is
   selected in CMake. A local SDK checkout may be supplied with
   `ATS_VST3_SDK_DIR`; otherwise the exact commit is fetched.
-- Scope: real VST3 artifact and process wrapper. No CLAP dependency is added;
-  AU, standalone, Visage-to-IPlugView callbacks, host automation stress, and
-  DAW scans remain separate tasks.
+- Scope: real VST3 artifact, process wrapper, and Visage-backed `IPlugView`.
+  No CLAP dependency is added; AU, standalone, host automation stress, and DAW
+  scans remain separate tasks.
 
 ## Evidence
 
@@ -49,7 +49,23 @@ no-input stereo bus setup, 48 kHz/64-frame setup, activate/process/deactivate
 and terminate, and confirmed both output channels are silent when no playback
 buffer has been published.
 
-This clears the earlier “no pinned SDK” blocker for the VST3 slice. It does not
-yet clear the full production host gate: the editor currently has no VST3
-`IPlugView` bridge, AU/standalone targets are not yet implemented, and the
-artifact test is not a DAW/pluginval-equivalent scan. Those claims remain open.
+The native editor view probe uses the same bundle and a real Cocoa host window:
+
+```text
+cmake --build /tmp/ats-vst3-visage3 --target ats_vst3_editor_view_probe -j2
+ctest --test-dir /tmp/ats-vst3-visage3 --output-on-failure \
+  -R '^ats_vst3_(artifact_test|editor_view_probe)$'
+```
+
+Result: both tests passed. The controller created a real editor view, accepted
+the native `NSView` platform, attached to a host content view, reported its
+logical size, accepted focus, resized to 720x480, and removed the Visage child
+without leaving a stale subview. The existing pinned-Visage probes separately
+cover native mouse/text dispatch, popup focus/selection/dismissal, parameter
+gestures, scale, standalone creation, and teardown.
+
+This clears the earlier “no pinned SDK” blocker and the VST3 native editor
+attachment gate. It does not yet clear the full production host gate: AU and
+standalone targets are not yet implemented, the VST3 artifact tests are not a
+DAW/pluginval-equivalent scan, and the full host automation/stress matrix
+remains open.

@@ -8,7 +8,7 @@ target_compile_features(ats_resynth_vst3 PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_vst3 PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
   "${CMAKE_SOURCE_DIR}/src/host")
-target_link_libraries(ats_resynth_vst3 PRIVATE ats_vst3_sdk ats_host_vst3)
+target_link_libraries(ats_resynth_vst3 PRIVATE ats_vst3_sdk ats_host_vst3 ats_visage_editor)
 set_target_properties(ats_resynth_vst3 PROPERTIES
   OUTPUT_NAME "ATS Resynth"
   PREFIX "")
@@ -42,3 +42,14 @@ add_dependencies(ats_vst3_artifact_test ats_resynth_vst3)
 enable_testing()
 add_test(NAME ats_vst3_artifact_test
   COMMAND ats_vst3_artifact_test "$<TARGET_FILE:ats_resynth_vst3>")
+
+if(APPLE)
+  add_executable(ats_vst3_editor_view_probe
+    "${CMAKE_SOURCE_DIR}/tests/host/vst3_editor_view_probe.mm")
+  target_compile_features(ats_vst3_editor_view_probe PRIVATE cxx_std_17)
+  target_link_libraries(ats_vst3_editor_view_probe PRIVATE ats_vst3_sdk
+    "-framework Cocoa")
+  add_dependencies(ats_vst3_editor_view_probe ats_resynth_vst3)
+  add_test(NAME ats_vst3_editor_view_probe
+    COMMAND ats_vst3_editor_view_probe "$<TARGET_FILE:ats_resynth_vst3>")
+endif()

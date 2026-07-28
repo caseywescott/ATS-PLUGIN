@@ -1,12 +1,14 @@
 #include "../../core/AtsStateCodec.h"
 #include "../../core/ParameterRegistry.h"
 #include "../../host/HostAdapter.h"
+#include "../../ui/VisageEditor.h"
 
 #include "base/source/fstreamer.h"
 #include "public.sdk/source/vst/vstaudioeffect.h"
 #include "public.sdk/source/vst/vsteditcontroller.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ustring.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "public.sdk/source/main/pluginfactory_constexpr.h"
@@ -210,11 +212,114 @@ private:
     ats::host::HostAdapter host_;
 };
 
+class AtsVst3PlugView final : public Steinberg::FObject, public Steinberg::IPlugView
+{
+public:
+    AtsVst3PlugView() = default;
+    ~AtsVst3PlugView() override { editor_.reset(); }
+
+    OBJ_METHODS(AtsVst3PlugView, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::IPlugView)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::tresult PLUGIN_API isPlatformTypeSupported(Steinberg::FIDString type) override
+    {
+#if defined(__APPLE__)
+        return Steinberg::FIDStringsEqual(type, Steinberg::kPlatformTypeNSView)
+                   ? Steinberg::kResultTrue
+                   : Steinberg::kResultFalse;
+#elif defined(_WIN32)
+        return Steinberg::FIDStringsEqual(type, Steinberg::kPlatformTypeHWND)
+                   ? Steinberg::kResultTrue
+                   : Steinberg::kResultFalse;
+#else
+        (void) type;
+        return Steinberg::kResultFalse;
+#endif
+    }
+
+    Steinberg::tresult PLUGIN_API attached(void* parent, Steinberg::FIDString type) override
+    {
+        if (isPlatformTypeSupported(type) != Steinberg::kResultTrue || parent == nullptr)
+            return Steinberg::kResultFalse;
+        if (!editor_)
+            editor_ = std::make_unique<ats::ui::VisageEditor>();
+        if (!editor_->setParent(parent))
+            return Steinberg::kResultFalse;
+        editor_->show();
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API removed() override
+    {
+        editor_.reset();
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API onWheel(float) override { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API onKeyDown(Steinberg::char16, Steinberg::int16,
+                                            Steinberg::int16) override
+    { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API onKeyUp(Steinberg::char16, Steinberg::int16,
+                                          Steinberg::int16) override
+    { return Steinberg::kResultFalse; }
+
+    Steinberg::tresult PLUGIN_API getSize(Steinberg::ViewRect* size) override
+    {
+        if (size == nullptr)
+            return Steinberg::kResultFalse;
+        std::uint32_t width = 0, height = 0;
+        editor_->getSize(width, height);
+        size->left = 0;
+        size->top = 0;
+        size->right = static_cast<Steinberg::int32>(width);
+        size->bottom = static_cast<Steinberg::int32>(height);
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API onSize(Steinberg::ViewRect* newSize) override
+    {
+        if (newSize == nullptr || newSize->getWidth() <= 0 || newSize->getHeight() <= 0)
+            return Steinberg::kResultFalse;
+        return editor_->setSize(static_cast<std::uint32_t>(newSize->getWidth()),
+                                static_cast<std::uint32_t>(newSize->getHeight()))
+                   ? Steinberg::kResultTrue
+                   : Steinberg::kResultFalse;
+    }
+
+    Steinberg::tresult PLUGIN_API onFocus(Steinberg::TBool) override
+    { return Steinberg::kResultTrue; }
+
+    Steinberg::tresult PLUGIN_API setFrame(Steinberg::IPlugFrame* frame) override
+    {
+        frame_ = frame;
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API canResize() override
+    { return editor_->canResize() ? Steinberg::kResultTrue : Steinberg::kResultFalse; }
+
+    Steinberg::tresult PLUGIN_API checkSizeConstraint(Steinberg::ViewRect* rect) override
+    {
+        return rect != nullptr && rect->getWidth() > 0 && rect->getHeight() > 0
+                   ? Steinberg::kResultTrue
+                   : Steinberg::kResultFalse;
+    }
+
+private:
+    std::unique_ptr<ats::ui::VisageEditor> editor_ = std::make_unique<ats::ui::VisageEditor>();
+    Steinberg::IPlugFrame* frame_ = nullptr;
+};
+
 class AtsVst3Controller final : public Steinberg::Vst::EditController
 {
 public:
     static Steinberg::FUnknown* createInstance(void*)
     { return static_cast<Steinberg::Vst::IEditController*>(new AtsVst3Controller()); }
+
+    Steinberg::IPlugView* PLUGIN_API createView(Steinberg::FIDString name) SMTG_OVERRIDE;
 
     Steinberg::tresult PLUGIN_API initialize(Steinberg::FUnknown* context) SMTG_OVERRIDE
     {
@@ -244,6 +349,13 @@ public:
         return state == nullptr ? Steinberg::kResultFalse : Steinberg::kResultTrue;
     }
 };
+
+Steinberg::IPlugView* PLUGIN_API AtsVst3Controller::createView(Steinberg::FIDString name)
+{
+    return Steinberg::FIDStringsEqual(name, Steinberg::Vst::ViewType::kEditor)
+               ? new AtsVst3PlugView()
+               : nullptr;
+}
 
 } // namespace ats::vst3
 
