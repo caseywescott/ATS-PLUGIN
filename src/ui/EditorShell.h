@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorHost.h"
+#include "EditorPageModels.h"
 #include "SessionPageModel.h"
 #include "ThemeTokens.h"
 
@@ -27,6 +28,10 @@ public:
 
     [[nodiscard]] const EditorShellState& state() const noexcept { return state_; }
     [[nodiscard]] const SessionPageModel& session() const noexcept { return session_; }
+    [[nodiscard]] const AnalysisPageModel& analysis() const noexcept { return analysis_; }
+    [[nodiscard]] const SynthesisPageModel& synthesis() const noexcept { return synthesis_; }
+    [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
+    [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
 
     bool selectPage(std::size_t index) noexcept
     {
@@ -62,6 +67,10 @@ public:
 private:
     EditorShellState state_{};
     SessionPageModel session_{};
+    AnalysisPageModel analysis_{};
+    SynthesisPageModel synthesis_{};
+    PartialPageModel partials_{};
+    MathPageModel math_{};
 };
 
 } // namespace ats::ui

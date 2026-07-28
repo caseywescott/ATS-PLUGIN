@@ -111,6 +111,46 @@ public:
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 204.0f, 380.0f, 3.0f);
         }
+        else if (selected == static_cast<std::size_t>(EditorPage::analysis))
+        {
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("ANALYSIS PROFILE  |  18 CONTROLS  |  RANGE / TRACKING / THRESHOLDS",
+                        labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
+            canvas.text(shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT",
+                        labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
+            canvas.setColor(tokens.accent);
+            canvas.rectangle(18.0f, 172.0f, 420.0f, 3.0f);
+        }
+        else if (selected == static_cast<std::size_t>(EditorPage::synthesis))
+        {
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("PITCH  |  SHAPE  |  TIME  |  RENDER",
+                        labelFont, visage::Font::kLeft, 18.0f, 112.0f, 520.0f, 18.0f);
+            canvas.text(shell_.synthesis().shapeControlsDimmed() ? "LINEAR  |  SHAPE AMOUNT DIMMED"
+                                                                  : "SHAPE ACTIVE  |  BOTH PLAYBACK",
+                        labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
+            canvas.setColor(tokens.accent);
+            canvas.rectangle(18.0f, 172.0f, 320.0f, 3.0f);
+        }
+        else if (selected == static_cast<std::size_t>(EditorPage::partials))
+        {
+            canvas.setColor(tokens.secondaryText);
+            canvas.text(shell_.partials().view().editing() ? "CELL EDIT  |  AMPLITUDE / FREQUENCY  |  APPLY"
+                                                            : "PARTIAL / FRAME  |  SELECT A CELL",
+                        labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
+            canvas.setColor(tokens.accent);
+            canvas.rectangle(18.0f, 144.0f, 260.0f, 3.0f);
+        }
+        else if (selected == static_cast<std::size_t>(EditorPage::math))
+        {
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("MATHEXPR  |  MULTILINE SCRIPT  |  APPLY",
+                        labelFont, visage::Font::kLeft, 18.0f, 112.0f, 560.0f, 18.0f);
+            canvas.text(MathPageModel::helpText().data(), labelFont, visage::Font::kLeft,
+                        18.0f, 140.0f, 620.0f, 18.0f);
+            canvas.setColor(tokens.accent);
+            canvas.rectangle(18.0f, 172.0f, 280.0f, 3.0f);
+        }
     }
 
     bool receivesTextInput() override { return true; }

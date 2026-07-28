@@ -22,6 +22,14 @@ The harness verifies that:
   enablement, timbre curve, and Smearnov detection/onset overlay state; and
 - the real shell renders the Session source drop targets and transport summary
   from that framework-free model rather than from widget state.
+- the Analysis model exposes all 18 stable analysis controls, staged profile /
+  custom selection, source action, and worker cancellation state;
+- the Synthesis model keeps Linear shape dimming, `FULL` duration semantics,
+  and playback options explicit;
+- the Partials model validates bounded partial/frame cell edits before creating
+  a domain command; and
+- the Math model produces a typed Apply action and uses an explicit 600 ms
+  result deadline, so success feedback is not completed by a UI timer.
 - hide/destruction removes the embedded Visage view.
 
 Evidence:
@@ -33,9 +41,10 @@ ctest --test-dir /tmp/ats-visage-probe-arm64-release \
   --output-on-failure -R real_dispatch_harness_test
 ctest --test-dir build-review --output-on-failure -R editor_shell_test
 ctest --test-dir build-review --output-on-failure -R session_page_model_test
+ctest --test-dir build-review --output-on-failure -R editor_page_models_test
 ```
 
-Result: native probes `2/2` passed and the shell/session model tests passed.
+Result: native probes `2/2` passed and the shell/session/page model tests passed.
 This is the foundational real-dispatch proof; popup row
 selection, dialogs, pointer capture, widget parity, and production host-wrapper
 artifacts remain follow-on work.
