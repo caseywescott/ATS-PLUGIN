@@ -47,6 +47,9 @@ The harness verifies that:
 - dialog requests now map import/export/preset/bounce selections to typed
   actions with cancellation and duplicate-open guards; close transitions clear
   dialogs, popup ownership, pointer capture, and focus before detaching.
+- the Session source-card import path now has a backend-neutral dialog request /
+  result seam backed by macOS `NSOpenPanel`/`NSSavePanel`, with explicit
+  accepted versus cancelled results and parent-window ownership; and
 - the deterministic spectrum renderer emits a fixed-dark canvas for both
   themes, ordered grid/residual/trace/playhead/legend commands, amplitude
   weighting, selected-trace emphasis, and bounded playhead coordinates.
@@ -83,4 +86,6 @@ new spectrum canvas/menu is likewise model- and render-covered in this slice,
 with native wheel/drag wiring compile-validated alongside the existing
 lifecycle harness; direct spectrum wheel/drag and popup-coordinate evidence
 remain follow-on probes. Dialogs, widget parity, and production host-wrapper
-artifacts remain follow-on work.
+artifacts remain follow-on work. The native modal chooser itself is compile-
+validated but its automated accept/cancel interaction remains a follow-on
+probe because the current harness does not drive modal panels.

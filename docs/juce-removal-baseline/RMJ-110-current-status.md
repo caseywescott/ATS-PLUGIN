@@ -18,6 +18,7 @@ The latest implementation commits are:
 - `b6b05a1` Visage Session spectrum canvas and seven-mode view-menu implementation
 - `ac111be` native spectrum wheel/drag navigation wiring
 - `f4d9943` source-current ANL/RND activity indicators
+- `e343c1d` backend-neutral macOS native file-dialog bridge
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -46,6 +47,9 @@ Validation on 2026-07-28:
   and analysis/render activity from the neutral shell model; native history and
   theme click dispatch remain a follow-on probe because their coordinate path
   is not yet stable enough to claim as native evidence
+- The Session source-card path now routes import requests through a
+  backend-neutral result seam and macOS `NSOpenPanel`/`NSSavePanel`; automated
+  modal accept/cancel evidence remains open.
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
