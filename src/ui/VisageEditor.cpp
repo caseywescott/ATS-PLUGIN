@@ -2,6 +2,7 @@
 #include "VisageNativeMac.h"
 
 #include <visage/app.h>
+#include <visage_ui/popup_menu.h>
 
 #include <algorithm>
 #include <memory>
@@ -17,7 +18,28 @@ public:
     explicit ProbeFrame(EditorEventSink sink) : sink_(sink)
     {
         setAcceptsKeystrokes(true);
-        onMouseDown() += [this](const visage::MouseEvent&) {
+        onMouseDown() += [this](const visage::MouseEvent& event) {
+            if (event.shouldTriggerPopup())
+            {
+                visage::PopupMenu popup("Probe menu");
+                popup.addOption(1, "Probe option");
+                popup.onSelection() += [this](int optionId) {
+                    if (sink_.popupSelected)
+                        sink_.popupSelected(sink_.context, optionId);
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                popup.onCancel() += [this] {
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                if (sink_.popupShown)
+                    sink_.popupShown(sink_.context);
+                // Keep the probe menu in a deterministic logical location so
+                // the native harness can select it across window-system scale.
+                popup.show(this, { 40, 40 });
+                return;
+            }
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
             requestKeyboardFocus();

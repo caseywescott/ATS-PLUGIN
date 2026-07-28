@@ -28,6 +28,9 @@ struct HarnessState
     ats::MonotonicClock::TimePoint start = ats::MonotonicClock::now();
     int refreshes = 0;
     int focusChanges = 0;
+    int popupShown = 0;
+    int popupSelections = 0;
+    int popupDismissed = 0;
     bool focused = false;
 };
 
@@ -35,8 +38,12 @@ void mouseDown(void* context)
 {
     auto& state = *static_cast<HarnessState*>(context);
     REQUIRE(state.actions.submit(ats::ui::SetParameterAction { "synth.frequency", 0.5f, true, false }));
-    REQUIRE(state.scheduler.post(state.registration, ats::MonotonicClock::now(),
-                                { true, false, false, false, true, 17 }));
+    const ats::ui::UiRefreshInput refreshInput { true, false, false, false, true, 17 };
+    const auto now = ats::MonotonicClock::now();
+    state.scheduler.post(state.registration, now, refreshInput);
+    if (state.refreshes == 0)
+        REQUIRE(state.scheduler.post(state.registration, now + std::chrono::milliseconds(100),
+                                     refreshInput));
 }
 
 void mouseUp(void* context)
@@ -59,6 +66,17 @@ void focusChanged(void* context, bool focused)
     ++state.focusChanges;
     state.focused = focused;
 }
+
+void popupShown(void* context) { ++static_cast<HarnessState*>(context)->popupShown; }
+
+void popupSelected(void* context, int optionId)
+{
+    auto& state = *static_cast<HarnessState*>(context);
+    REQUIRE(optionId == 1);
+    ++state.popupSelections;
+}
+
+void popupDismissed(void* context) { ++static_cast<HarnessState*>(context)->popupDismissed; }
 
 void drainEvents(NSApplication* application)
 {
@@ -100,7 +118,8 @@ int main()
             });
         REQUIRE(state.registration != ats::ui::UiScheduler::kInvalidRegistration);
 
-        ats::ui::EditorEventSink sink { &state, mouseDown, mouseUp, textInput, focusChanged };
+        ats::ui::EditorEventSink sink { &state, mouseDown, mouseUp, textInput, focusChanged,
+                                        popupShown, popupSelected, popupDismissed };
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
         REQUIRE(editor->setSize(640, 480));
         editor->setScale(1.25);
@@ -133,6 +152,16 @@ int main()
                      charactersIgnoringModifiers:@"x" isARepeat:NO keyCode:7];
         [embeddedView keyDown:key];
         drainEvents(application);
+        REQUIRE(state.focusChanges > 0 && state.focused);
+
+        NSEvent* rightMouse = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown
+                                                 location:NSMakePoint(40.0, 40.0)
+                                            modifierFlags:0 timestamp:0.0
+                                             windowNumber:[hostWindow windowNumber]
+                                                  context:nil eventNumber:2 clickCount:1 pressure:1.0];
+        [embeddedView rightMouseDown:rightMouse];
+        drainEvents(application);
+        REQUIRE(state.popupShown == 1);
 
         auto beginAction = state.actions.tryPop();
         REQUIRE(beginAction.has_value() && std::holds_alternative<ats::ui::SetParameterAction>(*beginAction));
@@ -148,7 +177,6 @@ int main()
         REQUIRE(textAction.has_value() && std::holds_alternative<ats::ui::ApplyMathAction>(*textAction));
         REQUIRE(std::get<ats::ui::ApplyMathAction>(*textAction).script == "x");
         REQUIRE(state.refreshes == 1);
-        REQUIRE(state.focusChanges > 0 && state.focused);
 
         state.scheduler.cancel(state.registration);
         editor->hide();

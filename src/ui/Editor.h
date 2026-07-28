@@ -15,6 +15,9 @@ struct EditorEventSink
     void (*mouseUp)(void* context) = nullptr;
     void (*textInput)(void* context, const char* text) = nullptr;
     void (*focusChanged)(void* context, bool focused) = nullptr;
+    void (*popupShown)(void* context) = nullptr;
+    void (*popupSelected)(void* context, int optionId) = nullptr;
+    void (*popupDismissed)(void* context) = nullptr;
 };
 
 class IEditor
