@@ -90,6 +90,22 @@ target_include_directories(spectral_envelope_service_test PRIVATE
 target_compile_features(spectral_envelope_service_test PRIVATE cxx_std_17)
 add_test(NAME spectral_envelope_service_test COMMAND spectral_envelope_service_test)
 
+add_executable(resampler_contract_test resampler_contract_test.cpp ../src/core/ResampleLinear.cpp)
+target_include_directories(resampler_contract_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/dsp")
+target_compile_features(resampler_contract_test PRIVATE cxx_std_17)
+add_test(NAME resampler_contract_test COMMAND resampler_contract_test)
+
+add_executable(analysis_cancel_test analysis_cancel_test.cpp)
+target_include_directories(analysis_cancel_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(analysis_cancel_test PRIVATE cxx_std_17)
+target_link_libraries(analysis_cancel_test PRIVATE ats_engine)
+add_test(NAME analysis_cancel_test COMMAND analysis_cancel_test)
+
 add_executable(telemetry_publishers_test telemetry_publishers_test.cpp)
 target_include_directories(telemetry_publishers_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio")

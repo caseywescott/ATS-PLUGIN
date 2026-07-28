@@ -752,6 +752,11 @@
           "proves": "Optional multires resolution behavior."
         },
         {
+          "path": "tests/analysis_cancel_test.cpp",
+          "state": "existing",
+          "proves": "Cancellation before analysis and invalid-request errors are typed and do not enter ATSA."
+        },
+        {
           "path": "required: tests/analysis/analysis_cancel_test.cpp",
           "state": "required",
           "proves": "Cancellation and no-partial-publication behavior."
@@ -950,6 +955,11 @@
         "src/dsp/Resampler.h::Resampler"
       ],
       "tests": [
+        {
+          "path": "tests/resampler_contract_test.cpp",
+          "state": "existing",
+          "proves": "Linear interpolation, endpoint clamping, near-equal-rate copy, and invalid input handling."
+        },
         {
           "path": "required: tests/dsp/resampler_test.cpp",
           "state": "required",
