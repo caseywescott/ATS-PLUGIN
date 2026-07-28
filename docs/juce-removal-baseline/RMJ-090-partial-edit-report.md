@@ -11,7 +11,9 @@ Task packet:
 - Source-current or documented-only scope: source-current cell editing and the documented interaction contract
 - Required tests: `tests/partial_edit_transaction_test.cpp`
 - Expected evidence: atomic invalid-write rejection, selection/lasso/box, dB/frequency draw, clipboard, gain, seek/pan/zoom, keyboard result, and undo/redo
-- Known deviations/blockers: a real native event dispatcher and embedded host proof remain blocked with the JUCE-free backend decision
+- Known deviations/blockers: the pinned Visage native dispatcher and embedded
+  host proof now pass; complete partial-edit widget parity and production host
+  wrapper evidence remain follow-on work
 
 The framework-free service now owns typed edit commands and returns a command
 result containing acceptance, changed state, selection, pointer capture, focus,

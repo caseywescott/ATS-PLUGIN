@@ -13,13 +13,15 @@ Task ID: RMJ-060 / commit 17
 - Thread domain: workers own jobs; callers own completion dispatch. The
   scheduler never invokes UI code or joins from `audio_rt`.
 - State/format impact: none.
-- Scope: source-current neutral scheduling contract. Native backend timers and
-  live editor dispatch remain pending until the backend is pinned.
+- Scope: source-current neutral scheduling contract. Native backend timer and
+  live editor dispatch evidence now use the pinned Visage probe; full page
+  refresh parity remains pending.
 - Required tests: queued-token lifetime, pre-start cancellation, mid-work
   cancellation, and cadence/debounce boundary checks.
 - Expected evidence: focused scheduler executable and headless CMake graph.
-- Known blocker: `ARCH-SCHED-002` still requires a real UI scheduler and
-  focused-text/teardown evidence after the backend decision.
+- Remaining gate: `ARCH-SCHED-002` still requires the complete page/widget
+  refresh matrix and release evidence; backend selection is no longer a
+  blocker.
 
 ## Evidence
 

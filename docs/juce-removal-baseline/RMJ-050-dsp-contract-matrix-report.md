@@ -16,5 +16,6 @@ cmake --build build-review --target dsp_contract_matrix_test -j2
 ```
 
 The matrix is deliberately separate from the native plugin target. It proves
-the algorithm/service boundary without implying that the still-blocked native
-JUCE-free window backend or VST3/AU wrapper has been selected.
+the algorithm/service boundary without implying that the remaining production
+VST3/AU wrapper work is complete. The JUCE-free window backend is selected and
+its pinned Visage native probe passes independently.
