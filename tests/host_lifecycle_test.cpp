@@ -2,6 +2,8 @@
 #include "../src/ui/HeadlessEditor.h"
 
 #include <cassert>
+#include <cstddef>
+#include <vector>
 
 int main()
 {
@@ -24,6 +26,28 @@ int main()
     assert(host.setParameterText("partGain", "2"));
     assert(host.parameterText("partGain") == "2");
     assert(!host.setParameterText("missing", "1"));
+
+    const auto stateHeader = ats::AtsStateCodec::encodeHeader({ 17 });
+    ats::host::HostStateChunk stateChunk = stateHeader;
+    stateChunk.push_back(static_cast<std::byte>(0x2a));
+    assert(host.stateChunk().empty());
+    assert(host.restoreState(stateChunk));
+    assert(host.stateChunk() == stateChunk);
+    const auto preservedState = host.stateChunk();
+    auto truncatedState = stateChunk;
+    truncatedState.resize(7);
+    assert(!host.restoreState(truncatedState));
+    assert(host.stateChunk() == preservedState);
+    auto badVersionState = stateChunk;
+    badVersionState[4] = static_cast<std::byte>(0xff);
+    assert(!host.restoreState(badVersionState));
+    assert(host.stateChunk() == preservedState);
+    std::vector<std::byte> oversizedState(ats::host::HostAdapter::kMaximumStateChunkBytes + 1);
+    assert(!host.restoreState(oversizedState));
+    assert(host.stateChunk() == preservedState);
+    host.clearState();
+    assert(host.stateChunk().empty());
+
     assert(host.initialize(ats::host::HostFormat::vst3));
     assert(host.format() == ats::host::HostFormat::vst3);
     const bool invalidPrepare = host.prepare({ 0.0, 64, 2 });

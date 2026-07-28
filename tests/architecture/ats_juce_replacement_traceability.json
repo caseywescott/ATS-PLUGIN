@@ -28,7 +28,7 @@
         "src/plugin/PluginEntry.cpp::createPluginFilter"
       ],
       "replacement_owner": "HostAdapter and thin VST3/AU/native entry shims",
-      "replacement_api": "HostAdapter::initialize, prepare, process(AudioBufferView, MidiEventList), release; wrapper-specific entry points translate to neutral types only.",
+      "replacement_api": "HostAdapter::initialize, prepare, process(AudioBufferView, MidiEventList), release, restoreState(HostStateChunk); wrapper-specific entry points translate to neutral types only.",
       "algorithm_or_dsp": "none",
       "data_flow": "Host lifecycle, audio buffers, MIDI events, bus/layout information, and state requests cross into neutral engine services.",
       "thread_domain": "host_callback",
@@ -47,13 +47,14 @@
       "replacement_refs": [
         "src/host/HostAdapter.h::HostIdentity",
         "src/host/HostAdapter.h::HostAdapter",
+        "src/host/HostAdapter.h::HostStateChunk",
         "planned: src/host/PluginEntry.cpp"
       ],
       "tests": [
         {
           "path": "tests/host_lifecycle_test.cpp",
           "state": "existing",
-          "proves": "Neutral identity, repeated prepare/process/release, bus contract, and editor attach/detach are safe."
+          "proves": "Neutral identity, repeated prepare/process/release, bus contract, editor attach/detach, and bounded versioned state restore are safe."
         },
         {
           "path": "required: plugin validation and AU/VST3 scan",

@@ -1,11 +1,13 @@
 #pragma once
 
+#include "../core/AtsStateCodec.h"
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
 #include "../ui/Editor.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,9 +67,13 @@ struct HostParameterInfo
     std::uint16_t choiceCount = 0;
 };
 
+using HostStateChunk = std::vector<std::byte>;
+
 class HostAdapter
 {
 public:
+    static constexpr std::size_t kMaximumStateChunkBytes = 64u * 1024u * 1024u;
+
     HostAdapter() = default;
     HostAdapter(const HostAdapter&) = delete;
     HostAdapter& operator=(const HostAdapter&) = delete;
@@ -85,6 +91,7 @@ public:
     { return { editorWidth_, editorHeight_ }; }
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
+    [[nodiscard]] const HostStateChunk& stateChunk() const noexcept { return stateChunk_; }
 
     [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
     { return ParameterRegistry::descriptors(); }
@@ -140,6 +147,27 @@ public:
         float value = 0.0f;
         return descriptor->fromText(text, value) && parameters_.write(id, value);
     }
+
+    // The native wrapper owns the format-specific state callback. It passes
+    // the complete ATSP payload here; validation happens before replacing the
+    // previously published chunk so a rejected host restore cannot partially
+    // mutate state.
+    bool restoreState(const void* data, std::size_t size)
+    {
+        if (data == nullptr || size > kMaximumStateChunkBytes ||
+            !ats::AtsStateCodec::decodeHeader(data, size))
+            return false;
+
+        HostStateChunk next(static_cast<const std::byte*>(data),
+                            static_cast<const std::byte*>(data) + size);
+        stateChunk_ = std::move(next);
+        return true;
+    }
+
+    bool restoreState(const HostStateChunk& chunk)
+    { return restoreState(chunk.data(), chunk.size()); }
+
+    void clearState() noexcept { stateChunk_.clear(); }
 
     bool initialize(HostFormat format) noexcept
     {
@@ -299,6 +327,7 @@ private:
     HostPrepareSpec spec_{};
     HostState state_ = HostState::cold;
     ParameterStore parameters_;
+    HostStateChunk stateChunk_;
     PlaybackBufferPool playback_;
     MidiNoteRouter midi_;
     OnePoleSmoother outputTrim_;
