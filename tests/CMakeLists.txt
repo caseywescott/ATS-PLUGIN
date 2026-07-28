@@ -171,6 +171,14 @@ target_include_directories(snapshot_publisher_contract_test PRIVATE
 target_compile_features(snapshot_publisher_contract_test PRIVATE cxx_std_17)
 add_test(NAME snapshot_publisher_contract_test COMMAND snapshot_publisher_contract_test)
 
+add_executable(playback_telemetry_contract_test playback_telemetry_contract_test.cpp)
+target_include_directories(playback_telemetry_contract_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(playback_telemetry_contract_test PRIVATE cxx_std_17)
+add_test(NAME playback_telemetry_contract_test COMMAND playback_telemetry_contract_test)
+
 add_executable(ui_ownership_contract_test ui_ownership_contract_test.cpp)
 target_include_directories(ui_ownership_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")

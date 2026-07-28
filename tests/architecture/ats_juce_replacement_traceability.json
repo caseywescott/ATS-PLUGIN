@@ -472,9 +472,15 @@
       "replacement_refs": [
         "src/engine/SnapshotPublisher.h::SnapshotPublisher",
         "src/audio/AudioBufferPool.h::AudioBufferPool",
-        "src/engine/PlaybackSnapshot.h::PlaybackSnapshot"
+        "src/engine/PlaybackSnapshot.h::PlaybackSnapshot",
+        "src/audio/PlaybackTelemetryPublisher.h::PlaybackTelemetryPublisher"
       ],
       "tests": [
+        {
+          "path": "tests/playback_telemetry_contract_test.cpp",
+          "state": "existing",
+          "proves": "Single-writer publication, complete scalar snapshots, meter/playhead revision alignment, and bounded read ownership."
+        },
         {
           "path": "required: tests/realtime/audio_thread_safety_test.cpp",
           "state": "required",
@@ -1623,13 +1629,19 @@
       ],
       "replacement_refs": [
         "src/audio/MeterPublisher.h::MeterPublisher",
-        "src/audio/SpectrumDataPublisher.h::SpectrumDataPublisher"
+        "src/audio/SpectrumDataPublisher.h::SpectrumDataPublisher",
+        "src/audio/PlaybackTelemetryPublisher.h::PlaybackTelemetryPublisher"
       ],
       "tests": [
         {
           "path": "tests/telemetry_publishers_test.cpp",
           "state": "existing",
           "proves": "Bounded meter and spectrum snapshots publish without audio-thread allocation or UI coupling."
+        },
+        {
+          "path": "tests/playback_telemetry_contract_test.cpp",
+          "state": "existing",
+          "proves": "Meter and playhead scalar snapshots align with the immutable playback revision."
         },
         {
           "path": "required: tests/ui/spectrum_trace_snapshot_test.cpp",
