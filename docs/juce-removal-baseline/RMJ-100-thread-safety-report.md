@@ -15,8 +15,8 @@ cmake --build /tmp/ats-juce-tsan --target audio_thread_safety_test -j2
 ctest --test-dir /tmp/ats-juce-tsan --output-on-failure -R audio_thread_safety_test
 ```
 
-The required ThreadSanitizer build and real native editor/window evidence
-remain release-gate work after the target UI backend is pinned. The
+The required ThreadSanitizer build remains release-gate work. The target UI
+backend is now pinned and its real native editor/window probe passes. The
 traceability ledger records the editor lifecycle and scheduler real-dispatch
-rows as blocked by `D-UI-BACKEND-NOT-PINNED`; no neutral implementation is
-being presented as native-window evidence.
+rows as planned follow-on work; no headless implementation is being presented
+as full widget parity evidence.

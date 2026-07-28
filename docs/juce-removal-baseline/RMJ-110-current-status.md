@@ -22,9 +22,10 @@ Validation on 2026-07-28:
 - UI parity manifest: 53 records valid
 - ATS replacement traceability: 39 records valid
 
-Completion is blocked at the native wrapper/editor stage. `BUILD_PLUGIN=ON`
-still enters `src/plugin/CMakeLists.txt`, which fetches JUCE; no pinned
-JUCE-free renderer, VST3/AU SDK integration, or real-window dispatch harness
-exists in this workspace. The UI/backend and host rows therefore remain
-conservatively mapped/planned, and the JUCE removal/build-artifact gates must
-not be claimed complete until that dependency and revision are supplied.
+The native backend prerequisite is now clear: Visage is pinned and the arm64
+native embedding probe passes. `BUILD_PLUGIN=ON` still enters
+`src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
+integration, the full widget parity port, and the real-dispatch matrix remain
+open. The UI/editor and scheduler rows are therefore unblocked but still
+planned, and the JUCE removal/build-artifact gates must not be claimed complete
+until those follow-on gates pass.

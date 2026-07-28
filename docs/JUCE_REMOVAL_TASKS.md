@@ -16,8 +16,10 @@ short RMJ report with the exact commands and evidence.
   the commits below; the reports do not make the host, UI, or release gates
   pass.
 - Current ledger state is 9 `implemented`, 30 `mapped`; all UI records remain
-  `planned`. RMJ-010 is blocked until a JUCE-free backend and exact revision
-  are selected and proven.
+  `planned`. RMJ-010 now selects Visage at commit
+  `20de59464243447816d142e9d38e9723d068f755`; its native probe is passing, so
+  the editor and scheduler work is unblocked but remains planned until the
+  full live-dispatch and parity evidence is complete.
 
 ## Rules for every commit
 

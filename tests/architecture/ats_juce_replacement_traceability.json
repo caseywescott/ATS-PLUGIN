@@ -5,7 +5,7 @@
   "ui_manifest": "tests/ui/ats_ui_parity_manifest.json",
   "branch": "remove-juce",
   "baseline_commit": "36244a3ff041491d9a8cc4f5bf641105b52c8e35",
-  "target_backend_revision": "blocked:D-UI-BACKEND-NOT-PINNED",
+  "target_backend_revision": "Visage@20de59464243447816d142e9d38e9723d068f755",
   "allowed_statuses": [
     "baseline",
     "mapped",
@@ -543,17 +543,22 @@
           "path": "tests/editor_action_protocol_test.cpp",
           "state": "existing",
           "proves": "Every editor action has an owner thread, cancellation policy, undo policy, stable name, and payload validation."
+        },
+        {
+          "path": "tests/ui/visage_editor_probe.mm",
+          "state": "required",
+          "proves": "Pinned Visage ApplicationWindow attaches to a native NSView, resizes, scales, receives mouse/text/focus events, hides, and tears down without a stale child view."
         }
       ],
       "fixtures_or_goldens": [
         "tests/ui/ats_ui_parity_manifest.json"
       ],
-      "evidence": [],
-      "status": "blocked",
-      "deviation_id": null,
-      "blocked_by": [
-        "D-UI-BACKEND-NOT-PINNED"
+      "evidence": [
+        "cmake -S . -B /tmp/ats-visage-probe-arm64-release -DBUILD_PLUGIN=OFF -DATS_BUILD_VISAGE_UI_PROBE=ON -DATS_VISAGE_DIR='/Volumes/Extreme SSD/Mearcstapa/build-ui/_deps/visage-src' -DFETCHCONTENT_SOURCE_DIR_BGFX='/Volumes/Extreme SSD/Mearcstapa/build-ui/_deps/bgfx-src' -DFETCHCONTENT_SOURCE_DIR_FREETYPE='/Volumes/Extreme SSD/Mearcstapa/build-ui/_deps/freetype-src' -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/ats-visage-probe-arm64-release --target visage_editor_probe -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R visage_editor_probe"
       ],
+      "status": "mapped",
+      "deviation_id": null,
+      "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
     },
     {
@@ -1809,11 +1814,9 @@
       "evidence": [
         "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure"
       ],
-      "status": "blocked",
+      "status": "mapped",
       "deviation_id": null,
-      "blocked_by": [
-        "D-UI-BACKEND-NOT-PINNED"
-      ],
+      "blocked_by": [],
       "last_reviewed": "TO_BE_REVIEWED"
     },
     {
