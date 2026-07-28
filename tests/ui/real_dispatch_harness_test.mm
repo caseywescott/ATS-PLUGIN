@@ -32,6 +32,11 @@ struct HarnessState
     int popupShown = 0;
     int popupSelections = 0;
     int popupDismissed = 0;
+    int pageSelections = 0;
+    int parameterGestures = 0;
+    bool parameterBegin = false;
+    bool parameterEnd = false;
+    float parameterValue = 0.0f;
     bool focused = false;
 };
 
@@ -79,6 +84,24 @@ void popupSelected(void* context, int optionId)
 
 void popupDismissed(void* context) { ++static_cast<HarnessState*>(context)->popupDismissed; }
 
+void pageSelected(void* context, int pageIndex)
+{
+    auto& state = *static_cast<HarnessState*>(context);
+    REQUIRE(pageIndex == 1);
+    ++state.pageSelections;
+}
+
+void parameterGesture(void* context, const char* id, float value, bool begin, bool end)
+{
+    auto& state = *static_cast<HarnessState*>(context);
+    REQUIRE(std::strcmp(id, "analysis.frequency") == 0);
+    REQUIRE(value >= 0.0f && value <= 1.0f);
+    ++state.parameterGestures;
+    state.parameterBegin = state.parameterBegin || begin;
+    state.parameterEnd = state.parameterEnd || end;
+    state.parameterValue = value;
+}
+
 void drainEvents(NSApplication* application)
 {
     for (int i = 0; i < 64; ++i)
@@ -120,7 +143,8 @@ int main()
         REQUIRE(state.registration != ats::ui::UiScheduler::kInvalidRegistration);
 
         ats::ui::EditorEventSink sink { &state, mouseDown, mouseUp, textInput, focusChanged,
-                                        popupShown, popupSelected, popupDismissed };
+                                        popupShown, popupSelected, popupDismissed,
+                                        pageSelected, parameterGesture };
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
         ats::host::HostAdapter host;
         REQUIRE(host.initialize(ats::host::HostFormat::standalone));
@@ -163,6 +187,32 @@ int main()
         [embeddedView keyDown:key];
         drainEvents(application);
         REQUIRE(state.focusChanges > 0 && state.focused);
+
+        auto sendEmbeddedMouse = [&](NSEventType type, NSPoint logicalPoint, int eventNumber) {
+            const NSPoint viewPoint = NSMakePoint(logicalPoint.x / 1.25,
+                                                  embeddedView.bounds.size.height - logicalPoint.y / 1.25);
+            const NSPoint windowPoint = [embeddedView convertPoint:viewPoint toView:nil];
+            NSEvent* event = [NSEvent mouseEventWithType:type
+                                                location:windowPoint
+                                           modifierFlags:0 timestamp:0.0
+                                                windowNumber:[hostWindow windowNumber]
+                                                     context:nil eventNumber:eventNumber
+                                                  clickCount:1 pressure:type == NSEventTypeLeftMouseUp ? 0.0 : 1.0];
+            if (type == NSEventTypeLeftMouseDragged)
+                [embeddedView mouseDragged:event];
+            else if (type == NSEventTypeLeftMouseUp)
+                [embeddedView mouseUp:event];
+            else
+                [embeddedView mouseDown:event];
+        };
+
+        sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(240.0, 74.0), 8);
+        sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(240.0, 74.0), 8);
+        REQUIRE(state.pageSelections == 1);
+        sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(220.0, 260.0), 9);
+        sendEmbeddedMouse(NSEventTypeLeftMouseDragged, NSMakePoint(360.0, 260.0), 10);
+        sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(360.0, 260.0), 10);
+        REQUIRE(state.parameterGestures >= 2 && state.parameterBegin && state.parameterEnd);
 
         NSEvent* rightMouse = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown
                                                  location:NSMakePoint(40.0, 40.0)

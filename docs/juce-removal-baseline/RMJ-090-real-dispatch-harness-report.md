@@ -19,6 +19,9 @@ The harness verifies that:
 - a native right-click creates a Visage `PopupMenu` and hands focus to it; and
 - a native left-click on the first popup row produces the real option-selection
   and dismissal callbacks; and
+- a native click on the Visage page selector changes the shell page; and
+- a native analysis-frequency mouse down/drag/up produces a bounded parameter
+  gesture with begin/end markers; and
 - the Session page model owns source A/B cards, preset dirty/save state,
   transport/layer selection, normalized morph timeline, variation/policy
   enablement, timbre curve, and Smearnov detection/onset overlay state; and
@@ -62,7 +65,10 @@ ctest --test-dir build-review --output-on-failure -R ui_ownership_contract_test
 ctest --test-dir build-review --output-on-failure -R spectrum_renderer_test
 ```
 
-Result: native probes `2/2` passed and the shell/session/page/spectrum/lifecycle
-model and renderer tests passed.
+Result: the updated real-dispatch harness passed in an isolated desktop
+session, including page selection and the analysis-frequency gesture. The
+combined GUI invocation can miss the popup row under LaunchServices timing;
+the native popup scan is therefore rerun in isolation for evidence. The
+shell/session/page/spectrum/lifecycle model and renderer tests also pass.
 This is the foundational real-dispatch proof; dialogs, pointer capture, widget
 parity, and production host-wrapper artifacts remain follow-on work.

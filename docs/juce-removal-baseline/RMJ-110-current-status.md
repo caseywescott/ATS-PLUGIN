@@ -13,6 +13,7 @@ The latest implementation commits are:
 - `612a15b` standalone editor lifecycle seam and probe
 - `0a9b336` replacement-editor detach invariant
 - `05a1fcb` stale RMJ-010 backend-blocker correction
+- native Visage page-selector and parameter-gesture dispatch proof
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
@@ -30,7 +31,8 @@ Validation on 2026-07-28:
 - Visage native editor probe: passed at arm64 with attachment, resize, scale,
   focus, mouse, text, hide, standalone window creation, and teardown
 - Visage real-dispatch harness: passed with parameter gestures, text input,
-  popup creation/focus, native popup row selection, and dismissal
+  native page selection, analysis-frequency begin/drag/end, popup
+  creation/focus, native popup row selection, and dismissal
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters

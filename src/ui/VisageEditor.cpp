@@ -47,13 +47,41 @@ public:
             {
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
                 if (shell_.selectPage(page))
+                {
+                    if (sink_.pageSelected)
+                        sink_.pageSelected(sink_.context, static_cast<int>(page));
                     redraw();
+                }
+                requestKeyboardFocus();
+                return;
+            }
+            if (shell_.state().page == EditorPage::analysis && point.y >= 190.0f &&
+                point.y < 228.0f && point.x >= 18.0f && point.x <= 438.0f)
+            {
+                parameterDragging_ = true;
+                parameterValue_ = parameterAt(point.x);
+                emitParameterGesture(parameterValue_, true, false);
+                requestKeyboardFocus();
+                return;
             }
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
             requestKeyboardFocus();
         };
+        onMouseDrag() += [this](const visage::MouseEvent& event) {
+            if (!parameterDragging_)
+                return;
+            parameterValue_ = parameterAt(event.relativePosition().x);
+            emitParameterGesture(parameterValue_, false, false);
+            redraw();
+        };
         onMouseUp() += [this](const visage::MouseEvent&) {
+            if (parameterDragging_)
+            {
+                emitParameterGesture(parameterValue_, false, true);
+                parameterDragging_ = false;
+                return;
+            }
             if (sink_.mouseUp)
                 sink_.mouseUp(sink_.context);
         };
@@ -118,6 +146,12 @@ public:
                         labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
             canvas.text(shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT",
                         labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
+            canvas.text("FREQUENCY", labelFont, visage::Font::kLeft,
+                        18.0f, 184.0f, 140.0f, 14.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 198.0f, 420.0f, 18.0f, 4.0f);
+            canvas.setColor(tokens.accent);
+            canvas.roundedRectangle(18.0f, 198.0f, 420.0f * parameterValue_, 18.0f, 4.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 172.0f, 420.0f, 3.0f);
         }
@@ -168,6 +202,17 @@ public:
     }
 
 private:
+    [[nodiscard]] float parameterAt(float x) const noexcept
+    {
+        return std::clamp((x - 18.0f) / 420.0f, 0.0f, 1.0f);
+    }
+
+    void emitParameterGesture(float value, bool begin, bool end)
+    {
+        if (sink_.parameterGesture)
+            sink_.parameterGesture(sink_.context, "analysis.frequency", value, begin, end);
+    }
+
     struct VisageTokens
     {
         std::uint32_t background;
@@ -187,6 +232,8 @@ private:
 
     EditorEventSink sink_{};
     EditorShellModel shell_{};
+    bool parameterDragging_ = false;
+    float parameterValue_ = 0.5f;
 };
 
 } // namespace

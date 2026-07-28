@@ -18,6 +18,9 @@ struct EditorEventSink
     void (*popupShown)(void* context) = nullptr;
     void (*popupSelected)(void* context, int optionId) = nullptr;
     void (*popupDismissed)(void* context) = nullptr;
+    void (*pageSelected)(void* context, int pageIndex) = nullptr;
+    void (*parameterGesture)(void* context, const char* id, float value,
+                             bool begin, bool end) = nullptr;
 };
 
 class IEditor
