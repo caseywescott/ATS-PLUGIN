@@ -531,6 +531,7 @@
         "src/ui/UiActionDispatcher.h::UiActionDispatcher",
         "src/engine/PluginModel.h::PluginModel",
         "src/ui/UiBackend.h::UiBackend",
+        "src/ui/EditorActionProtocol.h::ActionContract",
         "src/ui/EditorHost.h::HeadlessEditorHost",
         "src/ui/SpectrumViewModel.h::SpectrumViewModel"
       ],
@@ -539,6 +540,11 @@
           "path": "tests/plugin_model_test.cpp",
           "state": "existing",
           "proves": "Neutral composition-root action ownership, renderer-free editor lifecycle, validation, typed results, and telemetry revisions."
+        },
+        {
+          "path": "tests/editor_action_protocol_test.cpp",
+          "state": "existing",
+          "proves": "Every editor action has an owner thread, cancellation policy, undo policy, stable name, and payload validation."
         }
       ],
       "fixtures_or_goldens": [
