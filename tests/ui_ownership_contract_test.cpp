@@ -12,10 +12,10 @@ int main()
     assert(ember.accent.argb != 0 && porcelain.accent.argb != 0);
 
     ats::ui::PopupManager popups;
-    const auto id = popups.open({ ats::ui::PopupKind::view, "spectrum", true, false }, "viewButton");
+    const auto id = popups.open({ ats::ui::PopupRootKind::view, "spectrum", true, false }, "viewButton");
     assert(popups.open() && popups.state().id == id && popups.state().restoreFocusId == "viewButton");
     assert(popups.outsideClick() && !popups.open());
-    const auto modal = popups.open({ ats::ui::PopupKind::timeline, "timeline", false, true });
+    const auto modal = popups.open({ ats::ui::PopupRootKind::timeline, "timeline", false, true });
     assert(!popups.outsideClick() && popups.open());
     assert(popups.dismiss(modal) && !popups.open());
     assert(!popups.dismiss(modal));

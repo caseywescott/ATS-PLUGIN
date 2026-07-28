@@ -33,6 +33,9 @@ The harness verifies that:
 - the spectrum interaction model preserves the seven mode IDs and labels,
   source-aware enablement/check state, normalized zoom/pan/fit bounds, pointer
   capture, and typed partial/residual/Smearnov edit payloads.
+- dialog requests now map import/export/preset/bounce selections to typed
+  actions with cancellation and duplicate-open guards; close transitions clear
+  dialogs, popup ownership, pointer capture, and focus before detaching.
 - hide/destruction removes the embedded Visage view.
 
 Evidence:
@@ -47,10 +50,12 @@ ctest --test-dir build-review --output-on-failure -R session_page_model_test
 ctest --test-dir build-review --output-on-failure -R editor_page_models_test
 ctest --test-dir build-review --output-on-failure -R spectrum_interaction_model_test
 ctest --test-dir build-review --output-on-failure -R spectrum_trace_snapshot_test
+ctest --test-dir build-review --output-on-failure -R editor_lifecycle_model_test
+ctest --test-dir build-review --output-on-failure -R ui_ownership_contract_test
 ```
 
-Result: native probes `2/2` passed and the shell/session/page/spectrum model
-tests passed.
+Result: native probes `2/2` passed and the shell/session/page/spectrum/lifecycle
+model tests passed.
 This is the foundational real-dispatch proof; popup row
 selection, dialogs, pointer capture, widget parity, and production host-wrapper
 artifacts remain follow-on work.

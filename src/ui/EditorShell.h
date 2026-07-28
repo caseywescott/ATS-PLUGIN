@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorHost.h"
+#include "EditorLifecycleModel.h"
 #include "EditorPageModels.h"
 #include "SessionPageModel.h"
 #include "SpectrumInteractionModel.h"
@@ -34,6 +35,7 @@ public:
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
     [[nodiscard]] const SpectrumInteractionModel& spectrum() const noexcept { return spectrum_; }
+    [[nodiscard]] const EditorLifecycleModel& lifecycle() const noexcept { return lifecycle_; }
 
     bool selectPage(std::size_t index) noexcept
     {
@@ -74,6 +76,7 @@ private:
     PartialPageModel partials_{};
     MathPageModel math_{};
     SpectrumInteractionModel spectrum_{};
+    EditorLifecycleModel lifecycle_{};
 };
 
 } // namespace ats::ui

@@ -7,11 +7,13 @@
 namespace ats::ui
 {
 
-enum class PopupKind : std::uint8_t { source, preset, view, timeline, context };
+// Kept distinct from EditorHost's lifecycle popup enum: this is the backend
+// manager's ownership/category value, not the renderer-facing menu selection.
+enum class PopupRootKind : std::uint8_t { source, preset, view, timeline, context };
 
 struct PopupRequest
 {
-    PopupKind kind = PopupKind::context;
+    PopupRootKind kind = PopupRootKind::context;
     std::string ownerId;
     bool dismissOnOutsideClick = true;
     bool modal = false;

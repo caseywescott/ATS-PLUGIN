@@ -109,6 +109,13 @@ target_include_directories(spectrum_interaction_model_test PRIVATE
 target_compile_features(spectrum_interaction_model_test PRIVATE cxx_std_17)
 add_test(NAME spectrum_interaction_model_test COMMAND spectrum_interaction_model_test)
 
+add_executable(editor_lifecycle_model_test editor_lifecycle_model_test.cpp)
+target_include_directories(editor_lifecycle_model_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(editor_lifecycle_model_test PRIVATE cxx_std_17)
+add_test(NAME editor_lifecycle_model_test COMMAND editor_lifecycle_model_test)
+
 add_executable(dsp_service_contract_test dsp_service_contract_test.cpp)
 target_include_directories(dsp_service_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
