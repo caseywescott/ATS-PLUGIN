@@ -13,7 +13,7 @@ The latest implementation commits are:
 - `612a15b` standalone editor lifecycle seam and probe
 - `0a9b336` replacement-editor detach invariant
 - `05a1fcb` stale RMJ-010 backend-blocker correction
-- native Visage page-selector and parameter-gesture dispatch proof
+- `ee8d3ee` native Visage page-selector and parameter-gesture dispatch proof
 - `45d06c4` neutral VST3/AU/standalone target seams
 - `664aee0` bounded versioned host-state chunk bridge
 - `6110ccf` explicit dispatcher teardown reset
