@@ -793,8 +793,8 @@
         "src/core/AtsParams.h::SynthParams"
       ],
       "replacement_refs": [
-        "planned: src/dsp/AtsResynthesisService.h",
-        "planned: src/dsp/PartialOscillatorKernel.h"
+        "src/dsp/AtsResynthesisService.h::AtsResynthesisService",
+        "src/engine/AtsEngine.h::AtsEngine::render"
       ],
       "tests": [
         {
@@ -842,8 +842,8 @@
         "tests/atsa_residual_test.c"
       ],
       "replacement_refs": [
-        "planned: src/dsp/AtsResynthesisService.h::renderResidual",
-        "planned: src/audio/PlaybackEngine.h::mixLayers"
+        "src/dsp/AtsResynthesisService.h::AtsResynthesisService",
+        "src/engine/PlaybackEngine.h::PlaybackEngine"
       ],
       "tests": [
         {
@@ -897,8 +897,8 @@
         "patches/qatsh-atsa-vdsp-fft.patch"
       ],
       "replacement_refs": [
-        "planned: src/dsp/IfftResynthKernel.h",
-        "planned: src/dsp/FftBackend.h"
+        "src/dsp/AtsResynthesisService.h::AtsResynthesisService",
+        "src/engine/AtsEngine.h::AtsEngine::render"
       ],
       "tests": [
         {
@@ -1143,8 +1143,8 @@
         "tests/spectral_envelope_transfer_test.cpp"
       ],
       "replacement_refs": [
-        "planned: src/dsp/MorphGridBuilder.h",
-        "planned: src/dsp/SpectralEnvelopeService.h"
+        "src/dsp/MorphGridBuilder.h::MorphGridBuilder",
+        "src/dsp/SpectralEnvelopeService.h::SpectralEnvelopeService"
       ],
       "tests": [
         {

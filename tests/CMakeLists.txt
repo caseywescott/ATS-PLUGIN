@@ -82,6 +82,14 @@ target_compile_features(dsp_service_contract_test PRIVATE cxx_std_17)
 target_link_libraries(dsp_service_contract_test PRIVATE ats_engine)
 add_test(NAME dsp_service_contract_test COMMAND dsp_service_contract_test)
 
+add_executable(spectral_envelope_service_test spectral_envelope_service_test.cpp
+  ../src/core/AtsSpectralEnvelope.cpp)
+target_include_directories(spectral_envelope_service_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/dsp")
+target_compile_features(spectral_envelope_service_test PRIVATE cxx_std_17)
+add_test(NAME spectral_envelope_service_test COMMAND spectral_envelope_service_test)
+
 add_executable(telemetry_publishers_test telemetry_publishers_test.cpp)
 target_include_directories(telemetry_publishers_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/audio")
