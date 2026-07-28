@@ -10,6 +10,9 @@ Focused evidence:
 ```text
 cmake --build build-review --target audio_thread_safety_test -j2
 ctest --test-dir build-review --output-on-failure -R audio_thread_safety_test
+cmake -S . -B /tmp/ats-juce-tsan -DBUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_C_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread
+cmake --build /tmp/ats-juce-tsan --target audio_thread_safety_test -j2
+ctest --test-dir /tmp/ats-juce-tsan --output-on-failure -R audio_thread_safety_test
 ```
 
 The required ThreadSanitizer build and real native editor/window evidence

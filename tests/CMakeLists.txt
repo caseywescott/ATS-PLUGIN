@@ -56,6 +56,14 @@ target_include_directories(ui_action_dispatcher_test PRIVATE "${CMAKE_CURRENT_SO
 target_compile_features(ui_action_dispatcher_test PRIVATE cxx_std_17)
 add_test(NAME ui_action_dispatcher_test COMMAND ui_action_dispatcher_test)
 
+add_executable(telemetry_test diagnostics/telemetry_test.cpp)
+target_include_directories(telemetry_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/diagnostics"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(telemetry_test PRIVATE cxx_std_17)
+add_test(NAME telemetry_test COMMAND telemetry_test)
+
 add_executable(plugin_model_test plugin_model_test.cpp)
 target_include_directories(plugin_model_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -230,6 +238,14 @@ target_include_directories(playback_engine_test PRIVATE
 target_compile_features(playback_engine_test PRIVATE cxx_std_17)
 target_link_libraries(playback_engine_test PRIVATE ats_playback)
 add_test(NAME playback_engine_test COMMAND playback_engine_test)
+
+add_executable(playback_audio_golden_test audio/playback_audio_golden_test.cpp)
+target_include_directories(playback_audio_golden_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(playback_audio_golden_test PRIVATE cxx_std_17)
+target_link_libraries(playback_audio_golden_test PRIVATE ats_playback)
+add_test(NAME playback_audio_golden_test COMMAND playback_audio_golden_test)
 
 add_executable(legacy_state_codec_test legacy_state_codec_test.cpp)
 target_include_directories(legacy_state_codec_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/state" "${ATS_ATSA_SOURCE_DIR}")

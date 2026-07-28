@@ -159,13 +159,8 @@
       "tests": [
         {
           "path": "tests/parameter_registry_test.cpp",
-          "state": "required",
-          "proves": "The neutral descriptor table matches the baseline parameter contract."
-        },
-        {
-          "path": "tests/parameter_registry_test.cpp",
-          "state": "required",
-          "proves": "Normalized/raw/default conversions and automation writes are stable."
+          "state": "existing",
+          "proves": "The neutral descriptor table, normalized/raw/default conversions, and automation writes match the baseline parameter contract."
         }
       ],
       "fixtures_or_goldens": [
@@ -173,7 +168,7 @@
         "required: normalized-value matrix"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R parameter_registry_test --output-on-failure"
+        "cmake --build build-review --target parameter_registry_test -j2 && ctest --test-dir build-review --output-on-failure -R parameter_registry_test"
       ],
       "status": "implemented",
       "deviation_id": null,
@@ -487,11 +482,6 @@
           "proves": "Concurrent reader/publication stress for coherent playback, meter, and playhead snapshots."
         },
         {
-          "path": "required: tests/realtime/audio_thread_safety_test.cpp",
-          "state": "required",
-          "proves": "Allocation, lock, publication, and ownership rules."
-        },
-        {
           "path": "required: ThreadSanitizer build",
           "state": "required",
           "proves": "No data race across model, worker, UI, and audio publication."
@@ -501,7 +491,8 @@
         "required: publication stress trace"
       ],
       "evidence": [
-        "cmake --build build-review --target audio_thread_safety_test playback_telemetry_contract_test -j2 && ctest --test-dir build-review --output-on-failure -R 'audio_thread_safety_test|playback_telemetry_contract_test'"
+        "cmake --build build-review --target audio_thread_safety_test playback_telemetry_contract_test -j2 && ctest --test-dir build-review --output-on-failure -R 'audio_thread_safety_test|playback_telemetry_contract_test'",
+        "cmake -S . -B /tmp/ats-juce-tsan -DBUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_C_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread && cmake --build /tmp/ats-juce-tsan --target audio_thread_safety_test -j2 && ctest --test-dir /tmp/ats-juce-tsan --output-on-failure -R audio_thread_safety_test"
       ],
       "status": "implemented",
       "deviation_id": null,
@@ -658,9 +649,9 @@
       ],
       "tests": [
         {
-          "path": "required: tests/diagnostics/telemetry_test.cpp",
-          "state": "required",
-          "proves": "Bounded event delivery, error mapping, and log redirection."
+          "path": "tests/diagnostics/telemetry_test.cpp",
+          "state": "existing",
+          "proves": "Bounded progress/action-result delivery, error mapping, generation identity, and cancellation publication."
         },
         {
           "path": "tests/ui_action_dispatcher_test.cpp",
@@ -671,7 +662,9 @@
       "fixtures_or_goldens": [
         "required: progress/error event trace"
       ],
-      "evidence": [],
+      "evidence": [
+        "cmake --build build-review --target telemetry_test ui_action_dispatcher_test -j2 && ctest --test-dir build-review --output-on-failure -R 'telemetry_test|ui_action_dispatcher_test'"
+      ],
       "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
@@ -1627,18 +1620,18 @@
       "tests": [
         {
           "path": "tests/playback_buffer_test.cpp",
-          "state": "required",
+          "state": "existing",
           "proves": "Publication ownership, generation rejection, stop/reset, and block-size matrix."
+        },
+        {
+          "path": "tests/audio/playback_audio_golden_test.cpp",
+          "state": "existing",
+          "proves": "Deterministic stereo playback samples, finite output, and combined-layer render routing."
         },
         {
           "path": "tests/playback_engine_test.cpp",
           "state": "existing",
           "proves": "Layer routing, gain/trim smoothing, preview mode selection, and prepared/released audio processing."
-        },
-        {
-          "path": "required: tests/audio/playback_audio_golden_test.cpp",
-          "state": "required",
-          "proves": "Click-free transitions and output gain/timing."
         }
       ],
       "fixtures_or_goldens": [
@@ -1646,7 +1639,7 @@
         "required: publication stress trace"
       ],
       "evidence": [
-        "ctest --test-dir build-review -R 'playback_buffer_test|playback_engine_test' --output-on-failure"
+        "cmake --build build-review --target playback_buffer_test playback_engine_test playback_audio_golden_test -j2 && ctest --test-dir build-review --output-on-failure -R 'playback_buffer_test|playback_engine_test|playback_audio_golden_test'"
       ],
       "status": "implemented",
       "deviation_id": null,
@@ -2112,7 +2105,7 @@
       "tests": [
         {
           "path": "tests/ats_primitives_test.cpp",
-          "state": "required",
+          "state": "existing",
           "proves": "20 ms response, reset/prepare, automation timing, finite values, and no allocation/lock."
         }
       ],
@@ -2120,7 +2113,7 @@
         "required: gain step/automation response fixtures"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R ats_primitives_test --output-on-failure"
+        "cmake --build build-review --target ats_primitives_test -j2 && ctest --test-dir build-review --output-on-failure -R ats_primitives_test"
       ],
       "status": "implemented",
       "deviation_id": null,
