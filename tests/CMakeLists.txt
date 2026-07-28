@@ -57,6 +57,14 @@ target_compile_features(ats_engine_test PRIVATE cxx_std_17)
 target_link_libraries(ats_engine_test PRIVATE ats_engine)
 add_test(NAME ats_engine_test COMMAND ats_engine_test WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+add_executable(playback_engine_test playback_engine_test.cpp)
+target_include_directories(playback_engine_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(playback_engine_test PRIVATE cxx_std_17)
+target_link_libraries(playback_engine_test PRIVATE ats_playback)
+add_test(NAME playback_engine_test COMMAND playback_engine_test)
+
 add_executable(legacy_state_codec_test legacy_state_codec_test.cpp)
 target_include_directories(legacy_state_codec_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/state" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(legacy_state_codec_test PRIVATE cxx_std_17)

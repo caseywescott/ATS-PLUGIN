@@ -1517,6 +1517,7 @@
       "replacement_refs": [
         "src/core/PlaybackBuffers.h::PlaybackBufferPool",
         "src/core/PlaybackBuffers.h::OwnedAudioBuffer",
+        "src/engine/PlaybackEngine.h::PlaybackEngine",
         "planned: src/audio/PlayheadPublisher.h"
       ],
       "tests": [
@@ -1524,6 +1525,11 @@
           "path": "tests/playback_buffer_test.cpp",
           "state": "required",
           "proves": "Publication ownership, generation rejection, stop/reset, and block-size matrix."
+        },
+        {
+          "path": "tests/playback_engine_test.cpp",
+          "state": "existing",
+          "proves": "Layer routing, gain/trim smoothing, preview mode selection, and prepared/released audio processing."
         },
         {
           "path": "required: tests/audio/playback_audio_golden_test.cpp",
