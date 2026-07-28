@@ -311,13 +311,14 @@
       ],
       "replacement_refs": [
         "src/platform/FileService.h::FileService",
+        "src/platform/FileService.cpp::FileService::writeAtomic",
         "src/state/PresetService.h::PresetService"
       ],
       "tests": [
         {
           "path": "tests/file_service_preset_test.cpp",
           "state": "existing",
-          "proves": "Index, load, save, overwrite, cancellation, and errors."
+          "proves": "Index, load, save, atomic overwrite, cancellation, and errors."
         }
       ],
       "fixtures_or_goldens": [

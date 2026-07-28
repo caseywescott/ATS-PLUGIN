@@ -91,16 +91,18 @@ FileResult FileService::writeAtomic(const ats::Path& path, const std::vector<std
         std::filesystem::remove(temporary, ec);
         return failure(FileStatus::cancelled, path, "cancelled", "file operation cancelled");
     }
-    if (overwrite && std::filesystem::exists(file, ec))
-    {
-        std::filesystem::remove(file, ec);
-        if (ec)
-        {
-            std::filesystem::remove(temporary, ec);
-            return failure(FileStatus::permissionDenied, path, "remove_failed", "existing target could not be replaced");
-        }
-    }
     std::filesystem::rename(temporary, file, ec);
+#if defined(_WIN32)
+    // Windows rename does not replace an existing file. The temporary file is
+    // complete before this fallback, so the only non-atomic step is the
+    // platform-specific replacement; POSIX/macOS stays atomic end-to-end.
+    if (ec && overwrite && std::filesystem::exists(file))
+    {
+        ec.clear();
+        std::filesystem::remove(file, ec);
+        if (!ec) std::filesystem::rename(temporary, file, ec);
+    }
+#endif
     if (ec)
     {
         std::filesystem::remove(temporary, ec);

@@ -28,6 +28,10 @@ int main()
 
     const auto loaded = presets.load(all[12].path);
     assert(loaded.succeeded() && loaded.bytes == payload);
+    const std::vector<std::byte> replacement { std::byte { 9 }, std::byte { 8 } };
+    assert(presets.save("alpha", replacement, true).succeeded());
+    const auto replaced = presets.load(all[12].path);
+    assert(replaced.succeeded() && replaced.bytes == replacement);
     ats::CancellationToken cancellation;
     cancellation.cancel();
     assert(presets.save("cancelled", payload, false, &cancellation).cancelled());
