@@ -50,6 +50,18 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
         (void) host->importSource(ats->path, ats->slot, ats::engine::SourceImportKind::ats, importError);
         return;
     }
+    if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(action))
+    {
+        ats::Error error;
+        (void) host->analyzeSource(analyse->slot, error);
+        return;
+    }
+    if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(*action))
+    {
+        ats::Error error;
+        (void) host->analyzeSource(0, error);
+        return;
+    }
     const auto* parameter = std::get_if<ats::ui::SetParameterAction>(action);
     if (parameter == nullptr)
         return;

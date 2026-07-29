@@ -489,6 +489,18 @@ private:
                                       ats::engine::SourceImportKind::ats, importError);
             return;
         }
+        if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(&action))
+        {
+            ats::Error error;
+            (void) host_.analyzeSource(analyse->slot, error);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(action))
+        {
+            ats::Error error;
+            (void) host_.analyzeSource(0, error);
+            return;
+        }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
         if (parameter == nullptr)
             return;

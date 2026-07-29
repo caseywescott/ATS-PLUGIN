@@ -30,6 +30,7 @@ struct ImportedSource
     int sampleRate = 0;
     int atsType = 0;
     std::vector<double> monoSamples;
+    std::vector<double> residual;
     ats::AtsSoundPtr sound;
 };
 

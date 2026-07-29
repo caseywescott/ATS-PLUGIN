@@ -5,6 +5,7 @@
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
 #include "../engine/SourceImportService.h"
+#include "../engine/AtsEngine.h"
 #include "../ui/Editor.h"
 
 #include <algorithm>
@@ -116,6 +117,54 @@ public:
             return false;
         }
         sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
+        return true;
+    }
+
+    // Non-real-time action entry point. It converts an imported WAV/AIFF slot
+    // into an ATS model and, when the host is prepared, publishes a rendered
+    // block that process() can consume on the audio thread.
+    bool analyzeSource(int slot, Error& error)
+    {
+        error = {};
+        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)])
+        {
+            error = { "missing_source", "select an imported audio source before analysis" };
+            return false;
+        }
+        auto& source = *sources_[static_cast<std::size_t>(slot)];
+        if (source.kind != engine::SourceImportKind::audio || source.monoSamples.empty() || source.sampleRate <= 0)
+        {
+            error = { "source_not_audio", "selected source does not contain audio samples to analyse" };
+            return false;
+        }
+        const auto generation = sourceGenerations_.next();
+        auto analysed = AtsEngine::analyze(generation, sourceCancellation_.token(),
+            { source.monoSamples.data(), source.monoSamples.size(), source.sampleRate, {} });
+        if (analysed.status != JobResult<AnalysisOutput>::Status::success)
+        {
+            error = analysed.error;
+            return false;
+        }
+        source.sound = std::move(analysed.value.sound);
+        source.residual = std::move(analysed.value.residual);
+        if (state_ != HostState::prepared)
+            return true;
+
+        const auto playbackSlot = playback_.tryAcquireWriteSlot();
+        if (playbackSlot == PlaybackBufferPool::kNoBuffer)
+        {
+            error = { "playback_busy", "no playback buffer is available for the analysed source" };
+            return false;
+        }
+        const auto rendered = AtsEngine::render(generation, sourceCancellation_.token(), source.sound.get(), {},
+                                                playback_.writeView(playbackSlot));
+        if (rendered.status != JobResult<RenderStats>::Status::success ||
+            !playback_.publish(playbackSlot, generation))
+        {
+            error = rendered.error ? rendered.error
+                                   : Error { "playback_publish_failed", "could not publish analysed playback" };
+            return false;
+        }
         return true;
     }
 

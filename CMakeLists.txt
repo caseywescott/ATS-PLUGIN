@@ -489,7 +489,7 @@ foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
     "${CMAKE_SOURCE_DIR}/src/host"
     "${CMAKE_SOURCE_DIR}/src/ui")
   target_link_libraries(${host_target} INTERFACE
-    ats_core ats_playback ats_state ats_editor ats_source_import)
+    ats_core ats_engine ats_playback ats_state ats_editor ats_source_import)
 endforeach()
 
 if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE OR ATS_BUILD_NATIVE_AU)
