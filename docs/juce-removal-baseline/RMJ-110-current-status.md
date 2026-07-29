@@ -78,8 +78,11 @@ Validation on 2026-07-28:
   `53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9` and passes the direct factory
   artifact probe for identity, all-81 parameter info/read/write, stereo float
   format, ATSP class-info state round-trip, zero-input stereo process selector,
-  initialize, uninitialize, and close. AU registration/`auval`, MIDI/
-  automation stress, and a native AU editor remain open.
+  initialize, uninitialize, and close. The same component now advertises a
+  Visage-backed `kAudioUnitProperty_CocoaUI` factory; `ats_au_editor_view_probe`
+  attaches that `NSView` to a Cocoa host window, verifies focus and logical
+  resize, and removes it cleanly. AU registration/`auval`, MIDI/automation
+  stress, and runtime standalone GUI smoke remain open.
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters
