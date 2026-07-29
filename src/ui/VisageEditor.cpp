@@ -233,14 +233,36 @@ public:
                     if (descriptor == nullptr)
                         return;
                     const auto bounds = sessionControlBounds(*control);
-                    const auto normalized = parameterAt(point.x, bounds);
-                    setSessionValue(*control, descriptor->denormalize(normalized));
-                    emitSessionGesture(*control, normalized, true, true);
+                    if (descriptor->type == ParameterType::boolean ||
+                        descriptor->type == ParameterType::choice)
+                    {
+                        float value = sessionValues_[*control];
+                        if (descriptor->type == ParameterType::boolean)
+                            value = value >= 0.5f ? 0.0f : 1.0f;
+                        else
+                            value = std::fmod(value + 1.0f,
+                                              static_cast<float>(descriptor->choiceCount));
+                        setSessionValue(*control, value);
+                        emitSessionGesture(*control, descriptor->normalize(value), true, true);
+                    }
+                    else
+                    {
+                        parameterDragging_ = true;
+                        activeParameterSurface_ = ParameterSurface::session;
+                        activeSessionControl_ = *control;
+                        parameterValue_ = parameterAt(point.x, bounds);
+                        emitSessionGesture(*control, parameterValue_, true, false);
+                    }
                     requestKeyboardFocus();
                     redraw();
                     return;
                 }
-                if (point.y >= 700.0f && point.y < 728.0f && point.x >= 18.0f && point.x < 426.0f)
+                const auto transportY = sessionContentY(static_cast<float>((kSessionControlIds.size() + 1) / 2) * 42.0f + 16.0f);
+                const auto variationY = transportY + 40.0f;
+                const auto timelineY = variationY + 40.0f;
+                const auto timbreCurveY = timelineY + 82.0f;
+                if (point.y >= transportY && point.y < transportY + 28.0f &&
+                    point.x >= 18.0f && point.x < 426.0f)
                 {
                     const auto layer = static_cast<SessionLayer>(std::clamp(
                         static_cast<int>((point.x - 18.0f) / 102.0f), 0, 3));
@@ -252,14 +274,16 @@ public:
                     requestKeyboardFocus();
                     return;
                 }
-                if (point.y >= 700.0f && point.y < 728.0f && point.x >= 450.0f && point.x < 638.0f)
+                if (point.y >= transportY && point.y < transportY + 28.0f &&
+                    point.x >= 450.0f && point.x < 638.0f)
                 {
                     shell_.session().setSmearEnabled(!shell_.session().state().transport.smearEnabled);
                     redraw();
                     requestKeyboardFocus();
                     return;
                 }
-                if (point.y >= 740.0f && point.y < 768.0f && point.x >= 18.0f && point.x < 318.0f)
+                if (point.y >= variationY && point.y < variationY + 28.0f &&
+                    point.x >= 18.0f && point.x < 318.0f)
                 {
                     const auto variation = static_cast<std::size_t>((point.x - 18.0f) / 100.0f);
                     const auto stored = shell_.session().state().morph.variationStored[variation];
@@ -269,7 +293,8 @@ public:
                     requestKeyboardFocus();
                     return;
                 }
-                if (point.y >= 780.0f && point.y < 844.0f && point.x >= 18.0f && point.x < 426.0f)
+                if (point.y >= timelineY && point.y < timelineY + 64.0f &&
+                    point.x >= 18.0f && point.x < 426.0f)
                 {
                     const auto normalized = std::clamp((point.x - 18.0f) / 408.0f, 0.0f, 1.0f);
                     shell_.session().setTimeline({ 0.0f, normalized, 1.0f });
@@ -278,15 +303,30 @@ public:
                     requestKeyboardFocus();
                     return;
                 }
-                if (point.y >= 780.0f && point.y < 812.0f && point.x >= 450.0f && point.x < 538.0f)
+                if (point.y >= timelineY && point.y < timelineY + 32.0f &&
+                    point.x >= 450.0f && point.x < 538.0f)
                 {
                     emitAction(DetectSmearnovAction {});
                     requestKeyboardFocus();
                     return;
                 }
-                if (point.y >= 780.0f && point.y < 812.0f && point.x >= 550.0f && point.x < 638.0f)
+                if (point.y >= timelineY && point.y < timelineY + 32.0f &&
+                    point.x >= 550.0f && point.x < 638.0f)
                 {
                     emitAction(ApplySmearnovAction {});
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= timbreCurveY && point.y < timbreCurveY + 64.0f &&
+                    point.x >= 18.0f && point.x < 426.0f)
+                {
+                    const auto middle = std::clamp(1.0f - (point.y - timbreCurveY) / 64.0f,
+                                                   0.0f, 1.0f);
+                    const auto& timbre = shell_.session().state().timbre;
+                    shell_.session().setTimbre(timbre.brightness, timbre.tilt, timbre.tonalNoise,
+                                               { 0.0f, middle, 1.0f });
+                    emitAction(SetTimbreMotionPlanAction { { 0.0f, middle, 1.0f } });
+                    redraw();
                     requestKeyboardFocus();
                     return;
                 }
@@ -490,12 +530,16 @@ public:
                 return;
             const auto bounds = activeParameterSurface_ == ParameterSurface::analysis
                 ? analysisControlBoundsFor(activeAnalysisControl_)
-                : synthesisControlBoundsFor(activeSynthesisControl_);
+                : activeParameterSurface_ == ParameterSurface::synthesis
+                    ? synthesisControlBoundsFor(activeSynthesisControl_)
+                    : sessionControlBounds(activeSessionControl_);
             parameterValue_ = parameterAt(event.relativePosition().x, bounds);
             if (activeParameterSurface_ == ParameterSurface::analysis)
                 emitParameterGesture(activeAnalysisControl_, parameterValue_, false, false);
-            else
+            else if (activeParameterSurface_ == ParameterSurface::synthesis)
                 emitSynthesisGesture(activeSynthesisControl_, parameterValue_, false, false);
+            else
+                emitSessionGesture(activeSessionControl_, parameterValue_, false, false);
             redraw();
         };
         onMouseUp() += [this](const visage::MouseEvent& event) {
@@ -528,8 +572,10 @@ public:
             {
                 if (activeParameterSurface_ == ParameterSurface::analysis)
                     emitParameterGesture(activeAnalysisControl_, parameterValue_, false, true);
-                else
+                else if (activeParameterSurface_ == ParameterSurface::synthesis)
                     emitSynthesisGesture(activeSynthesisControl_, parameterValue_, false, true);
+                else
+                    emitSessionGesture(activeSessionControl_, parameterValue_, false, true);
                 parameterDragging_ = false;
                 return;
             }
@@ -546,6 +592,18 @@ public:
                 {
                     analysisScroll_ = std::clamp(analysisScroll_ - delta * 36.0f,
                                                  0.0f, analysisMaximumScroll());
+                    redraw();
+                }
+                return true;
+            }
+            if (shell_.state().page == EditorPage::session && point.y >= 474.0f)
+            {
+                const auto delta = event.precise_wheel_delta_y != 0.0f
+                    ? event.precise_wheel_delta_y : event.wheel_delta_y;
+                if (delta != 0.0f)
+                {
+                    sessionScroll_ = std::clamp(sessionScroll_ - delta * 36.0f,
+                                                0.0f, sessionMaximumScroll());
                     redraw();
                 }
                 return true;
@@ -685,45 +743,78 @@ public:
                         18.0f, 474.0f, 360.0f, 14.0f);
             drawSessionControls(canvas, tokens, labelFont);
             const auto& transport = session.transport;
+            const auto transportY = sessionContentY(static_cast<float>((kSessionControlIds.size() + 1) / 2) * 42.0f + 16.0f);
+            const auto variationY = transportY + 40.0f;
+            const auto timelineY = variationY + 40.0f;
+            const auto timbreCurveY = timelineY + 82.0f;
             constexpr std::array<const char*, 4> layerLabels { "BOTH", "PART", "RES", "SMEAR" };
-            for (std::size_t index = 0; index < layerLabels.size(); ++index)
+            if (sessionContentVisible(transportY, 28.0f))
             {
-                const auto x = 18.0f + static_cast<float>(index) * 102.0f;
-                canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
-                    ? tokens.accent : tokens.surface);
-                canvas.roundedRectangle(x, 700.0f, 96.0f, 28.0f, 5.0f);
-                canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
-                    ? tokens.background : tokens.text);
-                canvas.text(layerLabels[index], labelFont, visage::Font::kCenter, x, 706.0f, 96.0f, 16.0f);
+                for (std::size_t index = 0; index < layerLabels.size(); ++index)
+                {
+                    const auto x = 18.0f + static_cast<float>(index) * 102.0f;
+                    canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
+                        ? tokens.accent : tokens.surface);
+                    canvas.roundedRectangle(x, transportY, 96.0f, 28.0f, 5.0f);
+                    canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
+                        ? tokens.background : tokens.text);
+                    canvas.text(layerLabels[index], labelFont, visage::Font::kCenter,
+                                x, transportY + 6.0f, 96.0f, 16.0f);
+                }
+                canvas.setColor(transport.smearEnabled ? tokens.accent : tokens.surface);
+                canvas.roundedRectangle(450.0f, transportY, 188.0f, 28.0f, 5.0f);
+                canvas.setColor(transport.smearEnabled ? tokens.background : tokens.text);
+                canvas.text(transport.smearEnabled ? "SMEAR FX ON" : "SMEAR FX OFF", labelFont,
+                            visage::Font::kCenter, 454.0f, transportY + 6.0f, 180.0f, 16.0f);
             }
-            canvas.setColor(transport.smearEnabled ? tokens.accent : tokens.surface);
-            canvas.roundedRectangle(450.0f, 700.0f, 188.0f, 28.0f, 5.0f);
-            canvas.setColor(transport.smearEnabled ? tokens.background : tokens.text);
-            canvas.text(transport.smearEnabled ? "SMEAR FX ON" : "SMEAR FX OFF", labelFont,
-                        visage::Font::kCenter, 454.0f, 706.0f, 180.0f, 16.0f);
-            for (std::size_t index = 0; index < session.morph.variationStored.size(); ++index)
+            if (sessionContentVisible(variationY, 28.0f))
             {
-                const auto x = 18.0f + static_cast<float>(index) * 100.0f;
-                canvas.setColor(session.morph.variationStored[index] ? tokens.accent : tokens.surface);
-                canvas.roundedRectangle(x, 740.0f, 92.0f, 28.0f, 5.0f);
-                canvas.setColor(session.morph.variationStored[index] ? tokens.background : tokens.text);
-                const auto label = std::string("VAR ") + std::to_string(index + 1);
-                canvas.text(label.c_str(), labelFont, visage::Font::kCenter, x, 746.0f, 92.0f, 16.0f);
+                for (std::size_t index = 0; index < session.morph.variationStored.size(); ++index)
+                {
+                    const auto x = 18.0f + static_cast<float>(index) * 100.0f;
+                    canvas.setColor(session.morph.variationStored[index] ? tokens.accent : tokens.surface);
+                    canvas.roundedRectangle(x, variationY, 92.0f, 28.0f, 5.0f);
+                    canvas.setColor(session.morph.variationStored[index] ? tokens.background : tokens.text);
+                    const auto label = std::string("VAR ") + std::to_string(index + 1);
+                    canvas.text(label.c_str(), labelFont, visage::Font::kCenter,
+                                x, variationY + 6.0f, 92.0f, 16.0f);
+                }
             }
-            canvas.setColor(tokens.surface);
-            canvas.roundedRectangle(18.0f, 780.0f, 408.0f, 64.0f, 8.0f);
-            canvas.setColor(tokens.accent);
-            const auto& timeline = session.morph.timeline;
-            if (timeline.size() >= 3)
-                canvas.rectangle(18.0f + 408.0f * timeline[1], 788.0f, 3.0f, 48.0f);
-            canvas.setColor(tokens.secondaryText);
-            canvas.text("MORPH TIMELINE", labelFont, visage::Font::kLeft, 30.0f, 790.0f, 180.0f, 14.0f);
-            canvas.setColor(tokens.surface);
-            canvas.roundedRectangle(450.0f, 780.0f, 88.0f, 32.0f, 5.0f);
-            canvas.roundedRectangle(550.0f, 780.0f, 88.0f, 32.0f, 5.0f);
-            canvas.setColor(tokens.accent);
-            canvas.text("DETECT", labelFont, visage::Font::kCenter, 454.0f, 788.0f, 80.0f, 16.0f);
-            canvas.text("APPLY", labelFont, visage::Font::kCenter, 554.0f, 788.0f, 80.0f, 16.0f);
+            if (sessionContentVisible(timelineY, 64.0f))
+            {
+                canvas.setColor(tokens.surface);
+                canvas.roundedRectangle(18.0f, timelineY, 408.0f, 64.0f, 8.0f);
+                canvas.setColor(tokens.accent);
+                const auto& timeline = session.morph.timeline;
+                if (timeline.size() >= 3)
+                    canvas.rectangle(18.0f + 408.0f * timeline[1], timelineY + 8.0f, 3.0f, 48.0f);
+                canvas.setColor(tokens.secondaryText);
+                canvas.text("MORPH TIMELINE", labelFont, visage::Font::kLeft,
+                            30.0f, timelineY + 10.0f, 180.0f, 14.0f);
+                canvas.setColor(tokens.surface);
+                canvas.roundedRectangle(450.0f, timelineY, 88.0f, 32.0f, 5.0f);
+                canvas.roundedRectangle(550.0f, timelineY, 88.0f, 32.0f, 5.0f);
+                canvas.setColor(tokens.accent);
+                canvas.text("DETECT", labelFont, visage::Font::kCenter,
+                            454.0f, timelineY + 8.0f, 80.0f, 16.0f);
+                canvas.text("APPLY", labelFont, visage::Font::kCenter,
+                            554.0f, timelineY + 8.0f, 80.0f, 16.0f);
+            }
+            if (sessionContentVisible(timbreCurveY, 64.0f))
+            {
+                canvas.setColor(tokens.surface);
+                canvas.roundedRectangle(18.0f, timbreCurveY, 408.0f, 64.0f, 8.0f);
+                canvas.setColor(tokens.accent);
+                const auto& curve = session.timbre.curve;
+                const auto middle = curve.size() >= 2 ? curve[1] : 0.5f;
+                canvas.rectangle(18.0f + 204.0f, timbreCurveY + 8.0f,
+                                 3.0f, 48.0f * (1.0f - middle));
+                canvas.setColor(tokens.secondaryText);
+                canvas.text("TIMBRE MOTION CURVE", labelFont, visage::Font::kLeft,
+                            30.0f, timbreCurveY + 10.0f, 240.0f, 14.0f);
+                canvas.text("CLICK TO SET MIDPOINT", labelFont, visage::Font::kLeft,
+                            30.0f, timbreCurveY + 34.0f, 240.0f, 14.0f);
+            }
         }
         else if (selected == static_cast<std::size_t>(EditorPage::analysis))
         {
@@ -891,12 +982,27 @@ private:
         "synStart", "synDur", "usePhase", "useAllPartials", "residualOnly", "useIfftSynth",
         "classicPreviewMode"
     };
-    static constexpr std::array<std::string_view, 9> kSessionControlIds {
-        "morphAmount", "morphPerformanceMacro", "morphSmoothingMs", "timbreBrightnessDb",
-        "timbreTiltDbPerOct", "timbreNoiseBalance", "partGain", "resGain", "outputTrim"
+    static constexpr std::array<std::string_view, 51> kSessionControlIds {
+        "morphAmount", "morphPerformanceMacro", "morphSmoothingMs",
+        "morphGridType", "morphCorrespondenceStrategy", "morphQuality",
+        "morphUnmatchedSourcePolicy", "morphUnmatchedTargetPolicy", "morphDiscardOptIn",
+        "morphFrequencyInterpolationDomain", "morphAmplitudeInterpolationDomain",
+        "morphPhaseStrategy", "morphTransientPolicy",
+        "smearnovBlurMs", "smearnovSharpenAmount", "smearnovExaggerateDb", "smearnovMix",
+        "smearnovMaxDb", "smearnovTargets", "smearnovScope", "smearnovWeightDetFlux",
+        "smearnovWeightResFlux", "smearnovWeightHfcFlux", "smearnovWeightBirth",
+        "smearnovWeightPhaseDev", "smearnovThresholdLambda", "smearnovThresholdAutoScale",
+        "smearnovPeakWindowFrames", "smearnovMinGapFrames", "smearnovPreMarginMs",
+        "smearnovMaxAttackFrames", "smearnovUsePhaseDeviation", "smearnovUseRpcaFallback",
+        "timbreBrightnessDb", "timbreTiltDbPerOct", "timbreNoiseBalance",
+        "morphLaneFrequencyAmount", "morphLaneFrequencyLinked", "morphLaneAmplitudeAmount",
+        "morphLaneAmplitudeLinked", "morphLaneResidualAmount", "morphLaneResidualLinked",
+        "morphLaneTimeAmount", "morphLaneTimeLinked", "morphLaneTransientAmount",
+        "morphLaneTransientLinked", "morphLanePhaseAmount", "morphLanePhaseLinked",
+        "partGain", "resGain", "outputTrim"
     };
 
-    enum class ParameterSurface : std::uint8_t { analysis, synthesis };
+    enum class ParameterSurface : std::uint8_t { analysis, synthesis, session };
 
     [[nodiscard]] static const ParameterDescriptor* analysisDescriptor(std::size_t index) noexcept
     {
@@ -965,14 +1071,14 @@ private:
         return synthesisControlBounds(control);
     }
 
-    [[nodiscard]] static AnalysisControlBounds sessionControlBounds(std::size_t control) noexcept
+    [[nodiscard]] AnalysisControlBounds sessionControlBounds(std::size_t control) const noexcept
     {
         constexpr float width = 300.0f;
         constexpr float gap = 14.0f;
         const auto row = control / 2;
         const auto column = control % 2;
         return { 18.0f + static_cast<float>(column) * (width + gap),
-                 490.0f + static_cast<float>(row) * 42.0f, width, 34.0f };
+                 490.0f + static_cast<float>(row) * 42.0f - sessionScroll_, width, 34.0f };
     }
 
     [[nodiscard]] std::optional<std::size_t> analysisControlAt(const visage::Point& point) const noexcept
@@ -1001,7 +1107,7 @@ private:
         return std::nullopt;
     }
 
-    [[nodiscard]] static std::optional<std::size_t> sessionControlAt(const visage::Point& point) noexcept
+    [[nodiscard]] std::optional<std::size_t> sessionControlAt(const visage::Point& point) const noexcept
     {
         for (std::size_t control = 0; control < kSessionControlIds.size(); ++control)
         {
@@ -1024,6 +1130,23 @@ private:
         const auto last = analysisControlBounds(kAnalysisVisualOrder.size() - 1);
         return std::max(0.0f, last.y + last.height + analysisScroll_ - height() + 16.0f);
     }
+
+    [[nodiscard]] float sessionMaximumScroll() const noexcept
+    {
+        // Parameters occupy paired rows, followed by the Session-only
+        // transport, variation, timeline, onset, and timbre-plan controls.
+        const auto parameterRows = (kSessionControlIds.size() + 1) / 2;
+        const auto contentBottom = 490.0f + static_cast<float>(parameterRows) * 42.0f + 268.0f;
+        return std::max(0.0f, contentBottom - height() + 16.0f);
+    }
+
+    [[nodiscard]] bool sessionContentVisible(float y, float contentHeight) const noexcept
+    {
+        return y + contentHeight >= 474.0f && y <= height();
+    }
+
+    [[nodiscard]] float sessionContentY(float offset) const noexcept
+    { return 490.0f + offset - sessionScroll_; }
 
     void setAnalysisValue(std::size_t control, float value)
     {
@@ -1049,7 +1172,28 @@ private:
     {
         const auto* descriptor = sessionDescriptor(control);
         if (descriptor != nullptr && control < sessionValues_.size())
+        {
             sessionValues_[control] = descriptor->snap(value);
+            if (descriptor->id == "timbreBrightnessDb" || descriptor->id == "timbreTiltDbPerOct" ||
+                descriptor->id == "timbreNoiseBalance")
+            {
+                const auto* brightness = ParameterRegistry::find("timbreBrightnessDb");
+                const auto* tilt = ParameterRegistry::find("timbreTiltDbPerOct");
+                const auto* noise = ParameterRegistry::find("timbreNoiseBalance");
+                if (brightness != nullptr && tilt != nullptr && noise != nullptr)
+                {
+                    const auto findValue = [this](std::string_view id) {
+                        for (std::size_t i = 0; i < kSessionControlIds.size(); ++i)
+                            if (kSessionControlIds[i] == id) return sessionValues_[i];
+                        return 0.0f;
+                    };
+                    shell_.session().setTimbre(findValue("timbreBrightnessDb"),
+                                               findValue("timbreTiltDbPerOct"),
+                                               findValue("timbreNoiseBalance"),
+                                               shell_.session().state().timbre.curve);
+                }
+            }
+        }
     }
 
     void drawAnalysisControls(visage::Canvas& canvas, const VisageTokens& tokens,
@@ -1166,16 +1310,31 @@ private:
             if (descriptor == nullptr)
                 continue;
             const auto bounds = sessionControlBounds(control);
+            if (!sessionContentVisible(bounds.y - 14.0f, bounds.height + 14.0f))
+                continue;
             canvas.setColor(tokens.secondaryText);
             canvas.text(descriptor->name.data(), labelFont, visage::Font::kLeft,
                         bounds.x, bounds.y - 14.0f, bounds.width, 13.0f);
             canvas.setColor(tokens.surface);
             canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
             const auto value = sessionValues_[control];
-            canvas.setColor(tokens.accent);
-            canvas.roundedRectangle(bounds.x, bounds.y,
-                                    bounds.width * descriptor->normalize(value), bounds.height, 4.0f);
-            canvas.setColor(tokens.background);
+            if (descriptor->type == ParameterType::boolean || descriptor->type == ParameterType::choice)
+            {
+                const auto active = descriptor->type == ParameterType::boolean && value >= 0.5f;
+                if (active)
+                {
+                    canvas.setColor(tokens.accent);
+                    canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
+                }
+                canvas.setColor(active ? tokens.background : tokens.text);
+            }
+            else
+            {
+                canvas.setColor(tokens.accent);
+                canvas.roundedRectangle(bounds.x, bounds.y,
+                                        bounds.width * descriptor->normalize(value), bounds.height, 4.0f);
+                canvas.setColor(tokens.background);
+            }
             const auto text = descriptor->text(value);
             canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
                         bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f,
@@ -1302,8 +1461,10 @@ private:
     std::array<float, AnalysisPageModel::kControlCount> analysisValues_ {};
     std::size_t activeSynthesisControl_ = 0;
     std::array<float, kSynthesisControlIds.size()> synthesisValues_ {};
+    std::size_t activeSessionControl_ = 0;
     std::array<float, kSessionControlIds.size()> sessionValues_ {};
     float analysisScroll_ = 0.0f;
+    float sessionScroll_ = 0.0f;
     int analysisProfile_ = 0;
     bool mathEditing_ = false;
     int partialIndex_ = 0;
