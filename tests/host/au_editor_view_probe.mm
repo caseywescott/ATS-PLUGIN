@@ -210,17 +210,22 @@ int main(int argc, char** argv)
                 changedAnalysisLowestFrequency <= 2000.0f);
         REQUIRE(changedAnalysisLowestFrequency != initialAnalysisLowestFrequency);
 
-        [editorView removeFromSuperview];
-        REQUIRE([parent subviews].count == 0);
-
-        CFRelease(cocoaInfo.mCocoaAUViewClass[0]);
-        CFRelease(cocoaInfo.mCocoaAUViewBundleLocation);
-
+        // A host may release the processor while the Cocoa view is still
+        // alive. Keep the view/timer installed across Close(), drain the UI
+        // run loop, then detach it. The lifetime bridge must suppress both
+        // editor actions and queued-analysis polling after the target dies.
         auto uninitialize = reinterpret_cast<UnitFn>(
             plugin->Lookup(kAudioUnitUninitializeSelect));
         if (uninitialize != nullptr)
             (void)uninitialize(plugin);
         REQUIRE(plugin->Close(plugin) == noErr);
+        drainEvents(application);
+
+        [editorView removeFromSuperview];
+        REQUIRE([parent subviews].count == 0);
+
+        CFRelease(cocoaInfo.mCocoaAUViewClass[0]);
+        CFRelease(cocoaInfo.mCocoaAUViewBundleLocation);
         dlclose(module);
 
         [hostWindow close];

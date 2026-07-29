@@ -16,6 +16,7 @@
 #include <AudioUnitSDK/ComponentBase.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -39,22 +40,59 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
 
 namespace
 {
+class AuEditorActionTarget;
+
+struct AuEditorLifetime
+{
+    std::atomic<AuEditorActionTarget*> target { nullptr };
+};
+
 class AuEditorActionTarget
 {
 public:
     virtual ~AuEditorActionTarget() = default;
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
     virtual void pumpEditorWork() = 0;
+    [[nodiscard]] virtual std::shared_ptr<AuEditorLifetime> editorLifetime() const = 0;
+};
+
+class AuEditorActionBridge
+{
+public:
+    explicit AuEditorActionBridge(std::weak_ptr<AuEditorLifetime> lifetime)
+        : lifetime_(std::move(lifetime)) {}
+
+    void dispatch(const ats::ui::EditorAction& action)
+    {
+        if (const auto lifetime = lifetime_.lock())
+            if (auto* target = lifetime->target.load(std::memory_order_acquire))
+                target->handleEditorAction(action);
+    }
+
+    void poll()
+    {
+        if (const auto lifetime = lifetime_.lock())
+            if (auto* target = lifetime->target.load(std::memory_order_acquire))
+                target->pumpEditorWork();
+    }
+
+private:
+    std::weak_ptr<AuEditorLifetime> lifetime_;
 };
 
 void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
 {
-    auto* target = static_cast<AuEditorActionTarget*>(context);
-    if (target != nullptr && action != nullptr)
-        target->handleEditorAction(*action);
+    auto* bridge = static_cast<AuEditorActionBridge*>(context);
+    if (bridge != nullptr && action != nullptr)
+        bridge->dispatch(*action);
 }
 
-AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
+struct AuEditorEndpoint
+{
+    std::weak_ptr<AuEditorLifetime> lifetime;
+};
+
+AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
 }
 
 @interface AtsAuHostedEditorView : NSView
@@ -62,10 +100,11 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
 
 @implementation AtsAuHostedEditorView {
     std::unique_ptr<ats::ui::VisageEditor> _editor;
+    std::shared_ptr<AuEditorActionBridge> _actionBridge;
     NSTimer* _analysisTimer;
 }
 
-- (instancetype)initWithPreferredSize:(NSSize)size actionTarget:(AuEditorActionTarget*)actionTarget
+- (instancetype)initWithPreferredSize:(NSSize)size endpoint:(AuEditorEndpoint)endpoint
 {
     const CGFloat width = size.width > 1.0 ? size.width : 1280.0;
     const CGFloat height = size.height > 1.0 ? size.height : 940.0;
@@ -73,8 +112,9 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
     if (self == nil)
         return nil;
 
+    _actionBridge = std::make_shared<AuEditorActionBridge>(std::move(endpoint.lifetime));
     ats::ui::EditorEventSink sink;
-    sink.context = actionTarget;
+    sink.context = _actionBridge.get();
     sink.action = &forwardEditorAction;
     _editor = std::make_unique<ats::ui::VisageEditor>(sink);
     if (!_editor->setSize(static_cast<std::uint32_t>(width),
@@ -85,9 +125,10 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
         return nil;
     }
     _editor->show();
+    auto* actionBridge = _actionBridge.get();
     _analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
-        if (actionTarget != nullptr)
-            actionTarget->pumpEditorWork();
+        if (actionBridge != nullptr)
+            actionBridge->poll();
     }];
     return self;
 }
@@ -110,6 +151,7 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
     [_analysisTimer invalidate];
     _analysisTimer = nil;
     _editor.reset();
+    _actionBridge.reset();
 #if !__has_feature(objc_arc)
     [super dealloc];
 #endif
@@ -131,7 +173,7 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
 {
     return [[AtsAuHostedEditorView alloc]
         initWithPreferredSize:preferredSize
-                  actionTarget:editorActionTargetForAudioUnit(audioUnit)];
+                      endpoint:editorEndpointForAudioUnit(audioUnit)];
 }
 
 @end
@@ -150,6 +192,13 @@ public:
         : ausdk::AUBase(instance, 0, 1)
     {
         host_.initialize(ats::host::HostFormat::au);
+        editorLifetime_->target.store(this, std::memory_order_release);
+    }
+
+    ~AtsAudioUnit() override
+    {
+        editorLifetime_->target.store(nullptr, std::memory_order_release);
+        host_.release();
     }
 
     bool StreamFormatWritable(AudioUnitScope, AudioUnitElement) override { return true; }
@@ -172,10 +221,15 @@ public:
             return result;
         const auto format = GetStreamFormat(kAudioUnitScope_Output, 0);
         const auto sampleRate = format.mSampleRate > 0.0 ? format.mSampleRate : 48000.0;
+        editorLifetime_->target.store(this, std::memory_order_release);
         return host_.prepare({ sampleRate, 512, 2, 0 }) ? noErr : kAudio_ParamError;
     }
 
-    void Cleanup() override { host_.release(); }
+    void Cleanup() override
+    {
+        editorLifetime_->target.store(nullptr, std::memory_order_release);
+        host_.release();
+    }
 
     OSStatus SaveState(CFPropertyListRef* data) override
     {
@@ -530,6 +584,9 @@ private:
         (void) host_.pollAnalysis(error);
     }
 
+    [[nodiscard]] std::shared_ptr<AuEditorLifetime> editorLifetime() const override
+    { return editorLifetime_; }
+
     Float64 GetLatency() override { return 0.0; }
     Float64 GetTailTime() override { return 0.0; }
 
@@ -544,11 +601,12 @@ private:
     }
 
     ats::host::HostAdapter host_;
+    std::shared_ptr<AuEditorLifetime> editorLifetime_ = std::make_shared<AuEditorLifetime>();
     std::array<ats::MidiEvent, 256> midiEvents_{};
     std::size_t midiEventCount_ = 0;
 };
 
-AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit)
+AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit)
 {
     // AudioUnit is the SDK's plug-in-interface pointer. The implementation
     // object is constructed in the documented storage that follows that
@@ -557,7 +615,9 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit)
     auto* unit = instance != nullptr
         ? reinterpret_cast<AtsAudioUnit*>(&instance->mInstanceStorage)
         : nullptr;
-    return unit != nullptr ? static_cast<AuEditorActionTarget*>(unit) : nullptr;
+    if (unit == nullptr)
+        return {};
+    return { static_cast<AuEditorActionTarget*>(unit)->editorLifetime() };
 }
 }
 
