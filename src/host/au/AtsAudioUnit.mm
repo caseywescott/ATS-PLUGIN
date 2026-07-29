@@ -34,6 +34,25 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
 };
 }
 
+namespace
+{
+class AuEditorActionTarget
+{
+public:
+    virtual ~AuEditorActionTarget() = default;
+    virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
+};
+
+void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
+{
+    auto* target = static_cast<AuEditorActionTarget*>(context);
+    if (target != nullptr && action != nullptr)
+        target->handleEditorAction(*action);
+}
+
+AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
+}
+
 @interface AtsAuHostedEditorView : NSView
 @end
 
@@ -41,7 +60,7 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
     std::unique_ptr<ats::ui::VisageEditor> _editor;
 }
 
-- (instancetype)initWithPreferredSize:(NSSize)size
+- (instancetype)initWithPreferredSize:(NSSize)size actionTarget:(AuEditorActionTarget*)actionTarget
 {
     const CGFloat width = size.width > 1.0 ? size.width : 1280.0;
     const CGFloat height = size.height > 1.0 ? size.height : 940.0;
@@ -49,7 +68,10 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
     if (self == nil)
         return nil;
 
-    _editor = std::make_unique<ats::ui::VisageEditor>();
+    ats::ui::EditorEventSink sink;
+    sink.context = actionTarget;
+    sink.action = &forwardEditorAction;
+    _editor = std::make_unique<ats::ui::VisageEditor>(sink);
     if (!_editor->setSize(static_cast<std::uint32_t>(width),
                           static_cast<std::uint32_t>(height)) ||
         !_editor->setParent((__bridge void*)self))
@@ -96,8 +118,9 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
 
 - (NSView*)uiViewForAudioUnit:(AudioUnit)audioUnit withSize:(NSSize)preferredSize
 {
-    (void)audioUnit;
-    return [[AtsAuHostedEditorView alloc] initWithPreferredSize:preferredSize];
+    return [[AtsAuHostedEditorView alloc]
+        initWithPreferredSize:preferredSize
+                  actionTarget:editorActionTargetForAudioUnit(audioUnit)];
 }
 
 @end
@@ -109,7 +132,7 @@ Class cocoaViewFactoryClass()
     return [AtsAudioUnitCocoaViewFactory class];
 }
 
-class AtsAudioUnit final : public ausdk::AUBase
+class AtsAudioUnit final : public ausdk::AUBase, public AuEditorActionTarget
 {
 public:
     explicit AtsAudioUnit(AudioComponentInstance instance)
@@ -429,6 +452,18 @@ private:
             : kAudioUnitErr_InvalidParameter;
     }
 
+    void handleEditorAction(const ats::ui::EditorAction& action) override
+    {
+        const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
+        if (parameter == nullptr)
+            return;
+        const auto* descriptor = ats::ParameterRegistry::find(parameter->id);
+        if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
+            return;
+        (void) SetParameter(descriptor->hostNumericId, kAudioUnitScope_Global, 0,
+                            parameter->value, 0);
+    }
+
     Float64 GetLatency() override { return 0.0; }
     Float64 GetTailTime() override { return 0.0; }
 
@@ -446,6 +481,18 @@ private:
     std::array<ats::MidiEvent, 256> midiEvents_{};
     std::size_t midiEventCount_ = 0;
 };
+
+AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit)
+{
+    // AudioUnit is the SDK's plug-in-interface pointer. The implementation
+    // object is constructed in the documented storage that follows that
+    // interface, rather than at the interface address itself.
+    auto* instance = reinterpret_cast<ausdk::AudioComponentPlugInInstance*>(audioUnit);
+    auto* unit = instance != nullptr
+        ? reinterpret_cast<AtsAudioUnit*>(&instance->mInstanceStorage)
+        : nullptr;
+    return unit != nullptr ? static_cast<AuEditorActionTarget*>(unit) : nullptr;
+}
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AtsAudioUnitFactory, AtsAudioUnit)

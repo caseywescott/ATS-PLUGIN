@@ -36,7 +36,7 @@ Task ID: RMJ-070 / commit 22
   parameter info/read/write across all 81 IDs, output format, bounded ATSP
   class-info state round-trip, zero-input stereo process adaptation,
   initialization, teardown, and Visage-backed CocoaUI editor attach/focus/
-  resize/teardown. Class-info follows the AU property-list contract: the
+  resize/teardown/parameter forwarding. Class-info follows the AU property-list contract: the
   bounded ATSP bytes live under `kAUPresetDataKey`, with compatibility for
   the earlier raw-data form. No CLAP dependency is added. MIDI/automation
   one MIDI note dispatch and scheduled immediate/ramped parameter events are
@@ -71,7 +71,13 @@ The x86_64 editor probe passes after reading
 `kAudioUnitProperty_CocoaUI`, loads `AtsAudioUnitCocoaViewFactory` from the
 component bundle, creates a Visage-backed `NSView` at 1280×940, attaches it to
 a Cocoa host window, accepts first-responder focus, resizes to 720×480, and
-removes cleanly with no stale subview. Direct-factory harnesses cast
+removes cleanly with no stale subview. The same live probe selects the Analysis
+page and drags the actual embedded slider; it then reads the corresponding
+AudioUnit parameter back through the component API and verifies a changed
+descriptor-domain value in the 1–2000 Hz range. The Cocoa factory routes typed
+Visage parameter actions to the owning AU instance, so this is native
+editor-to-AU parameter evidence rather than a visual-only CocoaUI check.
+Direct-factory harnesses cast
 `AudioComponentMethod` lookups to fixed prototypes so ARM64 register calling
 convention matches the AudioUnitSDK implementations.
 

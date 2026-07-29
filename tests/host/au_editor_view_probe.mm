@@ -7,7 +7,9 @@
 #include <dlfcn.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <vector>
 
 namespace
 {
@@ -16,6 +18,8 @@ using GetPropertyInfoFn = OSStatus (*)(void*, AudioUnitPropertyID, AudioUnitScop
                                        AudioUnitElement, UInt32*, Boolean*);
 using GetPropertyFn = OSStatus (*)(void*, AudioUnitPropertyID, AudioUnitScope,
                                    AudioUnitElement, void*, UInt32*);
+using GetParameterFn = OSStatus (*)(void*, AudioUnitParameterID, AudioUnitScope,
+                                    AudioUnitElement, AudioUnitParameterValue*);
 using UnitFn = OSStatus (*)(void*);
 
 [[noreturn]] void fail(const char* expression, int line)
@@ -76,7 +80,37 @@ int main(int argc, char** argv)
             plugin->Lookup(kAudioUnitGetPropertyInfoSelect));
         auto getProperty = reinterpret_cast<GetPropertyFn>(
             plugin->Lookup(kAudioUnitGetPropertySelect));
-        REQUIRE(getPropertyInfo != nullptr && getProperty != nullptr);
+        auto getParameter = reinterpret_cast<GetParameterFn>(
+            plugin->Lookup(kAudioUnitGetParameterSelect));
+        REQUIRE(getPropertyInfo != nullptr && getProperty != nullptr && getParameter != nullptr);
+
+        UInt32 parameterListSize = 0;
+        REQUIRE(getPropertyInfo(plugin, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global,
+                                0, &parameterListSize, nullptr) == noErr);
+        REQUIRE(parameterListSize > 0 &&
+                parameterListSize % sizeof(AudioUnitParameterID) == 0);
+        std::vector<AudioUnitParameterID> parameterIds(
+            parameterListSize / sizeof(AudioUnitParameterID));
+        REQUIRE(getProperty(plugin, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0,
+                            parameterIds.data(), &parameterListSize) == noErr);
+        AudioUnitParameterID analysisLowestFrequency = 0;
+        bool foundAnalysisLowestFrequency = false;
+        for (const auto id : parameterIds)
+        {
+            AudioUnitParameterInfo info {};
+            UInt32 infoSize = sizeof(info);
+            REQUIRE(getProperty(plugin, kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global,
+                                id, &info, &infoSize) == noErr);
+            if (std::strcmp(info.name, "Lowest frequency (Hz)") == 0)
+            {
+                analysisLowestFrequency = id;
+                foundAnalysisLowestFrequency = true;
+            }
+        }
+        REQUIRE(foundAnalysisLowestFrequency);
+        AudioUnitParameterValue initialAnalysisLowestFrequency = 0.0f;
+        REQUIRE(getParameter(plugin, analysisLowestFrequency, kAudioUnitScope_Global, 0,
+                             &initialAnalysisLowestFrequency) == noErr);
 
         UInt32 size = 0;
         REQUIRE(getPropertyInfo(plugin, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0,
@@ -117,6 +151,65 @@ int main(int argc, char** argv)
         REQUIRE(NSEqualSizes(editorView.frame.size, NSMakeSize(720.0, 480.0)));
         drainEvents(application);
 
+        // Exercise the real embedded Visage view, then verify that the AU
+        // instance received the descriptor-domain parameter change.
+        NSView* embeddedView = editorView.subviews.firstObject;
+        REQUIRE(embeddedView != nil);
+        REQUIRE([hostWindow makeFirstResponder:embeddedView]);
+        auto sendEmbeddedMouse = [&](NSEventType type, NSPoint logicalPoint, int eventNumber) {
+            const NSPoint viewPoint = NSMakePoint(logicalPoint.x,
+                                                  embeddedView.bounds.size.height - logicalPoint.y);
+            const NSPoint windowPoint = [embeddedView convertPoint:viewPoint toView:nil];
+            NSEvent* event = [NSEvent mouseEventWithType:type
+                                                location:windowPoint
+                                           modifierFlags:0 timestamp:0.0
+                                                windowNumber:[hostWindow windowNumber]
+                                                     context:nil eventNumber:eventNumber
+                                                  clickCount:1
+                                                    pressure:type == NSEventTypeLeftMouseUp ? 0.0 : 1.0];
+            if (type == NSEventTypeLeftMouseDragged)
+                [embeddedView mouseDragged:event];
+            else if (type == NSEventTypeLeftMouseUp)
+                [embeddedView mouseUp:event];
+            else
+                [embeddedView mouseDown:event];
+        };
+        const CGFloat pageX[] { 220.0, 240.0, 260.0 };
+        const CGFloat pageY[] { 74.0, 90.0 };
+        for (const auto x : pageX)
+            for (const auto y : pageY)
+            {
+                sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(x, y), 8);
+                sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(x, y), 8);
+            }
+        const CGFloat parameterX[] { 160.0, 220.0, 300.0 };
+        const CGFloat parameterY[] { 200.0, 208.0, 216.0 };
+        for (const auto x : parameterX)
+        {
+            for (const auto y : parameterY)
+            {
+                sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(x, y), 9);
+                sendEmbeddedMouse(NSEventTypeLeftMouseDragged, NSMakePoint(x + 80.0, y), 10);
+                sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(x + 80.0, y), 10);
+                AudioUnitParameterValue value = 0.0f;
+                REQUIRE(getParameter(plugin, analysisLowestFrequency, kAudioUnitScope_Global, 0,
+                                     &value) == noErr);
+                if (value != initialAnalysisLowestFrequency)
+                    break;
+            }
+            AudioUnitParameterValue value = 0.0f;
+            REQUIRE(getParameter(plugin, analysisLowestFrequency, kAudioUnitScope_Global, 0,
+                                 &value) == noErr);
+            if (value != initialAnalysisLowestFrequency)
+                break;
+        }
+        AudioUnitParameterValue changedAnalysisLowestFrequency = 0.0f;
+        REQUIRE(getParameter(plugin, analysisLowestFrequency, kAudioUnitScope_Global, 0,
+                             &changedAnalysisLowestFrequency) == noErr);
+        REQUIRE(changedAnalysisLowestFrequency >= 1.0f &&
+                changedAnalysisLowestFrequency <= 2000.0f);
+        REQUIRE(changedAnalysisLowestFrequency != initialAnalysisLowestFrequency);
+
         [editorView removeFromSuperview];
         REQUIRE([parent subviews].count == 0);
 
@@ -134,6 +227,7 @@ int main(int argc, char** argv)
         drainEvents(application);
     }
 
-    std::cout << "ats_au_editor_view_probe: CocoaUI advertise, NSView attach, focus, resize, and teardown ok\n";
+    std::cout << "ats_au_editor_view_probe: CocoaUI advertise, NSView attach, focus, resize, "
+                 "parameter gesture, and teardown ok\n";
     return 0;
 }
