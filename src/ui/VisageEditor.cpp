@@ -27,6 +27,9 @@ public:
         for (std::size_t index = 0; index < analysisValues_.size(); ++index)
             if (const auto* descriptor = analysisDescriptor(index))
                 analysisValues_[index] = descriptor->defaultValue;
+        for (std::size_t index = 0; index < synthesisValues_.size(); ++index)
+            if (const auto* descriptor = synthesisDescriptor(index))
+                synthesisValues_[index] = descriptor->defaultValue;
 
         setAcceptsKeystrokes(true);
         onMouseDown() += [this](const visage::MouseEvent& event) {
@@ -185,9 +188,42 @@ public:
                     else
                     {
                         parameterDragging_ = true;
+                        activeParameterSurface_ = ParameterSurface::analysis;
                         activeAnalysisControl_ = *control;
                         parameterValue_ = parameterAt(point.x, analysisControlBoundsFor(*control));
                         emitParameterGesture(*control, parameterValue_, true, false);
+                    }
+                    requestKeyboardFocus();
+                    redraw();
+                    return;
+                }
+            }
+            if (shell_.state().page == EditorPage::synthesis)
+            {
+                if (const auto control = synthesisControlAt(point))
+                {
+                    const auto* descriptor = synthesisDescriptor(*control);
+                    if (descriptor == nullptr)
+                        return;
+                    if (descriptor->type == ParameterType::boolean ||
+                        descriptor->type == ParameterType::choice)
+                    {
+                        float value = synthesisValues_[*control];
+                        if (descriptor->type == ParameterType::boolean)
+                            value = value >= 0.5f ? 0.0f : 1.0f;
+                        else
+                            value = std::fmod(value + 1.0f,
+                                              static_cast<float>(descriptor->choiceCount));
+                        setSynthesisValue(*control, value);
+                        emitSynthesisGesture(*control, descriptor->normalize(value), true, true);
+                    }
+                    else
+                    {
+                        parameterDragging_ = true;
+                        activeParameterSurface_ = ParameterSurface::synthesis;
+                        activeSynthesisControl_ = *control;
+                        parameterValue_ = parameterAt(point.x, synthesisControlBoundsFor(*control));
+                        emitSynthesisGesture(*control, parameterValue_, true, false);
                     }
                     requestKeyboardFocus();
                     redraw();
@@ -211,9 +247,14 @@ public:
             }
             if (!parameterDragging_)
                 return;
-            parameterValue_ = parameterAt(event.relativePosition().x,
-                                          analysisControlBoundsFor(activeAnalysisControl_));
-            emitParameterGesture(activeAnalysisControl_, parameterValue_, false, false);
+            const auto bounds = activeParameterSurface_ == ParameterSurface::analysis
+                ? analysisControlBoundsFor(activeAnalysisControl_)
+                : synthesisControlBoundsFor(activeSynthesisControl_);
+            parameterValue_ = parameterAt(event.relativePosition().x, bounds);
+            if (activeParameterSurface_ == ParameterSurface::analysis)
+                emitParameterGesture(activeAnalysisControl_, parameterValue_, false, false);
+            else
+                emitSynthesisGesture(activeSynthesisControl_, parameterValue_, false, false);
             redraw();
         };
         onMouseUp() += [this](const visage::MouseEvent&) {
@@ -225,7 +266,10 @@ public:
             }
             if (parameterDragging_)
             {
-                emitParameterGesture(activeAnalysisControl_, parameterValue_, false, true);
+                if (activeParameterSurface_ == ParameterSurface::analysis)
+                    emitParameterGesture(activeAnalysisControl_, parameterValue_, false, true);
+                else
+                    emitSynthesisGesture(activeSynthesisControl_, parameterValue_, false, true);
                 parameterDragging_ = false;
                 return;
             }
@@ -395,7 +439,8 @@ public:
                                                                   : "SHAPE ACTIVE  |  BOTH PLAYBACK",
                         labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
             canvas.setColor(tokens.accent);
-            canvas.rectangle(18.0f, 172.0f, 320.0f, 3.0f);
+            canvas.rectangle(18.0f, 172.0f, 620.0f, 3.0f);
+            drawSynthesisControls(canvas, tokens, labelFont);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::partials))
         {
@@ -458,11 +503,24 @@ private:
 
     static constexpr std::array<std::size_t, AnalysisPageModel::kControlCount>
         kAnalysisVisualOrder { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2 };
+    static constexpr std::array<std::string_view, 12> kSynthesisControlIds {
+        "freq", "freqShapeMode", "freqShapeAmount", "freqShapePivotHz", "timeStretch",
+        "synStart", "synDur", "usePhase", "useAllPartials", "residualOnly", "useIfftSynth",
+        "classicPreviewMode"
+    };
+
+    enum class ParameterSurface : std::uint8_t { analysis, synthesis };
 
     [[nodiscard]] static const ParameterDescriptor* analysisDescriptor(std::size_t index) noexcept
     {
         const auto ids = AnalysisPageModel::controlIds();
         return index < ids.size() ? ParameterRegistry::find(ids[index]) : nullptr;
+    }
+
+    [[nodiscard]] static const ParameterDescriptor* synthesisDescriptor(std::size_t index) noexcept
+    {
+        return index < kSynthesisControlIds.size() ? ParameterRegistry::find(kSynthesisControlIds[index])
+                                                   : nullptr;
     }
 
     [[nodiscard]] AnalysisControlBounds analysisControlBounds(std::size_t visualIndex) const noexcept
@@ -487,6 +545,33 @@ private:
         return {};
     }
 
+    [[nodiscard]] AnalysisControlBounds synthesisControlBounds(std::size_t control) const noexcept
+    {
+        constexpr float columnWidth = 300.0f;
+        constexpr float columnGap = 14.0f;
+        switch (control)
+        {
+            case 0: return { 18.0f, 190.0f, 620.0f, 34.0f };
+            case 1: return { 18.0f, 232.0f, 620.0f, 28.0f };
+            case 2: return { 18.0f, 274.0f, columnWidth, 34.0f };
+            case 3: return { 18.0f + columnWidth + columnGap, 274.0f, columnWidth, 34.0f };
+            case 4: return { 18.0f, 316.0f, 620.0f, 34.0f };
+            case 5: return { 18.0f, 358.0f, columnWidth, 34.0f };
+            case 6: return { 18.0f + columnWidth + columnGap, 358.0f, columnWidth, 34.0f };
+            case 7: return { 18.0f, 400.0f, columnWidth, 28.0f };
+            case 8: return { 18.0f + columnWidth + columnGap, 400.0f, columnWidth, 28.0f };
+            case 9: return { 18.0f, 438.0f, columnWidth, 28.0f };
+            case 10: return { 18.0f + columnWidth + columnGap, 438.0f, columnWidth, 28.0f };
+            case 11: return { 18.0f, 480.0f, 620.0f, 34.0f };
+            default: return {};
+        }
+    }
+
+    [[nodiscard]] AnalysisControlBounds synthesisControlBoundsFor(std::size_t control) const noexcept
+    {
+        return synthesisControlBounds(control);
+    }
+
     [[nodiscard]] std::optional<std::size_t> analysisControlAt(const visage::Point& point) const noexcept
     {
         for (std::size_t visualIndex = 0; visualIndex < kAnalysisVisualOrder.size(); ++visualIndex)
@@ -495,6 +580,20 @@ private:
             if (point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
                 point.y >= bounds.y && point.y <= bounds.y + bounds.height)
                 return kAnalysisVisualOrder[visualIndex];
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::size_t> synthesisControlAt(const visage::Point& point) const noexcept
+    {
+        for (std::size_t control = 0; control < kSynthesisControlIds.size(); ++control)
+        {
+            if ((control == 2 || control == 3) && shell_.synthesis().shapeControlsDimmed())
+                continue;
+            const auto bounds = synthesisControlBounds(control);
+            if (point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
+                point.y >= bounds.y && point.y <= bounds.y + bounds.height)
+                return control;
         }
         return std::nullopt;
     }
@@ -518,6 +617,17 @@ private:
             return;
         analysisValues_[control] = descriptor->snap(value);
         shell_.analysis().setControl(control, analysisValues_[control]);
+    }
+
+    void setSynthesisValue(std::size_t control, float value)
+    {
+        const auto* descriptor = synthesisDescriptor(control);
+        if (descriptor == nullptr || control >= synthesisValues_.size())
+            return;
+        synthesisValues_[control] = descriptor->snap(value);
+        if (control == 1)
+            shell_.synthesis().setShapeMode(
+                static_cast<FrequencyShapeMode>(static_cast<int>(synthesisValues_[control])));
     }
 
     void drawAnalysisControls(visage::Canvas& canvas, const VisageTokens& tokens,
@@ -578,6 +688,53 @@ private:
         }
     }
 
+    void drawSynthesisControls(visage::Canvas& canvas, const VisageTokens& tokens,
+                               const visage::Font& labelFont) const
+    {
+        for (std::size_t control = 0; control < kSynthesisControlIds.size(); ++control)
+        {
+            const auto* descriptor = synthesisDescriptor(control);
+            if (descriptor == nullptr)
+                continue;
+            const auto bounds = synthesisControlBounds(control);
+            const auto dimmed = (control == 2 || control == 3) &&
+                shell_.synthesis().shapeControlsDimmed();
+            canvas.setColor(dimmed ? tokens.secondaryText : tokens.secondaryText);
+            canvas.text(descriptor->name.data(), labelFont, visage::Font::kLeft,
+                        bounds.x, bounds.y - 14.0f, bounds.width, 13.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
+
+            const auto value = synthesisValues_[control];
+            if (descriptor->type == ParameterType::boolean || descriptor->type == ParameterType::choice)
+            {
+                const auto active = descriptor->type == ParameterType::boolean && value >= 0.5f;
+                if (active)
+                {
+                    canvas.setColor(tokens.accent);
+                    canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
+                }
+                canvas.setColor(active ? tokens.background : tokens.text);
+                const auto text = descriptor->text(value);
+                canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                            bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f,
+                            bounds.height - 6.0f);
+            }
+            else
+            {
+                const auto normalized = descriptor->normalize(value);
+                canvas.setColor(dimmed ? tokens.secondaryText : tokens.accent);
+                canvas.roundedRectangle(bounds.x, bounds.y, bounds.width * normalized,
+                                        bounds.height, 4.0f);
+                canvas.setColor(tokens.background);
+                const auto text = descriptor->text(value);
+                canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                            bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f,
+                            bounds.height - 6.0f);
+            }
+        }
+    }
+
     [[nodiscard]] const char* spectrumModeLabel() const noexcept
     {
         const auto items = shell_.spectrum().menu(true, false);
@@ -595,6 +752,19 @@ private:
             return;
         setAnalysisValue(control, descriptor->denormalize(normalized));
         const auto parameterValue = analysisValues_[control];
+        const auto id = std::string(descriptor->id);
+        emitAction(SetParameterAction { id, parameterValue, begin, end });
+        if (sink_.parameterGesture)
+            sink_.parameterGesture(sink_.context, id.c_str(), parameterValue, begin, end);
+    }
+
+    void emitSynthesisGesture(std::size_t control, float normalized, bool begin, bool end)
+    {
+        const auto* descriptor = synthesisDescriptor(control);
+        if (descriptor == nullptr || control >= synthesisValues_.size())
+            return;
+        setSynthesisValue(control, descriptor->denormalize(normalized));
+        const auto parameterValue = synthesisValues_[control];
         const auto id = std::string(descriptor->id);
         emitAction(SetParameterAction { id, parameterValue, begin, end });
         if (sink_.parameterGesture)
@@ -620,8 +790,11 @@ private:
     void* dialogParent_ = nullptr;
     bool parameterDragging_ = false;
     float parameterValue_ = 0.5f;
+    ParameterSurface activeParameterSurface_ = ParameterSurface::analysis;
     std::size_t activeAnalysisControl_ = 3;
     std::array<float, AnalysisPageModel::kControlCount> analysisValues_ {};
+    std::size_t activeSynthesisControl_ = 0;
+    std::array<float, kSynthesisControlIds.size()> synthesisValues_ {};
     float analysisScroll_ = 0.0f;
     bool spectrumDragging_ = false;
     float spectrumLastX_ = 0.0f;

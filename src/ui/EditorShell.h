@@ -34,6 +34,7 @@ public:
     [[nodiscard]] const AnalysisPageModel& analysis() const noexcept { return analysis_; }
     [[nodiscard]] AnalysisPageModel& analysis() noexcept { return analysis_; }
     [[nodiscard]] const SynthesisPageModel& synthesis() const noexcept { return synthesis_; }
+    [[nodiscard]] SynthesisPageModel& synthesis() noexcept { return synthesis_; }
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
     [[nodiscard]] const SpectrumInteractionModel& spectrum() const noexcept { return spectrum_; }
