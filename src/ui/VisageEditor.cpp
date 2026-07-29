@@ -230,6 +230,69 @@ public:
                     return;
                 }
             }
+            if (shell_.state().page == EditorPage::math)
+            {
+                if (point.x >= 18.0f && point.x <= 638.0f && point.y >= 180.0f && point.y < 410.0f)
+                {
+                    mathEditing_ = true;
+                    if (shell_.math().draft().empty())
+                        shell_.math().setDraft(std::string(MathPageModel::starterText()));
+                    requestKeyboardFocus();
+                    redraw();
+                    return;
+                }
+                if (point.x >= 506.0f && point.x <= 638.0f && point.y >= 424.0f && point.y < 458.0f)
+                {
+                    if (const auto action = shell_.math().applyAction())
+                    {
+                        emitAction(*action);
+                        shell_.math().beginApply();
+                        redraw();
+                    }
+                    requestKeyboardFocus();
+                    return;
+                }
+            }
+            if (shell_.state().page == EditorPage::partials)
+            {
+                if (point.x >= 18.0f && point.x <= 638.0f && point.y >= 190.0f && point.y < 224.0f)
+                {
+                    partialIndex_ = static_cast<int>(std::round(parameterAt(
+                        point.x, { 18.0f, 190.0f, 620.0f, 34.0f }) * 255.0f));
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.x >= 18.0f && point.x <= 638.0f && point.y >= 232.0f && point.y < 266.0f)
+                {
+                    partialFrame_ = static_cast<int>(std::round(parameterAt(
+                        point.x, { 18.0f, 232.0f, 620.0f, 34.0f }) * 1023.0f));
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.x >= 18.0f && point.x <= 300.0f && point.y >= 274.0f && point.y < 308.0f)
+                {
+                    partialAmplitude_ = parameterAt(point.x, { 18.0f, 274.0f, 282.0f, 34.0f });
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.x >= 314.0f && point.x <= 638.0f && point.y >= 274.0f && point.y < 308.0f)
+                {
+                    partialFrequencyHz_ = 20.0f + parameterAt(
+                        point.x, { 314.0f, 274.0f, 324.0f, 34.0f }) * 19980.0f;
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.x >= 18.0f && point.x <= 180.0f && point.y >= 326.0f && point.y < 360.0f)
+                {
+                    emitAction(PartialEditAction { partialIndex_, partialFrame_, true });
+                    requestKeyboardFocus();
+                    return;
+                }
+            }
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
             requestKeyboardFocus();
@@ -445,11 +508,23 @@ public:
         else if (selected == static_cast<std::size_t>(EditorPage::partials))
         {
             canvas.setColor(tokens.secondaryText);
-            canvas.text(shell_.partials().view().editing() ? "CELL EDIT  |  AMPLITUDE / FREQUENCY  |  APPLY"
-                                                            : "PARTIAL / FRAME  |  SELECT A CELL",
+            canvas.text("CELL EDIT  |  AMPLITUDE / FREQUENCY  |  APPLY",
                         labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
             canvas.setColor(tokens.accent);
-            canvas.rectangle(18.0f, 144.0f, 260.0f, 3.0f);
+            canvas.rectangle(18.0f, 172.0f, 620.0f, 3.0f);
+            drawPartialControl(canvas, tokens, labelFont, "PARTIAL", static_cast<float>(partialIndex_),
+                               255.0f, { 18.0f, 190.0f, 620.0f, 34.0f });
+            drawPartialControl(canvas, tokens, labelFont, "FRAME", static_cast<float>(partialFrame_),
+                               1023.0f, { 18.0f, 232.0f, 620.0f, 34.0f });
+            drawPartialControl(canvas, tokens, labelFont, "AMPLITUDE", partialAmplitude_, 1.0f,
+                               { 18.0f, 274.0f, 282.0f, 34.0f });
+            drawPartialControl(canvas, tokens, labelFont, "FREQUENCY HZ", partialFrequencyHz_ - 20.0f,
+                               19980.0f, { 314.0f, 274.0f, 324.0f, 34.0f });
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 326.0f, 162.0f, 34.0f, 6.0f);
+            canvas.setColor(tokens.accent);
+            canvas.text("APPLY TO CELL", labelFont, visage::Font::kCenter,
+                        22.0f, 334.0f, 154.0f, 18.0f);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::math))
         {
@@ -459,7 +534,22 @@ public:
             canvas.text(MathPageModel::helpText().data(), labelFont, visage::Font::kLeft,
                         18.0f, 140.0f, 620.0f, 18.0f);
             canvas.setColor(tokens.accent);
-            canvas.rectangle(18.0f, 172.0f, 280.0f, 3.0f);
+            canvas.rectangle(18.0f, 172.0f, 620.0f, 3.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 180.0f, 620.0f, 230.0f, 8.0f);
+            canvas.setColor(mathEditing_ ? tokens.accent : tokens.secondaryText);
+            const auto& draft = shell_.math().draft();
+            canvas.text(draft.empty() ? MathPageModel::starterText().data() : draft.c_str(),
+                        labelFont, visage::Font::kLeft, 30.0f, 194.0f, 596.0f, 190.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(506.0f, 424.0f, 132.0f, 34.0f, 6.0f);
+            canvas.setColor(shell_.math().canApply() ? tokens.accent : tokens.secondaryText);
+            canvas.text("APPLY SCRIPT", labelFont, visage::Font::kCenter,
+                        510.0f, 432.0f, 124.0f, 18.0f);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text(shell_.math().status() == MathStatus::running ? "RUNNING" :
+                        shell_.math().canApply() ? "READY" : "ENTER A SCRIPT",
+                        labelFont, visage::Font::kLeft, 18.0f, 432.0f, 360.0f, 18.0f);
         }
     }
 
@@ -467,6 +557,20 @@ public:
 
     void textInput(const std::string& text) override
     {
+        if (shell_.state().page == EditorPage::math && mathEditing_)
+        {
+            auto draft = shell_.math().draft();
+            if (text == "\b")
+            {
+                if (!draft.empty())
+                    draft.pop_back();
+            }
+            else
+                draft += text;
+            shell_.math().setDraft(std::move(draft));
+            redraw();
+            return;
+        }
         if (sink_.textInput)
             sink_.textInput(sink_.context, text.c_str());
     }
@@ -735,6 +839,25 @@ private:
         }
     }
 
+    static void drawPartialControl(visage::Canvas& canvas, const VisageTokens& tokens,
+                                   const visage::Font& labelFont, const char* label, float value,
+                                   float maximum, const AnalysisControlBounds& bounds)
+    {
+        canvas.setColor(tokens.secondaryText);
+        canvas.text(label, labelFont, visage::Font::kLeft,
+                    bounds.x, bounds.y - 14.0f, bounds.width, 13.0f);
+        canvas.setColor(tokens.surface);
+        canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
+        canvas.setColor(tokens.accent);
+        canvas.roundedRectangle(bounds.x, bounds.y,
+                                bounds.width * std::clamp(value / maximum, 0.0f, 1.0f),
+                                bounds.height, 4.0f);
+        canvas.setColor(tokens.background);
+        const auto text = std::to_string(value);
+        canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                    bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f, bounds.height - 6.0f);
+    }
+
     [[nodiscard]] const char* spectrumModeLabel() const noexcept
     {
         const auto items = shell_.spectrum().menu(true, false);
@@ -796,6 +919,11 @@ private:
     std::size_t activeSynthesisControl_ = 0;
     std::array<float, kSynthesisControlIds.size()> synthesisValues_ {};
     float analysisScroll_ = 0.0f;
+    bool mathEditing_ = false;
+    int partialIndex_ = 0;
+    int partialFrame_ = 0;
+    float partialAmplitude_ = 0.5f;
+    float partialFrequencyHz_ = 440.0f;
     bool spectrumDragging_ = false;
     float spectrumLastX_ = 0.0f;
     float spectrumLastY_ = 0.0f;
