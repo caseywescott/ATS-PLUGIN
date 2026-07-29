@@ -93,6 +93,7 @@ struct HarnessState
     bool typedParameterBegin = false;
     bool typedParameterEnd = false;
     int typedImportWavActions = 0;
+    int typedImportAtsActions = 0;
     int fileDrops = 0;
     int lastDropSlot = -1;
     bool lastDropAccepted = false;
@@ -173,17 +174,27 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
         state.typedParameterEnd = state.typedParameterEnd || parameter.end;
         return;
     }
-    REQUIRE(std::holds_alternative<ats::ui::ImportWavAction>(*action));
-    const auto& imported = std::get<ats::ui::ImportWavAction>(*action);
+    if (const auto* imported = std::get_if<ats::ui::ImportWavAction>(action))
+    {
+        REQUIRE(imported->slot >= 0 && imported->slot <= 1);
+        REQUIRE(imported->path.string() == "/tmp/ats-native-drop.wav");
+        ++state.typedImportWavActions;
+        return;
+    }
+    REQUIRE(std::holds_alternative<ats::ui::ImportAtsAction>(*action));
+    const auto& imported = std::get<ats::ui::ImportAtsAction>(*action);
     REQUIRE(imported.slot >= 0 && imported.slot <= 1);
-    REQUIRE(imported.path.string() == "/tmp/ats-native-drop.wav");
-    ++state.typedImportWavActions;
+    REQUIRE(imported.path.string() == "/tmp/ats-native-drop.ats");
+    ++state.typedImportAtsActions;
 }
 
 void fileDrop(void* context, int slot, const char* path, bool accepted)
 {
     auto& state = *static_cast<HarnessState*>(context);
-    REQUIRE(path != nullptr && std::strcmp(path, "/tmp/ats-native-drop.wav") == 0);
+    REQUIRE(path != nullptr);
+    const bool knownPath = std::strcmp(path, "/tmp/ats-native-drop.wav") == 0 ||
+                           std::strcmp(path, "/tmp/ats-native-drop.ats") == 0;
+    REQUIRE(knownPath);
     ++state.fileDrops;
     state.lastDropSlot = slot;
     state.lastDropAccepted = accepted;
@@ -291,6 +302,32 @@ int main()
         REQUIRE(state.fileDrops == 1 && state.lastDropSlot >= 0 && state.lastDropSlot <= 1 &&
                 state.lastDropAccepted);
         REQUIRE(state.typedImportWavActions == 1);
+
+        AtsTestPasteboard* atsDropPasteboard = [[AtsTestPasteboard alloc]
+            initWithFileUrl:[NSURL fileURLWithPath:@"/tmp/ats-native-drop.ats"]];
+        const CGFloat atsDropXs[] { 350.0, 430.0, 520.0, 600.0 };
+        bool nativeAtsDropAccepted = false;
+        for (const auto x : atsDropXs)
+        {
+            for (const auto y : dropYs)
+            {
+                const auto dropPoint = windowPointForLogical(NSMakePoint(x, y));
+                AtsTestDraggingInfo* dropInfo = [[AtsTestDraggingInfo alloc]
+                    initWithPasteboard:atsDropPasteboard location:dropPoint];
+                const auto nativeDropInfo = static_cast<id<NSDraggingInfo>>(dropInfo);
+                if ([embeddedView draggingEntered:nativeDropInfo] != NSDragOperationCopy)
+                    continue;
+                REQUIRE([embeddedView performDragOperation:nativeDropInfo]);
+                nativeAtsDropAccepted = true;
+                break;
+            }
+            if (nativeAtsDropAccepted)
+                break;
+        }
+        REQUIRE(nativeAtsDropAccepted);
+        REQUIRE(state.fileDrops == 2 && state.lastDropSlot >= 0 && state.lastDropSlot <= 1 &&
+                state.lastDropAccepted);
+        REQUIRE(state.typedImportAtsActions == 1);
 
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
                                             location:windowPointForLogical(NSMakePoint(600.0, 120.0))
