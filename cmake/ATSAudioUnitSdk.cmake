@@ -8,6 +8,7 @@ function(ats_add_audio_unit_sdk)
   if(ATS_AUDIO_UNIT_SDK_DIR AND
      EXISTS "${ATS_AUDIO_UNIT_SDK_DIR}/include/AudioUnitSDK/AUBase.h")
     set(_ats_audio_unit_sdk_root "${ATS_AUDIO_UNIT_SDK_DIR}")
+    ats_assert_git_revision("${_ats_audio_unit_sdk_root}" "${ATS_AUDIO_UNIT_SDK_VERSION}" "Apple AudioUnitSDK")
   else()
     FetchContent_Declare(ats_audio_unit_sdk
       GIT_REPOSITORY https://github.com/apple/AudioUnitSDK.git

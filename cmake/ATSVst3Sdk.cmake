@@ -7,6 +7,7 @@ function(ats_add_vst3_sdk)
 
   if(ATS_VST3_SDK_DIR AND EXISTS "${ATS_VST3_SDK_DIR}/public.sdk/source/main/pluginfactory.cpp")
     set(_ats_vst3_sdk_root "${ATS_VST3_SDK_DIR}")
+    ats_assert_git_revision("${_ats_vst3_sdk_root}" "${ATS_VST3_SDK_VERSION}" "Steinberg VST3 SDK")
   else()
     FetchContent_Declare(ats_vst3_sdk
       GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git

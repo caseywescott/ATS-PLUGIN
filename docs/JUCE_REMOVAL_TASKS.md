@@ -230,3 +230,7 @@ The native `BUILD_PLUGIN=OFF` graph now has a dedicated `ats_no_juce_native_scan
 CTest gate. The final clean-checkout gate remains open because `BUILD_PLUGIN=ON`
 still enters the legacy JUCE plugin target until the production integration and
 full widget-port commits are complete.
+
+Native wrapper configure paths also reject local VST3, AudioUnitSDK, or Visage
+checkouts whose Git `HEAD` differs from the exact revision pinned in the root
+CMake configuration.

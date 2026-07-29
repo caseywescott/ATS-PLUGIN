@@ -32,6 +32,25 @@ set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
 
+function(ats_assert_git_revision checkout expected name)
+  execute_process(
+    COMMAND git -C "${checkout}" rev-parse HEAD
+    RESULT_VARIABLE _ats_git_result
+    OUTPUT_VARIABLE _ats_git_revision
+    ERROR_VARIABLE _ats_git_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT _ats_git_result EQUAL 0)
+    message(FATAL_ERROR
+      "${name} checkout is not a readable Git repository: ${checkout}. "
+      "Expected pinned revision ${expected}. ${_ats_git_error}")
+  endif()
+  if(NOT "${_ats_git_revision}" STREQUAL "${expected}")
+    message(FATAL_ERROR
+      "${name} checkout revision mismatch: ${checkout} is ${_ats_git_revision}, "
+      "but the build requires ${expected}.")
+  endif()
+endfunction()
+
 if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE OR ATS_BUILD_NATIVE_AU))
   # Visage's native macOS windowing implementation contains Objective-C++
   # sources. Enable the language at the top-level project so CMake also
@@ -459,6 +478,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
   set(VISAGE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VISAGE_ENABLE_WIDGETS ON CACHE BOOL "" FORCE)
   if(ATS_VISAGE_DIR AND EXISTS "${ATS_VISAGE_DIR}/CMakeLists.txt")
+    ats_assert_git_revision("${ATS_VISAGE_DIR}" "${ATS_VISAGE_VERSION}" "Visage")
     add_subdirectory("${ATS_VISAGE_DIR}" "${CMAKE_BINARY_DIR}/visage")
   else()
     FetchContent_Declare(visage
