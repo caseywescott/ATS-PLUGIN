@@ -95,6 +95,7 @@ struct HarnessState
     int typedImportWavActions = 0;
     int typedImportAtsActions = 0;
     int fileDrops = 0;
+    int sourceDropCounts[2] {};
     int lastDropSlot = -1;
     bool lastDropAccepted = false;
 };
@@ -177,6 +178,7 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
     if (const auto* imported = std::get_if<ats::ui::ImportWavAction>(action))
     {
         REQUIRE(imported->slot >= 0 && imported->slot <= 1);
+        REQUIRE(imported->slot == state.lastDropSlot);
         REQUIRE(imported->path.string() == "/tmp/ats-native-drop.wav");
         ++state.typedImportWavActions;
         return;
@@ -184,6 +186,7 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
     REQUIRE(std::holds_alternative<ats::ui::ImportAtsAction>(*action));
     const auto& imported = std::get<ats::ui::ImportAtsAction>(*action);
     REQUIRE(imported.slot >= 0 && imported.slot <= 1);
+    REQUIRE(imported.slot == state.lastDropSlot);
     REQUIRE(imported.path.string() == "/tmp/ats-native-drop.ats");
     ++state.typedImportAtsActions;
 }
@@ -198,6 +201,8 @@ void fileDrop(void* context, int slot, const char* path, bool accepted)
     ++state.fileDrops;
     state.lastDropSlot = slot;
     state.lastDropAccepted = accepted;
+    if (accepted && slot >= 0 && slot <= 1)
+        ++state.sourceDropCounts[slot];
 }
 
 void drainEvents(NSApplication* application)
@@ -273,60 +278,51 @@ int main()
             return [embeddedView convertPoint:viewPoint toView:nil];
         };
 
+        const auto performNativeDrop = [&](id pasteboard, NSPoint nativeViewPoint) {
+            const auto dropPoint = [embeddedView convertPoint:nativeViewPoint toView:nil];
+            AtsTestDraggingInfo* dropInfo = [[AtsTestDraggingInfo alloc]
+                initWithPasteboard:pasteboard location:dropPoint];
+            const auto nativeDropInfo = static_cast<id<NSDraggingInfo>>(dropInfo);
+            if ([embeddedView draggingEntered:nativeDropInfo] != NSDragOperationCopy)
+                return false;
+            REQUIRE([embeddedView performDragOperation:nativeDropInfo]);
+            return true;
+        };
+
         AtsTestPasteboard* dropPasteboard = [[AtsTestPasteboard alloc]
             initWithFileUrl:[NSURL fileURLWithPath:@"/tmp/ats-native-drop.wav"]];
-        // The native backend converts AppKit window coordinates through the
-        // host view and its scale. Exercise a compact grid spanning both
-        // source cards rather than assuming a particular backing-space origin.
-        const CGFloat dropXs[] { 40.0, 100.0, 200.0, 350.0, 430.0, 520.0, 600.0 };
-        const CGFloat dropYs[] { 120.0, 140.0, 160.0 };
-        bool nativeDropAccepted = false;
-        for (const auto x : dropXs)
+        // Probe AppKit coordinates directly rather than inferring them from
+        // the host scale. Record one accepted point per source-card widget;
+        // this makes the mapping evidence resilient to backing-scale changes.
+        NSPoint sourceBPoint = NSZeroPoint;
+        bool foundSourceAPoint = false;
+        bool foundSourceBPoint = false;
+        for (CGFloat y = 6.0; y < embeddedView.bounds.size.height &&
+             !(foundSourceAPoint && foundSourceBPoint); y += 12.0)
         {
-            for (const auto y : dropYs)
+            for (CGFloat x = 6.0; x < embeddedView.bounds.size.width; x += 12.0)
             {
-                const auto dropPoint = windowPointForLogical(NSMakePoint(x, y));
-                AtsTestDraggingInfo* dropInfo = [[AtsTestDraggingInfo alloc]
-                    initWithPasteboard:dropPasteboard location:dropPoint];
-                const auto nativeDropInfo = static_cast<id<NSDraggingInfo>>(dropInfo);
-                if ([embeddedView draggingEntered:nativeDropInfo] != NSDragOperationCopy)
+                if (!performNativeDrop(dropPasteboard, NSMakePoint(x, y)))
                     continue;
-                REQUIRE([embeddedView performDragOperation:nativeDropInfo]);
-                nativeDropAccepted = true;
-                break;
+                if (state.lastDropSlot == 1)
+                {
+                    sourceBPoint = NSMakePoint(x, y);
+                    foundSourceBPoint = true;
+                }
+                else
+                    foundSourceAPoint = true;
+                if (foundSourceAPoint && foundSourceBPoint)
+                    break;
             }
-            if (nativeDropAccepted)
-                break;
         }
-        REQUIRE(nativeDropAccepted);
-        REQUIRE(state.fileDrops == 1 && state.lastDropSlot >= 0 && state.lastDropSlot <= 1 &&
-                state.lastDropAccepted);
-        REQUIRE(state.typedImportWavActions == 1);
+        REQUIRE(state.sourceDropCounts[0] > 0 && foundSourceAPoint);
+        REQUIRE(state.sourceDropCounts[1] > 0 && foundSourceBPoint);
+        REQUIRE(state.typedImportWavActions == state.fileDrops);
 
         AtsTestPasteboard* atsDropPasteboard = [[AtsTestPasteboard alloc]
             initWithFileUrl:[NSURL fileURLWithPath:@"/tmp/ats-native-drop.ats"]];
-        const CGFloat atsDropXs[] { 350.0, 430.0, 520.0, 600.0 };
-        bool nativeAtsDropAccepted = false;
-        for (const auto x : atsDropXs)
-        {
-            for (const auto y : dropYs)
-            {
-                const auto dropPoint = windowPointForLogical(NSMakePoint(x, y));
-                AtsTestDraggingInfo* dropInfo = [[AtsTestDraggingInfo alloc]
-                    initWithPasteboard:atsDropPasteboard location:dropPoint];
-                const auto nativeDropInfo = static_cast<id<NSDraggingInfo>>(dropInfo);
-                if ([embeddedView draggingEntered:nativeDropInfo] != NSDragOperationCopy)
-                    continue;
-                REQUIRE([embeddedView performDragOperation:nativeDropInfo]);
-                nativeAtsDropAccepted = true;
-                break;
-            }
-            if (nativeAtsDropAccepted)
-                break;
-        }
-        REQUIRE(nativeAtsDropAccepted);
-        REQUIRE(state.fileDrops == 2 && state.lastDropSlot >= 0 && state.lastDropSlot <= 1 &&
-                state.lastDropAccepted);
+        REQUIRE(performNativeDrop(atsDropPasteboard, sourceBPoint));
+        REQUIRE(state.lastDropSlot == 1 && state.lastDropAccepted);
         REQUIRE(state.typedImportAtsActions == 1);
 
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
