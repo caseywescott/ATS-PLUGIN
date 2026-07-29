@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace ats::vst3
@@ -212,10 +213,23 @@ private:
     ats::host::HostAdapter host_;
 };
 
+class Vst3EditorActionTarget
+{
+public:
+    virtual ~Vst3EditorActionTarget() = default;
+    virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
+};
+
 class AtsVst3PlugView final : public Steinberg::FObject, public Steinberg::IPlugView
 {
 public:
-    AtsVst3PlugView() = default;
+    explicit AtsVst3PlugView(Vst3EditorActionTarget& actionTarget) : actionTarget_(&actionTarget)
+    {
+        ats::ui::EditorEventSink sink;
+        sink.context = actionTarget_;
+        sink.action = &AtsVst3PlugView::editorAction;
+        editor_ = std::make_unique<ats::ui::VisageEditor>(sink);
+    }
     ~AtsVst3PlugView() override { editor_.reset(); }
 
     OBJ_METHODS(AtsVst3PlugView, Steinberg::FObject)
@@ -309,11 +323,19 @@ public:
     }
 
 private:
-    std::unique_ptr<ats::ui::VisageEditor> editor_ = std::make_unique<ats::ui::VisageEditor>();
+    static void editorAction(void* context, const ats::ui::EditorAction* action)
+    {
+        auto* target = static_cast<Vst3EditorActionTarget*>(context);
+        if (target != nullptr && action != nullptr)
+            target->handleEditorAction(*action);
+    }
+
+    Vst3EditorActionTarget* actionTarget_ = nullptr;
+    std::unique_ptr<ats::ui::VisageEditor> editor_;
     Steinberg::IPlugFrame* frame_ = nullptr;
 };
 
-class AtsVst3Controller final : public Steinberg::Vst::EditController
+class AtsVst3Controller final : public Steinberg::Vst::EditController, public Vst3EditorActionTarget
 {
 public:
     static Steinberg::FUnknown* createInstance(void*)
@@ -348,12 +370,31 @@ public:
     {
         return state == nullptr ? Steinberg::kResultFalse : Steinberg::kResultTrue;
     }
+
+    void handleEditorAction(const ats::ui::EditorAction& action) override
+    {
+        const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
+        if (parameter == nullptr)
+            return;
+        const auto* descriptor = ats::ParameterRegistry::find(parameter->id);
+        if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
+            return;
+
+        const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor->hostNumericId);
+        const auto normalized = descriptor->normalize(parameter->value);
+        if (parameter->begin)
+            beginEdit(tag);
+        setParamNormalized(tag, normalized);
+        performEdit(tag, normalized);
+        if (parameter->end)
+            endEdit(tag);
+    }
 };
 
 Steinberg::IPlugView* PLUGIN_API AtsVst3Controller::createView(Steinberg::FIDString name)
 {
     return Steinberg::FIDStringsEqual(name, Steinberg::Vst::ViewType::kEditor)
-               ? new AtsVst3PlugView()
+               ? new AtsVst3PlugView(*this)
                : nullptr;
 }
 

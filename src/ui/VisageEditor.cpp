@@ -1,6 +1,7 @@
 #include "VisageEditor.h"
 #include "EditorShell.h"
 #include "VisageNativeMac.h"
+#include "../core/ParameterRegistry.h"
 
 #include <embedded/fonts.h>
 #include <visage/app.h>
@@ -415,9 +416,13 @@ private:
 
     void emitParameterGesture(float value, bool begin, bool end)
     {
-        emitAction(SetParameterAction { "analysis.frequency", value, begin, end });
+        const auto* descriptor = ParameterRegistry::find("analysisLowestFreq");
+        if (descriptor == nullptr)
+            return;
+        const auto parameterValue = descriptor->denormalize(value);
+        emitAction(SetParameterAction { "analysisLowestFreq", parameterValue, begin, end });
         if (sink_.parameterGesture)
-            sink_.parameterGesture(sink_.context, "analysis.frequency", value, begin, end);
+            sink_.parameterGesture(sink_.context, "analysisLowestFreq", parameterValue, begin, end);
     }
 
     void emitAction(const EditorAction& action)

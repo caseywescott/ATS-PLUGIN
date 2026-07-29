@@ -98,8 +98,8 @@ void pageSelected(void* context, int pageIndex)
 void parameterGesture(void* context, const char* id, float value, bool begin, bool end)
 {
     auto& state = *static_cast<HarnessState*>(context);
-    REQUIRE(std::strcmp(id, "analysis.frequency") == 0);
-    REQUIRE(value >= 0.0f && value <= 1.0f);
+    REQUIRE(std::strcmp(id, "analysisLowestFreq") == 0);
+    REQUIRE(value >= 1.0f && value <= 2000.0f);
     ++state.parameterGestures;
     state.parameterBegin = state.parameterBegin || begin;
     state.parameterEnd = state.parameterEnd || end;
@@ -112,7 +112,7 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
     REQUIRE(action != nullptr);
     REQUIRE(std::holds_alternative<ats::ui::SetParameterAction>(*action));
     const auto& parameter = std::get<ats::ui::SetParameterAction>(*action);
-    REQUIRE(parameter.id == "analysis.frequency");
+    REQUIRE(parameter.id == "analysisLowestFreq");
     ++state.typedParameterActions;
     state.typedParameterBegin = state.typedParameterBegin || parameter.begin;
     state.typedParameterEnd = state.typedParameterEnd || parameter.end;

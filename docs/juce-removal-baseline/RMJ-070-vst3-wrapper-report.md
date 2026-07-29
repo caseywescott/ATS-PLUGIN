@@ -50,6 +50,14 @@ logical resize, and teardown. The shared Visage probes additionally pass
 native mouse/text input, focus, popup selection/dismissal, page selection, and
 parameter gestures at a 1.25x scale.
 
+The controller-created view now supplies a backend-neutral editor action target
+to `VisageEditor`. A real analysis-frequency gesture emits the durable
+`analysisLowestFreq` parameter ID with a descriptor-domain value; the VST3
+controller converts it back to normalized VST3 space, updates its parameter
+state, and forwards begin/perform/end edits to the host component handler.
+This is a compiled and artifact-tested host bridge. A DAW-host recording of
+the gesture is still a separate external validation gate.
+
 ```text
 cmake -S . -B /private/tmp/ats-vst3-arm64 \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_PLUGIN=OFF \
