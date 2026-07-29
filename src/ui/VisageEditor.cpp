@@ -30,6 +30,9 @@ public:
         for (std::size_t index = 0; index < synthesisValues_.size(); ++index)
             if (const auto* descriptor = synthesisDescriptor(index))
                 synthesisValues_[index] = descriptor->defaultValue;
+        for (std::size_t index = 0; index < sessionValues_.size(); ++index)
+            if (const auto* descriptor = sessionDescriptor(index))
+                sessionValues_[index] = descriptor->defaultValue;
 
         setAcceptsKeystrokes(true);
         onMouseDown() += [this](const visage::MouseEvent& event) {
@@ -178,6 +181,22 @@ public:
                 redraw();
                 requestKeyboardFocus();
                 return;
+            }
+            if (shell_.state().page == EditorPage::session)
+            {
+                if (const auto control = sessionControlAt(point))
+                {
+                    const auto* descriptor = sessionDescriptor(*control);
+                    if (descriptor == nullptr)
+                        return;
+                    const auto bounds = sessionControlBounds(*control);
+                    const auto normalized = parameterAt(point.x, bounds);
+                    setSessionValue(*control, descriptor->denormalize(normalized));
+                    emitSessionGesture(*control, normalized, true, true);
+                    requestKeyboardFocus();
+                    redraw();
+                    return;
+                }
             }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
@@ -527,6 +546,10 @@ public:
                         18.0f, 216.0f, 164.0f, 18.0f);
             canvas.text(spectrumModeLabel(), labelFont, visage::Font::kLeft,
                         30.0f, 438.0f, 240.0f, 14.0f);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("MORPH  |  TIMBRE  |  OUTPUT", labelFont, visage::Font::kLeft,
+                        18.0f, 474.0f, 360.0f, 14.0f);
+            drawSessionControls(canvas, tokens, labelFont);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::analysis))
         {
@@ -680,6 +703,10 @@ private:
         "synStart", "synDur", "usePhase", "useAllPartials", "residualOnly", "useIfftSynth",
         "classicPreviewMode"
     };
+    static constexpr std::array<std::string_view, 9> kSessionControlIds {
+        "morphAmount", "morphPerformanceMacro", "morphSmoothingMs", "timbreBrightnessDb",
+        "timbreTiltDbPerOct", "timbreNoiseBalance", "partGain", "resGain", "outputTrim"
+    };
 
     enum class ParameterSurface : std::uint8_t { analysis, synthesis };
 
@@ -693,6 +720,12 @@ private:
     {
         return index < kSynthesisControlIds.size() ? ParameterRegistry::find(kSynthesisControlIds[index])
                                                    : nullptr;
+    }
+
+    [[nodiscard]] static const ParameterDescriptor* sessionDescriptor(std::size_t index) noexcept
+    {
+        return index < kSessionControlIds.size() ? ParameterRegistry::find(kSessionControlIds[index])
+                                                 : nullptr;
     }
 
     [[nodiscard]] AnalysisControlBounds analysisControlBounds(std::size_t visualIndex) const noexcept
@@ -744,6 +777,16 @@ private:
         return synthesisControlBounds(control);
     }
 
+    [[nodiscard]] static AnalysisControlBounds sessionControlBounds(std::size_t control) noexcept
+    {
+        constexpr float width = 300.0f;
+        constexpr float gap = 14.0f;
+        const auto row = control / 2;
+        const auto column = control % 2;
+        return { 18.0f + static_cast<float>(column) * (width + gap),
+                 490.0f + static_cast<float>(row) * 42.0f, width, 34.0f };
+    }
+
     [[nodiscard]] std::optional<std::size_t> analysisControlAt(const visage::Point& point) const noexcept
     {
         for (std::size_t visualIndex = 0; visualIndex < kAnalysisVisualOrder.size(); ++visualIndex)
@@ -763,6 +806,18 @@ private:
             if ((control == 2 || control == 3) && shell_.synthesis().shapeControlsDimmed())
                 continue;
             const auto bounds = synthesisControlBounds(control);
+            if (point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
+                point.y >= bounds.y && point.y <= bounds.y + bounds.height)
+                return control;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] static std::optional<std::size_t> sessionControlAt(const visage::Point& point) noexcept
+    {
+        for (std::size_t control = 0; control < kSessionControlIds.size(); ++control)
+        {
+            const auto bounds = sessionControlBounds(control);
             if (point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
                 point.y >= bounds.y && point.y <= bounds.y + bounds.height)
                 return control;
@@ -800,6 +855,13 @@ private:
         if (control == 1)
             shell_.synthesis().setShapeMode(
                 static_cast<FrequencyShapeMode>(static_cast<int>(synthesisValues_[control])));
+    }
+
+    void setSessionValue(std::size_t control, float value)
+    {
+        const auto* descriptor = sessionDescriptor(control);
+        if (descriptor != nullptr && control < sessionValues_.size())
+            sessionValues_[control] = descriptor->snap(value);
     }
 
     void drawAnalysisControls(visage::Canvas& canvas, const VisageTokens& tokens,
@@ -907,6 +969,32 @@ private:
         }
     }
 
+    void drawSessionControls(visage::Canvas& canvas, const VisageTokens& tokens,
+                             const visage::Font& labelFont) const
+    {
+        for (std::size_t control = 0; control < kSessionControlIds.size(); ++control)
+        {
+            const auto* descriptor = sessionDescriptor(control);
+            if (descriptor == nullptr)
+                continue;
+            const auto bounds = sessionControlBounds(control);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text(descriptor->name.data(), labelFont, visage::Font::kLeft,
+                        bounds.x, bounds.y - 14.0f, bounds.width, 13.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(bounds.x, bounds.y, bounds.width, bounds.height, 4.0f);
+            const auto value = sessionValues_[control];
+            canvas.setColor(tokens.accent);
+            canvas.roundedRectangle(bounds.x, bounds.y,
+                                    bounds.width * descriptor->normalize(value), bounds.height, 4.0f);
+            canvas.setColor(tokens.background);
+            const auto text = descriptor->text(value);
+            canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                        bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f,
+                        bounds.height - 6.0f);
+        }
+    }
+
     static void drawPartialControl(visage::Canvas& canvas, const VisageTokens& tokens,
                                    const visage::Font& labelFont, const char* label, float value,
                                    float maximum, const AnalysisControlBounds& bounds)
@@ -989,6 +1077,19 @@ private:
             sink_.parameterGesture(sink_.context, id.c_str(), parameterValue, begin, end);
     }
 
+    void emitSessionGesture(std::size_t control, float normalized, bool begin, bool end)
+    {
+        const auto* descriptor = sessionDescriptor(control);
+        if (descriptor == nullptr || control >= sessionValues_.size())
+            return;
+        setSessionValue(control, descriptor->denormalize(normalized));
+        const auto value = sessionValues_[control];
+        const auto id = std::string(descriptor->id);
+        emitAction(SetParameterAction { id, value, begin, end });
+        if (sink_.parameterGesture)
+            sink_.parameterGesture(sink_.context, id.c_str(), value, begin, end);
+    }
+
     void emitAction(const EditorAction& action)
     {
         if (sink_.action)
@@ -1013,6 +1114,7 @@ private:
     std::array<float, AnalysisPageModel::kControlCount> analysisValues_ {};
     std::size_t activeSynthesisControl_ = 0;
     std::array<float, kSynthesisControlIds.size()> synthesisValues_ {};
+    std::array<float, kSessionControlIds.size()> sessionValues_ {};
     float analysisScroll_ = 0.0f;
     bool mathEditing_ = false;
     int partialIndex_ = 0;
