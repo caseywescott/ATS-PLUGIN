@@ -9,11 +9,18 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 
 namespace
 {
 using GetFactoryFunction = Steinberg::IPluginFactory* (*)();
+
+void writeResult(const char* path)
+{
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream << "{\"status\":\"passed\",\"probe\":\"vst3-native-editor\"}\n";
+}
 
 [[noreturn]] void fail(const char* expression, int line)
 {
@@ -88,7 +95,9 @@ public:
 
 int main(int argc, char** argv)
 {
-    REQUIRE(argc == 2);
+    // The launcher supplies the VST3 binary and a result path.  A missing
+    // result file is therefore an unambiguous launch/crash failure for CTest.
+    REQUIRE(argc == 3);
 
     @autoreleasepool
     {
@@ -250,6 +259,7 @@ int main(int argc, char** argv)
 
         std::cout << "ats_vst3_editor_view_probe: native NSView attach, focus, resize, "
                      "parameter gesture, VST3 automation, and teardown ok\n";
+        writeResult(argv[2]);
     }
     return 0;
 }

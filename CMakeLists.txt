@@ -28,6 +28,8 @@ set(ATS_VST3_SDK_VERSION "05c4a9763f311a58fe3f34b68a199e5eea92e2b4"
 set(ATS_VST3_SDK_DIR "" CACHE PATH
     "Path to a standalone Steinberg VST3 SDK checkout (overrides download)")
 option(ATS_BUILD_VISAGE_UI_PROBE "Build the pinned Visage native editor probe" OFF)
+option(ATS_ENABLE_NATIVE_HOST_SMOKE
+    "Run launched native-host editor smoke tests (requires a GUI-capable runner)" OFF)
 set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")

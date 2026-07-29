@@ -53,12 +53,23 @@ if(APPLE)
   target_link_libraries(ats_vst3_artifact_test PRIVATE
     "-framework CoreFoundation")
 
-  add_executable(ats_vst3_editor_view_probe
+  add_executable(ats_vst3_editor_view_probe MACOSX_BUNDLE
     "${CMAKE_SOURCE_DIR}/tests/host/vst3_editor_view_probe.mm")
   target_compile_features(ats_vst3_editor_view_probe PRIVATE cxx_std_17)
   target_link_libraries(ats_vst3_editor_view_probe PRIVATE ats_vst3_sdk
     "-framework Cocoa")
+  set_target_properties(ats_vst3_editor_view_probe PROPERTIES
+    OUTPUT_NAME "ATS VST3 Editor Smoke"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.atsplugin.vst3-editor-smoke"
+    MACOSX_BUNDLE_BUNDLE_NAME "ATS VST3 Editor Smoke"
+    MACOSX_BUNDLE_INFO_PLIST
+      "${CMAKE_SOURCE_DIR}/tests/host/ATSVst3EditorSmokeInfo.plist.in")
   add_dependencies(ats_vst3_editor_view_probe ats_resynth_vst3)
-  add_test(NAME ats_vst3_editor_view_probe
-    COMMAND ats_vst3_editor_view_probe "$<TARGET_FILE:ats_resynth_vst3>")
+  if(ATS_ENABLE_NATIVE_HOST_SMOKE)
+    add_test(NAME ats_vst3_editor_view_probe
+      COMMAND /bin/sh "${CMAKE_SOURCE_DIR}/tests/host/run_macos_app_smoke.sh"
+        "$<TARGET_BUNDLE_DIR:ats_vst3_editor_view_probe>"
+        "$<TARGET_FILE:ats_resynth_vst3>"
+        "${CMAKE_CURRENT_BINARY_DIR}/ats_vst3_editor_view_probe.json")
+  endif()
 endif()
