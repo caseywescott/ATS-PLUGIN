@@ -2,6 +2,9 @@
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstparameterchanges.h"
+#include "base/source/fobject.h"
 #include "public.sdk/source/common/memorystream.h"
 
 #include <dlfcn.h>
@@ -11,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 namespace
 {
@@ -24,6 +28,111 @@ void require(bool value, const char* expression)
         std::abort();
     }
 }
+
+class TestParameterQueue final : public Steinberg::FObject,
+                                 public Steinberg::Vst::IParamValueQueue
+{
+public:
+    explicit TestParameterQueue(Steinberg::Vst::ParamID parameterId)
+        : parameterId_(parameterId) {}
+
+    OBJ_METHODS(TestParameterQueue, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::Vst::IParamValueQueue)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::Vst::ParamID PLUGIN_API getParameterId() override { return parameterId_; }
+    Steinberg::int32 PLUGIN_API getPointCount() override
+    { return static_cast<Steinberg::int32>(points_.size()); }
+
+    Steinberg::tresult PLUGIN_API getPoint(Steinberg::int32 index,
+                                           Steinberg::int32& sampleOffset,
+                                           Steinberg::Vst::ParamValue& value) override
+    {
+        if (index < 0 || static_cast<std::size_t>(index) >= points_.size())
+            return Steinberg::kResultFalse;
+        sampleOffset = points_[static_cast<std::size_t>(index)].first;
+        value = points_[static_cast<std::size_t>(index)].second;
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API addPoint(Steinberg::int32 sampleOffset,
+                                           Steinberg::Vst::ParamValue value,
+                                           Steinberg::int32& index) override
+    {
+        index = static_cast<Steinberg::int32>(points_.size());
+        points_.emplace_back(sampleOffset, value);
+        return Steinberg::kResultTrue;
+    }
+
+private:
+    Steinberg::Vst::ParamID parameterId_;
+    std::vector<std::pair<Steinberg::int32, Steinberg::Vst::ParamValue>> points_;
+};
+
+class TestParameterChanges final : public Steinberg::FObject,
+                                   public Steinberg::Vst::IParameterChanges
+{
+public:
+    OBJ_METHODS(TestParameterChanges, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::Vst::IParameterChanges)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::int32 PLUGIN_API getParameterCount() override
+    { return static_cast<Steinberg::int32>(queues_.size()); }
+
+    Steinberg::Vst::IParamValueQueue* PLUGIN_API getParameterData(Steinberg::int32 index) override
+    {
+        if (index < 0 || static_cast<std::size_t>(index) >= queues_.size())
+            return nullptr;
+        return &queues_[static_cast<std::size_t>(index)];
+    }
+
+    Steinberg::Vst::IParamValueQueue* PLUGIN_API addParameterData(
+        const Steinberg::Vst::ParamID& id, Steinberg::int32& index) override
+    {
+        index = static_cast<Steinberg::int32>(queues_.size());
+        queues_.emplace_back(id);
+        return &queues_.back();
+    }
+
+private:
+    std::vector<TestParameterQueue> queues_;
+};
+
+class TestEventList final : public Steinberg::FObject, public Steinberg::Vst::IEventList
+{
+public:
+    OBJ_METHODS(TestEventList, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::Vst::IEventList)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::int32 PLUGIN_API getEventCount() override
+    { return static_cast<Steinberg::int32>(events_.size()); }
+
+    Steinberg::tresult PLUGIN_API getEvent(Steinberg::int32 index,
+                                           Steinberg::Vst::Event& event) override
+    {
+        if (index < 0 || static_cast<std::size_t>(index) >= events_.size())
+            return Steinberg::kResultFalse;
+        event = events_[static_cast<std::size_t>(index)];
+        return Steinberg::kResultTrue;
+    }
+
+    Steinberg::tresult PLUGIN_API addEvent(Steinberg::Vst::Event& event) override
+    {
+        events_.push_back(event);
+        return Steinberg::kResultTrue;
+    }
+
+private:
+    std::vector<Steinberg::Vst::Event> events_;
+};
 }
 
 int main(int argc, char** argv)
@@ -106,11 +215,48 @@ int main(int argc, char** argv)
     Steinberg::Vst::AudioBusBuffers output;
     output.numChannels = 2;
     output.channelBuffers32 = channels;
+
+    TestParameterChanges parameterChanges;
+    Steinberg::int32 parameterQueueIndex = -1;
+    auto* parameterQueue = parameterChanges.addParameterData(1, parameterQueueIndex);
+    require(parameterQueue != nullptr && parameterQueueIndex == 0,
+            "automation queue allocation");
+    Steinberg::int32 pointIndex = -1;
+    require(parameterQueue->addPoint(0, 0.25, pointIndex) == Steinberg::kResultTrue,
+            "automation start point");
+    require(parameterQueue->addPoint(32, 0.75, pointIndex) == Steinberg::kResultTrue,
+            "automation end point");
+
+    TestEventList events;
+    Steinberg::Vst::Event noteOn {};
+    noteOn.type = Steinberg::Vst::Event::kNoteOnEvent;
+    noteOn.sampleOffset = 7;
+    noteOn.noteOn.pitch = 60;
+    noteOn.noteOn.velocity = 0.8f;
+    require(events.addEvent(noteOn) == Steinberg::kResultTrue, "MIDI note-on dispatch");
+    Steinberg::Vst::Event noteOff {};
+    noteOff.type = Steinberg::Vst::Event::kNoteOffEvent;
+    noteOff.sampleOffset = 48;
+    noteOff.noteOff.pitch = 60;
+    require(events.addEvent(noteOff) == Steinberg::kResultTrue, "MIDI note-off dispatch");
+    for (int index = 0; index < 300; ++index)
+    {
+        Steinberg::Vst::Event extra {};
+        extra.type = Steinberg::Vst::Event::kNoteOnEvent;
+        extra.sampleOffset = index % 64;
+        extra.noteOn.pitch = static_cast<Steinberg::int16>(36 + index % 48);
+        extra.noteOn.velocity = 0.5f;
+        require(events.addEvent(extra) == Steinberg::kResultTrue,
+                "bounded MIDI event list construction");
+    }
+
     Steinberg::Vst::ProcessData data {};
     data.numSamples = 64;
     data.numOutputs = 1;
     data.outputs = &output;
     data.symbolicSampleSize = Steinberg::Vst::kSample32;
+    data.inputParameterChanges = &parameterChanges;
+    data.inputEvents = &events;
     require(processor->process(data) == Steinberg::kResultTrue, "process");
     for (float sample : left) require(sample == 0.0f, "left output silence");
     for (float sample : right) require(sample == 0.0f, "right output silence");
@@ -132,5 +278,5 @@ int main(int argc, char** argv)
     processor->release();
     component->release();
     dlclose(module);
-    std::cout << "ats_vst3_artifact_test: identity, 81 parameters, bus, lifecycle, and process ok\n";
+    std::cout << "ats_vst3_artifact_test: identity, 81 parameters, automation, MIDI, bus, lifecycle, and process ok\n";
 }

@@ -183,10 +183,12 @@ listed commit supplies the cross-layer proof.
 - [x] Commit 21 VST3 artifact slice: exact SDK commit pinned in CMake and a
   real arm64 artifact/lifecycle/process test passes, including all-81
   controller parameter round-trips and processor state rewind/reopen.
-- [ ] Commit 21 completion gates: host automation/MIDI stress,
+- [ ] Commit 21 completion gates: full host automation/MIDI stress,
   pluginval-equivalent scan, `IPlugView` callbacks, and a live arm64 Cocoa
   editor probe. The probe currently hits the headless AppKit/Visage `SIGTRAP`
-  during font initialization and is retained as an open native-runtime gate.
+  during font initialization and is retained as an open native-runtime gate;
+  focused two-point automation and bounded MIDI ingress coverage now passes in
+  the artifact test.
 - [x] Commit 22 AU native editor contract: Visage-backed CocoaUI
   advertise/attach/focus/resize/teardown probe is implemented beside the AU
   factory artifact tests; x86_64 probe evidence passes.

@@ -48,7 +48,9 @@ controller and confirmed all 81 parameter IDs round-trip through the controller,
 instantiated the processor, exercised no-input stereo bus setup, 48 kHz/64-frame
 setup, activate/process/deactivate and terminate, confirmed both output channels
 are silent when no playback buffer has been published, and reopened the bounded
-ATSP state stream after an explicit rewind.
+ATSP state stream after an explicit rewind. The same artifact test now supplies a
+two-point automation queue, note-on/note-off events with sample offsets, and a
+300-event input list to verify bounded MIDI conversion during process dispatch.
 
 The native editor view probe uses the same bundle and a real Cocoa host window:
 
