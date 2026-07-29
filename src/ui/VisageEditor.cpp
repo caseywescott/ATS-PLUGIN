@@ -138,18 +138,43 @@ public:
                 return;
             }
             if (shell_.state().page == EditorPage::session && point.y >= 112.0f &&
-                point.y < 164.0f && point.x >= 18.0f && point.x < 238.0f)
+                point.y < 180.0f && ((point.x >= 18.0f && point.x < 318.0f) ||
+                                     (point.x >= 330.0f && point.x < 630.0f)))
             {
-                const NativeFileDialogRequest request {
-                    point.x < 128.0f ? NativeFileDialogKind::importWav
-                                     : NativeFileDialogKind::importAts,
-                    dialogParent_, {}};
+                const auto slot = point.x >= 330.0f ? 1 : 0;
+                const auto localX = point.x - (slot == 0 ? 18.0f : 330.0f);
+                if (point.y >= 148.0f && localX < 92.0f)
+                {
+                    emitAction(AnalyzeMorphSourceAction { slot });
+                    requestKeyboardFocus();
+                    return;
+                }
+                const auto kind = localX < 190.0f ? NativeFileDialogKind::importWav
+                                                   : NativeFileDialogKind::importAts;
+                const NativeFileDialogRequest request { kind, dialogParent_, {}};
                 if (sink_.dialogRequested)
                     sink_.dialogRequested(sink_.context, static_cast<int>(request.kind));
                 const auto result = detail::runNativeFileDialog(request);
                 if (sink_.dialogResolved)
                     sink_.dialogResolved(sink_.context, static_cast<int>(request.kind),
                                          result.path.c_str(), result.accepted);
+                if (result.accepted)
+                {
+                    if (kind == NativeFileDialogKind::importWav)
+                        emitAction(ImportWavAction { ats::Path { result.path }, slot });
+                    else
+                        emitAction(ImportAtsAction { ats::Path { result.path }, slot });
+                }
+                requestKeyboardFocus();
+                return;
+            }
+            if (shell_.state().page == EditorPage::session && point.y >= 190.0f &&
+                point.y < 210.0f && point.x >= 18.0f && point.x < 146.0f)
+            {
+                const auto playing = !shell_.session().state().transport.playing;
+                shell_.session().setPlaying(playing);
+                emitAction(shell_.session().previewAction(playing));
+                redraw();
                 requestKeyboardFocus();
                 return;
             }
@@ -440,17 +465,16 @@ public:
         if (selected == static_cast<std::size_t>(EditorPage::session))
         {
             const auto& session = shell_.session().state();
+            drawSourceCard(canvas, tokens, labelFont, session.sources[0], "A", 18.0f);
+            drawSourceCard(canvas, tokens, labelFont, session.sources[1], "B", 330.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 190.0f, 128.0f, 20.0f, 5.0f);
+            canvas.setColor(session.transport.playing ? tokens.accent : tokens.text);
+            canvas.text(session.transport.playing ? "STOP PREVIEW" : "PLAY PREVIEW",
+                        labelFont, visage::Font::kCenter, 22.0f, 193.0f, 120.0f, 14.0f);
             canvas.setColor(tokens.secondaryText);
-            canvas.text("SOURCE A", labelFont, visage::Font::kLeft,
-                        18.0f, 112.0f, 170.0f, 18.0f);
-            canvas.text(session.sources[0].hasModel ? "READY" : "DROP WAV / ATS",
-                        labelFont, visage::Font::kLeft, 18.0f, 132.0f, 220.0f, 18.0f);
-            canvas.text("SOURCE B", labelFont, visage::Font::kLeft,
-                        258.0f, 112.0f, 170.0f, 18.0f);
-            canvas.text(session.sources[1].hasModel ? "READY" : "DROP WAV / ATS",
-                        labelFont, visage::Font::kLeft, 258.0f, 132.0f, 220.0f, 18.0f);
-            canvas.text("PLAY  BOTH  |  SMEAR OFF  |  SPECTRUM  COMBINED  |  A -> B",
-                        labelFont, visage::Font::kLeft, 18.0f, 176.0f, 520.0f, 18.0f);
+            canvas.text("BOTH  |  SMEAR OFF  |  SPECTRUM",
+                        labelFont, visage::Font::kLeft, 160.0f, 193.0f, 360.0f, 14.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 204.0f, 380.0f, 3.0f);
             canvas.setColor(tokens.secondaryText);
@@ -856,6 +880,33 @@ private:
         const auto text = std::to_string(value);
         canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
                     bounds.x + 4.0f, bounds.y + 3.0f, bounds.width - 8.0f, bounds.height - 6.0f);
+    }
+
+    static void drawSourceCard(visage::Canvas& canvas, const VisageTokens& tokens,
+                               const visage::Font& labelFont, const SessionSourceCard& source,
+                               const char* slot, float x)
+    {
+        canvas.setColor(tokens.surface);
+        canvas.roundedRectangle(x, 112.0f, 300.0f, 68.0f, 8.0f);
+        canvas.setColor(tokens.accent);
+        canvas.roundedRectangle(x + 8.0f, 120.0f, 18.0f, 14.0f, 4.0f);
+        canvas.setColor(tokens.background);
+        canvas.text(slot, labelFont, visage::Font::kCenter, x + 8.0f, 120.0f, 18.0f, 14.0f);
+        canvas.setColor(tokens.text);
+        const auto& name = source.name.empty() ? std::string("DROP WAV / ATS") : source.name;
+        canvas.text(name.c_str(), labelFont, visage::Font::kLeft, x + 34.0f, 120.0f, 254.0f, 14.0f);
+        constexpr std::array<const char*, 3> labels { "ANALYZE", "WAV", "ATS" };
+        constexpr std::array<float, 3> widths { 88.0f, 92.0f, 92.0f };
+        float buttonX = x + 8.0f;
+        for (std::size_t index = 0; index < labels.size(); ++index)
+        {
+            canvas.setColor(tokens.panel);
+            canvas.roundedRectangle(buttonX, 148.0f, widths[index], 24.0f, 5.0f);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text(labels[index], labelFont, visage::Font::kCenter,
+                        buttonX, 153.0f, widths[index], 14.0f);
+            buttonX += widths[index] + 4.0f;
+        }
     }
 
     [[nodiscard]] const char* spectrumModeLabel() const noexcept
