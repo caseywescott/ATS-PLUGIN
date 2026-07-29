@@ -1,7 +1,12 @@
 #include "../../core/ParameterRegistry.h"
 #include "../../host/HostAdapter.h"
+#include "../../ui/VisageEditor.h"
 
+#include <AudioToolbox/AudioToolbox.h>
+#include <AudioUnit/AUCocoaUIView.h>
 #include <CoreFoundation/CoreFoundation.h>
+
+#import <Cocoa/Cocoa.h>
 
 #include <AudioUnitSDK/AUBase.h>
 #include <AudioUnitSDK/AUPlugInDispatch.h>
@@ -10,9 +15,83 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <memory>
+
+@interface AtsAuHostedEditorView : NSView
+@end
+
+@implementation AtsAuHostedEditorView {
+    std::unique_ptr<ats::ui::VisageEditor> _editor;
+}
+
+- (instancetype)initWithPreferredSize:(NSSize)size
+{
+    const CGFloat width = size.width > 1.0 ? size.width : 1280.0;
+    const CGFloat height = size.height > 1.0 ? size.height : 940.0;
+    self = [super initWithFrame:NSMakeRect(0.0, 0.0, width, height)];
+    if (self == nil)
+        return nil;
+
+    _editor = std::make_unique<ats::ui::VisageEditor>();
+    if (!_editor->setSize(static_cast<std::uint32_t>(width),
+                          static_cast<std::uint32_t>(height)) ||
+        !_editor->setParent((__bridge void*)self))
+    {
+        _editor.reset();
+        return nil;
+    }
+    _editor->show();
+    return self;
+}
+
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    if (_editor != nullptr && newSize.width > 0.0 && newSize.height > 0.0)
+        _editor->setSize(static_cast<std::uint32_t>(newSize.width),
+                         static_cast<std::uint32_t>(newSize.height));
+}
+
+- (BOOL)acceptsFirstResponder
+{
+    return YES;
+}
+
+- (void)dealloc
+{
+    _editor.reset();
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
+}
+
+@end
+
+@interface AtsAudioUnitCocoaViewFactory : NSObject <AUCocoaUIBase>
+@end
+
+@implementation AtsAudioUnitCocoaViewFactory
+
+- (unsigned)interfaceVersion
+{
+    return 0;
+}
+
+- (NSView*)uiViewForAudioUnit:(AudioUnit)audioUnit withSize:(NSSize)preferredSize
+{
+    (void)audioUnit;
+    return [[AtsAuHostedEditorView alloc] initWithPreferredSize:preferredSize];
+}
+
+@end
 
 namespace
 {
+Class cocoaViewFactoryClass()
+{
+    return [AtsAudioUnitCocoaViewFactory class];
+}
+
 class AtsAudioUnit final : public ausdk::AUBase
 {
 public:
@@ -57,6 +136,48 @@ public:
         const auto* bytes = CFDataGetBytePtr(static_cast<CFDataRef>(data));
         const auto size = static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(data)));
         return host_.restoreState(bytes, size) ? noErr : kAudioUnitErr_InvalidPropertyValue;
+    }
+
+    OSStatus GetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScope inScope,
+                             AudioUnitElement inElement, UInt32& outDataSize,
+                             bool& outWritable) override
+    {
+        if (inID == kAudioUnitProperty_CocoaUI && inScope == kAudioUnitScope_Global)
+        {
+            outDataSize = sizeof(AudioUnitCocoaViewInfo);
+            outWritable = false;
+            return noErr;
+        }
+        return ausdk::AUBase::GetPropertyInfo(inID, inScope, inElement, outDataSize, outWritable);
+    }
+
+    OSStatus GetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope,
+                         AudioUnitElement inElement, void* outData) override
+    {
+        if (inID == kAudioUnitProperty_CocoaUI && inScope == kAudioUnitScope_Global)
+        {
+            if (outData == nullptr)
+                return kAudio_ParamError;
+            @autoreleasepool
+            {
+                Class cls = cocoaViewFactoryClass();
+                NSBundle* bundle = [NSBundle bundleForClass:cls];
+                if (cls == nil || bundle == nil || bundle.bundlePath == nil)
+                    return kAudioUnitErr_InvalidPropertyValue;
+
+                auto* info = static_cast<AudioUnitCocoaViewInfo*>(outData);
+                info->mCocoaAUViewClass[0] = CFStringCreateCopy(
+                    kCFAllocatorDefault, (__bridge CFStringRef)NSStringFromClass(cls));
+                info->mCocoaAUViewBundleLocation = CFURLCreateWithFileSystemPath(
+                    kCFAllocatorDefault, (__bridge CFStringRef)bundle.bundlePath,
+                    kCFURLPOSIXPathStyle, true);
+                if (info->mCocoaAUViewClass[0] == nullptr ||
+                    info->mCocoaAUViewBundleLocation == nullptr)
+                    return kAudioUnitErr_InvalidPropertyValue;
+            }
+            return noErr;
+        }
+        return ausdk::AUBase::GetProperty(inID, inScope, inElement, outData);
     }
 
     OSStatus ProcessMultipleBufferLists(AudioUnitRenderActionFlags&,

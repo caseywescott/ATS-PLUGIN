@@ -32,7 +32,7 @@ set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
 
-if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE))
+if(APPLE AND (ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE OR ATS_BUILD_NATIVE_AU))
   # Visage's native macOS windowing implementation contains Objective-C++
   # sources. Enable the language at the top-level project so CMake also
   # initializes its compile rule variables for the nested dependency.
@@ -449,9 +449,9 @@ foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
     ats_core ats_playback ats_state ats_editor)
 endforeach()
 
-if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE)
+if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE OR ATS_BUILD_NATIVE_AU)
   if(NOT APPLE)
-    message(FATAL_ERROR "ATS_BUILD_VISAGE_UI_PROBE currently requires macOS native host embedding")
+    message(FATAL_ERROR "ATS Visage editor backends currently require macOS native host embedding")
   endif()
 
   include(FetchContent)

@@ -13,6 +13,17 @@
 namespace
 {
 using FactoryFunction = AudioComponentFactoryFunction;
+using GetPropertyInfoFn = OSStatus (*)(void*, AudioUnitPropertyID, AudioUnitScope,
+                                       AudioUnitElement, UInt32*, Boolean*);
+using GetPropertyFn = OSStatus (*)(void*, AudioUnitPropertyID, AudioUnitScope,
+                                   AudioUnitElement, void*, UInt32*);
+using SetPropertyFn = OSStatus (*)(void*, AudioUnitPropertyID, AudioUnitScope,
+                                   AudioUnitElement, const void*, UInt32);
+using GetParameterFn = OSStatus (*)(void*, AudioUnitParameterID, AudioUnitScope,
+                                    AudioUnitElement, AudioUnitParameterValue*);
+using SetParameterFn = OSStatus (*)(void*, AudioUnitParameterID, AudioUnitScope,
+                                    AudioUnitElement, AudioUnitParameterValue, UInt32);
+using UnitFn = OSStatus (*)(void*);
 
 void require(bool value, const char* expression)
 {
@@ -39,29 +50,34 @@ int main(int argc, char** argv)
     require(plugin != nullptr, "AudioUnit factory");
     require(plugin->Open(plugin, reinterpret_cast<AudioComponentInstance>(plugin)) == noErr,
             "AudioComponent Open");
-    auto initialize = plugin->Lookup(kAudioUnitInitializeSelect);
+    auto initialize = reinterpret_cast<UnitFn>(plugin->Lookup(kAudioUnitInitializeSelect));
     require(initialize != nullptr && initialize(plugin) == noErr, "AudioUnitInitialize");
 
     UInt32 count = 0;
     UInt32 size = sizeof(count);
-    auto getPropertyInfo = plugin->Lookup(kAudioUnitGetPropertyInfoSelect);
+    auto getPropertyInfo = reinterpret_cast<GetPropertyInfoFn>(
+        plugin->Lookup(kAudioUnitGetPropertyInfoSelect));
     require(getPropertyInfo != nullptr &&
                 getPropertyInfo(plugin, kAudioUnitProperty_ParameterList,
                                 kAudioUnitScope_Global, 0, &size, nullptr) == noErr,
             "parameter-list property info");
     require(size == 81u * sizeof(AudioUnitParameterID), "81 parameter contract");
     std::array<AudioUnitParameterID, 81> ids {};
-    auto getProperty = plugin->Lookup(kAudioUnitGetPropertySelect);
+    auto getProperty = reinterpret_cast<GetPropertyFn>(
+        plugin->Lookup(kAudioUnitGetPropertySelect));
     require(getProperty != nullptr &&
                 getProperty(plugin, kAudioUnitProperty_ParameterList,
                             kAudioUnitScope_Global, 0, ids.data(), &size) == noErr,
             "parameter-list property");
     count = size / sizeof(AudioUnitParameterID);
     require(count == 81, "81 parameter list entries");
-    auto setParameter = plugin->Lookup(kAudioUnitSetParameterSelect);
+    auto setParameter = reinterpret_cast<SetParameterFn>(
+        plugin->Lookup(kAudioUnitSetParameterSelect));
     require(setParameter != nullptr, "parameter setter");
-    auto getParameter = plugin->Lookup(kAudioUnitGetParameterSelect);
-    auto getParameterInfo = plugin->Lookup(kAudioUnitGetPropertySelect);
+    auto getParameter = reinterpret_cast<GetParameterFn>(
+        plugin->Lookup(kAudioUnitGetParameterSelect));
+    auto getParameterInfo = reinterpret_cast<GetPropertyFn>(
+        plugin->Lookup(kAudioUnitGetPropertySelect));
     require(getParameter != nullptr && getParameterInfo != nullptr, "parameter readers");
     for (const auto id : ids)
     {
@@ -88,7 +104,8 @@ int main(int argc, char** argv)
     format.mBytesPerFrame = sizeof(float);
     format.mChannelsPerFrame = 2;
     format.mBitsPerChannel = 32;
-    auto setProperty = plugin->Lookup(kAudioUnitSetPropertySelect);
+    auto setProperty = reinterpret_cast<SetPropertyFn>(
+        plugin->Lookup(kAudioUnitSetPropertySelect));
     require(setProperty != nullptr &&
                 setProperty(plugin, kAudioUnitProperty_StreamFormat,
                             kAudioUnitScope_Output, 0, &format, sizeof(format)) == noErr,
@@ -113,10 +130,8 @@ int main(int argc, char** argv)
                 static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(state))))
                  .has_value(),
             "ATSP class-info header");
-    auto setClassInfo = plugin->Lookup(kAudioUnitSetPropertySelect);
-    require(setClassInfo != nullptr &&
-                setClassInfo(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,
-                             &state, sizeof(state)) == noErr,
+    require(setProperty(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,
+                        &state, sizeof(state)) == noErr,
             "class-info state restore");
     CFRelease(state);
 
@@ -147,7 +162,7 @@ int main(int argc, char** argv)
     for (const auto sample : right)
         require(sample == 0.0f, "silent right output without playback");
 
-    auto uninitialize = plugin->Lookup(kAudioUnitUninitializeSelect);
+    auto uninitialize = reinterpret_cast<UnitFn>(plugin->Lookup(kAudioUnitUninitializeSelect));
     require(uninitialize != nullptr && uninitialize(plugin) == noErr, "AudioUnitUninitialize");
     require(plugin->Close(plugin) == noErr, "AudioComponent Close");
     dlclose(module);
