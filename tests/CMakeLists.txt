@@ -468,6 +468,13 @@ add_test(
           "${CMAKE_CURRENT_SOURCE_DIR}/ui/ats_ui_parity_manifest.json"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+add_test(
+  NAME ats_no_juce_native_scan
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/architecture/no_juce_native_scan.py"
+          "${CMAKE_SOURCE_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME estimator_accuracy_test COMMAND $<TARGET_FILE:estimator_accuracy_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

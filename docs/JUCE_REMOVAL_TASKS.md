@@ -225,3 +225,8 @@ listed commit supplies the cross-layer proof.
 - [ ] Standalone and one DAW/VST3 host are actually exercised with build hash.
 - [ ] Clean checkout, no-JUCE scan, dependency/license docs, artifacts, and
   final manifest/status promotion pass.
+
+The native `BUILD_PLUGIN=OFF` graph now has a dedicated `ats_no_juce_native_scan`
+CTest gate. The final clean-checkout gate remains open because `BUILD_PLUGIN=ON`
+still enters the legacy JUCE plugin target until the production integration and
+full widget-port commits are complete.
