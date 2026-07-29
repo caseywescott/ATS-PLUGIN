@@ -1,5 +1,7 @@
 #include "../../core/ParameterRegistry.h"
 #include "../../state/FactoryPresetState.h"
+#include "../../state/ParameterPresetCodec.h"
+#include "../../platform/FileService.h"
 #include "../../host/HostAdapter.h"
 #include "../../ui/VisageEditor.h"
 
@@ -458,6 +460,20 @@ private:
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
             (void) ats::state::applyFactoryPreset(factory->index, host_.parameters());
+            return;
+        }
+        ats::platform::FileService files;
+        if (const auto* save = std::get_if<ats::ui::SavePresetAction>(&action))
+        {
+            (void) files.writeAtomic(save->path, ats::state::ParameterPresetCodec::encode(host_.parameters()), true);
+            return;
+        }
+        if (const auto* load = std::get_if<ats::ui::LoadPresetAction>(&action))
+        {
+            const auto payload = files.read(load->path);
+            std::string error;
+            if (payload.succeeded())
+                (void) ats::state::ParameterPresetCodec::decode(payload.bytes, host_.parameters(), error);
             return;
         }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);

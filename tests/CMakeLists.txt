@@ -19,6 +19,14 @@ target_include_directories(factory_preset_state_test PRIVATE "${CMAKE_CURRENT_SO
 target_compile_features(factory_preset_state_test PRIVATE cxx_std_17)
 add_test(NAME factory_preset_state_test COMMAND factory_preset_state_test)
 
+add_executable(parameter_preset_codec_test parameter_preset_codec_test.cpp
+  ../src/core/ParameterRegistry.cpp ../src/platform/FileService.cpp)
+target_include_directories(parameter_preset_codec_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/platform"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/state")
+target_compile_features(parameter_preset_codec_test PRIVATE cxx_std_17)
+add_test(NAME parameter_preset_codec_test COMMAND parameter_preset_codec_test)
+
 add_executable(parameter_binding_dispatch_test parameter_binding_dispatch_test.cpp ../src/core/ParameterRegistry.cpp)
 target_include_directories(parameter_binding_dispatch_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
