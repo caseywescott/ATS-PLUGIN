@@ -1,6 +1,8 @@
 #include "../../core/AtsStateCodec.h"
 #include "../../core/ParameterRegistry.h"
 #include "../../state/FactoryPresetState.h"
+#include "../../state/ParameterPresetCodec.h"
+#include "../../platform/FileService.h"
 #include "../../host/HostAdapter.h"
 #include "../../ui/VisageEditor.h"
 
@@ -386,15 +388,28 @@ public:
             ats::ParameterStore preset;
             if (!ats::state::applyFactoryPreset(factory->index, preset))
                 return;
+            applyPreset(preset);
+            return;
+        }
+        ats::platform::FileService files;
+        if (const auto* save = std::get_if<ats::ui::SavePresetAction>(&action))
+        {
+            ats::ParameterStore current;
             for (const auto& descriptor : ats::ParameterRegistry::descriptors())
-            {
-                const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId);
-                const auto normalized = descriptor.normalize(preset.read(descriptor.denseIndex));
-                beginEdit(tag);
-                setParamNormalized(tag, normalized);
-                performEdit(tag, normalized);
-                endEdit(tag);
-            }
+                (void) current.write(descriptor.denseIndex, descriptor.denormalize(
+                    static_cast<float>(getParamNormalized(
+                        static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId)))));
+            (void) files.writeAtomic(save->path, ats::state::ParameterPresetCodec::encode(current), true);
+            return;
+        }
+        if (const auto* load = std::get_if<ats::ui::LoadPresetAction>(&action))
+        {
+            const auto payload = files.read(load->path);
+            ats::ParameterStore preset;
+            std::string error;
+            if (payload.succeeded() &&
+                ats::state::ParameterPresetCodec::decode(payload.bytes, preset, error))
+                applyPreset(preset);
             return;
         }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
@@ -412,6 +427,20 @@ public:
         performEdit(tag, normalized);
         if (parameter->end)
             endEdit(tag);
+    }
+
+private:
+    void applyPreset(const ats::ParameterStore& preset)
+    {
+        for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+        {
+            const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId);
+            const auto normalized = descriptor.normalize(preset.read(descriptor.denseIndex));
+            beginEdit(tag);
+            setParamNormalized(tag, normalized);
+            performEdit(tag, normalized);
+            endEdit(tag);
+        }
     }
 };
 

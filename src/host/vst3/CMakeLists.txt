@@ -8,7 +8,7 @@ target_compile_features(ats_resynth_vst3 PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_vst3 PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
   "${CMAKE_SOURCE_DIR}/src/host")
-target_link_libraries(ats_resynth_vst3 PRIVATE ats_vst3_sdk ats_host_vst3 ats_visage_editor)
+target_link_libraries(ats_resynth_vst3 PRIVATE ats_vst3_sdk ats_host_vst3 ats_file_service ats_visage_editor)
 set_target_properties(ats_resynth_vst3 PROPERTIES
   OUTPUT_NAME "ATS Resynth"
   PREFIX "")
