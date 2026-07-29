@@ -9,6 +9,10 @@ renderer-neutral UI scheduler.
 
 The latest implementation commits are:
 
+- `2c9ca80` routes the public `BUILD_PLUGIN=ON` switch to the pinned native
+  VST3/AU/standalone wrapper graph; it no longer enters the retired JUCE
+  `src/plugin` target
+
 - `59d1905` VST3 controller parameter matrix and processor state rewind/reopen
 - `6404147` focused VST3 automation/MIDI ingress coverage with bounded events
 - `edf97d1` repeated timestamp-advanced AU automation/MIDI render coverage
@@ -40,8 +44,10 @@ The latest implementation commits are:
 
 Validation on 2026-07-29:
 
-- `ctest --test-dir build-review --output-on-failure`: 68/68 passed,
-  including `ats_no_juce_native_scan`
+- `arch -x86_64 ctest --test-dir /private/tmp/ats-native-default
+  --output-on-failure`: 74/74 passed, including the native artifact tests,
+  VST3/AU editor probes, standalone smoke, `ats_no_juce_native_scan`, and all
+  neutral/core contracts
 - Qatsh manifest: 20/20 patch/source marker sets verified
 - UI parity manifest: 53 records valid
 - UI parity baseline/backend inputs frozen to the ATS baseline commit and
@@ -65,6 +71,12 @@ Validation on 2026-07-29:
   and analysis/render activity from the neutral shell model; native history and
   theme click dispatch remain a follow-on probe because their coordinate path
   is not yet stable enough to claim as native evidence
+- The x86_64 real-dispatch harness now remains green after the native embedding
+  seam fix: logical resize, 1.25x scale, page selection, analysis parameter
+  begin/drag/end, native text/focus, popup selection/dismissal, hide/show, and
+  teardown are proven. Header history/theme and Session spectrum-menu callback
+  promotion remain intentionally open until their post-resize coordinate
+  transform is stabilized.
 - The Session source-card path now routes import requests through a
   backend-neutral result seam and macOS `NSOpenPanel`/`NSSavePanel`; automated
   modal accept/cancel evidence remains open.
@@ -109,10 +121,15 @@ Validation on 2026-07-29:
 
 The native backend prerequisite is now selected and pinned: Visage is configured
 at the exact Mearcstapa revision, with real native probes retained as the runtime
-gate. `BUILD_PLUGIN=ON` still enters
-`src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
-integration, AU/standalone wrappers, the full widget parity port, and the
-complete real-dispatch matrix remain open. Neutral host state, parameter, and lifecycle seams now
-compile through explicit format targets, and the real popup path is covered.
-The JUCE removal/build-artifact gates must not be claimed complete until those
-follow-on gates pass.
+gate. `BUILD_PLUGIN=ON` now selects the native VST3/AU/standalone wrappers and
+does not enter `src/plugin/CMakeLists.txt`; the legacy JUCE source directory is
+retained only as migration reference until the full surface promotion and
+deletion gate is complete. Full widget parity, complete real-dispatch coverage,
+and legacy-source deletion remain open.
+
+Steinberg's bundled validator source was located in the pinned VST3 SDK, but a
+standalone validator configure was not possible from the available local
+checkout because its `cmake` submodule (`SMTG_VST3_SDK.cmake`) is absent. No
+`pluginval` binary or DAW is installed in the available environment. The
+artifact and neutral-host tests therefore remain supplemental and are not
+reported as pluginval/DAW validation.
