@@ -23,6 +23,8 @@ using GetParameterFn = OSStatus (*)(void*, AudioUnitParameterID, AudioUnitScope,
                                     AudioUnitElement, AudioUnitParameterValue*);
 using SetParameterFn = OSStatus (*)(void*, AudioUnitParameterID, AudioUnitScope,
                                     AudioUnitElement, AudioUnitParameterValue, UInt32);
+using ScheduleParametersFn = AudioUnitScheduleParametersProc;
+using MidiEventFn = MusicDeviceMIDIEventProc;
 using UnitFn = OSStatus (*)(void*);
 
 void require(bool value, const char* expression)
@@ -108,6 +110,34 @@ int main(int argc, char** argv)
         require(value >= info.minValue && value <= info.maxValue, "parameter value range");
     }
 
+    AudioUnitParameterInfo automationInfo {};
+    UInt32 automationInfoSize = sizeof(automationInfo);
+    require(getParameterInfo(plugin, kAudioUnitProperty_ParameterInfo,
+                              kAudioUnitScope_Global, ids.front(), &automationInfo,
+                              &automationInfoSize) == noErr,
+            "automation parameter info");
+    AudioUnitParameterEvent events[2] {};
+    events[0].scope = kAudioUnitScope_Global;
+    events[0].parameter = ids.front();
+    events[0].eventType = kParameterEvent_Immediate;
+    events[0].eventValues.immediate.value = automationInfo.maxValue;
+    events[1].scope = kAudioUnitScope_Global;
+    events[1].parameter = ids.front();
+    events[1].eventType = kParameterEvent_Ramped;
+    events[1].eventValues.ramp.startBufferOffset = 8;
+    events[1].eventValues.ramp.durationInFrames = 16;
+    events[1].eventValues.ramp.startValue = automationInfo.minValue;
+    events[1].eventValues.ramp.endValue = automationInfo.maxValue;
+    const auto schedule = reinterpret_cast<ScheduleParametersFn>(
+        plugin->Lookup(kAudioUnitScheduleParametersSelect));
+    require(schedule != nullptr && schedule(plugin, events, 2) == noErr,
+            "immediate and ramped parameter schedule");
+
+    const auto midi = reinterpret_cast<MidiEventFn>(
+        plugin->Lookup(kMusicDeviceMIDIEventSelect));
+    require(midi != nullptr && midi(plugin, 0x90, 60, 100, 4) == noErr,
+            "MIDI note-on dispatch");
+
     AudioStreamBasicDescription format {};
     format.mSampleRate = 48000.0;
     format.mFormatID = kAudioFormatLinearPCM;
@@ -171,9 +201,9 @@ int main(int argc, char** argv)
     // AUBase's redundant render-argument check. The selector still enters
     // the real ProcessMultipleBufferLists override below.
     AudioUnitRenderActionFlags processFlags = kAudioUnitRenderAction_DoNotCheckRenderArgs;
-    require(process != nullptr, "stereo process selector");
+    require(process != nullptr, "stereo process selector lookup");
     const auto processStatus = process(plugin, &processFlags, &timestamp, frames, 0, nullptr, 1, outputs);
-    require(processStatus == noErr, "stereo process selector");
+    require(processStatus == noErr, "stereo process selector status");
     for (const auto sample : left)
         require(sample == 0.0f, "silent left output without playback");
     for (const auto sample : right)

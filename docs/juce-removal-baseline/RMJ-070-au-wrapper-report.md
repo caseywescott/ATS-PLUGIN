@@ -39,7 +39,9 @@ Task ID: RMJ-070 / commit 22
   resize/teardown. Class-info follows the AU property-list contract: the
   bounded ATSP bytes live under `kAUPresetDataKey`, with compatibility for
   the earlier raw-data form. No CLAP dependency is added. MIDI/automation
-  stress and runtime standalone GUI smoke remain separate gates.
+  one MIDI note dispatch and scheduled immediate/ramped parameter events are
+  covered by the focused artifact test; repeated render/automation stress and
+  runtime standalone GUI smoke remain separate gates.
 
 ## Evidence
 
@@ -60,7 +62,8 @@ ctest --test-dir /private/tmp/ats-au-editor --output-on-failure \
 
 Result: `ats_au_artifact_test` passed. The component opens through the direct
 factory, verifies the 81-entry parameter matrix, zero-input stereo capability,
-ATSP dictionary class-info round-trip, and zero-input stereo process silence.
+ATSP dictionary class-info round-trip, scheduled parameter events, MIDI note
+dispatch, and zero-input stereo process silence.
 The x86_64 editor probe passes after reading
 `kAudioUnitProperty_CocoaUI`, loads `AtsAudioUnitCocoaViewFactory` from the
 component bundle, creates a Visage-backed `NSView` at 1280×940, attaches it to

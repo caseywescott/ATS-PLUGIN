@@ -17,6 +17,23 @@
 #include <cstring>
 #include <memory>
 
+namespace ausdk
+{
+struct AtsAudioUnitLookup
+{
+    static AudioComponentMethod Lookup(SInt16 selector)
+    {
+        const auto process = AUBaseProcessMultipleLookup::Lookup(selector);
+        return process != nullptr ? process : AUMIDILookup::Lookup(selector);
+    }
+};
+
+template <class Implementor>
+class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
+{
+};
+}
+
 @interface AtsAuHostedEditorView : NSView
 @end
 
@@ -250,8 +267,74 @@ public:
     {
         if (inputCount != 0 || outputCount != 1 || outputs == nullptr || outputs[0] == nullptr)
             return kAudio_ParamError;
-        const auto& output = *outputs[0];
-        const auto frames = inputFrames;
+        ScheduledProcessContext context { this, outputs[0], false };
+        auto& events = GetParamEventList();
+        if (!events.empty())
+        {
+            const auto result = ProcessForScheduledParams(events, inputFrames, &context);
+            events.clear();
+            midiEventCount_ = 0;
+            return result;
+        }
+        const auto result = processOutput(*outputs[0], 0, inputFrames,
+                                          { midiEvents_.data(),
+                                            static_cast<std::uint32_t>(midiEventCount_) });
+        midiEventCount_ = 0;
+        return result;
+    }
+
+    OSStatus MIDIEvent(UInt32 status, UInt32 data1, UInt32 data2,
+                       UInt32 offset) override
+    {
+        const auto type = static_cast<UInt8>(status & 0xf0u);
+        if (type != 0x80u && type != 0x90u)
+            return noErr;
+        if (midiEventCount_ >= midiEvents_.size())
+            return kAudio_ParamError;
+        midiEvents_[midiEventCount_++] = {
+            offset,
+            type == 0x90u && data2 != 0u ? ats::MidiEvent::Type::noteOn
+                                         : ats::MidiEvent::Type::noteOff,
+            static_cast<std::uint8_t>(data1 & 0x7fu),
+            static_cast<std::uint8_t>(data2 & 0x7fu)
+        };
+        return noErr;
+    }
+
+protected:
+    OSStatus ProcessScheduledSlice(void* userData, UInt32 startFrame,
+                                   UInt32 frameCount, UInt32) override
+    {
+        auto& context = *static_cast<ScheduledProcessContext*>(userData);
+        for (const auto& event : GetParamEventList())
+        {
+            const auto* descriptor = descriptorFor(event.parameter);
+            if (descriptor == nullptr)
+                continue;
+            const auto value = Globals()->GetParameter(event.parameter);
+            host_.applyParameterChange({ descriptor->denseIndex,
+                                         descriptor->snap(static_cast<float>(value)) });
+        }
+        const ats::MidiEventList midi = context.midiDispatched
+            ? ats::MidiEventList {}
+            : ats::MidiEventList { midiEvents_.data(),
+                                   static_cast<std::uint32_t>(midiEventCount_) };
+        context.midiDispatched = true;
+        return processOutput(*context.output, startFrame, frameCount, midi);
+    }
+
+private:
+    struct ScheduledProcessContext
+    {
+        AtsAudioUnit* unit = nullptr;
+        AudioBufferList* output = nullptr;
+        bool midiDispatched = false;
+    };
+
+    OSStatus processOutput(AudioBufferList& output, UInt32 startFrame, UInt32 frames,
+                           ats::MidiEventList midi)
+    {
+        const auto totalFrames = startFrame + frames;
         if (output.mNumberBuffers == 0 || output.mNumberBuffers > 2)
             return kAudio_ParamError;
         std::array<float*, 2> channels{};
@@ -263,20 +346,20 @@ public:
                 buffer.mData == nullptr)
                 return kAudio_ParamError;
             if (buffer.mNumberChannels == 1)
-                channels[channelCount++] = static_cast<float*>(buffer.mData);
+                channels[channelCount++] = static_cast<float*>(buffer.mData) + startFrame;
             else
             {
                 if (channelCount != 0)
                     return kAudio_ParamError;
-                channels[0] = static_cast<float*>(buffer.mData);
-                channels[1] = channels[0] + frames;
+                channels[0] = static_cast<float*>(buffer.mData) + startFrame * buffer.mNumberChannels;
+                channels[1] = channels[0] + totalFrames;
                 channelCount = 2;
             }
         }
         if (channelCount != 2)
             return kAudio_ParamError;
         const ats::AudioBufferView view { channels.data(), 2, frames };
-        return host_.process(view, {}) ? noErr : kAudioUnitErr_Uninitialized;
+        return host_.process(view, midi) ? noErr : kAudioUnitErr_Uninitialized;
     }
 
     OSStatus GetParameterList(AudioUnitScope scope, AudioUnitParameterID* ids,
@@ -337,17 +420,18 @@ public:
         if (scope != kAudioUnitScope_Global)
             return kAudioUnitErr_InvalidScope;
         const auto* descriptor = descriptorFor(id);
-        return descriptor != nullptr &&
-                       host_.applyParameterChange({ descriptor->denseIndex,
-                                                    descriptor->snap(static_cast<float>(value)) })
-                   ? noErr
-                   : kAudioUnitErr_InvalidParameter;
+        if (descriptor == nullptr)
+            return kAudioUnitErr_InvalidParameter;
+        const auto snapped = descriptor->snap(static_cast<float>(value));
+        Globals()->SetParameter(descriptor->hostNumericId, snapped, true);
+        return host_.applyParameterChange({ descriptor->denseIndex, snapped })
+            ? noErr
+            : kAudioUnitErr_InvalidParameter;
     }
 
     Float64 GetLatency() override { return 0.0; }
     Float64 GetTailTime() override { return 0.0; }
 
-private:
     static const ats::ParameterDescriptor* descriptorFor(AudioUnitParameterID id)
     {
         const auto& descriptors = ats::ParameterRegistry::descriptors();
@@ -359,7 +443,9 @@ private:
     }
 
     ats::host::HostAdapter host_;
+    std::array<ats::MidiEvent, 256> midiEvents_{};
+    std::size_t midiEventCount_ = 0;
 };
 }
 
-AUSDK_COMPONENT_ENTRY(ausdk::AUBaseProcessMultipleFactory, AtsAudioUnit)
+AUSDK_COMPONENT_ENTRY(ausdk::AtsAudioUnitFactory, AtsAudioUnit)
