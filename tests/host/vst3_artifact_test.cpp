@@ -217,15 +217,19 @@ int main(int argc, char** argv)
     output.channelBuffers32 = channels;
 
     TestParameterChanges parameterChanges;
-    Steinberg::int32 parameterQueueIndex = -1;
-    auto* parameterQueue = parameterChanges.addParameterData(1, parameterQueueIndex);
-    require(parameterQueue != nullptr && parameterQueueIndex == 0,
-            "automation queue allocation");
-    Steinberg::int32 pointIndex = -1;
-    require(parameterQueue->addPoint(0, 0.25, pointIndex) == Steinberg::kResultTrue,
-            "automation start point");
-    require(parameterQueue->addPoint(32, 0.75, pointIndex) == Steinberg::kResultTrue,
-            "automation end point");
+    for (Steinberg::Vst::ParamID id = 1; id <= 81; ++id)
+    {
+        Steinberg::int32 parameterQueueIndex = -1;
+        auto* parameterQueue = parameterChanges.addParameterData(id, parameterQueueIndex);
+        require(parameterQueue != nullptr && parameterQueueIndex == id - 1,
+                "automation queue allocation");
+        Steinberg::int32 pointIndex = -1;
+        require(parameterQueue->addPoint(0, 0.25, pointIndex) == Steinberg::kResultTrue,
+                "automation start point");
+        require(parameterQueue->addPoint(32, 0.75, pointIndex) == Steinberg::kResultTrue,
+                "automation end point");
+    }
+    require(parameterChanges.getParameterCount() == 81, "81 automation queues");
 
     TestEventList events;
     Steinberg::Vst::Event noteOn {};

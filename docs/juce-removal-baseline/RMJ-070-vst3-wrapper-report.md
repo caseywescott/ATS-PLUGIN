@@ -51,6 +51,8 @@ are silent when no playback buffer has been published, and reopened the bounded
 ATSP state stream after an explicit rewind. The same artifact test now supplies a
 two-point automation queue, note-on/note-off events with sample offsets, and a
 300-event input list to verify bounded MIDI conversion during process dispatch.
+All 81 automation queues carry two points, so the dispatch test covers the full
+host parameter-ID matrix rather than only a representative control.
 
 The native editor view probe uses the same bundle and a real Cocoa host window:
 
