@@ -9,8 +9,11 @@
 #include "../ui/Editor.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstddef>
+#include <chrono>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -79,6 +82,12 @@ public:
     static constexpr std::size_t kMaximumStateChunkBytes = 64u * 1024u * 1024u;
 
     HostAdapter() = default;
+    ~HostAdapter()
+    {
+        cancelAnalysis();
+        if (analysisFuture_.valid())
+            analysisFuture_.wait();
+    }
     HostAdapter(const HostAdapter&) = delete;
     HostAdapter& operator=(const HostAdapter&) = delete;
 
@@ -117,6 +126,7 @@ public:
             return false;
         }
         sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
+        ++sourceRevisions_[static_cast<std::size_t>(slot)];
         return true;
     }
 
@@ -167,6 +177,89 @@ public:
         }
         return true;
     }
+
+    // Queues a copy of the decoded source so no worker observes mutable UI
+    // ownership. Completion is committed by pollAnalysis() on the host/UI
+    // domain; process() remains strictly audio-thread-only.
+    bool queueAnalysisSource(int slot, Error& error)
+    {
+        error = {};
+        if (analysisRunning_.load(std::memory_order_acquire))
+        {
+            error = { "analysis_busy", "an analysis job is already running" };
+            return false;
+        }
+        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)])
+        {
+            error = { "missing_source", "select an imported audio source before analysis" };
+            return false;
+        }
+        const auto& source = *sources_[static_cast<std::size_t>(slot)];
+        if (source.kind != engine::SourceImportKind::audio || source.monoSamples.empty() || source.sampleRate <= 0)
+        {
+            error = { "source_not_audio", "selected source does not contain audio samples to analyse" };
+            return false;
+        }
+        analysisCancellation_.cancel();
+        analysisCancellation_ = CancellationSource {};
+        analysisSlot_ = slot;
+        analysisSourceRevision_ = sourceRevisions_[static_cast<std::size_t>(slot)];
+        const auto generation = sourceGenerations_.next();
+        auto samples = source.monoSamples;
+        const auto sampleRate = source.sampleRate;
+        const auto token = analysisCancellation_.token();
+        analysisFuture_ = std::async(std::launch::async,
+            [generation, token, samples = std::move(samples), sampleRate]() mutable {
+                return AtsEngine::analyze(generation, token,
+                                          { samples.data(), samples.size(), sampleRate, {} });
+            });
+        analysisRunning_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    bool pollAnalysis(Error& error)
+    {
+        error = {};
+        if (!analysisRunning_.load(std::memory_order_acquire) || !analysisFuture_.valid() ||
+            analysisFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return false;
+        auto analysed = analysisFuture_.get();
+        analysisRunning_.store(false, std::memory_order_release);
+        if (analysed.status != JobResult<AnalysisOutput>::Status::success)
+        {
+            error = analysed.error;
+            return true;
+        }
+        if (analysisSlot_ < 0 || !sources_[static_cast<std::size_t>(analysisSlot_)] ||
+            sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_)
+        {
+            error = { "stale_analysis", "source changed while analysis was running" };
+            return true;
+        }
+        auto& source = *sources_[static_cast<std::size_t>(analysisSlot_)];
+        source.sound = std::move(analysed.value.sound);
+        source.residual = std::move(analysed.value.residual);
+        if (state_ == HostState::prepared)
+        {
+            const auto playbackSlot = playback_.tryAcquireWriteSlot();
+            const auto rendered = playbackSlot == PlaybackBufferPool::kNoBuffer
+                ? JobResult<RenderStats> {}
+                : AtsEngine::render(analysed.generation, analysisCancellation_.token(), source.sound.get(), {},
+                                    playback_.writeView(playbackSlot));
+            if (playbackSlot == PlaybackBufferPool::kNoBuffer ||
+                rendered.status != JobResult<RenderStats>::Status::success ||
+                !playback_.publish(playbackSlot, analysed.generation))
+            {
+                error = rendered.error ? rendered.error
+                                       : Error { "playback_publish_failed", "could not publish analysed playback" };
+            }
+        }
+        return true;
+    }
+
+    void cancelAnalysis() noexcept { analysisCancellation_.cancel(); }
+    [[nodiscard]] bool analysisRunning() const noexcept
+    { return analysisRunning_.load(std::memory_order_acquire); }
 
     [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
     { return ParameterRegistry::descriptors(); }
@@ -250,6 +343,7 @@ public:
         // before resetting flags so no hidden editor pointer survives with a
         // logically cold adapter.
         detachEditor();
+        cancelAnalysis();
         sources_ = {};
         format_ = format;
         state_ = HostState::cold;
@@ -274,6 +368,7 @@ public:
 
     void release() noexcept
     {
+        cancelAnalysis();
         detachEditor();
         state_ = HostState::released;
         midi_.reset();
@@ -438,6 +533,12 @@ private:
     std::array<std::optional<engine::ImportedSource>, 2> sources_;
     GenerationSource sourceGenerations_;
     CancellationSource sourceCancellation_;
+    CancellationSource analysisCancellation_;
+    std::future<JobResult<AnalysisOutput>> analysisFuture_;
+    int analysisSlot_ = -1;
+    std::uint64_t analysisSourceRevision_ = 0;
+    std::atomic<bool> analysisRunning_ { false };
+    std::array<std::uint64_t, 2> sourceRevisions_ {};
     HostStateChunk stateChunk_;
     PlaybackBufferPool playback_;
     MidiNoteRouter midi_;

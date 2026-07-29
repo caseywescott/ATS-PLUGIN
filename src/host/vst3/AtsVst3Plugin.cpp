@@ -16,6 +16,8 @@
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "public.sdk/source/main/pluginfactory_constexpr.h"
 
+#include <visage_ui/events.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +36,14 @@ static constexpr Steinberg::TUID kControllerTuid =
 
 namespace
 {
+
+constexpr const char* kImportSourceMessage = "ats.editor.import-source";
+constexpr const char* kAnalyzeSourceMessage = "ats.editor.analyze-source";
+constexpr const char* kCancelAnalysisMessage = "ats.editor.cancel-analysis";
+constexpr const char* kPollAnalysisMessage = "ats.editor.poll-analysis";
+constexpr const char* kSourceSlotAttribute = "slot";
+constexpr const char* kSourceKindAttribute = "kind";
+constexpr const char* kSourcePathAttribute = "path";
 
 std::vector<std::byte> readStream(Steinberg::IBStream* stream)
 {
@@ -201,6 +211,67 @@ public:
                                                                          : Steinberg::kResultFalse;
     }
 
+    // Editor-originated file and analysis work is deliberately received by
+    // the processor.  A VST3 controller can be recreated independently, so
+    // keeping decoded sources or playback state there would disconnect the
+    // visible editor from the audio instance that process() renders.
+    Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE
+    {
+        if (message == nullptr)
+            return Steinberg::kInvalidArgument;
+        const auto* messageId = message->getMessageID();
+        auto* attributes = message->getAttributes();
+        if (messageId == nullptr || attributes == nullptr)
+            return Steinberg::kResultFalse;
+
+        if (Steinberg::FIDStringsEqual(messageId, kImportSourceMessage))
+        {
+            Steinberg::int64 slot = -1;
+            Steinberg::int64 kind = -1;
+            const void* pathBytes = nullptr;
+            Steinberg::uint32 pathSize = 0;
+            if (attributes->getInt(kSourceSlotAttribute, slot) != Steinberg::kResultTrue ||
+                attributes->getInt(kSourceKindAttribute, kind) != Steinberg::kResultTrue ||
+                attributes->getBinary(kSourcePathAttribute, pathBytes, pathSize) != Steinberg::kResultTrue ||
+                pathBytes == nullptr || pathSize == 0 || slot < 0 || slot > 1 || kind < 0 || kind > 1)
+                return Steinberg::kResultFalse;
+            const auto importKind = kind == 0 ? ats::engine::SourceImportKind::audio
+                                              : ats::engine::SourceImportKind::ats;
+            ats::Error error;
+            const ats::Path path { std::string(static_cast<const char*>(pathBytes), pathSize) };
+            return host_.importSource(path, static_cast<int>(slot), importKind, error)
+                       ? Steinberg::kResultTrue
+                       : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kAnalyzeSourceMessage))
+        {
+            Steinberg::int64 slot = -1;
+            if (attributes->getInt(kSourceSlotAttribute, slot) != Steinberg::kResultTrue ||
+                slot < 0 || slot > 1)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.queueAnalysisSource(static_cast<int>(slot), error)
+                       ? Steinberg::kResultTrue
+                       : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kCancelAnalysisMessage))
+        {
+            host_.cancelAnalysis();
+            return Steinberg::kResultTrue;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kPollAnalysisMessage))
+        {
+            // The editor's Visage timer runs this on its UI thread. This is
+            // intentionally not done in process(): completion may render and
+            // publish a new buffer, neither of which belongs on the audio
+            // callback.
+            ats::Error error;
+            (void) host_.pollAnalysis(error);
+            return Steinberg::kResultTrue;
+        }
+        return AudioEffect::notify(message);
+    }
+
 private:
     void applyParameterChanges(Steinberg::Vst::IParameterChanges* changes) noexcept
     {
@@ -228,19 +299,40 @@ class Vst3EditorActionTarget
 public:
     virtual ~Vst3EditorActionTarget() = default;
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
+    virtual void pumpEditorWork() = 0;
+};
+
+class Vst3EditorWorkPump final : public visage::EventTimer
+{
+public:
+    explicit Vst3EditorWorkPump(Vst3EditorActionTarget* target) : target_(target) {}
+
+    void timerCallback() override
+    {
+        if (target_ != nullptr)
+            target_->pumpEditorWork();
+    }
+
+private:
+    Vst3EditorActionTarget* target_ = nullptr;
 };
 
 class AtsVst3PlugView final : public Steinberg::FObject, public Steinberg::IPlugView
 {
 public:
-    explicit AtsVst3PlugView(Vst3EditorActionTarget& actionTarget) : actionTarget_(&actionTarget)
+    explicit AtsVst3PlugView(Vst3EditorActionTarget& actionTarget)
+        : actionTarget_(&actionTarget), workPump_(actionTarget_)
     {
         ats::ui::EditorEventSink sink;
         sink.context = actionTarget_;
         sink.action = &AtsVst3PlugView::editorAction;
         editor_ = std::make_unique<ats::ui::VisageEditor>(sink);
     }
-    ~AtsVst3PlugView() override { editor_.reset(); }
+    ~AtsVst3PlugView() override
+    {
+        workPump_.stopTimer();
+        editor_.reset();
+    }
 
     OBJ_METHODS(AtsVst3PlugView, Steinberg::FObject)
     DEFINE_INTERFACES
@@ -273,11 +365,13 @@ public:
         if (!editor_->setParent(parent))
             return Steinberg::kResultFalse;
         editor_->show();
+        workPump_.startTimer(20);
         return Steinberg::kResultTrue;
     }
 
     Steinberg::tresult PLUGIN_API removed() override
     {
+        workPump_.stopTimer();
         editor_.reset();
         return Steinberg::kResultTrue;
     }
@@ -342,15 +436,13 @@ private:
 
     Vst3EditorActionTarget* actionTarget_ = nullptr;
     std::unique_ptr<ats::ui::VisageEditor> editor_;
+    Vst3EditorWorkPump workPump_;
     Steinberg::IPlugFrame* frame_ = nullptr;
 };
 
 class AtsVst3Controller final : public Steinberg::Vst::EditController, public Vst3EditorActionTarget
 {
 public:
-    AtsVst3Controller()
-    { sourceHost_.initialize(ats::host::HostFormat::vst3); }
-
     static Steinberg::FUnknown* createInstance(void*)
     { return static_cast<Steinberg::Vst::IEditController*>(new AtsVst3Controller()); }
 
@@ -415,17 +507,29 @@ public:
                 applyPreset(preset);
             return;
         }
-        ats::Error importError;
         if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
         {
-            (void) sourceHost_.importSource(wav->path, wav->slot,
-                                            ats::engine::SourceImportKind::audio, importError);
+            (void) sendImport(wav->path, wav->slot, ats::engine::SourceImportKind::audio);
             return;
         }
         if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(&action))
         {
-            (void) sourceHost_.importSource(ats->path, ats->slot,
-                                            ats::engine::SourceImportKind::ats, importError);
+            (void) sendImport(ats->path, ats->slot, ats::engine::SourceImportKind::ats);
+            return;
+        }
+        if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(&action))
+        {
+            (void) sendSlotCommand(kAnalyzeSourceMessage, analyse->slot);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(action))
+        {
+            (void) sendSlotCommand(kAnalyzeSourceMessage, 0);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::CancelJobsAction>(action))
+        {
+            (void) sendMessageId(kCancelAnalysisMessage);
             return;
         }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
@@ -445,7 +549,57 @@ public:
             endEdit(tag);
     }
 
+    void pumpEditorWork() override
+    { (void) sendMessageId(kPollAnalysisMessage); }
+
 private:
+    bool sendImport(const ats::Path& path, int slot, ats::engine::SourceImportKind kind)
+    {
+        if (path.empty() || slot < 0 || slot > 1 || path.string().size() > UINT32_MAX)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kImportSourceMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kSourceSlotAttribute, slot) == Steinberg::kResultTrue &&
+            attributes->setInt(kSourceKindAttribute,
+                               kind == ats::engine::SourceImportKind::audio ? 0 : 1) == Steinberg::kResultTrue &&
+            attributes->setBinary(kSourcePathAttribute, path.string().data(),
+                                  static_cast<Steinberg::uint32>(path.string().size())) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendSlotCommand(const char* messageId, int slot)
+    {
+        if (slot < 0 || slot > 1)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kSourceSlotAttribute, slot) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendMessageId(const char* messageId)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        const auto result = sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
     void applyPreset(const ats::ParameterStore& preset)
     {
         for (const auto& descriptor : ats::ParameterRegistry::descriptors())
@@ -459,7 +613,6 @@ private:
         }
     }
 
-    ats::host::HostAdapter sourceHost_;
 };
 
 Steinberg::IPlugView* PLUGIN_API AtsVst3Controller::createView(Steinberg::FIDString name)

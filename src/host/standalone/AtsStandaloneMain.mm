@@ -53,13 +53,18 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
     if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(action))
     {
         ats::Error error;
-        (void) host->analyzeSource(analyse->slot, error);
+        (void) host->queueAnalysisSource(analyse->slot, error);
         return;
     }
     if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(*action))
     {
         ats::Error error;
-        (void) host->analyzeSource(0, error);
+        (void) host->queueAnalysisSource(0, error);
+        return;
+    }
+    if (std::holds_alternative<ats::ui::CancelJobsAction>(*action))
+    {
+        host->cancelAnalysis();
         return;
     }
     const auto* parameter = std::get_if<ats::ui::SetParameterAction>(action);
@@ -176,7 +181,13 @@ int main(int argc, char** argv)
         if (!host.initialize(ats::host::HostFormat::standalone) ||
             !host.attachStandaloneEditor(editor, 1.0f, 1280.0f, 940.0f))
             return 2;
+        auto* hostAdapter = &host;
+        NSTimer* analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
+            ats::Error error;
+            (void) hostAdapter->pollAnalysis(error);
+        }];
         [application run];
+        [analysisTimer invalidate];
         host.detachEditor();
     }
     return 0;

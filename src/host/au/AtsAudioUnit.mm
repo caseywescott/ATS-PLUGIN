@@ -44,6 +44,7 @@ class AuEditorActionTarget
 public:
     virtual ~AuEditorActionTarget() = default;
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
+    virtual void pumpEditorWork() = 0;
 };
 
 void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
@@ -61,6 +62,7 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
 
 @implementation AtsAuHostedEditorView {
     std::unique_ptr<ats::ui::VisageEditor> _editor;
+    NSTimer* _analysisTimer;
 }
 
 - (instancetype)initWithPreferredSize:(NSSize)size actionTarget:(AuEditorActionTarget*)actionTarget
@@ -83,6 +85,10 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
         return nil;
     }
     _editor->show();
+    _analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
+        if (actionTarget != nullptr)
+            actionTarget->pumpEditorWork();
+    }];
     return self;
 }
 
@@ -101,6 +107,8 @@ AuEditorActionTarget* editorActionTargetForAudioUnit(AudioUnit audioUnit);
 
 - (void)dealloc
 {
+    [_analysisTimer invalidate];
+    _analysisTimer = nil;
     _editor.reset();
 #if !__has_feature(objc_arc)
     [super dealloc];
@@ -492,13 +500,18 @@ private:
         if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(&action))
         {
             ats::Error error;
-            (void) host_.analyzeSource(analyse->slot, error);
+            (void) host_.queueAnalysisSource(analyse->slot, error);
             return;
         }
         if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(action))
         {
             ats::Error error;
-            (void) host_.analyzeSource(0, error);
+            (void) host_.queueAnalysisSource(0, error);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::CancelJobsAction>(action))
+        {
+            host_.cancelAnalysis();
             return;
         }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
@@ -509,6 +522,12 @@ private:
             return;
         (void) SetParameter(descriptor->hostNumericId, kAudioUnitScope_Global, 0,
                             parameter->value, 0);
+    }
+
+    void pumpEditorWork() override
+    {
+        ats::Error error;
+        (void) host_.pollAnalysis(error);
     }
 
     Float64 GetLatency() override { return 0.0; }

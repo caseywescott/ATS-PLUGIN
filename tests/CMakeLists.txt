@@ -353,6 +353,15 @@ target_compile_features(host_analysis_playback_test PRIVATE cxx_std_17)
 target_link_libraries(host_analysis_playback_test PRIVATE ats_host_vst3)
 add_test(NAME host_analysis_playback_test COMMAND host_analysis_playback_test)
 
+add_executable(host_async_analysis_test host_async_analysis_test.cpp)
+target_include_directories(host_async_analysis_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_async_analysis_test PRIVATE cxx_std_17)
+target_link_libraries(host_async_analysis_test PRIVATE ats_host_vst3)
+add_test(NAME host_async_analysis_test COMMAND host_async_analysis_test)
+
 add_executable(midi_process_block_test midi_process_block_test.cpp ../src/core/ParameterRegistry.cpp)
 target_include_directories(midi_process_block_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"

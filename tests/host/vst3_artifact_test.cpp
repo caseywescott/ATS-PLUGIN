@@ -3,6 +3,7 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "base/source/fobject.h"
 #include "public.sdk/source/common/memorystream.h"
@@ -11,9 +12,14 @@
 
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -133,6 +139,105 @@ public:
 private:
     std::vector<Steinberg::Vst::Event> events_;
 };
+
+class TestAttributes final : public Steinberg::FObject, public Steinberg::Vst::IAttributeList
+{
+public:
+    OBJ_METHODS(TestAttributes, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::Vst::IAttributeList)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::tresult PLUGIN_API setInt(const char* id, Steinberg::int64 value) override
+    {
+        if (std::strcmp(id, "slot") == 0) slot_ = value;
+        else if (std::strcmp(id, "kind") == 0) kind_ = value;
+        else return Steinberg::kResultFalse;
+        return Steinberg::kResultTrue;
+    }
+    Steinberg::tresult PLUGIN_API getInt(const char* id, Steinberg::int64& value) override
+    {
+        if (std::strcmp(id, "slot") == 0) value = slot_;
+        else if (std::strcmp(id, "kind") == 0) value = kind_;
+        else return Steinberg::kResultFalse;
+        return Steinberg::kResultTrue;
+    }
+    Steinberg::tresult PLUGIN_API setFloat(const char*, double) override { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API getFloat(const char*, double&) override { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API setString(const char*, const Steinberg::Vst::TChar*) override
+    { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API getString(const char*, Steinberg::Vst::TChar*, Steinberg::uint32) override
+    { return Steinberg::kResultFalse; }
+    Steinberg::tresult PLUGIN_API setBinary(const char* id, const void* data,
+                                            Steinberg::uint32 size) override
+    {
+        if (std::strcmp(id, "path") != 0 || data == nullptr || size == 0)
+            return Steinberg::kResultFalse;
+        path_.assign(static_cast<const char*>(data), size);
+        return Steinberg::kResultTrue;
+    }
+    Steinberg::tresult PLUGIN_API getBinary(const char* id, const void*& data,
+                                            Steinberg::uint32& size) override
+    {
+        if (std::strcmp(id, "path") != 0 || path_.empty())
+            return Steinberg::kResultFalse;
+        data = path_.data();
+        size = static_cast<Steinberg::uint32>(path_.size());
+        return Steinberg::kResultTrue;
+    }
+
+private:
+    Steinberg::int64 slot_ = -1;
+    Steinberg::int64 kind_ = -1;
+    std::string path_;
+};
+
+class TestMessage final : public Steinberg::FObject, public Steinberg::Vst::IMessage
+{
+public:
+    explicit TestMessage(const char* id) : id_(id) {}
+
+    OBJ_METHODS(TestMessage, Steinberg::FObject)
+    DEFINE_INTERFACES
+        DEF_INTERFACE(Steinberg::Vst::IMessage)
+    END_DEFINE_INTERFACES(Steinberg::FObject)
+    REFCOUNT_METHODS(Steinberg::FObject)
+
+    Steinberg::FIDString PLUGIN_API getMessageID() override { return id_.c_str(); }
+    void PLUGIN_API setMessageID(Steinberg::FIDString id) override { id_ = id == nullptr ? "" : id; }
+    Steinberg::Vst::IAttributeList* PLUGIN_API getAttributes() override { return &attributes_; }
+
+private:
+    std::string id_;
+    TestAttributes attributes_;
+};
+
+void u16(std::ofstream& stream, std::uint16_t value)
+{
+    stream.put(static_cast<char>(value));
+    stream.put(static_cast<char>(value >> 8));
+}
+
+void u32(std::ofstream& stream, std::uint32_t value)
+{
+    u16(stream, static_cast<std::uint16_t>(value));
+    u16(stream, static_cast<std::uint16_t>(value >> 16));
+}
+
+void writeWave(const std::filesystem::path& path)
+{
+    constexpr std::uint32_t frames = 32768, sampleRate = 48000, bytes = frames * 2;
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    require(static_cast<bool>(stream), "open VST3 source fixture");
+    stream.write("RIFF", 4); u32(stream, 36 + bytes); stream.write("WAVEfmt ", 8); u32(stream, 16);
+    u16(stream, 1); u16(stream, 1); u32(stream, sampleRate); u32(stream, sampleRate * 2); u16(stream, 2); u16(stream, 16);
+    stream.write("data", 4); u32(stream, bytes);
+    for (std::uint32_t index = 0; index < frames; ++index)
+        u16(stream, static_cast<std::uint16_t>(std::lround(
+            7000.0 * std::sin(2.0 * 3.141592653589793 * 440.0 * index / sampleRate))));
+    require(static_cast<bool>(stream), "write VST3 source fixture");
+}
 }
 
 int main(int argc, char** argv)
@@ -190,14 +295,24 @@ int main(int argc, char** argv)
         require(std::abs(controller->getParamNormalized(id) - 0.5) < 1.0e-6,
                 "controller parameter read");
     }
-    controller->terminate();
-    controller->release();
-
     Steinberg::Vst::IComponent* component = nullptr;
     require(factory->createInstance(processorInfo.cid, Steinberg::Vst::IComponent::iid,
                                     reinterpret_cast<void**>(&component)) == Steinberg::kResultTrue,
             "processor instance");
     require(component->initialize(nullptr) == Steinberg::kResultTrue, "processor initialize");
+
+    Steinberg::Vst::IConnectionPoint* controllerConnection = nullptr;
+    Steinberg::Vst::IConnectionPoint* processorConnection = nullptr;
+    require(controller->queryInterface(Steinberg::Vst::IConnectionPoint::iid,
+                                       reinterpret_cast<void**>(&controllerConnection)) == Steinberg::kResultTrue,
+            "controller connection point");
+    require(component->queryInterface(Steinberg::Vst::IConnectionPoint::iid,
+                                      reinterpret_cast<void**>(&processorConnection)) == Steinberg::kResultTrue,
+            "processor connection point");
+    require(controllerConnection->connect(processorConnection) == Steinberg::kResultTrue,
+            "controller connects to processor");
+    require(processorConnection->connect(controllerConnection) == Steinberg::kResultTrue,
+            "processor connects to controller");
 
     Steinberg::Vst::IAudioProcessor* processor = nullptr;
     require(component->queryInterface(Steinberg::Vst::IAudioProcessor::iid,
@@ -272,6 +387,50 @@ int main(int argc, char** argv)
     for (float sample : left) require(sample == 0.0f, "left output silence");
     for (float sample : right) require(sample == 0.0f, "right output silence");
 
+    // A controller/editor command reaches the processor connection point.
+    // The processor, not the controller, decodes the source, owns the queued
+    // analysis, and publishes the audible buffer consumed by process().
+    const auto sourcePath = std::filesystem::temp_directory_path() / "ats-vst3-controller-source.wav";
+    writeWave(sourcePath);
+    TestMessage importMessage("ats.editor.import-source");
+    require(importMessage.getAttributes()->setInt("slot", 0) == Steinberg::kResultTrue,
+            "import slot attribute");
+    require(importMessage.getAttributes()->setInt("kind", 0) == Steinberg::kResultTrue,
+            "import kind attribute");
+    const auto sourcePathString = sourcePath.u8string();
+    require(importMessage.getAttributes()->setBinary("path", sourcePathString.data(),
+                                                     static_cast<Steinberg::uint32>(sourcePathString.size())) ==
+                Steinberg::kResultTrue,
+            "import path attribute");
+    require(processorConnection->notify(&importMessage) == Steinberg::kResultTrue,
+            "processor accepts editor import");
+    TestMessage analyzeMessage("ats.editor.analyze-source");
+    require(analyzeMessage.getAttributes()->setInt("slot", 0) == Steinberg::kResultTrue,
+            "analysis slot attribute");
+    require(processorConnection->notify(&analyzeMessage) == Steinberg::kResultTrue,
+            "processor queues editor analysis");
+
+    bool published = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline && !published)
+    {
+        TestMessage pollMessage("ats.editor.poll-analysis");
+        require(processorConnection->notify(&pollMessage) == Steinberg::kResultTrue,
+                "processor polls queued analysis");
+        left.fill(0.0f);
+        right.fill(0.0f);
+        data.inputParameterChanges = nullptr;
+        data.inputEvents = nullptr;
+        require(processor->process(data) == Steinberg::kResultTrue, "process shared editor audio");
+        for (const auto sample : left)
+            published = published || std::abs(sample) > 1.0e-6f;
+        if (!published)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(published, "processor publishes controller-imported analysis");
+    std::error_code ignored;
+    std::filesystem::remove(sourcePath, ignored);
+
     Steinberg::MemoryStream state;
     require(component->getState(&state) == Steinberg::kResultTrue && state.getSize() > 0,
             "processor state write");
@@ -285,9 +444,17 @@ int main(int argc, char** argv)
 
     processor->setProcessing(false);
     component->setActive(false);
+    require(controllerConnection->disconnect(processorConnection) == Steinberg::kResultTrue,
+            "controller disconnects processor");
+    require(processorConnection->disconnect(controllerConnection) == Steinberg::kResultTrue,
+            "processor disconnects controller");
+    controllerConnection->release();
+    processorConnection->release();
     component->terminate();
     processor->release();
     component->release();
+    controller->terminate();
+    controller->release();
     dlclose(module);
-    std::cout << "ats_vst3_artifact_test: identity, 81 parameters, automation, MIDI, bus, lifecycle, and process ok\n";
+    std::cout << "ats_vst3_artifact_test: identity, automation, MIDI, controller/processor ownership, and process ok\n";
 }
