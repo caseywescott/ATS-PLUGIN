@@ -131,6 +131,7 @@ public:
             if (shell_.state().page == EditorPage::session && isSpectrumPoint(point))
             {
                 spectrumDragging_ = true;
+                spectrumMoved_ = false;
                 spectrumLastX_ = point.x;
                 spectrumLastY_ = point.y;
                 shell_.spectrum().setPointerCaptured(true);
@@ -326,6 +327,8 @@ public:
             if (spectrumDragging_)
             {
                 const auto point = event.relativePosition();
+                spectrumMoved_ = spectrumMoved_ || std::abs(spectrumLastX_ - point.x) > 1.0f ||
+                    std::abs(spectrumLastY_ - point.y) > 1.0f;
                 shell_.spectrum().pan((spectrumLastX_ - point.x) / 608.0f,
                                        (spectrumLastY_ - point.y) / 184.0f);
                 spectrumLastX_ = point.x;
@@ -345,11 +348,30 @@ public:
                 emitSynthesisGesture(activeSynthesisControl_, parameterValue_, false, false);
             redraw();
         };
-        onMouseUp() += [this](const visage::MouseEvent&) {
+        onMouseUp() += [this](const visage::MouseEvent& event) {
             if (spectrumDragging_)
             {
                 spectrumDragging_ = false;
                 shell_.spectrum().setPointerCaptured(false);
+                if (!spectrumMoved_)
+                {
+                    const auto point = event.relativePosition();
+                    const auto frame = spectrumFrameAt(point);
+                    if (shell_.spectrum().mode() == SpectralTraceMode::residual)
+                    {
+                        const auto band = spectrumBandAt(point);
+                        shell_.spectrum().selectBand(band);
+                        emitAction(shell_.spectrum().applyResidualEdit(
+                            band, frame, spectrumValueAt(point)));
+                    }
+                    else
+                    {
+                        const auto partial = spectrumPartialAt(point);
+                        shell_.spectrum().selectPartial(partial);
+                        emitAction(shell_.spectrum().applyPartialEdit(partial, frame, false));
+                    }
+                    redraw();
+                }
                 return;
             }
             if (parameterDragging_)
@@ -609,6 +631,28 @@ private:
     [[nodiscard]] static bool isSpectrumPoint(const visage::Point& point) noexcept
     {
         return point.x >= 24.0f && point.x < 632.0f && point.y >= 250.0f && point.y < 434.0f;
+    }
+
+    [[nodiscard]] static int spectrumFrameAt(const visage::Point& point) noexcept
+    {
+        return std::clamp(static_cast<int>((point.x - 24.0f) / 608.0f * 255.0f), 0, 255);
+    }
+
+    [[nodiscard]] static int spectrumPartialAt(const visage::Point& point) noexcept
+    {
+        return std::clamp(static_cast<int>((1.0f - (point.y - 250.0f) / 184.0f) * 31.0f),
+                          0, 31);
+    }
+
+    [[nodiscard]] static int spectrumBandAt(const visage::Point& point) noexcept
+    {
+        return std::clamp(static_cast<int>((1.0f - (point.y - 250.0f) / 184.0f) * 7.0f),
+                          0, 7);
+    }
+
+    [[nodiscard]] static float spectrumValueAt(const visage::Point& point) noexcept
+    {
+        return std::clamp(1.0f - (point.y - 250.0f) / 184.0f, 0.0f, 1.0f);
     }
 
     struct AnalysisControlBounds
@@ -976,6 +1020,7 @@ private:
     float partialAmplitude_ = 0.5f;
     float partialFrequencyHz_ = 440.0f;
     bool spectrumDragging_ = false;
+    bool spectrumMoved_ = false;
     float spectrumLastX_ = 0.0f;
     float spectrumLastY_ = 0.0f;
 };
