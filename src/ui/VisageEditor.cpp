@@ -251,6 +251,17 @@ public:
             {
                 const auto slot = point.x >= 330.0f ? 1 : 0;
                 const auto localX = point.x - (slot == 0 ? 18.0f : 330.0f);
+                if (point.y < 148.0f)
+                {
+                    const auto source = slot == 0 ? SessionSource::sourceA : SessionSource::sourceB;
+                    const auto layer = shell_.session().state().transport.layer;
+                    shell_.session().setTransport(source, layer);
+                    if (shell_.session().state().transport.playing)
+                        emitAction(shell_.session().previewAction(true));
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
                 if (point.y >= 148.0f && localX < 92.0f)
                 {
                     emitAction(AnalyzeMorphSourceAction { slot });
@@ -282,6 +293,16 @@ public:
                 const auto playing = !shell_.session().state().transport.playing;
                 shell_.session().setPlaying(playing);
                 emitAction(shell_.session().previewAction(playing));
+                redraw();
+                requestKeyboardFocus();
+                return;
+            }
+            if (shell_.state().page == EditorPage::session && point.y >= 190.0f &&
+                point.y < 210.0f && point.x >= 160.0f && point.x < 398.0f)
+            {
+                const auto normalized = std::clamp((point.x - 160.0f) / 238.0f, 0.0f, 1.0f);
+                shell_.session().setPlayhead(normalized);
+                emitAction(shell_.session().seekAction());
                 redraw();
                 requestKeyboardFocus();
                 return;
@@ -339,6 +360,7 @@ public:
                     point.x >= 450.0f && point.x < 638.0f)
                 {
                     shell_.session().setSmearEnabled(!shell_.session().state().transport.smearEnabled);
+                    emitAction(shell_.session().smearAction());
                     redraw();
                     requestKeyboardFocus();
                     return;
@@ -349,7 +371,7 @@ public:
                     const auto variation = static_cast<std::size_t>((point.x - 18.0f) / 100.0f);
                     const auto stored = shell_.session().state().morph.variationStored[variation];
                     shell_.session().setVariationStored(variation, !stored);
-                    emitAction(HistoryAction { false });
+                    emitAction(shell_.session().variationAction(variation, !stored));
                     redraw();
                     requestKeyboardFocus();
                     return;
@@ -770,10 +792,19 @@ public:
             canvas.text(session.transport.playing ? "STOP PREVIEW" : "PLAY PREVIEW",
                         labelFont, visage::Font::kCenter, 22.0f, 193.0f, 120.0f, 14.0f);
             canvas.setColor(tokens.secondaryText);
-            canvas.text("BOTH  |  SMEAR OFF  |  SPECTRUM",
-                        labelFont, visage::Font::kLeft, 160.0f, 193.0f, 360.0f, 14.0f);
+            const auto sourceLabel = session.transport.source == SessionSource::sourceA ? "A"
+                : session.transport.source == SessionSource::sourceB ? "B" : "CURRENT";
+            const auto layerLabel = session.transport.layer == SessionLayer::both ? "BOTH"
+                : session.transport.layer == SessionLayer::partials ? "PARTIALS"
+                : session.transport.layer == SessionLayer::residual ? "RESIDUAL" : "SMEAR";
+            const auto transportLabel = std::string(sourceLabel) + "  |  " + layerLabel +
+                (session.transport.smearEnabled ? "  |  SMEAR ON" : "  |  SMEAR OFF");
+            canvas.text(transportLabel.c_str(), labelFont, visage::Font::kLeft,
+                        160.0f, 193.0f, 360.0f, 14.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 204.0f, 380.0f, 3.0f);
+            canvas.rectangle(160.0f + 238.0f * session.transport.normalizedPlayhead,
+                             201.0f, 3.0f, 9.0f);
             canvas.setColor(tokens.secondaryText);
             canvas.text("SPECTRUM VIEW", labelFont, visage::Font::kLeft,
                         18.0f, 216.0f, 164.0f, 18.0f);

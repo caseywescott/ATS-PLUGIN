@@ -519,6 +519,9 @@ private:
 
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
+        ats::Error sessionError;
+        if (host_.applySessionAction(action, sessionError))
+            return;
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
             (void) ats::state::applyFactoryPreset(factory->index, host_.parameters());

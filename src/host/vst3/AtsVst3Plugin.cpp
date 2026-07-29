@@ -21,6 +21,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -41,9 +42,23 @@ constexpr const char* kImportSourceMessage = "ats.editor.import-source";
 constexpr const char* kAnalyzeSourceMessage = "ats.editor.analyze-source";
 constexpr const char* kCancelAnalysisMessage = "ats.editor.cancel-analysis";
 constexpr const char* kPollAnalysisMessage = "ats.editor.poll-analysis";
+constexpr const char* kSessionPreviewMessage = "ats.editor.session-preview";
+constexpr const char* kSessionStopMessage = "ats.editor.session-stop-preview";
+constexpr const char* kSessionSeekMessage = "ats.editor.session-seek-preview";
+constexpr const char* kSessionSmearMessage = "ats.editor.session-preview-smear";
+constexpr const char* kSessionVariationMessage = "ats.editor.session-variation";
+constexpr const char* kSessionTimelineMessage = "ats.editor.session-timeline";
+constexpr const char* kSessionDetectSmearnovMessage = "ats.editor.session-detect-smearnov";
+constexpr const char* kSessionApplySmearnovMessage = "ats.editor.session-apply-smearnov";
+constexpr const char* kSessionOnsetsMessage = "ats.editor.session-onsets";
+constexpr const char* kSessionTimbreMessage = "ats.editor.session-timbre";
 constexpr const char* kSourceSlotAttribute = "slot";
 constexpr const char* kSourceKindAttribute = "kind";
 constexpr const char* kSourcePathAttribute = "path";
+constexpr const char* kPreviewLayerAttribute = "layer";
+constexpr const char* kPreviewStartAttribute = "start";
+constexpr const char* kVariationStoreAttribute = "store";
+constexpr const char* kSessionValuesAttribute = "values";
 
 std::vector<std::byte> readStream(Steinberg::IBStream* stream)
 {
@@ -70,6 +85,22 @@ bool writeStream(Steinberg::IBStream* stream, const std::vector<std::byte>& byte
                          static_cast<Steinberg::int32>(bytes.size()), &bytesWritten) ==
                Steinberg::kResultTrue &&
            bytesWritten == static_cast<Steinberg::int32>(bytes.size());
+}
+
+bool readFloatVector(Steinberg::Vst::IAttributeList* attributes, const char* key,
+                     std::vector<float>& values)
+{
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr || attributes->getBinary(key, bytes, size) != Steinberg::kResultTrue ||
+        bytes == nullptr || size == 0 || size % sizeof(float) != 0)
+        return false;
+    const auto count = static_cast<std::size_t>(size / sizeof(float));
+    if (count > 4096)
+        return false;
+    values.resize(count);
+    std::memcpy(values.data(), bytes, size);
+    return true;
 }
 
 void copyAscii(Steinberg::Vst::String128 destination, std::string_view source)
@@ -268,6 +299,77 @@ public:
             ats::Error error;
             (void) host_.pollAnalysis(error);
             return Steinberg::kResultTrue;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionPreviewMessage))
+        {
+            Steinberg::int64 source = -1, layer = -1, start = 0;
+            if (attributes->getInt(kSourceSlotAttribute, source) != Steinberg::kResultTrue ||
+                attributes->getInt(kPreviewLayerAttribute, layer) != Steinberg::kResultTrue ||
+                attributes->getInt(kPreviewStartAttribute, start) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(ats::ui::PreviewAction {
+                                                static_cast<int>(source), static_cast<int>(layer), start != 0 }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionStopMessage))
+        {
+            ats::Error error;
+            return host_.applySessionAction(ats::ui::StopPreviewAction {}, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionSmearMessage))
+        {
+            Steinberg::int64 enabled = 0;
+            if (attributes->getInt(kPreviewStartAttribute, enabled) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(ats::ui::SetPreviewSmearAction { enabled != 0 }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionVariationMessage))
+        {
+            Steinberg::int64 slot = -1, store = 0;
+            if (attributes->getInt(kSourceSlotAttribute, slot) != Steinberg::kResultTrue ||
+                attributes->getInt(kVariationStoreAttribute, store) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(ats::ui::MorphVariationAction {
+                                                static_cast<int>(slot), store != 0 }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionSeekMessage) ||
+            Steinberg::FIDStringsEqual(messageId, kSessionTimelineMessage) ||
+            Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage) ||
+            Steinberg::FIDStringsEqual(messageId, kSessionTimbreMessage))
+        {
+            std::vector<float> values;
+            if (!readFloatVector(attributes, kSessionValuesAttribute, values))
+                return Steinberg::kResultFalse;
+            ats::ui::EditorAction action;
+            if (Steinberg::FIDStringsEqual(messageId, kSessionSeekMessage) && values.size() == 1)
+                action = ats::ui::SeekPreviewAction { values.front() };
+            else if (Steinberg::FIDStringsEqual(messageId, kSessionTimelineMessage))
+                action = ats::ui::SetMorphTimelineAction { std::move(values) };
+            else if (Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage))
+                action = ats::ui::EditSmearnovOnsetsAction { std::move(values) };
+            else if (Steinberg::FIDStringsEqual(messageId, kSessionTimbreMessage))
+                action = ats::ui::SetTimbreMotionPlanAction { std::move(values) };
+            else
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(action, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionDetectSmearnovMessage) ||
+            Steinberg::FIDStringsEqual(messageId, kSessionApplySmearnovMessage))
+        {
+            ats::Error error;
+            const auto action = Steinberg::FIDStringsEqual(messageId, kSessionDetectSmearnovMessage)
+                ? ats::ui::EditorAction { ats::ui::DetectSmearnovAction {} }
+                : ats::ui::EditorAction { ats::ui::ApplySmearnovAction {} };
+            return host_.applySessionAction(action, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         return AudioEffect::notify(message);
     }
@@ -478,6 +580,56 @@ public:
 
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
+        if (const auto* preview = std::get_if<ats::ui::PreviewAction>(&action))
+        {
+            (void) sendPreview(*preview);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::StopPreviewAction>(action))
+        {
+            (void) sendMessageId(kSessionStopMessage);
+            return;
+        }
+        if (const auto* seek = std::get_if<ats::ui::SeekPreviewAction>(&action))
+        {
+            (void) sendFloatValues(kSessionSeekMessage, { seek->normalizedTime });
+            return;
+        }
+        if (const auto* smear = std::get_if<ats::ui::SetPreviewSmearAction>(&action))
+        {
+            (void) sendToggle(kSessionSmearMessage, kPreviewStartAttribute, smear->enabled);
+            return;
+        }
+        if (const auto* variation = std::get_if<ats::ui::MorphVariationAction>(&action))
+        {
+            (void) sendVariation(*variation);
+            return;
+        }
+        if (const auto* timeline = std::get_if<ats::ui::SetMorphTimelineAction>(&action))
+        {
+            (void) sendFloatValues(kSessionTimelineMessage, timeline->normalizedPoints);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::DetectSmearnovAction>(action))
+        {
+            (void) sendMessageId(kSessionDetectSmearnovMessage);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::ApplySmearnovAction>(action))
+        {
+            (void) sendMessageId(kSessionApplySmearnovMessage);
+            return;
+        }
+        if (const auto* onsets = std::get_if<ats::ui::EditSmearnovOnsetsAction>(&action))
+        {
+            (void) sendFloatValues(kSessionOnsetsMessage, onsets->normalizedOnsets);
+            return;
+        }
+        if (const auto* timbre = std::get_if<ats::ui::SetTimbreMotionPlanAction>(&action))
+        {
+            (void) sendFloatValues(kSessionTimbreMessage, timbre->normalizedPlan);
+            return;
+        }
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
             ats::ParameterStore preset;
@@ -553,6 +705,68 @@ public:
     { (void) sendMessageId(kPollAnalysisMessage); }
 
 private:
+    bool sendPreview(const ats::ui::PreviewAction& preview)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSessionPreviewMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kSourceSlotAttribute, preview.source) == Steinberg::kResultTrue &&
+            attributes->setInt(kPreviewLayerAttribute, preview.layer) == Steinberg::kResultTrue &&
+            attributes->setInt(kPreviewStartAttribute, preview.start ? 1 : 0) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendToggle(const char* messageId, const char* attribute, bool enabled)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(attribute, enabled ? 1 : 0) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendVariation(const ats::ui::MorphVariationAction& variation)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSessionVariationMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kSourceSlotAttribute, variation.slot) == Steinberg::kResultTrue &&
+            attributes->setInt(kVariationStoreAttribute, variation.store ? 1 : 0) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendFloatValues(const char* messageId, const std::vector<float>& values)
+    {
+        if (values.empty() || values.size() > 4096 || values.size() > UINT32_MAX / sizeof(float))
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto byteCount = static_cast<Steinberg::uint32>(values.size() * sizeof(float));
+        const auto result = attributes != nullptr &&
+            attributes->setBinary(kSessionValuesAttribute, values.data(), byteCount) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
     bool sendImport(const ats::Path& path, int slot, ats::engine::SourceImportKind kind)
     {
         if (path.empty() || slot < 0 || slot > 1 || path.string().size() > UINT32_MAX)

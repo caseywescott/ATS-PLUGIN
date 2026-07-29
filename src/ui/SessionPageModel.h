@@ -227,6 +227,16 @@ public:
         return { state_.transport.normalizedPlayhead };
     }
 
+    [[nodiscard]] SetPreviewSmearAction smearAction() const noexcept
+    {
+        return { state_.transport.smearEnabled };
+    }
+
+    [[nodiscard]] MorphVariationAction variationAction(std::size_t index, bool store) const noexcept
+    {
+        return { static_cast<int>(index), store };
+    }
+
     [[nodiscard]] SetMorphTimelineAction timelineAction() const
     {
         return { state_.morph.timeline };

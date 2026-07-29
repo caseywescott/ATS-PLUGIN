@@ -20,6 +20,9 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
     auto* host = static_cast<ats::host::HostAdapter*>(context);
     if (host == nullptr || action == nullptr)
         return;
+    ats::Error sessionError;
+    if (host->applySessionAction(*action, sessionError))
+        return;
     if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(action))
     {
         (void) ats::state::applyFactoryPreset(factory->index, host->parameters());

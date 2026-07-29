@@ -153,6 +153,8 @@ public:
     {
         if (std::strcmp(id, "slot") == 0) slot_ = value;
         else if (std::strcmp(id, "kind") == 0) kind_ = value;
+        else if (std::strcmp(id, "layer") == 0) layer_ = value;
+        else if (std::strcmp(id, "start") == 0) start_ = value;
         else return Steinberg::kResultFalse;
         return Steinberg::kResultTrue;
     }
@@ -160,6 +162,8 @@ public:
     {
         if (std::strcmp(id, "slot") == 0) value = slot_;
         else if (std::strcmp(id, "kind") == 0) value = kind_;
+        else if (std::strcmp(id, "layer") == 0) value = layer_;
+        else if (std::strcmp(id, "start") == 0) value = start_;
         else return Steinberg::kResultFalse;
         return Steinberg::kResultTrue;
     }
@@ -172,25 +176,41 @@ public:
     Steinberg::tresult PLUGIN_API setBinary(const char* id, const void* data,
                                             Steinberg::uint32 size) override
     {
-        if (std::strcmp(id, "path") != 0 || data == nullptr || size == 0)
+        if (data == nullptr || size == 0)
             return Steinberg::kResultFalse;
-        path_.assign(static_cast<const char*>(data), size);
+        if (std::strcmp(id, "path") == 0)
+            path_.assign(static_cast<const char*>(data), size);
+        else if (std::strcmp(id, "values") == 0)
+            values_.assign(static_cast<const std::byte*>(data), static_cast<const std::byte*>(data) + size);
+        else
+            return Steinberg::kResultFalse;
         return Steinberg::kResultTrue;
     }
     Steinberg::tresult PLUGIN_API getBinary(const char* id, const void*& data,
                                             Steinberg::uint32& size) override
     {
-        if (std::strcmp(id, "path") != 0 || path_.empty())
+        if (std::strcmp(id, "path") == 0 && !path_.empty())
+        {
+            data = path_.data();
+            size = static_cast<Steinberg::uint32>(path_.size());
+        }
+        else if (std::strcmp(id, "values") == 0 && !values_.empty())
+        {
+            data = values_.data();
+            size = static_cast<Steinberg::uint32>(values_.size());
+        }
+        else
             return Steinberg::kResultFalse;
-        data = path_.data();
-        size = static_cast<Steinberg::uint32>(path_.size());
         return Steinberg::kResultTrue;
     }
 
 private:
     Steinberg::int64 slot_ = -1;
     Steinberg::int64 kind_ = -1;
+    Steinberg::int64 layer_ = -1;
+    Steinberg::int64 start_ = 0;
     std::string path_;
+    std::vector<std::byte> values_;
 };
 
 class TestMessage final : public Steinberg::FObject, public Steinberg::Vst::IMessage
@@ -428,6 +448,38 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     require(published, "processor publishes controller-imported analysis");
+
+    // Session commands use the same controller-to-processor connection as
+    // source import. Verify preview/seek/timeline/stop affect the processor
+    // owner rather than a transient editor-side object.
+    TestMessage previewMessage("ats.editor.session-preview");
+    require(previewMessage.getAttributes()->setInt("slot", 0) == Steinberg::kResultTrue &&
+            previewMessage.getAttributes()->setInt("layer", 0) == Steinberg::kResultTrue &&
+            previewMessage.getAttributes()->setInt("start", 1) == Steinberg::kResultTrue,
+            "session preview attributes");
+    require(processorConnection->notify(&previewMessage) == Steinberg::kResultTrue,
+            "processor accepts session preview");
+    const std::array<float, 1> seekValues { 0.5f };
+    TestMessage seekMessage("ats.editor.session-seek-preview");
+    require(seekMessage.getAttributes()->setBinary("values", seekValues.data(), sizeof(seekValues)) ==
+                Steinberg::kResultTrue &&
+            processorConnection->notify(&seekMessage) == Steinberg::kResultTrue,
+            "processor accepts session seek");
+    const std::array<float, 3> timelineValues { 0.0f, 0.5f, 1.0f };
+    TestMessage timelineMessage("ats.editor.session-timeline");
+    require(timelineMessage.getAttributes()->setBinary("values", timelineValues.data(), sizeof(timelineValues)) ==
+                Steinberg::kResultTrue &&
+            processorConnection->notify(&timelineMessage) == Steinberg::kResultTrue,
+            "processor accepts session timeline");
+    TestMessage stopMessage("ats.editor.session-stop-preview");
+    require(processorConnection->notify(&stopMessage) == Steinberg::kResultTrue,
+            "processor accepts session stop");
+    left.fill(1.0f);
+    right.fill(1.0f);
+    require(processor->process(data) == Steinberg::kResultTrue, "process stopped session preview");
+    for (const auto sample : left) require(sample == 0.0f, "session stop silences left output");
+    for (const auto sample : right) require(sample == 0.0f, "session stop silences right output");
+
     std::error_code ignored;
     std::filesystem::remove(sourcePath, ignored);
 

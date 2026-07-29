@@ -38,6 +38,9 @@ int main()
     assert(model.setPolicy(0, ats::ui::MorphPolicy::discard));
     assert(model.setVariationStored(2, true));
     assert(!model.setVariationStored(3, true));
+    assert(model.variationAction(2, false).slot == 2);
+    model.setSmearEnabled(true);
+    assert(model.smearAction().enabled);
 
     model.setSmearnovPanel(true, true, false);
     model.setSmearnovDetection(true, false);

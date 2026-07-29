@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/AtsStateCodec.h"
+#include "../core/AtsTransientSmear.h"
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -74,6 +76,28 @@ struct HostParameterInfo
     std::uint16_t choiceCount = 0;
 };
 
+// The Session page has state that is intentionally independent of any native
+// editor instance.  Native wrappers forward typed editor commands here, so a
+// controller recreation or a view close cannot leave preview / Smearnov work
+// owned by the UI object.
+struct SessionRuntimeSnapshot
+{
+    int previewSource = 0;
+    int previewLayer = 0;
+    bool previewPlaying = false;
+    float normalizedPlayhead = 0.0f;
+    bool liveSmearEnabled = false;
+    std::array<bool, 3> variationStored {};
+    bool smearnovRunning = false;
+    bool smearedSourceAvailable = false;
+    std::uint64_t timelineRevision = 0;
+    std::uint64_t timbreRevision = 0;
+    std::uint64_t onsetRevision = 0;
+    std::vector<float> timeline { 0.0f, 1.0f };
+    std::vector<float> timbrePlan;
+    std::vector<float> onsetOverlay;
+};
+
 using HostStateChunk = std::vector<std::byte>;
 
 class HostAdapter
@@ -87,6 +111,9 @@ public:
         cancelAnalysis();
         if (analysisFuture_.valid())
             analysisFuture_.wait();
+        cancelSmearnov();
+        if (smearnovFuture_.valid())
+            smearnovFuture_.wait();
     }
     HostAdapter(const HostAdapter&) = delete;
     HostAdapter& operator=(const HostAdapter&) = delete;
@@ -105,6 +132,25 @@ public:
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
     [[nodiscard]] const HostStateChunk& stateChunk() const noexcept { return stateChunk_; }
+    [[nodiscard]] SessionRuntimeSnapshot sessionSnapshot() const
+    {
+        SessionRuntimeSnapshot snapshot;
+        snapshot.previewSource = previewSource_.load(std::memory_order_acquire);
+        snapshot.previewLayer = previewLayer_.load(std::memory_order_acquire);
+        snapshot.previewPlaying = previewPlaying_.load(std::memory_order_acquire);
+        snapshot.normalizedPlayhead = normalizedPlayhead_.load(std::memory_order_acquire);
+        snapshot.liveSmearEnabled = liveSmearEnabled_.load(std::memory_order_acquire);
+        snapshot.variationStored = variationStored_;
+        snapshot.smearnovRunning = smearnovRunning_.load(std::memory_order_acquire);
+        snapshot.smearedSourceAvailable = smearedSourceAvailable_.load(std::memory_order_acquire);
+        snapshot.timelineRevision = timelineRevision_;
+        snapshot.timbreRevision = timbreRevision_;
+        snapshot.onsetRevision = onsetRevision_;
+        snapshot.timeline = timeline_;
+        snapshot.timbrePlan = timbrePlan_;
+        snapshot.onsetOverlay = onsetOverlay_;
+        return snapshot;
+    }
     [[nodiscard]] const engine::ImportedSource* source(int slot) const noexcept
     {
         return slot >= 0 && slot < static_cast<int>(sources_.size()) && sources_[static_cast<std::size_t>(slot)]
@@ -220,9 +266,13 @@ public:
     bool pollAnalysis(Error& error)
     {
         error = {};
+        Error smearnovError;
+        const bool smearnovCompleted = pollSmearnov(smearnovError);
+        if (smearnovCompleted && smearnovError)
+            error = std::move(smearnovError);
         if (!analysisRunning_.load(std::memory_order_acquire) || !analysisFuture_.valid() ||
             analysisFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-            return false;
+            return smearnovCompleted;
         auto analysed = analysisFuture_.get();
         analysisRunning_.store(false, std::memory_order_release);
         if (analysed.status != JobResult<AnalysisOutput>::Status::success)
@@ -260,6 +310,130 @@ public:
     void cancelAnalysis() noexcept { analysisCancellation_.cancel(); }
     [[nodiscard]] bool analysisRunning() const noexcept
     { return analysisRunning_.load(std::memory_order_acquire); }
+
+    // Applies the Session subset of EditorAction at the shared host boundary.
+    // File import, analysis, and parameter automation deliberately remain
+    // wrapper-specific because their host transactions have separate rules.
+    // Returns false for a non-Session action so callers can continue their
+    // normal action routing without accidentally swallowing it.
+    bool applySessionAction(const ui::EditorAction& action, Error& error)
+    {
+        error = {};
+        if (const auto* preview = std::get_if<ui::PreviewAction>(&action))
+        {
+            if (preview->source < 0 || preview->source >= static_cast<int>(sources_.size()) ||
+                preview->layer < 0 || preview->layer > 3)
+            {
+                error = { "invalid_preview", "preview source or audition layer is invalid" };
+                return true;
+            }
+            previewSource_.store(preview->source, std::memory_order_release);
+            previewLayer_.store(preview->layer, std::memory_order_release);
+            explicitPreview_.store(true, std::memory_order_release);
+            if (!preview->start)
+            {
+                previewPlaying_.store(false, std::memory_order_release);
+                return true;
+            }
+            if (!renderSourceForPreview(preview->source, error))
+                return true;
+            previewFrame_.store(0, std::memory_order_release);
+            previewPlaying_.store(true, std::memory_order_release);
+            return true;
+        }
+        if (std::holds_alternative<ui::StopPreviewAction>(action))
+        {
+            explicitPreview_.store(true, std::memory_order_release);
+            previewPlaying_.store(false, std::memory_order_release);
+            return true;
+        }
+        if (const auto* seek = std::get_if<ui::SeekPreviewAction>(&action))
+        {
+            if (!std::isfinite(seek->normalizedTime) || seek->normalizedTime < 0.0f ||
+                seek->normalizedTime > 1.0f)
+            {
+                error = { "invalid_seek", "preview seek must be normalized" };
+                return true;
+            }
+            normalizedPlayhead_.store(seek->normalizedTime, std::memory_order_release);
+            previewFrame_.store(static_cast<std::uint64_t>(seek->normalizedTime *
+                                static_cast<float>(std::numeric_limits<std::uint32_t>::max())),
+                                std::memory_order_release);
+            return true;
+        }
+        if (const auto* smear = std::get_if<ui::SetPreviewSmearAction>(&action))
+        {
+            liveSmearEnabled_.store(smear->enabled, std::memory_order_release);
+            return true;
+        }
+        if (const auto* variation = std::get_if<ui::MorphVariationAction>(&action))
+        {
+            if (variation->slot < 0 || variation->slot >= static_cast<int>(variations_.size()))
+            {
+                error = { "invalid_variation", "variation slot is invalid" };
+                return true;
+            }
+            const auto index = static_cast<std::size_t>(variation->slot);
+            if (variation->store)
+            {
+                variations_[index] = parameters_.snapshot();
+                variationStored_[index] = true;
+            }
+            else
+            {
+                if (!variationStored_[index] || variations_[index].size() != parameters_.size())
+                {
+                    error = { "missing_variation", "save this variation before recalling it" };
+                    return true;
+                }
+                for (std::size_t parameter = 0; parameter < variations_[index].size(); ++parameter)
+                    (void) parameters_.write(parameter, variations_[index][parameter]);
+            }
+            return true;
+        }
+        if (const auto* timeline = std::get_if<ui::SetMorphTimelineAction>(&action))
+        {
+            if (timeline->normalizedPoints.empty() || timeline->normalizedPoints.size() > 32 ||
+                !strictlyOrderedNormalized(timeline->normalizedPoints))
+            {
+                error = { "invalid_timeline", "timeline points must be ordered normalized values" };
+                return true;
+            }
+            timeline_ = timeline->normalizedPoints;
+            ++timelineRevision_;
+            return true;
+        }
+        if (const auto* onsets = std::get_if<ui::EditSmearnovOnsetsAction>(&action))
+        {
+            if (onsets->normalizedOnsets.size() > 4096 ||
+                !strictlyOrderedNormalized(onsets->normalizedOnsets))
+            {
+                error = { "invalid_onsets", "Smearnov onsets must be ordered normalized values" };
+                return true;
+            }
+            onsetOverlay_ = onsets->normalizedOnsets;
+            ++onsetRevision_;
+            return true;
+        }
+        if (std::holds_alternative<ui::DetectSmearnovAction>(action))
+            return queueSmearnov(false, error);
+        if (std::holds_alternative<ui::ApplySmearnovAction>(action))
+            return queueSmearnov(true, error);
+        if (const auto* timbre = std::get_if<ui::SetTimbreMotionPlanAction>(&action))
+        {
+            if (timbre->normalizedPlan.size() > 4096 ||
+                !std::all_of(timbre->normalizedPlan.begin(), timbre->normalizedPlan.end(),
+                             [](float value) { return std::isfinite(value) && value >= 0.0f && value <= 1.0f; }))
+            {
+                error = { "invalid_timbre_plan", "timbre curve values must be normalized" };
+                return true;
+            }
+            timbrePlan_ = timbre->normalizedPlan;
+            ++timbreRevision_;
+            return true;
+        }
+        return false;
+    }
 
     [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
     { return ParameterRegistry::descriptors(); }
@@ -344,7 +518,24 @@ public:
         // logically cold adapter.
         detachEditor();
         cancelAnalysis();
+        cancelSmearnov();
         sources_ = {};
+        previewSource_.store(0, std::memory_order_release);
+        previewLayer_.store(0, std::memory_order_release);
+        previewPlaying_.store(false, std::memory_order_release);
+        explicitPreview_.store(false, std::memory_order_release);
+        normalizedPlayhead_.store(0.0f, std::memory_order_release);
+        previewFrame_.store(0, std::memory_order_release);
+        liveSmearEnabled_.store(false, std::memory_order_release);
+        smearedSourceAvailable_.store(false, std::memory_order_release);
+        timeline_ = { 0.0f, 1.0f };
+        timbrePlan_.clear();
+        onsetOverlay_.clear();
+        variations_ = {};
+        variationStored_ = {};
+        timelineRevision_ = 0;
+        timbreRevision_ = 0;
+        onsetRevision_ = 0;
         format_ = format;
         state_ = HostState::cold;
         return true;
@@ -369,6 +560,9 @@ public:
     void release() noexcept
     {
         cancelAnalysis();
+        cancelSmearnov();
+        previewPlaying_.store(false, std::memory_order_release);
+        explicitPreview_.store(false, std::memory_order_release);
         detachEditor();
         state_ = HostState::released;
         midi_.reset();
@@ -497,6 +691,12 @@ public:
         for (const auto& event : midiEvents)
             midi_.consume(event);
 
+        if (explicitPreview_.load(std::memory_order_acquire) &&
+            !previewPlaying_.load(std::memory_order_acquire))
+        {
+            output.clear();
+            return true;
+        }
         const auto slot = playback_.beginAudioRead();
         const auto* source = playback_.readBuffer(slot);
         const auto trimTarget = parameters_.read("outputTrim");
@@ -505,13 +705,19 @@ public:
         {
             const auto frames = std::min(output.frameCount, source->frameCount());
             const auto channels = std::min(output.channelCount, source->channelCount());
+            const auto sourceFrames = source->frameCount();
+            const auto startFrame = explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0
+                ? previewFrame_.load(std::memory_order_relaxed) % sourceFrames : 0;
             for (std::uint32_t frame = 0; frame < frames; ++frame)
             {
                 const auto gain = outputTrim_.process();
+                const auto readFrame = sourceFrames == 0 ? 0 : (startFrame + frame) % sourceFrames;
                 for (std::uint32_t channel = 0; channel < channels; ++channel)
                     if (output.channels[channel] != nullptr && source->channel(channel) != nullptr)
-                        output.channels[channel][frame] = source->channel(channel)[frame] * gain;
+                        output.channels[channel][frame] = source->channel(channel)[readFrame] * gain;
             }
+            if (explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0)
+                previewFrame_.fetch_add(frames, std::memory_order_release);
         }
         for (std::uint32_t channel = 0; channel < output.channelCount; ++channel)
             if (output.channels[channel] != nullptr)
@@ -525,6 +731,207 @@ public:
     [[nodiscard]] int semitoneOffset() const noexcept { return midi_.semitoneOffset(); }
 
 private:
+    struct SmearnovWorkResult
+    {
+        bool apply = false;
+        int slot = -1;
+        std::uint64_t sourceRevision = 0;
+        std::vector<AtsOnset> onsets;
+        AtsSoundPtr transformed;
+        Error error;
+    };
+
+    static bool strictlyOrderedNormalized(const std::vector<float>& values) noexcept
+    {
+        float previous = -1.0f;
+        for (const auto value : values)
+        {
+            if (!std::isfinite(value) || value < 0.0f || value > 1.0f || value < previous)
+                return false;
+            previous = value;
+        }
+        return true;
+    }
+
+    [[nodiscard]] SmearnovDetectParams smearnovDetectParams() const noexcept
+    {
+        SmearnovDetectParams params;
+        params.weightDetFlux = parameters_.read("smearnovWeightDetFlux");
+        params.weightResFlux = parameters_.read("smearnovWeightResFlux");
+        params.weightHfcFlux = parameters_.read("smearnovWeightHfcFlux");
+        params.weightBirth = parameters_.read("smearnovWeightBirth");
+        params.weightPhaseDev = parameters_.read("smearnovWeightPhaseDev");
+        params.usePhaseDeviation = parameters_.read("smearnovUsePhaseDeviation") >= 0.5f;
+        params.thresholdLambda = parameters_.read("smearnovThresholdLambda");
+        params.thresholdAutoScale = parameters_.read("smearnovThresholdAutoScale");
+        params.peakWindowRadiusFrames = static_cast<int>(parameters_.read("smearnovPeakWindowFrames"));
+        params.minGapFramesOverride = static_cast<int>(parameters_.read("smearnovMinGapFrames"));
+        params.preMarginSeconds = parameters_.read("smearnovPreMarginMs") / 1000.0;
+        params.maxAttackFrames = static_cast<int>(parameters_.read("smearnovMaxAttackFrames"));
+        return params;
+    }
+
+    [[nodiscard]] SmearnovParams smearnovParams() const noexcept
+    {
+        SmearnovParams params;
+        params.blurMs = parameters_.read("smearnovBlurMs");
+        params.sharpenAmount = parameters_.read("smearnovSharpenAmount");
+        params.exaggerateDb = parameters_.read("smearnovExaggerateDb");
+        params.mix = parameters_.read("smearnovMix") / 100.0;
+        params.maxDb = parameters_.read("smearnovMaxDb");
+        switch (static_cast<int>(parameters_.read("smearnovTargets")))
+        {
+        case 0: params.targets = SmearnovTarget::Partials; break;
+        case 1: params.targets = SmearnovTarget::Residual; break;
+        default: params.targets = SmearnovTarget::Both; break;
+        }
+        return params;
+    }
+
+    bool queueSmearnov(bool apply, Error& error)
+    {
+        if (smearnovRunning_.load(std::memory_order_acquire))
+        {
+            error = { "smearnov_busy", "Smearnov work is already in progress" };
+            return true;
+        }
+        const auto slot = previewSource_.load(std::memory_order_acquire);
+        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)] ||
+            !sources_[static_cast<std::size_t>(slot)]->sound)
+        {
+            error = { "missing_model", "analyse a source before running Smearnov" };
+            return true;
+        }
+        auto* copied = copy_sound(sources_[static_cast<std::size_t>(slot)]->sound.get());
+        if (copied == nullptr)
+        {
+            error = { "copy_failed", "could not snapshot the source model for Smearnov" };
+            return true;
+        }
+        const auto sourceRevision = sourceRevisions_[static_cast<std::size_t>(slot)];
+        const auto detect = smearnovDetectParams();
+        const auto transform = smearnovParams();
+        const auto requested = onsetOverlay_;
+        smearnovCancellation_.cancel();
+        smearnovCancellation_ = CancellationSource {};
+        const auto token = smearnovCancellation_.token();
+        smearnovFuture_ = std::async(std::launch::async,
+            [apply, slot, sourceRevision, snapshot = AtsSoundPtr { copied }, detect, transform,
+             requested, token]() mutable {
+                SmearnovWorkResult result;
+                result.apply = apply;
+                result.slot = slot;
+                result.sourceRevision = sourceRevision;
+                if (token.isCancelled())
+                {
+                    result.error = { "cancelled", "Smearnov work was cancelled" };
+                    return result;
+                }
+                auto onsets = detectOnsets(snapshot.get(), detect);
+                if (!requested.empty())
+                {
+                    onsets.clear();
+                    const auto frameCount = std::max(1, snapshot.get()->frames - 1);
+                    for (const auto normalized : requested)
+                    {
+                        const auto frame = static_cast<int>(std::lround(normalized * frameCount));
+                        onsets.push_back({ frame, frame, frame, 0.0 });
+                    }
+                }
+                if (token.isCancelled())
+                {
+                    result.error = { "cancelled", "Smearnov work was cancelled" };
+                    return result;
+                }
+                result.onsets = std::move(onsets);
+                if (apply)
+                {
+                    if (!smearAttacks(snapshot.get(), result.onsets, transform))
+                    {
+                        result.error = { "smearnov_no_change", "Smearnov did not modify the selected source" };
+                        return result;
+                    }
+                    result.transformed = std::move(snapshot);
+                }
+                return result;
+            });
+        smearnovRunning_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    bool pollSmearnov(Error& error)
+    {
+        error = {};
+        if (!smearnovRunning_.load(std::memory_order_acquire) || !smearnovFuture_.valid() ||
+            smearnovFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return false;
+        auto result = smearnovFuture_.get();
+        smearnovRunning_.store(false, std::memory_order_release);
+        if (result.error)
+        {
+            error = std::move(result.error);
+            return true;
+        }
+        if (result.slot < 0 || result.slot >= static_cast<int>(sources_.size()) ||
+            !sources_[static_cast<std::size_t>(result.slot)] ||
+            sourceRevisions_[static_cast<std::size_t>(result.slot)] != result.sourceRevision)
+        {
+            error = { "stale_smearnov", "source changed while Smearnov work was running" };
+            return true;
+        }
+        const auto frameCount = std::max(1, sources_[static_cast<std::size_t>(result.slot)]->sound.get()->frames - 1);
+        onsetOverlay_.clear();
+        onsetOverlay_.reserve(result.onsets.size());
+        for (const auto& onset : result.onsets)
+            onsetOverlay_.push_back(std::clamp(static_cast<float>(onset.frame) / frameCount, 0.0f, 1.0f));
+        ++onsetRevision_;
+        if (result.apply)
+        {
+            sources_[static_cast<std::size_t>(result.slot)]->sound = std::move(result.transformed);
+            ++sourceRevisions_[static_cast<std::size_t>(result.slot)];
+            smearedSourceAvailable_.store(true, std::memory_order_release);
+            if (state_ == HostState::prepared && result.slot == previewSource_.load(std::memory_order_acquire))
+                (void) renderSourceForPreview(result.slot, error);
+        }
+        return true;
+    }
+
+    void cancelSmearnov() noexcept { smearnovCancellation_.cancel(); }
+
+    bool renderSourceForPreview(int slot, Error& error)
+    {
+        error = {};
+        if (state_ != HostState::prepared)
+        {
+            error = { "host_not_prepared", "prepare the audio host before starting preview" };
+            return false;
+        }
+        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)] ||
+            !sources_[static_cast<std::size_t>(slot)]->sound)
+        {
+            error = { "missing_model", "analyse the selected source before starting preview" };
+            return false;
+        }
+        const auto playbackSlot = playback_.tryAcquireWriteSlot();
+        if (playbackSlot == PlaybackBufferPool::kNoBuffer)
+        {
+            error = { "playback_busy", "no playback buffer is available for preview" };
+            return false;
+        }
+        const auto generation = sourceGenerations_.next();
+        const auto rendered = AtsEngine::render(generation, sourceCancellation_.token(),
+                                                sources_[static_cast<std::size_t>(slot)]->sound.get(), {},
+                                                playback_.writeView(playbackSlot));
+        if (rendered.status != JobResult<RenderStats>::Status::success ||
+            !playback_.publish(playbackSlot, generation))
+        {
+            error = rendered.error ? rendered.error
+                                   : Error { "playback_publish_failed", "could not publish preview audio" };
+            return false;
+        }
+        return true;
+    }
+
     HostIdentity identity_ = HostIdentity::current();
     HostFormat format_ = HostFormat::standalone;
     HostPrepareSpec spec_{};
@@ -538,6 +945,9 @@ private:
     int analysisSlot_ = -1;
     std::uint64_t analysisSourceRevision_ = 0;
     std::atomic<bool> analysisRunning_ { false };
+    CancellationSource smearnovCancellation_;
+    std::future<SmearnovWorkResult> smearnovFuture_;
+    std::atomic<bool> smearnovRunning_ { false };
     std::array<std::uint64_t, 2> sourceRevisions_ {};
     HostStateChunk stateChunk_;
     PlaybackBufferPool playback_;
@@ -549,6 +959,22 @@ private:
     float editorScale_ = 1.0f;
     float editorWidth_ = 0.0f;
     float editorHeight_ = 0.0f;
+    std::atomic<int> previewSource_ { 0 };
+    std::atomic<int> previewLayer_ { 0 };
+    std::atomic<bool> previewPlaying_ { false };
+    std::atomic<bool> explicitPreview_ { false };
+    std::atomic<float> normalizedPlayhead_ { 0.0f };
+    std::atomic<bool> liveSmearEnabled_ { false };
+    std::atomic<std::uint64_t> previewFrame_ { 0 };
+    std::atomic<bool> smearedSourceAvailable_ { false };
+    std::vector<float> timeline_ { 0.0f, 1.0f };
+    std::vector<float> timbrePlan_;
+    std::vector<float> onsetOverlay_;
+    std::array<std::vector<float>, 3> variations_;
+    std::array<bool, 3> variationStored_ {};
+    std::uint64_t timelineRevision_ = 0;
+    std::uint64_t timbreRevision_ = 0;
+    std::uint64_t onsetRevision_ = 0;
 };
 
 } // namespace ats::host

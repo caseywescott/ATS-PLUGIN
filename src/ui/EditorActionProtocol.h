@@ -41,6 +41,8 @@ template <typename T>
     if constexpr (std::is_same_v<T, PreviewAction>) return { "PlayPreview", ActionThreadDomain::audioRt, ActionCancellation::teardown, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, StopPreviewAction>) return { "StopPreview", ActionThreadDomain::audioRt, ActionCancellation::teardown, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, SeekPreviewAction>) return { "SeekPreview", ActionThreadDomain::audioRt, ActionCancellation::none, ActionUndoPolicy::none };
+    if constexpr (std::is_same_v<T, SetPreviewSmearAction>) return { "SetPreviewSmear", ActionThreadDomain::ui, ActionCancellation::superseded, ActionUndoPolicy::none };
+    if constexpr (std::is_same_v<T, MorphVariationAction>) return { "MorphVariation", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, SetMorphTimelineAction>) return { "SetMorphTimeline", ActionThreadDomain::ui, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, BounceMorphTimelineAction>) return { "BounceMorphTimeline", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, SetSpectralViewAction>) return { "SetSpectralView", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::none };
@@ -98,6 +100,11 @@ template <typename T>
     {
         if (!std::isfinite(action.normalizedTime) || action.normalizedTime < 0.0f || action.normalizedTime > 1.0f)
             return { false, "invalid_seek", "preview seek must be normalized" };
+    }
+    else if constexpr (std::is_same_v<T, MorphVariationAction>)
+    {
+        if (action.slot < 0 || action.slot >= 3)
+            return { false, "invalid_variation", "variation slot must be in range" };
     }
     else if constexpr (std::is_same_v<T, SetMorphTimelineAction>)
     {

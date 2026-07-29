@@ -22,6 +22,8 @@ struct CancelJobsAction {};
 struct PreviewAction { int source = 0; int layer = 0; bool start = false; };
 struct StopPreviewAction {};
 struct SeekPreviewAction { float normalizedTime = 0.0f; };
+struct SetPreviewSmearAction { bool enabled = false; };
+struct MorphVariationAction { int slot = 0; bool store = true; };
 struct SetMorphTimelineAction { std::vector<float> normalizedPoints; };
 struct BounceMorphTimelineAction { ats::Path path; int layer = 0; };
 struct SetSpectralViewAction { int source = 0; int mode = 0; };
@@ -48,6 +50,8 @@ using EditorAction = std::variant<SetParameterAction,
                                   PreviewAction,
                                   StopPreviewAction,
                                   SeekPreviewAction,
+                                  SetPreviewSmearAction,
+                                  MorphVariationAction,
                                   SetMorphTimelineAction,
                                   BounceMorphTimelineAction,
                                   SetSpectralViewAction,
