@@ -9,6 +9,10 @@ renderer-neutral UI scheduler.
 
 The latest implementation commits are:
 
+- `59d1905` VST3 controller parameter matrix and processor state rewind/reopen
+- `6404147` focused VST3 automation/MIDI ingress coverage with bounded events
+- `edf97d1` repeated timestamp-advanced AU automation/MIDI render coverage
+- `35f988d` explicit engine analysis-render failure diagnostics
 - current AU conformance slice: explicit zero-input/stereo channel capability
   and standard dictionary class-info with ATSP payload
 - `bc0bb0b` AU CocoaUI editor evidence
@@ -31,7 +35,7 @@ The latest implementation commits are:
 - `6110ccf` explicit dispatcher teardown reset
 - `706ac4f` neutral 81-parameter host contract
 
-Validation on 2026-07-28:
+Validation on 2026-07-29:
 
 - `ctest --test-dir build-review --output-on-failure`: 67/67 passed
 - Qatsh manifest: 20/20 patch/source marker sets verified
@@ -40,8 +44,9 @@ Validation on 2026-07-28:
   pinned Visage revision
 - ATS replacement traceability: 39 records valid; native editor lifecycle
   verified and UI backend/scheduler seams promoted to implemented
-- Visage native editor probe: passed at arm64 with attachment, resize, scale,
-  focus, mouse, text, hide, standalone window creation, and teardown
+- Pinned Visage native probes remain passing in previously validated
+  window-capable/x86_64 environments; the current arm64 desktop session traps
+  during AppKit/Visage font initialization for live Cocoa/standalone probes
 - Visage real-dispatch harness: passed with parameter gestures, text input,
   native page selection, analysis-frequency begin/drag/end, popup
   creation/focus, native popup row selection, and dismissal
@@ -60,17 +65,19 @@ Validation on 2026-07-28:
 
 - The first real JUCE-free VST3 artifact now builds against Steinberg VST3 SDK
   commit `05c4a9763f311a58fe3f34b68a199e5eea92e2b4` (tag
-  `v3.7.6_build_18`) and passes `ats_vst3_artifact_test` for identity, 81
-  parameters, no-input stereo setup, state header, lifecycle, and process
-  silence. This follows the Mearcstapa pinned-dependency pattern and removes
-  the former “no native SDK” blocker for VST3 only.
+  `v3.7.6_build_18`) and passes `ats_vst3_artifact_test` for identity, all-81
+  controller parameter round-trips, no-input stereo setup, state rewind/reopen,
+  lifecycle, process silence, focused automation, and bounded MIDI ingress.
+  This follows the Mearcstapa pinned-dependency pattern and removes the former
+  “no native SDK” blocker for VST3 only.
 
 - The VST3 controller now creates a Visage-backed `IPlugView`. The native
   `ats_vst3_editor_view_probe` attaches that view to a Cocoa `NSView`, verifies
-  focus and logical resize, and removes it cleanly. Together with the pinned
-  Visage editor and real-dispatch probes, this clears native VST3 editor
-  attachment; AU, standalone, DAW scan, and complete automation/stress gates
-  remain open.
+  focus and logical resize, and removes it cleanly where a host window can be
+  created. The current arm64 probe traps during AppKit/Visage font
+  initialization, so native VST3 editor attachment is not promoted as arm64
+  runtime evidence; AU, standalone, DAW scan, and complete automation/stress
+  gates remain open.
 
 - The next host slice adds a JUCE-free `ATS Resynth.app` standalone bundle and
   a non-bundled smoke entry point using `HostAdapter::attachStandaloneEditor`.
@@ -89,12 +96,14 @@ Validation on 2026-07-28:
   resize, and removes it cleanly under the passing x86_64 probe. The matching
   arm64 component passed the basic `auval` registration/open/format gate.
   The class-info path now emits a standard AU dictionary containing the ATSP
-  payload, while arm64 CocoaUI runtime evidence remains environment-sensitive
-  in this headless desktop session. AU MIDI/automation stress and runtime
-  standalone GUI smoke remain open.
+  payload, and the artifact test repeats four timestamp-advanced AU render
+  blocks with automation plus MIDI note-on/off dispatch. Arm64 CocoaUI runtime
+  evidence remains environment-sensitive in this headless desktop session;
+  broader AU stress and runtime standalone GUI smoke remain open.
 
-The native backend prerequisite is now clear: Visage is pinned and the arm64
-native embedding probe passes. `BUILD_PLUGIN=ON` still enters
+The native backend prerequisite is now selected and pinned: Visage is configured
+at the exact Mearcstapa revision, with real native probes retained as the runtime
+gate. `BUILD_PLUGIN=ON` still enters
 `src/plugin/CMakeLists.txt`, which fetches JUCE; production VST3/AU/standalone
 integration, AU/standalone wrappers, the full widget parity port, and the
 complete real-dispatch matrix remain open. Neutral host state, parameter, and lifecycle seams now
