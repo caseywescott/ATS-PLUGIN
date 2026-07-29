@@ -240,6 +240,56 @@ public:
                     redraw();
                     return;
                 }
+                if (point.y >= 700.0f && point.y < 728.0f && point.x >= 18.0f && point.x < 426.0f)
+                {
+                    const auto layer = static_cast<SessionLayer>(std::clamp(
+                        static_cast<int>((point.x - 18.0f) / 102.0f), 0, 3));
+                    const auto source = shell_.session().state().transport.source;
+                    shell_.session().setTransport(source, layer);
+                    if (shell_.session().state().transport.playing)
+                        emitAction(shell_.session().previewAction(true));
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= 700.0f && point.y < 728.0f && point.x >= 450.0f && point.x < 638.0f)
+                {
+                    shell_.session().setSmearEnabled(!shell_.session().state().transport.smearEnabled);
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= 740.0f && point.y < 768.0f && point.x >= 18.0f && point.x < 318.0f)
+                {
+                    const auto variation = static_cast<std::size_t>((point.x - 18.0f) / 100.0f);
+                    const auto stored = shell_.session().state().morph.variationStored[variation];
+                    shell_.session().setVariationStored(variation, !stored);
+                    emitAction(HistoryAction { false });
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= 780.0f && point.y < 844.0f && point.x >= 18.0f && point.x < 426.0f)
+                {
+                    const auto normalized = std::clamp((point.x - 18.0f) / 408.0f, 0.0f, 1.0f);
+                    shell_.session().setTimeline({ 0.0f, normalized, 1.0f });
+                    emitAction(shell_.session().timelineAction());
+                    redraw();
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= 780.0f && point.y < 812.0f && point.x >= 450.0f && point.x < 538.0f)
+                {
+                    emitAction(DetectSmearnovAction {});
+                    requestKeyboardFocus();
+                    return;
+                }
+                if (point.y >= 780.0f && point.y < 812.0f && point.x >= 550.0f && point.x < 638.0f)
+                {
+                    emitAction(ApplySmearnovAction {});
+                    requestKeyboardFocus();
+                    return;
+                }
             }
             if (shell_.state().page == EditorPage::analysis && point.y >= 112.0f &&
                 point.y < 140.0f && point.x >= 450.0f && point.x < 638.0f)
@@ -634,6 +684,46 @@ public:
             canvas.text("MORPH  |  TIMBRE  |  OUTPUT", labelFont, visage::Font::kLeft,
                         18.0f, 474.0f, 360.0f, 14.0f);
             drawSessionControls(canvas, tokens, labelFont);
+            const auto& transport = session.transport;
+            constexpr std::array<const char*, 4> layerLabels { "BOTH", "PART", "RES", "SMEAR" };
+            for (std::size_t index = 0; index < layerLabels.size(); ++index)
+            {
+                const auto x = 18.0f + static_cast<float>(index) * 102.0f;
+                canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
+                    ? tokens.accent : tokens.surface);
+                canvas.roundedRectangle(x, 700.0f, 96.0f, 28.0f, 5.0f);
+                canvas.setColor(static_cast<int>(transport.layer) == static_cast<int>(index)
+                    ? tokens.background : tokens.text);
+                canvas.text(layerLabels[index], labelFont, visage::Font::kCenter, x, 706.0f, 96.0f, 16.0f);
+            }
+            canvas.setColor(transport.smearEnabled ? tokens.accent : tokens.surface);
+            canvas.roundedRectangle(450.0f, 700.0f, 188.0f, 28.0f, 5.0f);
+            canvas.setColor(transport.smearEnabled ? tokens.background : tokens.text);
+            canvas.text(transport.smearEnabled ? "SMEAR FX ON" : "SMEAR FX OFF", labelFont,
+                        visage::Font::kCenter, 454.0f, 706.0f, 180.0f, 16.0f);
+            for (std::size_t index = 0; index < session.morph.variationStored.size(); ++index)
+            {
+                const auto x = 18.0f + static_cast<float>(index) * 100.0f;
+                canvas.setColor(session.morph.variationStored[index] ? tokens.accent : tokens.surface);
+                canvas.roundedRectangle(x, 740.0f, 92.0f, 28.0f, 5.0f);
+                canvas.setColor(session.morph.variationStored[index] ? tokens.background : tokens.text);
+                const auto label = std::string("VAR ") + std::to_string(index + 1);
+                canvas.text(label.c_str(), labelFont, visage::Font::kCenter, x, 746.0f, 92.0f, 16.0f);
+            }
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(18.0f, 780.0f, 408.0f, 64.0f, 8.0f);
+            canvas.setColor(tokens.accent);
+            const auto& timeline = session.morph.timeline;
+            if (timeline.size() >= 3)
+                canvas.rectangle(18.0f + 408.0f * timeline[1], 788.0f, 3.0f, 48.0f);
+            canvas.setColor(tokens.secondaryText);
+            canvas.text("MORPH TIMELINE", labelFont, visage::Font::kLeft, 30.0f, 790.0f, 180.0f, 14.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(450.0f, 780.0f, 88.0f, 32.0f, 5.0f);
+            canvas.roundedRectangle(550.0f, 780.0f, 88.0f, 32.0f, 5.0f);
+            canvas.setColor(tokens.accent);
+            canvas.text("DETECT", labelFont, visage::Font::kCenter, 454.0f, 788.0f, 80.0f, 16.0f);
+            canvas.text("APPLY", labelFont, visage::Font::kCenter, 554.0f, 788.0f, 80.0f, 16.0f);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::analysis))
         {
