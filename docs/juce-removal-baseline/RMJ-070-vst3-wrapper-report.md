@@ -33,39 +33,45 @@ Task ID: RMJ-070 / commit 21
 ## Evidence
 
 ```text
-cmake -S . -B /tmp/ats-vst3-arm64 \
+cmake -S . -B /private/tmp/ats-vst3-arm64 \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_PLUGIN=OFF \
   -DATS_BUILD_NATIVE_VST3=ON \
   -DATS_VST3_SDK_DIR="/Volumes/Extreme SSD/Mearcstapa/build-wrappers/cpm/vst3sdk"
-cmake --build /tmp/ats-vst3-arm64 --target ats_vst3_artifact_test -j2
-ctest --test-dir /tmp/ats-vst3-arm64 --output-on-failure \
+cmake --build /private/tmp/ats-vst3-arm64 --target ats_vst3_artifact_test -j2
+ctest --test-dir /private/tmp/ats-vst3-arm64 --output-on-failure \
   -R '^ats_vst3_artifact_test$'
 ```
 
 Result: the macOS VST3 bundle built and the artifact test passed. It loaded the
 module, verified factory identity and class metadata, instantiated the
-controller and confirmed 81 parameters, instantiated the processor, exercised
-no-input stereo bus setup, 48 kHz/64-frame setup, activate/process/deactivate
-and terminate, and confirmed both output channels are silent when no playback
-buffer has been published.
+controller and confirmed all 81 parameter IDs round-trip through the controller,
+instantiated the processor, exercised no-input stereo bus setup, 48 kHz/64-frame
+setup, activate/process/deactivate and terminate, confirmed both output channels
+are silent when no playback buffer has been published, and reopened the bounded
+ATSP state stream after an explicit rewind.
 
 The native editor view probe uses the same bundle and a real Cocoa host window:
 
 ```text
-cmake --build /tmp/ats-vst3-visage3 --target ats_vst3_editor_view_probe -j2
-ctest --test-dir /tmp/ats-vst3-visage3 --output-on-failure \
+cmake --build /private/tmp/ats-vst3-arm64 --target ats_vst3_editor_view_probe -j2
+ctest --test-dir /private/tmp/ats-vst3-arm64 --output-on-failure \
   -R '^ats_vst3_(artifact_test|editor_view_probe)$'
 ```
 
-Result: both tests passed. The controller created a real editor view, accepted
-the native `NSView` platform, attached to a host content view, reported its
-logical size, accepted focus, resized to 720x480, and removed the Visage child
-without leaving a stale subview. The existing pinned-Visage probes separately
-cover native mouse/text dispatch, popup focus/selection/dismissal, parameter
-gestures, scale, standalone creation, and teardown.
+Result on the current arm64 desktop session: the artifact test passed, while the
+real Cocoa editor view probe terminated with `SIGTRAP` during AppKit/Visage font
+initialization (`XType: Using static font registry`). This is the same headless
+desktop limitation observed by the AU CocoaUI and standalone probes, so it is
+recorded as an open live-window gate rather than treated as native evidence.
+The probe still covers the intended real host path: controller creates an editor
+view, accepts the native `NSView` platform, attaches to a host content view,
+reports logical size, accepts focus, resizes to 720x480, and removes the Visage
+child. The existing pinned-Visage probes separately cover native mouse/text
+dispatch, popup focus/selection/dismissal, parameter gestures, scale, standalone
+creation, and teardown where their host environment permits.
 
-This clears the earlier “no pinned SDK” blocker and the VST3 native editor
-attachment gate. It does not yet clear the full production host gate: AU and
-standalone targets are not yet implemented, the VST3 artifact tests are not a
-DAW/pluginval-equivalent scan, and the full host automation/stress matrix
-remains open.
+This clears the earlier “no pinned SDK” blocker and the VST3 artifact contract.
+It does not yet clear the full production host gate: the arm64 live Cocoa editor
+probe is environment-blocked, the artifact test is not a DAW/pluginval-equivalent
+scan, VST3 host automation/MIDI stress and `IPlugView` callbacks remain open,
+and AU/standalone runtime gates remain separate.

@@ -2,11 +2,13 @@
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "public.sdk/source/common/memorystream.h"
 
 #include <dlfcn.h>
 
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 
@@ -65,6 +67,13 @@ int main(int argc, char** argv)
             "controller instance");
     require(controller->initialize(nullptr) == Steinberg::kResultTrue, "controller initialize");
     require(controller->getParameterCount() == 81, "81 parameter contract");
+    for (Steinberg::Vst::ParamID id = 1; id <= 81; ++id)
+    {
+        require(controller->setParamNormalized(id, 0.5) == Steinberg::kResultTrue,
+                "controller parameter write");
+        require(std::abs(controller->getParamNormalized(id) - 0.5) < 1.0e-6,
+                "controller parameter read");
+    }
     controller->terminate();
     controller->release();
 
@@ -105,6 +114,17 @@ int main(int argc, char** argv)
     require(processor->process(data) == Steinberg::kResultTrue, "process");
     for (float sample : left) require(sample == 0.0f, "left output silence");
     for (float sample : right) require(sample == 0.0f, "right output silence");
+
+    Steinberg::MemoryStream state;
+    require(component->getState(&state) == Steinberg::kResultTrue && state.getSize() > 0,
+            "processor state write");
+    Steinberg::int64 rewoundPosition = -1;
+    require(state.seek(0, Steinberg::IBStream::kIBSeekSet, &rewoundPosition)
+                == Steinberg::kResultTrue
+                && rewoundPosition == 0,
+            "processor state rewind");
+    require(component->setState(&state) == Steinberg::kResultTrue,
+            "processor state reopen");
 
     processor->setProcessing(false);
     component->setActive(false);

@@ -44,6 +44,9 @@ add_test(NAME ats_vst3_artifact_test
   COMMAND ats_vst3_artifact_test "$<TARGET_FILE:ats_resynth_vst3>")
 
 if(APPLE)
+  target_link_libraries(ats_vst3_artifact_test PRIVATE
+    "-framework CoreFoundation")
+
   add_executable(ats_vst3_editor_view_probe
     "${CMAKE_SOURCE_DIR}/tests/host/vst3_editor_view_probe.mm")
   target_compile_features(ats_vst3_editor_view_probe PRIVATE cxx_std_17)

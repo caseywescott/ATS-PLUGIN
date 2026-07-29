@@ -178,20 +178,25 @@ listed commit supplies the cross-layer proof.
 
 ## Final acceptance checklist
 
-### Current execution status (2026-07-28)
+### Current execution status (2026-07-29)
 
-- [x] Commit 21 VST3 format slice: exact SDK commit pinned in CMake and a real
-  artifact/lifecycle/process test passes.
-- [ ] Commit 21 completion gates: host automation/state-reopen stress,
-  pluginval-equivalent scan, and VST3 `IPlugView` editor callbacks.
-- [x] Commit 22 AU native editor gate: Visage-backed CocoaUI advertise/attach/
-  focus/resize/teardown probe passes beside the AU factory artifact tests.
+- [x] Commit 21 VST3 artifact slice: exact SDK commit pinned in CMake and a
+  real arm64 artifact/lifecycle/process test passes, including all-81
+  controller parameter round-trips and processor state rewind/reopen.
+- [ ] Commit 21 completion gates: host automation/MIDI stress,
+  pluginval-equivalent scan, `IPlugView` callbacks, and a live arm64 Cocoa
+  editor probe. The probe currently hits the headless AppKit/Visage `SIGTRAP`
+  during font initialization and is retained as an open native-runtime gate.
+- [x] Commit 22 AU native editor contract: Visage-backed CocoaUI
+  advertise/attach/focus/resize/teardown probe is implemented beside the AU
+  factory artifact tests; x86_64 probe evidence passes.
 - [x] Commit 22 AU scan/load gate: the matching arm64 component passed
   `auval -v aufx Atr1 AtPl -o` for registration, open, initialization,
   zero-input stereo format, and required properties; the follow-up class-info
   dictionary contract is covered by the direct artifact test.
 - [ ] Commit 22 remaining gates: AU render/automation stress and standalone
-  native-window smoke evidence remain open; the JUCE-free AU artifact and
+  native-window smoke evidence remain open; the arm64 CocoaUI/standalone probes
+  hit the same headless AppKit/Visage `SIGTRAP`. The JUCE-free AU artifact and
   standalone targets are implemented.
 - [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
   JUCE removal remain open.
