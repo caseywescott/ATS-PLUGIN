@@ -55,8 +55,14 @@ to `VisageEditor`. A real analysis-frequency gesture emits the durable
 `analysisLowestFreq` parameter ID with a descriptor-domain value; the VST3
 controller converts it back to normalized VST3 space, updates its parameter
 state, and forwards begin/perform/end edits to the host component handler.
-This is a compiled and artifact-tested host bridge. A DAW-host recording of
-the gesture is still a separate external validation gate.
+The x86_64 `ats_vst3_editor_view_probe` now installs a fake
+`IComponentHandler`, attaches the actual controller-created view to a Cocoa
+`NSView`, selects Analysis, and drags the native slider. It observes exactly
+one `beginEdit`, at least two `performEdit` calls, and one `endEdit` for the
+same parameter with a normalized value in range. This is live native
+editor-to-standard-VST3-host callback evidence, rather than only a compiled
+bridge. A DAW-host recording of the gesture is still a separate external
+validation gate.
 
 ```text
 cmake -S . -B /private/tmp/ats-vst3-arm64 \
