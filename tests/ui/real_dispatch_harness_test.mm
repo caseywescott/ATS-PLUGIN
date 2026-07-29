@@ -39,6 +39,9 @@ struct HarnessState
     bool parameterEnd = false;
     float parameterValue = 0.0f;
     bool focused = false;
+    int typedParameterActions = 0;
+    bool typedParameterBegin = false;
+    bool typedParameterEnd = false;
 };
 
 void mouseDown(void* context)
@@ -103,6 +106,18 @@ void parameterGesture(void* context, const char* id, float value, bool begin, bo
     state.parameterValue = value;
 }
 
+void typedAction(void* context, const ats::ui::EditorAction* action)
+{
+    auto& state = *static_cast<HarnessState*>(context);
+    REQUIRE(action != nullptr);
+    REQUIRE(std::holds_alternative<ats::ui::SetParameterAction>(*action));
+    const auto& parameter = std::get<ats::ui::SetParameterAction>(*action);
+    REQUIRE(parameter.id == "analysis.frequency");
+    ++state.typedParameterActions;
+    state.typedParameterBegin = state.typedParameterBegin || parameter.begin;
+    state.typedParameterEnd = state.typedParameterEnd || parameter.end;
+}
+
 void drainEvents(NSApplication* application)
 {
     for (int i = 0; i < 64; ++i)
@@ -145,7 +160,8 @@ int main()
 
         ats::ui::EditorEventSink sink { &state, mouseDown, mouseUp, textInput, focusChanged,
                                         popupShown, popupSelected, popupDismissed,
-                                        pageSelected, parameterGesture };
+                                        pageSelected, parameterGesture, nullptr, nullptr, nullptr,
+                                        nullptr, nullptr, typedAction };
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
         ats::host::HostAdapter host;
         REQUIRE(host.initialize(ats::host::HostFormat::standalone));
@@ -246,6 +262,8 @@ int main()
                 break;
         }
         REQUIRE(state.parameterGestures >= 2 && state.parameterBegin && state.parameterEnd);
+        REQUIRE(state.typedParameterActions >= 2 && state.typedParameterBegin &&
+                state.typedParameterEnd);
 
         NSEvent* rightMouse = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown
                                                  location:NSMakePoint(40.0, 40.0)

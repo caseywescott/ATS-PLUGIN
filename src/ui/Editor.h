@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EditorHost.h"
+
 #include <cstdint>
 
 namespace ats::ui
@@ -26,6 +28,10 @@ struct EditorEventSink
     void (*spectrumModeSelected)(void* context, int sourceIndex, int mode) = nullptr;
     void (*dialogRequested)(void* context, int kind) = nullptr;
     void (*dialogResolved)(void* context, int kind, const char* path, bool accepted) = nullptr;
+    // Typed actions are delivered synchronously at the backend boundary. The
+    // pointed-to variant is only valid for the duration of the callback;
+    // consumers that queue work must copy it into their dispatcher.
+    void (*action)(void* context, const EditorAction* action) = nullptr;
 };
 
 class IEditor

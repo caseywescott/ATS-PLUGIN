@@ -47,6 +47,7 @@ public:
             {
                 if (shell_.state().canUndo && sink_.historyAction)
                     sink_.historyAction(sink_.context, false);
+                emitAction(HistoryAction { false });
                 requestKeyboardFocus();
                 return;
             }
@@ -54,6 +55,7 @@ public:
             {
                 if (shell_.state().canRedo && sink_.historyAction)
                     sink_.historyAction(sink_.context, true);
+                emitAction(HistoryAction { true });
                 requestKeyboardFocus();
                 return;
             }
@@ -99,6 +101,7 @@ public:
                     shell_.spectrum().setMode(items[static_cast<std::size_t>(optionId)].mode);
                     if (sink_.spectrumModeSelected)
                         sink_.spectrumModeSelected(sink_.context, action.source, action.mode);
+                    emitAction(action);
                     if (sink_.popupDismissed)
                         sink_.popupDismissed(sink_.context);
                     redraw();
@@ -412,8 +415,15 @@ private:
 
     void emitParameterGesture(float value, bool begin, bool end)
     {
+        emitAction(SetParameterAction { "analysis.frequency", value, begin, end });
         if (sink_.parameterGesture)
             sink_.parameterGesture(sink_.context, "analysis.frequency", value, begin, end);
+    }
+
+    void emitAction(const EditorAction& action)
+    {
+        if (sink_.action)
+            sink_.action(sink_.context, &action);
     }
 
     struct VisageTokens

@@ -12,6 +12,9 @@ The harness verifies that:
 - host attach, scale, resize, show/hide, detach, and destruction forward through
   the neutral `IEditor` seam;
 - a native mouse gesture becomes typed `SetParameterAction` begin/end events;
+- the Visage backend emits those typed actions through the backend-neutral
+  `EditorEventSink::action` seam, independently of the probe-only gesture
+  callback;
 - native text input becomes a typed `ApplyMathAction`;
 - the same native interaction posts an editor refresh through `UiScheduler`;
 - scheduler cadence and source revision are retained;
@@ -75,7 +78,9 @@ ctest --test-dir build-review --output-on-failure -R spectrum_renderer_test
 ```
 
 Result: the updated real-dispatch harness passed in an isolated desktop
-session, including page selection and the analysis-frequency gesture. The
+session, including page selection, the analysis-frequency gesture, and the
+typed action callback receiving bounded begin/end `SetParameterAction`
+variants. The
 combined GUI invocation can miss the popup row under LaunchServices timing;
 the native popup scan is therefore rerun in isolation for evidence. The
 shell/session/page/spectrum/lifecycle model and renderer tests also pass.
