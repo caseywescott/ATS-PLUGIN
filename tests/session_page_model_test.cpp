@@ -1,4 +1,5 @@
 #include "../src/ui/SessionPageModel.h"
+#include "../src/ui/SessionFileDrop.h"
 
 #include <cassert>
 #include <string>
@@ -48,5 +49,14 @@ int main()
     assert(import.slot == 0 && import.path.string() == "/tmp/source.wav");
     const auto exportAction = model.exportAts(ats::ui::SessionSource::sourceB, { "/tmp/source.ats" });
     assert(exportAction.source == 1);
+
+    const auto wavDrop = ats::ui::classifySessionSourceDrop(0, { "/tmp/Source.WAVE" });
+    assert(wavDrop && wavDrop->kind == ats::ui::SessionDropKind::wav);
+    assert(wavDrop->slot == 0 && wavDrop->path.string() == "/tmp/Source.WAVE");
+    const auto atsDrop = ats::ui::classifySessionSourceDrop(1, { "/tmp/source.ats" });
+    assert(atsDrop && atsDrop->kind == ats::ui::SessionDropKind::ats && atsDrop->slot == 1);
+    assert(!ats::ui::classifySessionSourceDrop(2, { "/tmp/source.wav" }));
+    assert(!ats::ui::classifySessionSourceDrop(0, { "/tmp/a.wav", "/tmp/b.ats" }));
+    assert(!ats::ui::classifySessionSourceDrop(0, { "/tmp/source.txt" }));
     return 0;
 }

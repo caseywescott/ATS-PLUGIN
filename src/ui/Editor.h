@@ -32,6 +32,10 @@ struct EditorEventSink
     // pointed-to variant is only valid for the duration of the callback;
     // consumers that queue work must copy it into their dispatcher.
     void (*action)(void* context, const EditorAction* action) = nullptr;
+    // Native file-drop completion is reported independently from typed actions
+    // so hosts can expose unsupported/multi-file rejection without guessing
+    // from an absent import action.
+    void (*fileDrop)(void* context, int slot, const char* path, bool accepted) = nullptr;
 };
 
 class IEditor

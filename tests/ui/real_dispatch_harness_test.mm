@@ -11,6 +11,56 @@
 #include <iostream>
 #include <memory>
 
+@interface AtsTestPasteboard : NSObject
+- (instancetype)initWithFileUrl:(NSURL*)fileUrl;
+@end
+
+@implementation AtsTestPasteboard
+{
+    NSURL* fileUrl_;
+}
+
+- (instancetype)initWithFileUrl:(NSURL*)fileUrl
+{
+    self = [super init];
+    if (self != nil)
+        fileUrl_ = fileUrl;
+    return self;
+}
+
+- (NSArray*)readObjectsForClasses:(NSArray<Class>*)classes options:(NSDictionary*)options
+{
+    (void)classes;
+    (void)options;
+    return @[ fileUrl_ ];
+}
+@end
+
+@interface AtsTestDraggingInfo : NSObject
+- (instancetype)initWithPasteboard:(id)pasteboard location:(NSPoint)location;
+@end
+
+@implementation AtsTestDraggingInfo
+{
+    id pasteboard_;
+    NSPoint location_;
+}
+
+- (instancetype)initWithPasteboard:(id)pasteboard location:(NSPoint)location
+{
+    self = [super init];
+    if (self != nil)
+    {
+        pasteboard_ = pasteboard;
+        location_ = location;
+    }
+    return self;
+}
+
+- (NSPasteboard*)draggingPasteboard { return static_cast<NSPasteboard*>(pasteboard_); }
+- (NSPoint)draggingLocation { return location_; }
+@end
+
 namespace
 {
 [[noreturn]] void fail(const char* expression, int line)
@@ -42,6 +92,10 @@ struct HarnessState
     int typedParameterActions = 0;
     bool typedParameterBegin = false;
     bool typedParameterEnd = false;
+    int typedImportWavActions = 0;
+    int fileDrops = 0;
+    int lastDropSlot = -1;
+    bool lastDropAccepted = false;
 };
 
 void mouseDown(void* context)
@@ -110,12 +164,29 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
 {
     auto& state = *static_cast<HarnessState*>(context);
     REQUIRE(action != nullptr);
-    REQUIRE(std::holds_alternative<ats::ui::SetParameterAction>(*action));
-    const auto& parameter = std::get<ats::ui::SetParameterAction>(*action);
-    REQUIRE(parameter.id == "analysisLowestFreq");
-    ++state.typedParameterActions;
-    state.typedParameterBegin = state.typedParameterBegin || parameter.begin;
-    state.typedParameterEnd = state.typedParameterEnd || parameter.end;
+    if (std::holds_alternative<ats::ui::SetParameterAction>(*action))
+    {
+        const auto& parameter = std::get<ats::ui::SetParameterAction>(*action);
+        REQUIRE(parameter.id == "analysisLowestFreq");
+        ++state.typedParameterActions;
+        state.typedParameterBegin = state.typedParameterBegin || parameter.begin;
+        state.typedParameterEnd = state.typedParameterEnd || parameter.end;
+        return;
+    }
+    REQUIRE(std::holds_alternative<ats::ui::ImportWavAction>(*action));
+    const auto& imported = std::get<ats::ui::ImportWavAction>(*action);
+    REQUIRE(imported.slot >= 0 && imported.slot <= 1);
+    REQUIRE(imported.path.string() == "/tmp/ats-native-drop.wav");
+    ++state.typedImportWavActions;
+}
+
+void fileDrop(void* context, int slot, const char* path, bool accepted)
+{
+    auto& state = *static_cast<HarnessState*>(context);
+    REQUIRE(path != nullptr && std::strcmp(path, "/tmp/ats-native-drop.wav") == 0);
+    ++state.fileDrops;
+    state.lastDropSlot = slot;
+    state.lastDropAccepted = accepted;
 }
 
 void drainEvents(NSApplication* application)
@@ -162,6 +233,7 @@ int main()
                                         popupShown, popupSelected, popupDismissed,
                                         pageSelected, parameterGesture, nullptr, nullptr, nullptr,
                                         nullptr, nullptr, typedAction };
+        sink.fileDrop = fileDrop;
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
         ats::host::HostAdapter host;
         REQUIRE(host.initialize(ats::host::HostFormat::standalone));
@@ -189,6 +261,36 @@ int main()
                                                       logicalPoint.y / 1.25);
             return [embeddedView convertPoint:viewPoint toView:nil];
         };
+
+        AtsTestPasteboard* dropPasteboard = [[AtsTestPasteboard alloc]
+            initWithFileUrl:[NSURL fileURLWithPath:@"/tmp/ats-native-drop.wav"]];
+        // The native backend converts AppKit window coordinates through the
+        // host view and its scale. Exercise a compact grid spanning both
+        // source cards rather than assuming a particular backing-space origin.
+        const CGFloat dropXs[] { 40.0, 100.0, 200.0, 350.0, 430.0, 520.0, 600.0 };
+        const CGFloat dropYs[] { 120.0, 140.0, 160.0 };
+        bool nativeDropAccepted = false;
+        for (const auto x : dropXs)
+        {
+            for (const auto y : dropYs)
+            {
+                const auto dropPoint = windowPointForLogical(NSMakePoint(x, y));
+                AtsTestDraggingInfo* dropInfo = [[AtsTestDraggingInfo alloc]
+                    initWithPasteboard:dropPasteboard location:dropPoint];
+                const auto nativeDropInfo = static_cast<id<NSDraggingInfo>>(dropInfo);
+                if ([embeddedView draggingEntered:nativeDropInfo] != NSDragOperationCopy)
+                    continue;
+                REQUIRE([embeddedView performDragOperation:nativeDropInfo]);
+                nativeDropAccepted = true;
+                break;
+            }
+            if (nativeDropAccepted)
+                break;
+        }
+        REQUIRE(nativeDropAccepted);
+        REQUIRE(state.fileDrops == 1 && state.lastDropSlot >= 0 && state.lastDropSlot <= 1 &&
+                state.lastDropAccepted);
+        REQUIRE(state.typedImportWavActions == 1);
 
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
                                             location:windowPointForLogical(NSMakePoint(600.0, 120.0))

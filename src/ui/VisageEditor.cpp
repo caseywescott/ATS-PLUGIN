@@ -1,5 +1,6 @@
 #include "VisageEditor.h"
 #include "EditorShell.h"
+#include "SessionFileDrop.h"
 #include "VisageNativeMac.h"
 #include "../core/ParameterRegistry.h"
 
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,6 +20,52 @@ namespace ats::ui
 {
 namespace
 {
+
+class SourceDropTarget final : public visage::Frame
+{
+public:
+    using PathsCallback = std::function<void(const std::vector<std::string>&)>;
+    using StateCallback = std::function<void(bool)>;
+
+    SourceDropTarget(PathsCallback dropped, StateCallback stateChanged)
+        : dropped_(std::move(dropped)), stateChanged_(std::move(stateChanged))
+    {
+        setDrawing(false);
+    }
+
+    bool receivesDragDropFiles() override { return true; }
+    std::string dragDropFileExtensionRegex() override
+    {
+        // WindowEventHandler applies this expression to the extension before
+        // dispatching a native drop, which lets the OS reject unsupported
+        // files and multi-file drops before the action boundary.
+        return "\\.(wav|wave|aif|aiff|ats|WAV|WAVE|AIF|AIFF|ATS)";
+    }
+
+    void dragFilesEnter(const std::vector<std::string>&) override
+    {
+        if (stateChanged_)
+            stateChanged_(true);
+    }
+
+    void dragFilesExit() override
+    {
+        if (stateChanged_)
+            stateChanged_(false);
+    }
+
+    void dropFiles(const std::vector<std::string>& paths) override
+    {
+        if (stateChanged_)
+            stateChanged_(false);
+        if (dropped_)
+            dropped_(paths);
+    }
+
+private:
+    PathsCallback dropped_;
+    StateCallback stateChanged_;
+};
 
 class ProbeFrame final : public visage::Frame
 {
@@ -35,6 +83,19 @@ public:
                 sessionValues_[index] = descriptor->defaultValue;
 
         setAcceptsKeystrokes(true);
+        setReceiveChildMouseEvents(true);
+        for (int slot = 0; slot < 2; ++slot)
+        {
+            auto target = std::make_unique<SourceDropTarget>(
+                [this, slot](const std::vector<std::string>& paths) { acceptSourceDrop(slot, paths); },
+                [this, slot](bool active) {
+                    sourceDropActive_[static_cast<std::size_t>(slot)] = active;
+                    redraw();
+                });
+            target->setBounds(slot == 0 ? 18.0f : 330.0f, 112.0f, 300.0f, 68.0f);
+            sourceDropTargets_[static_cast<std::size_t>(slot)] = target.get();
+            addChild(std::move(target));
+        }
         onMouseDown() += [this](const visage::MouseEvent& event) {
             if (event.shouldTriggerPopup())
             {
@@ -374,6 +435,7 @@ public:
                 const auto page = static_cast<std::size_t>((point.x - 16.0f) / 126.0f);
                 if (shell_.selectPage(page))
                 {
+                    updateSourceDropTargets();
                     if (sink_.pageSelected)
                         sink_.pageSelected(sink_.context, static_cast<int>(page));
                     redraw();
@@ -698,8 +760,10 @@ public:
         if (selected == static_cast<std::size_t>(EditorPage::session))
         {
             const auto& session = shell_.session().state();
-            drawSourceCard(canvas, tokens, labelFont, session.sources[0], "A", 18.0f);
-            drawSourceCard(canvas, tokens, labelFont, session.sources[1], "B", 330.0f);
+            drawSourceCard(canvas, tokens, labelFont, session.sources[0], "A", 18.0f,
+                           sourceDropActive_[0]);
+            drawSourceCard(canvas, tokens, labelFont, session.sources[1], "B", 330.0f,
+                           sourceDropActive_[1]);
             canvas.setColor(tokens.surface);
             canvas.roundedRectangle(18.0f, 190.0f, 128.0f, 20.0f, 5.0f);
             canvas.setColor(session.transport.playing ? tokens.accent : tokens.text);
@@ -1363,9 +1427,9 @@ private:
 
     static void drawSourceCard(visage::Canvas& canvas, const VisageTokens& tokens,
                                const visage::Font& labelFont, const SessionSourceCard& source,
-                               const char* slot, float x)
+                               const char* slot, float x, bool dropActive)
     {
-        canvas.setColor(tokens.surface);
+        canvas.setColor(dropActive ? tokens.accent : tokens.surface);
         canvas.roundedRectangle(x, 112.0f, 300.0f, 68.0f, 8.0f);
         canvas.setColor(tokens.accent);
         canvas.roundedRectangle(x + 8.0f, 120.0f, 18.0f, 14.0f, 4.0f);
@@ -1386,6 +1450,33 @@ private:
                         buttonX, 153.0f, widths[index], 14.0f);
             buttonX += widths[index] + 4.0f;
         }
+    }
+
+    void updateSourceDropTargets()
+    {
+        const auto visible = shell_.state().page == EditorPage::session;
+        for (auto* target : sourceDropTargets_)
+            if (target != nullptr)
+                target->setVisible(visible);
+        if (!visible)
+            sourceDropActive_.fill(false);
+    }
+
+    void acceptSourceDrop(int slot, const std::vector<std::string>& paths)
+    {
+        const auto drop = classifySessionSourceDrop(slot, paths);
+        const auto path = paths.size() == 1 ? paths.front().c_str() : "";
+        if (sink_.fileDrop)
+            sink_.fileDrop(sink_.context, slot, path, drop.has_value());
+        if (!drop)
+            return;
+
+        if (drop->kind == SessionDropKind::wav)
+            emitAction(ImportWavAction { drop->path, drop->slot });
+        else
+            emitAction(ImportAtsAction { drop->path, drop->slot });
+        requestKeyboardFocus();
+        redraw();
     }
 
     [[nodiscard]] const char* spectrumModeLabel() const noexcept
@@ -1451,6 +1542,8 @@ private:
     }
 
     EditorEventSink sink_{};
+    std::array<SourceDropTarget*, 2> sourceDropTargets_ {};
+    std::array<bool, 2> sourceDropActive_ {};
     EditorShellModel shell_{};
     SpectralTraceSnapshot spectrumSnapshot_{};
     void* dialogParent_ = nullptr;
