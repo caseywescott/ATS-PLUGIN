@@ -200,7 +200,7 @@ listed commit supplies the cross-layer proof.
   dictionary contract is covered by the direct artifact test.
 - [x] Commit 22 available-runtime gates: AU render/automation stress,
   x86_64 CocoaUI attach/focus/resize/teardown, and x86_64 standalone
-  `ApplicationWindow` launch/resize/hide/show/teardown all pass. The arm64
+  `ApplicationWindow` launch/resize/native parameter gesture/hide/show/teardown all pass. The arm64
   CocoaUI/standalone probes still hit the same headless AppKit/Visage trap.
   Focused four-block timestamp-advanced AU automation/MIDI dispatch coverage
   passes in the artifact test.

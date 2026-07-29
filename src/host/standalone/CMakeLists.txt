@@ -25,3 +25,6 @@ target_include_directories(ats_resynth_standalone_smoke PRIVATE
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_standalone_smoke PRIVATE
   ats_host_vst3 ats_visage_editor visage "-framework Cocoa")
+enable_testing()
+add_test(NAME ats_resynth_standalone_smoke
+  COMMAND ats_resynth_standalone_smoke --smoke)

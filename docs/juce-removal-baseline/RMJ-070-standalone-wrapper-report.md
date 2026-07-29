@@ -7,8 +7,9 @@ The JUCE-free standalone projection now has two native macOS entry points:
 - `ats_resynth_standalone` is a real `ATS Resynth.app` bundle with the ATS
   bundle identifier and a Visage `ApplicationWindow`.
 - `ats_resynth_standalone_smoke` is the same entry point without bundle
-  packaging and accepts `--smoke` for launch, resize, hide/show, and teardown
-  checks. It uses `HostAdapter::attachStandaloneEditor`, not a headless editor.
+  packaging and accepts `--smoke` for launch, resize, native parameter gesture,
+  hide/show, and teardown checks. It uses `HostAdapter::attachStandaloneEditor`,
+  not a headless editor.
 
 The implementation follows the Mearcstapa pattern of pinning Visage in the
 top-level CMake graph, while keeping the ATS wrapper independent of CLAP.
@@ -40,8 +41,12 @@ window-capable configuration and passed:
 
 ```text
 arch -x86_64 /private/tmp/ats-native-default/src/host/standalone/ats_resynth_standalone_smoke --smoke
-ats_standalone_smoke: launch, resize, hide/show, and teardown ok
+ats_standalone_smoke: launch, resize, native parameter gesture, hide/show, and teardown ok
 ```
 
 This is live native `ApplicationWindow` evidence for the available runtime;
-the arm64 headless-session limitation remains open.
+the arm64 headless-session limitation remains open. The smoke target is also a
+CTest gate: it uses the actual standalone `NSView` to select Analysis and drag
+the Analysis Low Freq control, then verifies that its typed Visage action
+updated the neutral `HostAdapter` parameter store before exercising
+hide/show/teardown.
