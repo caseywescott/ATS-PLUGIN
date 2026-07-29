@@ -30,7 +30,12 @@ then analyses and saves an ATS fixture before importing it through `ats_load`.
 It also proves cancellation and extension rejection. The model and host tests
 prove selected-slot ownership and typed action execution.
 
-This does **not** promote `UI-FILE-01` in the parity manifest. The real native
-drop harness currently proves only hit-testing and typed action dispatch
-(`UI-FILE-02`); it does not feed a readable file through the host handler.
-Nor does this prove queued analysis, playback publication, or DAW-host output.
+The real native drop harness now writes a WAV fixture, scans the embedded
+`NSView` to find both A/B targets, and routes the resulting typed actions into
+`HostAdapter::importSource`. It asserts a decoded, 48 kHz, four-frame source
+in each slot. This is injected-pasteboard evidence because the runner cannot
+use the system drag pasteboard service reliably.
+
+This does **not** promote `UI-FILE-01` in the parity manifest: chooser
+success/cancel/error is still unproven. Nor does this prove queued analysis,
+playback publication, or DAW-host output.

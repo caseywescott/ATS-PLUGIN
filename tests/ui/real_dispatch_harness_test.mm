@@ -7,7 +7,10 @@
 #import <Cocoa/Cocoa.h>
 
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 
@@ -98,7 +101,34 @@ struct HarnessState
     int sourceDropCounts[2] {};
     int lastDropSlot = -1;
     bool lastDropAccepted = false;
+    ats::host::HostAdapter* host = nullptr;
+    int decodedSourceDrops = 0;
 };
+
+void writeU16(std::ofstream& stream, std::uint16_t value)
+{
+    stream.put(static_cast<char>(value & 0xffu));
+    stream.put(static_cast<char>((value >> 8u) & 0xffu));
+}
+
+void writeU32(std::ofstream& stream, std::uint32_t value)
+{
+    writeU16(stream, static_cast<std::uint16_t>(value & 0xffffu));
+    writeU16(stream, static_cast<std::uint16_t>(value >> 16u));
+}
+
+void writeDropWave(const std::filesystem::path& path)
+{
+    constexpr std::int16_t samples[] = { 0, 4096, -4096, 0 };
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    REQUIRE(stream.good());
+    stream.write("RIFF", 4); writeU32(stream, 36 + sizeof(samples)); stream.write("WAVEfmt ", 8);
+    writeU32(stream, 16); writeU16(stream, 1); writeU16(stream, 1); writeU32(stream, 48000);
+    writeU32(stream, 96000); writeU16(stream, 2); writeU16(stream, 16);
+    stream.write("data", 4); writeU32(stream, sizeof(samples));
+    for (const auto sample : samples) writeU16(stream, static_cast<std::uint16_t>(sample));
+    REQUIRE(stream.good());
+}
 
 void mouseDown(void* context)
 {
@@ -181,6 +211,15 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
         REQUIRE(imported->slot == state.lastDropSlot);
         REQUIRE(imported->path.string() == "/tmp/ats-native-drop.wav");
         ++state.typedImportWavActions;
+        REQUIRE(state.host != nullptr);
+        if (state.host->source(imported->slot) == nullptr)
+        {
+            ats::Error error;
+            REQUIRE(state.host->importSource(imported->path, imported->slot,
+                                             ats::engine::SourceImportKind::audio, error));
+            REQUIRE(!error);
+            ++state.decodedSourceDrops;
+        }
         return;
     }
     REQUIRE(std::holds_alternative<ats::ui::ImportAtsAction>(*action));
@@ -236,6 +275,8 @@ int main()
         [hostWindow makeKeyAndOrderFront:nil];
         [application activateIgnoringOtherApps:YES];
 
+        const std::filesystem::path dropWavePath { "/tmp/ats-native-drop.wav" };
+        writeDropWave(dropWavePath);
         HarnessState state;
         state.registration = state.scheduler.registerSurface(
             ats::ui::UiRefreshSurface::editor, std::chrono::milliseconds(100),
@@ -253,6 +294,7 @@ int main()
         auto editor = std::make_unique<ats::ui::VisageEditor>(sink);
         ats::host::HostAdapter host;
         REQUIRE(host.initialize(ats::host::HostFormat::standalone));
+        state.host = &host;
         REQUIRE(host.attachEditor(*editor, (__bridge void*)[hostWindow contentView], 1.25f,
                                   640.0f, 480.0f));
         REQUIRE(host.editorAttached());
@@ -318,6 +360,11 @@ int main()
         REQUIRE(state.sourceDropCounts[0] > 0 && foundSourceAPoint);
         REQUIRE(state.sourceDropCounts[1] > 0 && foundSourceBPoint);
         REQUIRE(state.typedImportWavActions == state.fileDrops);
+        REQUIRE(state.decodedSourceDrops == 2);
+        REQUIRE(host.source(0) != nullptr && host.source(0)->sampleRate == 48000 &&
+                host.source(0)->monoSamples.size() == 4);
+        REQUIRE(host.source(1) != nullptr && host.source(1)->sampleRate == 48000 &&
+                host.source(1)->monoSamples.size() == 4);
 
         AtsTestPasteboard* atsDropPasteboard = [[AtsTestPasteboard alloc]
             initWithFileUrl:[NSURL fileURLWithPath:@"/tmp/ats-native-drop.ats"]];
@@ -476,6 +523,8 @@ int main()
         REQUIRE(!host.editorAttached());
         REQUIRE(!editor->isShowing());
         editor.reset();
+        std::error_code removeError;
+        std::filesystem::remove(dropWavePath, removeError);
         REQUIRE([[hostWindow contentView] subviews].count == 0);
         [hostWindow close];
     }
