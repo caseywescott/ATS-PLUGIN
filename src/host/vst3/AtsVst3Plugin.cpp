@@ -1,5 +1,6 @@
 #include "../../core/AtsStateCodec.h"
 #include "../../core/ParameterRegistry.h"
+#include "../../state/FactoryPresetState.h"
 #include "../../host/HostAdapter.h"
 #include "../../ui/VisageEditor.h"
 
@@ -380,6 +381,22 @@ public:
 
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
+        if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
+        {
+            ats::ParameterStore preset;
+            if (!ats::state::applyFactoryPreset(factory->index, preset))
+                return;
+            for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+            {
+                const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId);
+                const auto normalized = descriptor.normalize(preset.read(descriptor.denseIndex));
+                beginEdit(tag);
+                setParamNormalized(tag, normalized);
+                performEdit(tag, normalized);
+                endEdit(tag);
+            }
+            return;
+        }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
         if (parameter == nullptr)
             return;

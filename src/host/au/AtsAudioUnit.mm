@@ -1,4 +1,5 @@
 #include "../../core/ParameterRegistry.h"
+#include "../../state/FactoryPresetState.h"
 #include "../../host/HostAdapter.h"
 #include "../../ui/VisageEditor.h"
 
@@ -454,6 +455,11 @@ private:
 
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
+        if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
+        {
+            (void) ats::state::applyFactoryPreset(factory->index, host_.parameters());
+            return;
+        }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
         if (parameter == nullptr)
             return;

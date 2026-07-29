@@ -1,5 +1,6 @@
 #include "../../host/HostAdapter.h"
 #include "../../core/ParameterRegistry.h"
+#include "../../state/FactoryPresetState.h"
 #include "../../ui/VisageEditor.h"
 
 #import <Cocoa/Cocoa.h>
@@ -17,6 +18,11 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
     auto* host = static_cast<ats::host::HostAdapter*>(context);
     if (host == nullptr || action == nullptr)
         return;
+    if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(action))
+    {
+        (void) ats::state::applyFactoryPreset(factory->index, host->parameters());
+        return;
+    }
     const auto* parameter = std::get_if<ats::ui::SetParameterAction>(action);
     if (parameter == nullptr)
         return;

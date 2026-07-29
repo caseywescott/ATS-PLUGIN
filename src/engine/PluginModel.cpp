@@ -1,4 +1,5 @@
 #include "PluginModel.h"
+#include "../state/FactoryPresetState.h"
 
 #include <cmath>
 #include <utility>
@@ -91,6 +92,23 @@ ats::ui::ActionResult PluginModel::handle(const ats::ui::EditorAction& action)
         snapshot.renderRunning = false;
         snapshot.progress = 0.0f;
         snapshot.status = "jobs cancelled";
+        snapshot.error.clear();
+        publishTelemetry(std::move(snapshot));
+        return result;
+    }
+
+    if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
+    {
+        if (!ats::state::applyFactoryPreset(factory->index, parameters_))
+        {
+            unsupported("invalid_factory_preset", "factory preset index is out of range");
+            return result;
+        }
+        ++modelRevision_;
+        auto snapshot = telemetry_.snapshot();
+        snapshot.modelRevision = modelRevision_;
+        snapshot.displayRevision = modelRevision_;
+        snapshot.status = "factory preset applied";
         snapshot.error.clear();
         publishTelemetry(std::move(snapshot));
         return result;

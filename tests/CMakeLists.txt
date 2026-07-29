@@ -14,6 +14,11 @@ target_include_directories(parameter_registry_test PRIVATE "${CMAKE_CURRENT_SOUR
 target_compile_features(parameter_registry_test PRIVATE cxx_std_17)
 add_test(NAME parameter_registry_test COMMAND parameter_registry_test)
 
+add_executable(factory_preset_state_test factory_preset_state_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(factory_preset_state_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/state")
+target_compile_features(factory_preset_state_test PRIVATE cxx_std_17)
+add_test(NAME factory_preset_state_test COMMAND factory_preset_state_test)
+
 add_executable(parameter_binding_dispatch_test parameter_binding_dispatch_test.cpp ../src/core/ParameterRegistry.cpp)
 target_include_directories(parameter_binding_dispatch_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
