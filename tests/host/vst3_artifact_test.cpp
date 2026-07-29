@@ -141,6 +141,13 @@ int main(int argc, char** argv)
     void* module = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     require(module != nullptr, "dlopen(module)");
 
+#if defined(__APPLE__)
+    // The macOS VST3 loader requires these bundle lifecycle exports. Keep the
+    // direct artifact test aligned with Steinberg's standalone validator.
+    require(dlsym(module, "bundleEntry") != nullptr, "bundleEntry export");
+    require(dlsym(module, "bundleExit") != nullptr, "bundleExit export");
+#endif
+
     const auto getFactory = reinterpret_cast<GetFactoryFunction>(dlsym(module, "GetPluginFactory"));
     require(getFactory != nullptr, "GetPluginFactory export");
     auto* factory = getFactory();

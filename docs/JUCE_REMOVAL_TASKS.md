@@ -186,9 +186,11 @@ listed commit supplies the cross-layer proof.
 - [x] Commit 21 completion gates available in this environment: full 81-queue
   automation/MIDI stress, artifact lifecycle/state reopen, and live x86_64
   Cocoa `IPlugView` attach/focus/resize/remove evidence. The arm64 probe still
-  hits the headless AppKit/Visage `SIGTRAP` during font initialization. No
-  pluginval/DAW executable is installed, so the passing artifact/host-contract
-  suite is supplemental rather than a pluginval claim.
+  hits the headless AppKit/Visage `SIGTRAP` during font initialization. The
+  official Steinberg VST3 validator also passes the x86_64 bundle (47 passed,
+  0 failed), including macOS bundle entry and parameter-flush compatibility.
+  No pluginval/DAW executable is installed, so that result is supplemental
+  rather than a pluginval/DAW claim.
 - [x] Commit 22 AU native editor contract: Visage-backed CocoaUI
   advertise/attach/focus/resize/teardown probe is implemented beside the AU
   factory artifact tests; x86_64 probe evidence passes.

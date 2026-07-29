@@ -14,6 +14,12 @@ set_target_properties(ats_resynth_vst3 PROPERTIES
   PREFIX "")
 
 if(APPLE)
+  # macmain.cpp supplies the mandatory VST3 bundleEntry/bundleExit exports.
+  # It cannot remain solely inside the static SDK library: the linker has no
+  # referenced symbol that would pull that archive member into the bundle.
+  get_property(_ats_vst3_sdk_root TARGET ats_vst3_sdk PROPERTY ATS_VST3_SDK_ROOT)
+  target_sources(ats_resynth_vst3 PRIVATE
+    "${_ats_vst3_sdk_root}/public.sdk/source/main/macmain.cpp")
   target_link_libraries(ats_resynth_vst3 PRIVATE
     "-framework Foundation" "-framework CoreFoundation")
   set_target_properties(ats_resynth_vst3 PROPERTIES

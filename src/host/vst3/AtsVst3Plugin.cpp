@@ -131,12 +131,19 @@ public:
 
     Steinberg::tresult PLUGIN_API process(Steinberg::Vst::ProcessData& data) SMTG_OVERRIDE
     {
-        if (data.symbolicSampleSize != Steinberg::Vst::kSample32 || data.numOutputs != 1 ||
-            data.outputs == nullptr || data.outputs[0].numChannels != 2 ||
-            data.outputs[0].channelBuffers32 == nullptr)
+        if (data.symbolicSampleSize != Steinberg::Vst::kSample32)
             return Steinberg::kResultFalse;
 
+        // VST3 hosts issue parameter-flush calls with no audio buffers. They
+        // still carry automation and must succeed without entering the audio
+        // adapter or dereferencing an absent output bus.
         applyParameterChanges(data.inputParameterChanges);
+        if (data.numOutputs == 0 || data.outputs == nullptr)
+            return Steinberg::kResultTrue;
+        if (data.numOutputs != 1 || data.outputs[0].numChannels != 2)
+            return Steinberg::kResultFalse;
+        if (data.outputs[0].channelBuffers32 == nullptr || data.numSamples <= 0)
+            return Steinberg::kResultTrue;
 
         std::array<ats::MidiEvent, 256> midiEvents{};
         std::uint32_t midiCount = 0;

@@ -102,7 +102,20 @@ creation, and teardown where their host environment permits.
 
 This clears the earlier “no pinned SDK” blocker, the VST3 artifact contract,
 and the live native-window gate for the available x86_64 runtime. The arm64
-probe remains environment-blocked by the headless AppKit/Visage session. A
-DAW/pluginval executable is not installed on this machine (`pluginval` is not
-on PATH and no local binary was found), so the artifact/host-contract tests are
-recorded as supplemental validation rather than a DAW or pluginval claim.
+probe remains environment-blocked by the headless AppKit/Visage session.
+
+## Steinberg validator gate
+
+A complete temporary checkout of the same pinned Steinberg SDK revision was
+used to build its official `validator` target (CMake 4 requires
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5` for this historical SDK). Running it
+against the x86_64 `ATS Resynth.vst3` bundle completed with **47 tests passed,
+0 failed**. The run initially exposed two packaging/runtime defects: missing
+macOS `bundleEntry`/`bundleExit` exports and rejection of parameter-only
+process flushes without audio buffers. The wrapper now compiles `macmain.cpp`
+into the bundle and accepts those flushes after applying automation. The direct
+artifact test also asserts both lifecycle exports to prevent regression.
+
+No DAW or `pluginval` executable is installed on this machine, so the passing
+Steinberg validator is an official VST3 compatibility result, not a pluginval
+or DAW-host claim.

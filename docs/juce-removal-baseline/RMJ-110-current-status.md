@@ -127,9 +127,9 @@ retained only as migration reference until the full surface promotion and
 deletion gate is complete. Full widget parity, complete real-dispatch coverage,
 and legacy-source deletion remain open.
 
-Steinberg's bundled validator source was located in the pinned VST3 SDK, but a
-standalone validator configure was not possible from the available local
-checkout because its `cmake` submodule (`SMTG_VST3_SDK.cmake`) is absent. No
-`pluginval` binary or DAW is installed in the available environment. The
-artifact and neutral-host tests therefore remain supplemental and are not
-reported as pluginval/DAW validation.
+The official Steinberg VST3 validator was built from a complete temporary
+checkout of the same pinned SDK revision and passed the x86_64 bundle with 47
+tests passed and 0 failed. This caught and cleared the missing macOS bundle
+lifecycle exports and parameter-only process-flush behavior. No `pluginval`
+binary or DAW is installed in the available environment; the validator result
+is therefore not reported as pluginval/DAW validation.
