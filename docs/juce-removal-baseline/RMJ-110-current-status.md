@@ -12,6 +12,9 @@ The latest implementation commits are:
 - `59d1905` VST3 controller parameter matrix and processor state rewind/reopen
 - `6404147` focused VST3 automation/MIDI ingress coverage with bounded events
 - `edf97d1` repeated timestamp-advanced AU automation/MIDI render coverage
+- `53559e0` all-81 VST3 automation queue matrix
+- `3fccd6d` CTest-backed no-JUCE native source scan
+- `3d5d0b0` exact local native-backend revision enforcement
 - `35f988d` explicit engine analysis-render failure diagnostics
 - current AU conformance slice: explicit zero-input/stereo channel capability
   and standard dictionary class-info with ATSP payload
@@ -37,13 +40,16 @@ The latest implementation commits are:
 
 Validation on 2026-07-29:
 
-- `ctest --test-dir build-review --output-on-failure`: 67/67 passed
+- `ctest --test-dir build-review --output-on-failure`: 68/68 passed,
+  including `ats_no_juce_native_scan`
 - Qatsh manifest: 20/20 patch/source marker sets verified
 - UI parity manifest: 53 records valid
 - UI parity baseline/backend inputs frozen to the ATS baseline commit and
   pinned Visage revision
 - ATS replacement traceability: 39 records valid; native editor lifecycle
   verified and UI backend/scheduler seams promoted to implemented
+- Native source scan: no JUCE include/API leakage in 84 files under the
+  BUILD_PLUGIN=OFF core/engine/state/platform/ui/host graph
 - Pinned Visage native probes remain passing in previously validated
   window-capable/x86_64 environments; the current arm64 desktop session traps
   during AppKit/Visage font initialization for live Cocoa/standalone probes
