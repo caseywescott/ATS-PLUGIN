@@ -209,9 +209,40 @@ int main(int argc, char** argv)
     for (const auto sample : right)
         require(sample == 0.0f, "silent right output without playback");
 
+    for (UInt32 block = 0; block < 4; ++block)
+    {
+        AudioUnitParameterEvent blockEvents[2] {};
+        blockEvents[0].scope = kAudioUnitScope_Global;
+        blockEvents[0].parameter = ids[block % ids.size()];
+        blockEvents[0].eventType = kParameterEvent_Immediate;
+        blockEvents[0].eventValues.immediate.value = automationInfo.minValue;
+        blockEvents[1].scope = kAudioUnitScope_Global;
+        blockEvents[1].parameter = ids[block % ids.size()];
+        blockEvents[1].eventType = kParameterEvent_Ramped;
+        blockEvents[1].eventValues.ramp.startBufferOffset = 4;
+        blockEvents[1].eventValues.ramp.durationInFrames = 24;
+        blockEvents[1].eventValues.ramp.startValue = automationInfo.minValue;
+        blockEvents[1].eventValues.ramp.endValue = automationInfo.maxValue;
+        require(schedule(plugin, blockEvents, 2) == noErr,
+                "repeated automation schedule");
+        require(midi(plugin, 0x90, 48 + block, 90, 2) == noErr,
+                "repeated MIDI note-on dispatch");
+        require(midi(plugin, 0x80, 48 + block, 0, 40) == noErr,
+                "repeated MIDI note-off dispatch");
+        left.fill(1.0f);
+        right.fill(1.0f);
+        timestamp.mSampleTime = static_cast<Float64>((block + 1) * frames);
+        require(process(plugin, &processFlags, &timestamp, frames, 0, nullptr, 1, outputs) == noErr,
+                "repeated stereo process selector status");
+        for (const auto sample : left)
+            require(sample == 0.0f, "repeated silent left output");
+        for (const auto sample : right)
+            require(sample == 0.0f, "repeated silent right output");
+    }
+
     auto uninitialize = reinterpret_cast<UnitFn>(plugin->Lookup(kAudioUnitUninitializeSelect));
     require(uninitialize != nullptr && uninitialize(plugin) == noErr, "AudioUnitUninitialize");
     require(plugin->Close(plugin) == noErr, "AudioComponent Close");
     dlclose(module);
-    std::cout << "ats_au_artifact_test: component identity, 81 parameters, format, and lifecycle ok\n";
+    std::cout << "ats_au_artifact_test: component identity, 81 parameters, automation, MIDI, format, and lifecycle ok\n";
 }

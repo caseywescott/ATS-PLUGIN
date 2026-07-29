@@ -63,7 +63,10 @@ ctest --test-dir /private/tmp/ats-au-editor --output-on-failure \
 Result: `ats_au_artifact_test` passed. The component opens through the direct
 factory, verifies the 81-entry parameter matrix, zero-input stereo capability,
 ATSP dictionary class-info round-trip, scheduled parameter events, MIDI note
-dispatch, and zero-input stereo process silence.
+dispatch, and zero-input stereo process silence. The test also repeats four
+timestamp-advanced render blocks with fresh immediate/ramped automation and
+note-on/note-off events, confirming both output buffers remain silent. This is
+focused repeated-dispatch coverage; broader host/DAW stress remains open.
 The x86_64 editor probe passes after reading
 `kAudioUnitProperty_CocoaUI`, loads `AtsAudioUnitCocoaViewFactory` from the
 component bundle, creates a Visage-backed `NSView` at 1280×940, attaches it to

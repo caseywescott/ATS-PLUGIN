@@ -199,7 +199,8 @@ listed commit supplies the cross-layer proof.
 - [ ] Commit 22 remaining gates: AU render/automation stress and standalone
   native-window smoke evidence remain open; the arm64 CocoaUI/standalone probes
   hit the same headless AppKit/Visage `SIGTRAP`. The JUCE-free AU artifact and
-  standalone targets are implemented.
+  standalone targets are implemented. Focused four-block timestamp-advanced
+  AU automation/MIDI dispatch coverage now passes in the artifact test.
 - [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
   JUCE removal remain open.
 
