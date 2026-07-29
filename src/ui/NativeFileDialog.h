@@ -11,6 +11,7 @@ enum class NativeFileDialogKind : int
     importAts = 1,
     exportAts = 2,
     savePreset = 3
+    , loadPreset = 4
 };
 
 struct NativeFileDialogRequest

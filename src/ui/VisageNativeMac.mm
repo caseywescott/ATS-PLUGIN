@@ -55,7 +55,8 @@ NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& reques
         openPanel.canChooseDirectories = NO;
         openPanel.canChooseFiles = YES;
         openPanel.allowedFileTypes = kind == NativeFileDialogKind::importWav
-            ? @[ @"wav", @"wave", @"aiff", @"aif" ] : @[ @"ats" ];
+            ? @[ @"wav", @"wave", @"aiff", @"aif" ]
+            : kind == NativeFileDialogKind::loadPreset ? @[ @"atspreset" ] : @[ @"ats" ];
     }
 
     NSModalResponse response = NSModalResponseCancel;

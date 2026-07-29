@@ -58,6 +58,49 @@ public:
                 return;
             }
             const auto point = event.relativePosition();
+            if (point.y < 48.0f && point.x >= 120.0f && point.x < 236.0f)
+            {
+                visage::PopupMenu popup("Presets");
+                for (int index = 0; index < 12; ++index)
+                    popup.addOption(index + 1, "Factory " + std::to_string(index + 1));
+                popup.addOption(13, "Save preset...");
+                popup.addOption(14, "Load preset...");
+                popup.onSelection() += [this](int optionId) {
+                    if (optionId >= 1 && optionId <= 12)
+                        emitAction(ApplyFactoryPresetAction { optionId - 1 });
+                    else if (optionId == 13 || optionId == 14)
+                    {
+                        const auto kind = optionId == 13 ? NativeFileDialogKind::savePreset
+                                                         : NativeFileDialogKind::loadPreset;
+                        const NativeFileDialogRequest request { kind, dialogParent_, "ATS Resynth" };
+                        if (sink_.dialogRequested)
+                            sink_.dialogRequested(sink_.context, static_cast<int>(kind));
+                        const auto result = detail::runNativeFileDialog(request);
+                        if (sink_.dialogResolved)
+                            sink_.dialogResolved(sink_.context, static_cast<int>(kind),
+                                                 result.path.c_str(), result.accepted);
+                        if (result.accepted)
+                        {
+                            if (kind == NativeFileDialogKind::savePreset)
+                                emitAction(SavePresetAction { ats::Path { result.path } });
+                            else
+                                emitAction(LoadPresetAction { ats::Path { result.path } });
+                        }
+                    }
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                    requestKeyboardFocus();
+                };
+                popup.onCancel() += [this] {
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                if (sink_.popupShown)
+                    sink_.popupShown(sink_.context);
+                popup.show(this, { 120.0f, 40.0f });
+                requestKeyboardFocus();
+                return;
+            }
             if (point.y < 48.0f && point.x >= 248.0f && point.x < 316.0f)
             {
                 if (shell_.state().canUndo && sink_.historyAction)
@@ -197,6 +240,44 @@ public:
                     redraw();
                     return;
                 }
+            }
+            if (shell_.state().page == EditorPage::analysis && point.y >= 112.0f &&
+                point.y < 140.0f && point.x >= 450.0f && point.x < 638.0f)
+            {
+                visage::PopupMenu popup("Analysis profile");
+                popup.addOption(0, "Default");
+                popup.addOption(1, "Speech");
+                popup.addOption(2, "Percussive");
+                popup.addOption(3, "Custom");
+                popup.onSelection() += [this](int optionId) {
+                    if (optionId >= 0 && optionId <= 3)
+                    {
+                        analysisProfile_ = optionId;
+                        shell_.analysis().setProfile(static_cast<AnalysisProfile>(optionId));
+                        redraw();
+                    }
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                popup.onCancel() += [this] {
+                    if (sink_.popupDismissed)
+                        sink_.popupDismissed(sink_.context);
+                };
+                if (sink_.popupShown)
+                    sink_.popupShown(sink_.context);
+                popup.show(this, { 450.0f, 140.0f });
+                requestKeyboardFocus();
+                return;
+            }
+            if (shell_.state().page == EditorPage::analysis && point.y >= 148.0f &&
+                point.y < 176.0f && point.x >= 450.0f && point.x < 638.0f)
+            {
+                if (point.x < 540.0f)
+                    emitAction(AnalyzeCurrentAction {});
+                else if (shell_.analysis().canCancel())
+                    emitAction(CancelJobsAction {});
+                requestKeyboardFocus();
+                return;
             }
             if (point.y >= 56.0f && point.y < 92.0f && point.x >= 16.0f)
             {
@@ -450,6 +531,7 @@ public:
     void setActivity(bool analysisRunning, bool renderRunning)
     {
         shell_.setActivity(analysisRunning, renderRunning);
+        shell_.analysis().setWorkerRunning(analysisRunning);
         redraw();
     }
 
@@ -470,6 +552,8 @@ public:
         canvas.setColor(tokens.secondaryText);
         canvas.text("SPECTRAL MODEL EDITOR", labelFont, visage::Font::kLeft,
                     16.0f, 28.0f, 220.0f, 14.0f);
+        canvas.setColor(tokens.text);
+        canvas.text("PRESETS", labelFont, visage::Font::kCenter, 120.0f, 14.0f, 116.0f, 18.0f);
         canvas.setColor(shell_.state().canUndo ? tokens.text : tokens.secondaryText);
         canvas.text("UNDO", labelFont, visage::Font::kCenter, 248.0f, 14.0f, 68.0f, 18.0f);
         canvas.setColor(shell_.state().canRedo ? tokens.text : tokens.secondaryText);
@@ -558,6 +642,20 @@ public:
                         labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
             canvas.text(shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT",
                         labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(450.0f, 112.0f, 188.0f, 28.0f, 5.0f);
+            canvas.roundedRectangle(450.0f, 148.0f, 88.0f, 28.0f, 5.0f);
+            canvas.roundedRectangle(550.0f, 148.0f, 88.0f, 28.0f, 5.0f);
+            constexpr std::array<const char*, 4> profileLabels {
+                "DEFAULT", "SPEECH", "PERCUSSIVE", "CUSTOM"
+            };
+            canvas.setColor(tokens.text);
+            canvas.text(profileLabels[static_cast<std::size_t>(analysisProfile_)], labelFont,
+                        visage::Font::kCenter, 454.0f, 118.0f, 180.0f, 16.0f);
+            canvas.setColor(tokens.accent);
+            canvas.text("ANALYZE", labelFont, visage::Font::kCenter, 454.0f, 154.0f, 80.0f, 16.0f);
+            canvas.setColor(shell_.analysis().canCancel() ? tokens.accent : tokens.secondaryText);
+            canvas.text("CANCEL", labelFont, visage::Font::kCenter, 554.0f, 154.0f, 80.0f, 16.0f);
             canvas.setColor(tokens.accent);
             canvas.rectangle(18.0f, 172.0f, 620.0f, 3.0f);
             drawAnalysisControls(canvas, tokens, labelFont);
@@ -1116,6 +1214,7 @@ private:
     std::array<float, kSynthesisControlIds.size()> synthesisValues_ {};
     std::array<float, kSessionControlIds.size()> sessionValues_ {};
     float analysisScroll_ = 0.0f;
+    int analysisProfile_ = 0;
     bool mathEditing_ = false;
     int partialIndex_ = 0;
     int partialFrame_ = 0;
