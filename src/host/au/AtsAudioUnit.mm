@@ -476,6 +476,19 @@ private:
                 (void) ats::state::ParameterPresetCodec::decode(payload.bytes, host_.parameters(), error);
             return;
         }
+        ats::Error importError;
+        if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
+        {
+            (void) host_.importSource(wav->path, wav->slot,
+                                      ats::engine::SourceImportKind::audio, importError);
+            return;
+        }
+        if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(&action))
+        {
+            (void) host_.importSource(ats->path, ats->slot,
+                                      ats::engine::SourceImportKind::ats, importError);
+            return;
+        }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
         if (parameter == nullptr)
             return;

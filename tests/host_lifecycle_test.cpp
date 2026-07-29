@@ -3,7 +3,38 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <vector>
+
+namespace
+{
+void writeU16(std::ofstream& stream, std::uint16_t value)
+{
+    stream.put(static_cast<char>(value & 0xffu));
+    stream.put(static_cast<char>((value >> 8u) & 0xffu));
+}
+
+void writeU32(std::ofstream& stream, std::uint32_t value)
+{
+    writeU16(stream, static_cast<std::uint16_t>(value & 0xffffu));
+    writeU16(stream, static_cast<std::uint16_t>(value >> 16u));
+}
+
+void writeMonoWave(const std::filesystem::path& path)
+{
+    constexpr std::int16_t samples[] = { 0, 3000, -3000, 0 };
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    assert(stream);
+    stream.write("RIFF", 4); writeU32(stream, 36 + sizeof(samples)); stream.write("WAVEfmt ", 8);
+    writeU32(stream, 16); writeU16(stream, 1); writeU16(stream, 1); writeU32(stream, 44100);
+    writeU32(stream, 88200); writeU16(stream, 2); writeU16(stream, 16);
+    stream.write("data", 4); writeU32(stream, sizeof(samples));
+    for (const auto sample : samples) writeU16(stream, static_cast<std::uint16_t>(sample));
+    assert(stream);
+}
+}
 
 int main()
 {
@@ -50,6 +81,16 @@ int main()
 
     assert(host.initialize(ats::host::HostFormat::vst3));
     assert(host.format() == ats::host::HostFormat::vst3);
+    const auto wav = std::filesystem::temp_directory_path() / "ats-host-adapter-import.wav";
+    writeMonoWave(wav);
+    ats::Error importError;
+    assert(host.importSource({ wav.u8string() }, 0, ats::engine::SourceImportKind::audio, importError));
+    assert(!importError);
+    assert(host.source(0) != nullptr && host.source(0)->monoSamples.size() == 4);
+    assert(!host.importSource({ wav.u8string() }, 2, ats::engine::SourceImportKind::audio, importError));
+    assert(importError.code == "invalid_slot");
+    std::error_code filesystemError;
+    std::filesystem::remove(wav, filesystemError);
     const bool invalidPrepare = host.prepare({ 0.0, 64, 2 });
     assert(!invalidPrepare);
     const bool inputBusPrepare = host.prepare({ 48000.0, 64, 2, 2 });

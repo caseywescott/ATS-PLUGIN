@@ -40,6 +40,54 @@ void PluginModel::cancelJobs() noexcept
     invalidation_.invalidate(InvalidationKind::preview);
 }
 
+ats::ui::ActionResult PluginModel::importSource(const SourceImportRequest& request,
+                                                std::uint64_t generation)
+{
+    ats::ui::ActionResult result;
+    result.generation = generation;
+    auto imported = SourceImportService::import({ generation }, cancellation_.token(), request);
+    if (imported.status != ats::JobResult<ImportedSource>::Status::success)
+    {
+        result.status = imported.status == ats::JobResult<ImportedSource>::Status::cancelled
+                            ? ats::ui::ActionStatus::cancelled
+                            : ats::ui::ActionStatus::failed;
+        result.code = imported.error.code;
+        result.text = imported.error.text;
+
+        auto snapshot = telemetry_.snapshot();
+        snapshot.state = result.status == ats::ui::ActionStatus::cancelled
+                             ? ats::ui::UiState::noSource
+                             : ats::ui::UiState::error;
+        snapshot.status = result.status == ats::ui::ActionStatus::cancelled
+                              ? "source import cancelled"
+                              : "source import failed";
+        snapshot.error = result.text;
+        publishTelemetry(std::move(snapshot));
+        return result;
+    }
+
+    const auto slot = static_cast<std::size_t>(request.slot);
+    const bool importedAts = imported.value.kind == SourceImportKind::ats;
+    sources_[slot] = std::move(imported.value);
+    ++modelRevision_;
+    invalidation_.invalidate(InvalidationKind::preview);
+
+    auto snapshot = telemetry_.snapshot();
+    snapshot.state = importedAts ? ats::ui::UiState::analyzed : ats::ui::UiState::readyToAnalyze;
+    snapshot.modelRevision = modelRevision_;
+    snapshot.displayRevision = modelRevision_;
+    snapshot.hasSourceA = sources_[0].has_value();
+    snapshot.hasSourceB = sources_[1].has_value();
+    const auto* active = sources_[slot] ? &*sources_[slot] : nullptr;
+    snapshot.hasCurrentModel = active != nullptr && static_cast<bool>(active->sound);
+    snapshot.hasResidual = snapshot.hasCurrentModel && active->sound.get()->res != nullptr;
+    snapshot.hasPhase = snapshot.hasCurrentModel && active->sound.get()->pha != nullptr;
+    snapshot.status = importedAts ? "ATS model imported" : "audio source decoded";
+    snapshot.error.clear();
+    publishTelemetry(std::move(snapshot));
+    return result;
+}
+
 ats::ui::ActionResult PluginModel::handle(const ats::ui::EditorAction& action)
 {
     ats::ui::ActionResult result;
@@ -96,6 +144,12 @@ ats::ui::ActionResult PluginModel::handle(const ats::ui::EditorAction& action)
         publishTelemetry(std::move(snapshot));
         return result;
     }
+
+    if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
+        return importSource({ wav->path, wav->slot, SourceImportKind::audio }, result.generation);
+
+    if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(&action))
+        return importSource({ ats->path, ats->slot, SourceImportKind::ats }, result.generation);
 
     if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
     {

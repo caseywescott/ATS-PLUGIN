@@ -348,6 +348,9 @@ private:
 class AtsVst3Controller final : public Steinberg::Vst::EditController, public Vst3EditorActionTarget
 {
 public:
+    AtsVst3Controller()
+    { sourceHost_.initialize(ats::host::HostFormat::vst3); }
+
     static Steinberg::FUnknown* createInstance(void*)
     { return static_cast<Steinberg::Vst::IEditController*>(new AtsVst3Controller()); }
 
@@ -412,6 +415,19 @@ public:
                 applyPreset(preset);
             return;
         }
+        ats::Error importError;
+        if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
+        {
+            (void) sourceHost_.importSource(wav->path, wav->slot,
+                                            ats::engine::SourceImportKind::audio, importError);
+            return;
+        }
+        if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(&action))
+        {
+            (void) sourceHost_.importSource(ats->path, ats->slot,
+                                            ats::engine::SourceImportKind::ats, importError);
+            return;
+        }
         const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
         if (parameter == nullptr)
             return;
@@ -442,6 +458,8 @@ private:
             endEdit(tag);
         }
     }
+
+    ats::host::HostAdapter sourceHost_;
 };
 
 Steinberg::IPlugView* PLUGIN_API AtsVst3Controller::createView(Steinberg::FIDString name)

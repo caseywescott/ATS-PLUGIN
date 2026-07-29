@@ -4,10 +4,13 @@
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
+#include "../engine/SourceImportService.h"
 #include "../ui/Editor.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -92,6 +95,29 @@ public:
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
     [[nodiscard]] const HostStateChunk& stateChunk() const noexcept { return stateChunk_; }
+    [[nodiscard]] const engine::ImportedSource* source(int slot) const noexcept
+    {
+        return slot >= 0 && slot < static_cast<int>(sources_.size()) && sources_[static_cast<std::size_t>(slot)]
+                   ? &*sources_[static_cast<std::size_t>(slot)]
+                   : nullptr;
+    }
+
+    // The wrapper calls this from its UI/action domain. Decoding is kept out
+    // of process() and accepts only host-neutral paths and slots.
+    bool importSource(const Path& path, int slot, engine::SourceImportKind kind,
+                      Error& error)
+    {
+        error = {};
+        auto imported = engine::SourceImportService::import(
+            sourceGenerations_.next(), sourceCancellation_.token(), { path, slot, kind });
+        if (imported.status != JobResult<engine::ImportedSource>::Status::success)
+        {
+            error = imported.error;
+            return false;
+        }
+        sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
+        return true;
+    }
 
     [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
     { return ParameterRegistry::descriptors(); }
@@ -175,6 +201,7 @@ public:
         // before resetting flags so no hidden editor pointer survives with a
         // logically cold adapter.
         detachEditor();
+        sources_ = {};
         format_ = format;
         state_ = HostState::cold;
         return true;
@@ -359,6 +386,9 @@ private:
     HostPrepareSpec spec_{};
     HostState state_ = HostState::cold;
     ParameterStore parameters_;
+    std::array<std::optional<engine::ImportedSource>, 2> sources_;
+    GenerationSource sourceGenerations_;
+    CancellationSource sourceCancellation_;
     HostStateChunk stateChunk_;
     PlaybackBufferPool playback_;
     MidiNoteRouter midi_;

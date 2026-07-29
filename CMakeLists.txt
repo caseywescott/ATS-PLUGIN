@@ -439,14 +439,6 @@ target_include_directories(ats_playback PUBLIC
 target_compile_features(ats_playback PUBLIC cxx_std_17)
 target_link_libraries(ats_playback PUBLIC ats_core)
 
-add_library(ats_plugin_model STATIC src/engine/PluginModel.cpp)
-target_include_directories(ats_plugin_model PUBLIC
-  "${CMAKE_SOURCE_DIR}/src/core"
-  "${CMAKE_SOURCE_DIR}/src/engine"
-  "${CMAKE_SOURCE_DIR}/src/ui")
-target_compile_features(ats_plugin_model PUBLIC cxx_std_17)
-target_link_libraries(ats_plugin_model PUBLIC ats_core)
-
 add_library(ats_state STATIC src/state/LegacyStateCodec.cpp)
 target_include_directories(ats_state PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/state" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_state PUBLIC cxx_std_17)
@@ -456,6 +448,23 @@ add_library(ats_file_service STATIC src/platform/FileService.cpp)
 target_include_directories(ats_file_service PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/platform")
 target_compile_features(ats_file_service PUBLIC cxx_std_17)
 target_link_libraries(ats_file_service PUBLIC ats_core)
+
+add_library(ats_source_import STATIC src/engine/SourceImportService.cpp)
+target_include_directories(ats_source_import PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/core"
+  "${CMAKE_SOURCE_DIR}/src/engine"
+  "${CMAKE_SOURCE_DIR}/src/platform"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_source_import PUBLIC cxx_std_17)
+target_link_libraries(ats_source_import PUBLIC ats_file_service atsa SndFile::sndfile)
+
+add_library(ats_plugin_model STATIC src/engine/PluginModel.cpp)
+target_include_directories(ats_plugin_model PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/core"
+  "${CMAKE_SOURCE_DIR}/src/engine"
+  "${CMAKE_SOURCE_DIR}/src/ui")
+target_compile_features(ats_plugin_model PUBLIC cxx_std_17)
+target_link_libraries(ats_plugin_model PUBLIC ats_core ats_source_import)
 
 add_library(ats_preset_service STATIC src/state/PresetService.cpp)
 target_include_directories(ats_preset_service PUBLIC
@@ -480,7 +489,7 @@ foreach(host_target IN ITEMS ats_host_vst3 ats_host_au ats_standalone)
     "${CMAKE_SOURCE_DIR}/src/host"
     "${CMAKE_SOURCE_DIR}/src/ui")
   target_link_libraries(${host_target} INTERFACE
-    ats_core ats_playback ats_state ats_editor)
+    ats_core ats_playback ats_state ats_editor ats_source_import)
 endforeach()
 
 if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDALONE OR ATS_BUILD_NATIVE_AU)

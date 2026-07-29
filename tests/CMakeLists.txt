@@ -287,6 +287,16 @@ target_compile_features(ats_engine_test PRIVATE cxx_std_17)
 target_link_libraries(ats_engine_test PRIVATE ats_engine)
 add_test(NAME ats_engine_test COMMAND ats_engine_test WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+add_executable(source_import_service_test source_import_service_test.cpp)
+target_include_directories(source_import_service_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/platform"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(source_import_service_test PRIVATE cxx_std_17)
+target_link_libraries(source_import_service_test PRIVATE ats_source_import ats_engine)
+add_test(NAME source_import_service_test COMMAND source_import_service_test)
+
 add_executable(playback_engine_test playback_engine_test.cpp)
 target_include_directories(playback_engine_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
