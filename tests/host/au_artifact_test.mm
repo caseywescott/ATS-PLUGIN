@@ -71,6 +71,19 @@ int main(int argc, char** argv)
             "parameter-list property");
     count = size / sizeof(AudioUnitParameterID);
     require(count == 81, "81 parameter list entries");
+
+    UInt32 channelInfoSize = 0;
+    require(getPropertyInfo(plugin, kAudioUnitProperty_SupportedNumChannels,
+                            kAudioUnitScope_Global, 0, &channelInfoSize, nullptr) == noErr,
+            "supported-channel property info");
+    require(channelInfoSize == sizeof(AUChannelInfo), "zero-input stereo capability size");
+    AUChannelInfo channelInfo {};
+    require(getProperty(plugin, kAudioUnitProperty_SupportedNumChannels,
+                        kAudioUnitScope_Global, 0, &channelInfo, &channelInfoSize) == noErr,
+            "supported-channel property");
+    require(channelInfo.inChannels == 0 && channelInfo.outChannels == 2,
+            "zero-input stereo capability");
+
     auto setParameter = reinterpret_cast<SetParameterFn>(
         plugin->Lookup(kAudioUnitSetParameterSelect));
     require(setParameter != nullptr, "parameter setter");
@@ -124,10 +137,14 @@ int main(int argc, char** argv)
     require(getProperty(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,
                          &state, &stateSize) == noErr && state != nullptr,
             "class-info state read");
-    require(CFGetTypeID(state) == CFDataGetTypeID(), "ATSP class-info data");
+    require(CFGetTypeID(state) == CFDictionaryGetTypeID(), "AU class-info dictionary");
+    const auto* stateData = CFDictionaryGetValue(
+        static_cast<CFDictionaryRef>(state), CFSTR(kAUPresetDataKey));
+    require(stateData != nullptr && CFGetTypeID(stateData) == CFDataGetTypeID(),
+            "ATSP class-info data");
     require(ats::AtsStateCodec::decodeHeader(
-                CFDataGetBytePtr(static_cast<CFDataRef>(state)),
-                static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(state))))
+                CFDataGetBytePtr(static_cast<CFDataRef>(stateData)),
+                static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(stateData))))
                  .has_value(),
             "ATSP class-info header");
     require(setProperty(plugin, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0,

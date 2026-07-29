@@ -104,6 +104,16 @@ public:
     bool StreamFormatWritable(AudioUnitScope, AudioUnitElement) override { return true; }
     bool CanScheduleParameters() const override { return true; }
 
+    UInt32 SupportedNumChannels(const AUChannelInfo** outInfo) override
+    {
+        static constexpr AUChannelInfo supported[] = {
+            { 0, 2 }
+        };
+        if (outInfo != nullptr)
+            *outInfo = supported;
+        return static_cast<UInt32>(std::size(supported));
+    }
+
     OSStatus Initialize() override
     {
         const auto result = ausdk::AUBase::Initialize();
@@ -123,18 +133,69 @@ public:
         const auto fallback = ats::AtsStateCodec::encodeHeader();
         const auto& chunk = host_.stateChunk();
         const auto* bytes = chunk.empty() ? &fallback : &chunk;
-        const auto* raw = reinterpret_cast<const UInt8*>(bytes->data());
-        *data = CFDataCreate(kCFAllocatorDefault, raw,
-                             static_cast<CFIndex>(bytes->size()));
-        return *data == nullptr ? kAudio_ParamError : noErr;
+        const auto payload = CFDataCreate(
+            kCFAllocatorDefault, reinterpret_cast<const UInt8*>(bytes->data()),
+            static_cast<CFIndex>(bytes->size()));
+        if (payload == nullptr)
+            return kAudio_ParamError;
+
+        const auto description = GetComponentDescription();
+        auto dictionary = CFDictionaryCreateMutable(
+            kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
+        if (dictionary == nullptr)
+        {
+            CFRelease(payload);
+            return kAudio_ParamError;
+        }
+
+        const auto setNumber = [&](CFStringRef key, SInt32 value) {
+            const auto number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
+            if (number != nullptr)
+            {
+                CFDictionarySetValue(dictionary, key, number);
+                CFRelease(number);
+            }
+        };
+        setNumber(CFSTR(kAUPresetVersionKey), 0);
+        setNumber(CFSTR(kAUPresetTypeKey), static_cast<SInt32>(description.componentType));
+        setNumber(CFSTR(kAUPresetSubtypeKey), static_cast<SInt32>(description.componentSubType));
+        setNumber(CFSTR(kAUPresetManufacturerKey),
+                  static_cast<SInt32>(description.componentManufacturer));
+        CFDictionarySetValue(dictionary, CFSTR(kAUPresetNameKey), CFSTR("ATS Resynth"));
+        CFDictionarySetValue(dictionary, CFSTR(kAUPresetDataKey), payload);
+        CFRelease(payload);
+        *data = dictionary;
+        return noErr;
     }
 
     OSStatus RestoreState(CFPropertyListRef data) override
     {
-        if (data == nullptr || CFGetTypeID(data) != CFDataGetTypeID())
+        if (data == nullptr)
             return kAudioUnitErr_InvalidPropertyValue;
-        const auto* bytes = CFDataGetBytePtr(static_cast<CFDataRef>(data));
-        const auto size = static_cast<std::size_t>(CFDataGetLength(static_cast<CFDataRef>(data)));
+
+        CFDataRef payload = nullptr;
+        if (CFGetTypeID(data) == CFDictionaryGetTypeID())
+        {
+            const auto* value = CFDictionaryGetValue(
+                static_cast<CFDictionaryRef>(data), CFSTR(kAUPresetDataKey));
+            if (value == nullptr || CFGetTypeID(value) != CFDataGetTypeID())
+                return kAudioUnitErr_InvalidPropertyValue;
+            payload = static_cast<CFDataRef>(const_cast<void*>(value));
+        }
+        else if (CFGetTypeID(data) == CFDataGetTypeID())
+        {
+            // Accept the pre-dictionary ATSP form for projects saved by the
+            // focused wrapper tests before AU property-list conformance was added.
+            payload = static_cast<CFDataRef>(data);
+        }
+        else
+        {
+            return kAudioUnitErr_InvalidPropertyValue;
+        }
+
+        const auto* bytes = CFDataGetBytePtr(payload);
+        const auto size = static_cast<std::size_t>(CFDataGetLength(payload));
         return host_.restoreState(bytes, size) ? noErr : kAudioUnitErr_InvalidPropertyValue;
     }
 

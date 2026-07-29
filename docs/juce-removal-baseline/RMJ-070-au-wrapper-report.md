@@ -36,9 +36,10 @@ Task ID: RMJ-070 / commit 22
   parameter info/read/write across all 81 IDs, output format, bounded ATSP
   class-info state round-trip, zero-input stereo process adaptation,
   initialization, teardown, and Visage-backed CocoaUI editor attach/focus/
-  resize/teardown. No CLAP dependency is added. AU host scan/`auval`,
-  MIDI/automation stress, and runtime standalone GUI smoke remain separate
-  gates.
+  resize/teardown. Class-info follows the AU property-list contract: the
+  bounded ATSP bytes live under `kAUPresetDataKey`, with compatibility for
+  the earlier raw-data form. No CLAP dependency is added. MIDI/automation
+  stress and runtime standalone GUI smoke remain separate gates.
 
 ## Evidence
 
@@ -57,9 +58,10 @@ ctest --test-dir /private/tmp/ats-au-editor --output-on-failure \
   -R '^ats_au_(artifact_test|editor_view_probe)$'
 ```
 
-Result: both tests passed. The component still opens through the direct
-factory, verifies the 81-entry parameter matrix, ATSP class-info round-trip,
-and zero-input stereo process silence. The editor probe reads
+Result: `ats_au_artifact_test` passed. The component opens through the direct
+factory, verifies the 81-entry parameter matrix, zero-input stereo capability,
+ATSP dictionary class-info round-trip, and zero-input stereo process silence.
+The x86_64 editor probe passes after reading
 `kAudioUnitProperty_CocoaUI`, loads `AtsAudioUnitCocoaViewFactory` from the
 component bundle, creates a Visage-backed `NSView` at 1280×940, attaches it to
 a Cocoa host window, accepts first-responder focus, resizes to 720×480, and
@@ -67,5 +69,13 @@ removes cleanly with no stale subview. Direct-factory harnesses cast
 `AudioComponentMethod` lookups to fixed prototypes so ARM64 register calling
 convention matches the AudioUnitSDK implementations.
 
-This advances commit 22's native AU editor gate. AU registration/`auval`
-scan, MIDI/automation stress, and runtime standalone GUI smoke remain open.
+The matching arm64 component passed the real `auval -v aufx Atr1 AtPl -o`
+registration/open/initialization/default-format/required-property gate before
+the class-info dictionary correction. The full validator then exposed the
+raw-data class-info defect; the corrected dictionary is covered by the direct
+artifact test, but the cached AudioComponentRegistrar did not re-discover the
+refreshed temporary bundle in this session. The arm64 CocoaUI probe is also
+environment-sensitive in this headless desktop session (the same Visage/
+AppKit SIGTRAP affects standalone smoke); arm64 window-capable evidence
+remains open. MIDI/automation stress and runtime standalone GUI smoke remain
+open.

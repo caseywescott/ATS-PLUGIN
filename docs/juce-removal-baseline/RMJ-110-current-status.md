@@ -9,6 +9,11 @@ renderer-neutral UI scheduler.
 
 The latest implementation commits are:
 
+- current AU conformance slice: explicit zero-input/stereo channel capability
+  and standard dictionary class-info with ATSP payload
+- `bc0bb0b` AU CocoaUI editor evidence
+- `c70f34e` AU Visage CocoaUI bridge
+
 - `b15a91d` native Visage popup row-selection proof
 - `612a15b` standalone editor lifecycle seam and probe
 - `0a9b336` replacement-editor detach invariant
@@ -81,8 +86,12 @@ Validation on 2026-07-28:
   initialize, uninitialize, and close. The same component now advertises a
   Visage-backed `kAudioUnitProperty_CocoaUI` factory; `ats_au_editor_view_probe`
   attaches that `NSView` to a Cocoa host window, verifies focus and logical
-  resize, and removes it cleanly. AU registration/`auval`, MIDI/automation
-  stress, and runtime standalone GUI smoke remain open.
+  resize, and removes it cleanly under the passing x86_64 probe. The matching
+  arm64 component passed the basic `auval` registration/open/format gate.
+  The class-info path now emits a standard AU dictionary containing the ATSP
+  payload, while arm64 CocoaUI runtime evidence remains environment-sensitive
+  in this headless desktop session. AU MIDI/automation stress and runtime
+  standalone GUI smoke remain open.
 
 The native backend prerequisite is now clear: Visage is pinned and the arm64
 native embedding probe passes. `BUILD_PLUGIN=ON` still enters

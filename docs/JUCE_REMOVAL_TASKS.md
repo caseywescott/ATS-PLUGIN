@@ -186,9 +186,13 @@ listed commit supplies the cross-layer proof.
   pluginval-equivalent scan, and VST3 `IPlugView` editor callbacks.
 - [x] Commit 22 AU native editor gate: Visage-backed CocoaUI advertise/attach/
   focus/resize/teardown probe passes beside the AU factory artifact tests.
-- [ ] Commit 22 remaining gates: AU scan/load, render/automation stress, and
-  standalone native-window smoke evidence remain open; the JUCE-free AU
-  artifact and standalone targets are implemented.
+- [x] Commit 22 AU scan/load gate: the matching arm64 component passed
+  `auval -v aufx Atr1 AtPl -o` for registration, open, initialization,
+  zero-input stereo format, and required properties; the follow-up class-info
+  dictionary contract is covered by the direct artifact test.
+- [ ] Commit 22 remaining gates: AU render/automation stress and standalone
+  native-window smoke evidence remain open; the JUCE-free AU artifact and
+  standalone targets are implemented.
 - [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
   JUCE removal remain open.
 
