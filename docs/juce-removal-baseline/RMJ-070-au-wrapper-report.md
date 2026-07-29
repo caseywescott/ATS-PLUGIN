@@ -84,4 +84,7 @@ refreshed temporary bundle in this session. The arm64 CocoaUI probe is also
 environment-sensitive in this headless desktop session (the same Visage/
 AppKit SIGTRAP affects standalone smoke); arm64 window-capable evidence
 remains open. MIDI/automation stress and runtime standalone GUI smoke remain
-open.
+open for the arm64 headless session. The AU artifact and CocoaUI probe also
+pass under the available x86_64 window-capable runtime. No DAW or pluginval
+executable is installed in the current environment, so those host-contract
+tests remain supplemental.

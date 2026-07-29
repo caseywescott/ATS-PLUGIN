@@ -34,3 +34,14 @@ runtime standalone evidence from that invocation. The existing arm64 Visage
 editor probe remains the native standalone lifecycle evidence packet and must
 be rerun successfully in a window-capable session before the standalone gate
 is promoted.
+
+The standalone smoke was then rebuilt with `BUILD_PLUGIN=ON` in the x86_64
+window-capable configuration and passed:
+
+```text
+arch -x86_64 /private/tmp/ats-native-default/src/host/standalone/ats_resynth_standalone_smoke --smoke
+ats_standalone_smoke: launch, resize, hide/show, and teardown ok
+```
+
+This is live native `ApplicationWindow` evidence for the available runtime;
+the arm64 headless-session limitation remains open.

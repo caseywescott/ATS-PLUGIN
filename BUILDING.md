@@ -33,14 +33,26 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 - **Linux:** GCC 9+ or Clang 12+.  
 - **Windows:** MSVC 2019+; ensure `sndfile` is discoverable via `CMAKE_PREFIX_PATH` if not using vcpkg.
 
-## JUCE plugin (Phase 1)
+## Native plugin artifacts
 
-- **Option:** `-DBUILD_PLUGIN=ON` (default) builds **ATS Resynth** as **VST3** and **Standalone** via JUCE 7.0.12 (fetched by CMake). Turn off with `-DBUILD_PLUGIN=OFF` for tool-only CI or faster configures.
-- **Artifacts:** `build/src/plugin/AtsResynth_artefacts/Release/VST3/ATS Resynth.vst3` and `Standalone/ATS Resynth.app` (paths may vary slightly by generator). On **macOS** the same build also emits **`AU/ATS Resynth.component`** when `BUILD_PLUGIN=ON`.
-- **RT path:** the audio callback only plays a **pre-rendered** stereo buffer; `tracker` / `do_synthesis` run on worker threads (see `src/core/AtsRtSafety.h`). Changing synthesis parameters triggers a **background re-render** via `AsyncUpdater` (no `do_synthesis` on the audio thread).
-- **Output trim** uses `juce::LinearSmoothedValue` (~20 ms ramp) to reduce zipper noise; other synthesis parameters require a full re-render.
-- **Analysis type** (APVTS) is read when you press **Analyze**; change it before analyzing. Other synthesis APVTS parameters are exposed to the host; the editor includes sliders for partials gain, residual gain, and output trim only.
-- **VST2 replacement:** `JUCE_VST3_CAN_REPLACE_VST2=0` is set so a Steinberg VST2 SDK is not required.
+- **Option:** `-DBUILD_PLUGIN=ON` (default) selects the JUCE-free native graph:
+  pinned Visage UI, Steinberg VST3, macOS AUv2, and standalone targets. Use
+  `-DBUILD_PLUGIN=OFF` for the core/tool-only graph or focused native options.
+- **Focused options:** `ATS_BUILD_NATIVE_VST3`, `ATS_BUILD_NATIVE_AU`, and
+  `ATS_BUILD_NATIVE_STANDALONE` can be enabled independently. Supply local
+  checkouts with `ATS_VST3_SDK_DIR`, `ATS_AUDIO_UNIT_SDK_DIR`, and
+  `ATS_VISAGE_DIR`; each checkout is rejected unless its Git `HEAD` matches the
+  exact revision pinned in `CMakeLists.txt`.
+- **Artifacts:** the native targets emit `ATS Resynth.vst3`,
+  `ATS Resynth.component` on macOS, and `ATS Resynth.app`. The artifact tests
+  exercise identity, the 81-parameter matrix, state, automation, MIDI, format
+  negotiation, and lifecycle. CocoaUI, VST3 `NSView`, and standalone smoke
+  probes exercise the real native window path where a window-capable session is
+  available.
+- **RT path:** the audio callback only plays a **pre-rendered** stereo buffer;
+  `tracker` / `do_synthesis` run on worker threads (see
+  `src/core/AtsRtSafety.h`). The neutral `HostAdapter` owns the format-neutral
+  process contract; no JUCE object crosses the audio boundary.
 
 ## Presets and model size (Phase 2)
 

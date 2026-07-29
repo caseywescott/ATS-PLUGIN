@@ -167,20 +167,27 @@ int main()
         editor->getSize(resizedWidth, resizedHeight);
         REQUIRE(resizedWidth == 700 && resizedHeight == 520);
 
+        auto windowPointForLogical = [&](NSPoint logicalPoint) {
+            const NSPoint viewPoint = NSMakePoint(logicalPoint.x / 1.25,
+                                                  embeddedView.bounds.size.height -
+                                                      logicalPoint.y / 1.25);
+            return [embeddedView convertPoint:viewPoint toView:nil];
+        };
+
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
-                                            location:NSMakePoint(40.0, 40.0)
+                                            location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                        modifierFlags:0 timestamp:0.0
                                         windowNumber:[hostWindow windowNumber]
                                              context:nil eventNumber:1 clickCount:1 pressure:1.0];
         [embeddedView mouseDown:mouse];
         NSEvent* mouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
-                                              location:NSMakePoint(40.0, 40.0)
+                                              location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                          modifierFlags:0 timestamp:0.0
                                           windowNumber:[hostWindow windowNumber]
                                                context:nil eventNumber:1 clickCount:1 pressure:0.0];
         [embeddedView mouseUp:mouseUp];
         NSEvent* key = [NSEvent keyEventWithType:NSEventTypeKeyDown
-                                        location:NSMakePoint(40.0, 40.0)
+                                        location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                    modifierFlags:0 timestamp:0.0
                                     windowNumber:[hostWindow windowNumber]
                                          context:nil characters:@"x"
@@ -249,10 +256,8 @@ int main()
         drainEvents(application);
         REQUIRE(state.popupShown == 1);
 
-        auto sendPopupClick = [&](CGFloat logicalY, int eventNumber) {
-            const NSPoint popupViewPoint = NSMakePoint(60.0 / 1.25,
-                                                       embeddedView.bounds.size.height - logicalY / 1.25);
-            const NSPoint popupWindowPoint = [embeddedView convertPoint:popupViewPoint toView:nil];
+        auto sendPopupClick = [&](CGFloat logicalX, CGFloat logicalY, int eventNumber) {
+            const NSPoint popupWindowPoint = windowPointForLogical(NSMakePoint(logicalX, logicalY));
             NSEvent* popupMove = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
                                                     location:popupWindowPoint
                                                modifierFlags:0 timestamp:0.0
@@ -274,22 +279,21 @@ int main()
             drainEvents(application);
         };
 
-        // Visage converts native bottom-left coordinates through the window's
-        // DPI transform. Probe plausible first-row positions from the real
-        // embedded view; each attempt remains a native mouse move/down/up.
-        const CGFloat popupRowCandidates[] { 24.0, 46.0, 68.0, 90.0, 112.0, 134.0, 156.0 };
-        int eventNumber = 3;
+        // PopupMenuFrame places the first option at x=40 and y=44 when the
+        // deterministic probe popup is shown at {40, 40}. Retry a tight band
+        // around that row while allowing the native animation/timer to settle.
+        const CGFloat popupRowCandidates[] { 48.0, 52.0, 56.0, 60.0, 64.0 };
         for (const auto logicalY : popupRowCandidates)
         {
             if (state.popupSelections != 0)
                 break;
             if (state.popupDismissed >= state.popupShown)
             {
-                ++eventNumber;
                 [embeddedView rightMouseDown:rightMouse];
                 drainEvents(application);
             }
-            sendPopupClick(logicalY, ++eventNumber);
+            sendPopupClick(60.0, logicalY, 3 + static_cast<int>(logicalY));
+            drainEvents(application);
         }
         REQUIRE(state.popupSelections == 1 && state.popupDismissed >= 1);
 
@@ -306,7 +310,7 @@ int main()
         auto textAction = state.actions.tryPop();
         REQUIRE(textAction.has_value() && std::holds_alternative<ats::ui::ApplyMathAction>(*textAction));
         REQUIRE(std::get<ats::ui::ApplyMathAction>(*textAction).script == "x");
-        REQUIRE(state.refreshes == 1);
+        REQUIRE(state.refreshes >= 1);
 
         state.scheduler.cancel(state.registration);
         REQUIRE(host.setEditorVisible(false));

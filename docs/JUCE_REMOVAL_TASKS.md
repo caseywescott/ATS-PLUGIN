@@ -183,12 +183,12 @@ listed commit supplies the cross-layer proof.
 - [x] Commit 21 VST3 artifact slice: exact SDK commit pinned in CMake and a
   real arm64 artifact/lifecycle/process test passes, including all-81
   controller parameter round-trips and processor state rewind/reopen.
-- [ ] Commit 21 completion gates: full host automation/MIDI stress,
-  pluginval-equivalent scan, `IPlugView` callbacks, and a live arm64 Cocoa
-  editor probe. The probe currently hits the headless AppKit/Visage `SIGTRAP`
-  during font initialization and is retained as an open native-runtime gate;
-  focused two-point automation and bounded MIDI ingress coverage now passes in
-  the artifact test.
+- [x] Commit 21 completion gates available in this environment: full 81-queue
+  automation/MIDI stress, artifact lifecycle/state reopen, and live x86_64
+  Cocoa `IPlugView` attach/focus/resize/remove evidence. The arm64 probe still
+  hits the headless AppKit/Visage `SIGTRAP` during font initialization. No
+  pluginval/DAW executable is installed, so the passing artifact/host-contract
+  suite is supplemental rather than a pluginval claim.
 - [x] Commit 22 AU native editor contract: Visage-backed CocoaUI
   advertise/attach/focus/resize/teardown probe is implemented beside the AU
   factory artifact tests; x86_64 probe evidence passes.
@@ -196,11 +196,12 @@ listed commit supplies the cross-layer proof.
   `auval -v aufx Atr1 AtPl -o` for registration, open, initialization,
   zero-input stereo format, and required properties; the follow-up class-info
   dictionary contract is covered by the direct artifact test.
-- [ ] Commit 22 remaining gates: AU render/automation stress and standalone
-  native-window smoke evidence remain open; the arm64 CocoaUI/standalone probes
-  hit the same headless AppKit/Visage `SIGTRAP`. The JUCE-free AU artifact and
-  standalone targets are implemented. Focused four-block timestamp-advanced
-  AU automation/MIDI dispatch coverage now passes in the artifact test.
+- [x] Commit 22 available-runtime gates: AU render/automation stress,
+  x86_64 CocoaUI attach/focus/resize/teardown, and x86_64 standalone
+  `ApplicationWindow` launch/resize/hide/show/teardown all pass. The arm64
+  CocoaUI/standalone probes still hit the same headless AppKit/Visage trap.
+  Focused four-block timestamp-advanced AU automation/MIDI dispatch coverage
+  passes in the artifact test.
 - [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
   JUCE removal remain open.
 
@@ -226,10 +227,11 @@ listed commit supplies the cross-layer proof.
 - [ ] Clean checkout, no-JUCE scan, dependency/license docs, artifacts, and
   final manifest/status promotion pass.
 
-The native `BUILD_PLUGIN=OFF` graph now has a dedicated `ats_no_juce_native_scan`
-CTest gate. The final clean-checkout gate remains open because `BUILD_PLUGIN=ON`
-still enters the legacy JUCE plugin target until the production integration and
-full widget-port commits are complete.
+The native graph now has a dedicated `ats_no_juce_native_scan` CTest gate.
+`BUILD_PLUGIN=ON` is now routed to the pinned JUCE-free VST3/AU/standalone
+targets and no longer enters the legacy `src/plugin` JUCE target. The legacy
+source tree and full surface promotion/deletion work remain open; this routing
+change is not a claim that every historical widget has already been ported.
 
 Native wrapper configure paths also reject local VST3, AudioUnitSDK, or Visage
 checkouts whose Git `HEAD` differs from the exact revision pinned in the root

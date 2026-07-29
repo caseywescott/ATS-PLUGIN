@@ -457,11 +457,10 @@ struct VisageEditor::Impl
             canvas.fill(0, 0, canvas.width(), canvas.height());
         };
         app.onWindowContentsResized() = [this] {
-            if (app.width() > 0 && app.height() > 0)
-            {
-                width = static_cast<std::uint32_t>(app.width());
-                height = static_cast<std::uint32_t>(app.height());
-            }
+            // Host resize requests update the logical dimensions before
+            // reaching Visage. Do not replace them with native backing
+            // dimensions from this callback; that would make the neutral
+            // contract DPI-dependent.
             frame.setBounds(0.0f, 0.0f, static_cast<float>(width),
                             static_cast<float>(height));
         };
@@ -480,6 +479,7 @@ struct VisageEditor::Impl
     ProbeFrame frame { sink };
     std::uint32_t width = 1280;
     std::uint32_t height = 940;
+    double scale = 1.0;
     bool attached = false;
     bool visible = false;
 };
@@ -523,6 +523,8 @@ bool VisageEditor::setSize(std::uint32_t width, std::uint32_t height)
 #endif
     impl_->frame.setBounds(0.0f, 0.0f, static_cast<float>(width),
                            static_cast<float>(height));
+    detail::setNativeViewFrame(nativeHandle(), static_cast<float>(width / impl_->scale),
+                               static_cast<float>(height / impl_->scale));
     return true;
 }
 
@@ -530,7 +532,10 @@ bool VisageEditor::canResize() const { return true; }
 
 void VisageEditor::setScale(double scale)
 {
-    impl_->app.setDpiScale(static_cast<float>(std::clamp(scale, 0.5, 4.0)));
+    impl_->scale = std::clamp(scale, 0.5, 4.0);
+    impl_->app.setDpiScale(static_cast<float>(impl_->scale));
+    detail::setNativeViewFrame(nativeHandle(), static_cast<float>(impl_->width / impl_->scale),
+                               static_cast<float>(impl_->height / impl_->scale));
 }
 
 bool VisageEditor::setParent(void* nativeParent)
@@ -538,6 +543,8 @@ bool VisageEditor::setParent(void* nativeParent)
     if (nativeParent == nullptr)
         return false;
     impl_->app.show(nativeParent);
+    detail::setNativeViewFrame(nativeHandle(), static_cast<float>(impl_->width / impl_->scale),
+                               static_cast<float>(impl_->height / impl_->scale));
     impl_->frame.setDialogParent(nativeHandle());
     impl_->attached = true;
     impl_->visible = true;
@@ -552,6 +559,8 @@ bool VisageEditor::showStandalone()
     else
         impl_->app.window()->show();
     impl_->attached = impl_->app.window() != nullptr;
+    detail::setNativeViewFrame(nativeHandle(), static_cast<float>(impl_->width / impl_->scale),
+                               static_cast<float>(impl_->height / impl_->scale));
     impl_->frame.setDialogParent(nativeHandle());
     impl_->visible = impl_->attached && impl_->app.isShowing();
     detail::setNativeViewHidden(nativeHandle(), false);

@@ -15,7 +15,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(BUILD_PLUGIN "Build JUCE VST3 + Standalone plugin" ON)
+option(BUILD_PLUGIN "Build the JUCE-free native plugin artifacts" ON)
 option(ATS_BUILD_NATIVE_VST3 "Build the JUCE-free ATS VST3 wrapper" OFF)
 option(ATS_BUILD_NATIVE_STANDALONE "Build the JUCE-free ATS standalone wrapper" OFF)
 option(ATS_BUILD_NATIVE_AU "Build the JUCE-free ATS AUv2 wrapper" OFF)
@@ -31,6 +31,19 @@ option(ATS_BUILD_VISAGE_UI_PROBE "Build the pinned Visage native editor probe" O
 set(ATS_VISAGE_VERSION "20de59464243447816d142e9d38e9723d068f755"
     CACHE STRING "Pinned Visage commit for the native editor backend")
 set(ATS_VISAGE_DIR "" CACHE PATH "Path to a local Visage checkout")
+
+# BUILD_PLUGIN is retained as the public configure switch used by existing
+# scripts, but it no longer enters the retired src/plugin JUCE target. It
+# selects the native wrapper graph instead. Individual ATS_BUILD_NATIVE_*
+# options remain available for focused builds and CI jobs that set
+# BUILD_PLUGIN=OFF.
+if(BUILD_PLUGIN)
+  set(ATS_BUILD_NATIVE_VST3 ON CACHE BOOL "Build the JUCE-free ATS VST3 wrapper" FORCE)
+  set(ATS_BUILD_NATIVE_STANDALONE ON CACHE BOOL "Build the JUCE-free ATS standalone wrapper" FORCE)
+  if(APPLE)
+    set(ATS_BUILD_NATIVE_AU ON CACHE BOOL "Build the JUCE-free ATS AUv2 wrapper" FORCE)
+  endif()
+endif()
 
 function(ats_assert_git_revision checkout expected name)
   execute_process(
@@ -389,8 +402,8 @@ if(APPLE)
 endif()
 
 # Framework-free ATS ownership boundary. This target is intentionally built
-# before the legacy plugin target so core contracts can be compiled and tested
-# with BUILD_PLUGIN=OFF without JUCE or a plugin SDK in the include graph.
+# before the native wrapper targets so core contracts can be compiled and
+# tested with BUILD_PLUGIN=OFF without a plugin SDK in the include graph.
 add_library(ats_core STATIC
   src/core/AtsFrequencyShape.cpp
   src/core/AtsMathExpr.cpp
@@ -524,10 +537,6 @@ if(ATS_BUILD_NATIVE_AU)
 endif()
 
 add_subdirectory(tools)
-
-if(BUILD_PLUGIN)
-  add_subdirectory(src/plugin)
-endif()
 
 include(CTest)
 if(BUILD_TESTING)

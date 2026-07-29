@@ -94,8 +94,15 @@ int main()
         REQUIRE([embeddedView superview] == [hostWindow contentView]);
         REQUIRE([hostWindow makeFirstResponder:embeddedView]);
 
+        auto windowPointForLogical = [&](NSPoint logicalPoint) {
+            const NSPoint viewPoint = NSMakePoint(logicalPoint.x / 1.25,
+                                                  embeddedView.bounds.size.height -
+                                                      logicalPoint.y / 1.25);
+            return [embeddedView convertPoint:viewPoint toView:nil];
+        };
+
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
-                                            location:NSMakePoint(40.0, 40.0)
+                                            location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                        modifierFlags:0
                                            timestamp:0.0
                                         windowNumber:[hostWindow windowNumber]
@@ -105,7 +112,7 @@ int main()
                                             pressure:1.0];
         [embeddedView mouseDown:mouse];
         NSEvent* mouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
-                                              location:NSMakePoint(40.0, 40.0)
+                                              location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                          modifierFlags:0
                                              timestamp:0.0
                                           windowNumber:[hostWindow windowNumber]
@@ -116,7 +123,7 @@ int main()
         [embeddedView mouseUp:mouseUp];
 
         NSEvent* key = [NSEvent keyEventWithType:NSEventTypeKeyDown
-                                        location:NSMakePoint(40.0, 40.0)
+                                        location:windowPointForLogical(NSMakePoint(600.0, 120.0))
                                    modifierFlags:0
                                        timestamp:0.0
                                     windowNumber:[hostWindow windowNumber]

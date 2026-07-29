@@ -20,6 +20,13 @@ bool nativeViewIsHidden(void* nativeHandle)
     return view == nil || [view isHidden];
 }
 
+void setNativeViewFrame(void* nativeHandle, float width, float height)
+{
+    NSView* view = (__bridge NSView*)nativeHandle;
+    if (view != nil && width > 0.0f && height > 0.0f)
+        [view setFrame:NSMakeRect(0.0, 0.0, width, height)];
+}
+
 NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& request)
 {
     NSView* parent = (__bridge NSView*)request.parentView;

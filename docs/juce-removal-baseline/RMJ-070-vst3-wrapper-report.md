@@ -32,6 +32,24 @@ Task ID: RMJ-070 / commit 21
 
 ## Evidence
 
+The native host path was also exercised under the available x86_64 macOS
+runtime, which is the window-capable configuration on this desktop:
+
+```text
+arch -x86_64 cmake -S . -B /private/tmp/ats-native-default \
+  -DBUILD_PLUGIN=ON -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  -DATS_VST3_SDK_DIR="/Volumes/Extreme SSD/Mearcstapa/build-wrappers/cpm/vst3sdk" \
+  -DATS_VISAGE_DIR="/Volumes/Extreme SSD/Mearcstapa/build-wrappers/_deps/visage-src"
+ctest --test-dir /private/tmp/ats-native-default --output-on-failure \
+  -R '^ats_vst3_(artifact_test|editor_view_probe)$'
+```
+
+Result: both tests passed. The live probe demonstrates the actual
+controller-created `IPlugView` path with native `NSView` attachment, focus,
+logical resize, and teardown. The shared Visage probes additionally pass
+native mouse/text input, focus, popup selection/dismissal, page selection, and
+parameter gestures at a 1.25x scale.
+
 ```text
 cmake -S . -B /private/tmp/ats-vst3-arm64 \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_PLUGIN=OFF \
@@ -74,8 +92,9 @@ child. The existing pinned-Visage probes separately cover native mouse/text
 dispatch, popup focus/selection/dismissal, parameter gestures, scale, standalone
 creation, and teardown where their host environment permits.
 
-This clears the earlier “no pinned SDK” blocker and the VST3 artifact contract.
-It does not yet clear the full production host gate: the arm64 live Cocoa editor
-probe is environment-blocked, the artifact test is not a DAW/pluginval-equivalent
-scan, VST3 host automation/MIDI stress and `IPlugView` callbacks remain open,
-and AU/standalone runtime gates remain separate.
+This clears the earlier “no pinned SDK” blocker, the VST3 artifact contract,
+and the live native-window gate for the available x86_64 runtime. The arm64
+probe remains environment-blocked by the headless AppKit/Visage session. A
+DAW/pluginval executable is not installed on this machine (`pluginval` is not
+on PATH and no local binary was found), so the artifact/host-contract tests are
+recorded as supplemental validation rather than a DAW or pluginval claim.

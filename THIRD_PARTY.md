@@ -18,14 +18,23 @@ This repository integrates software from several upstream projects. **This is no
 - Used for WAV (and other format) I/O in the Phase 0 offline tool and expected in later plugin tooling.
 - **License:** LGPL (typical distribution: dynamic link or comply with LGPL static-linking requirements).
 
-## JUCE (plugin UI and formats)
+## Visage
 
-- Fetched by CMake ([JUCE](https://juce.com/) / GPL or commercial license depending on your distribution model).
-- **Audio Unit (macOS):** the AU wrapper uses Apple’s Core Audio / Audio Toolbox stack; follow Apple and JUCE licensing terms for AU binaries you ship.
+- The native editor backend is pinned to commit
+  `20de59464243447816d142e9d38e9723d068f755` in the CMake graph. Follow the
+  upstream Visage license and retain its notices when distributing binaries.
 
-## VST3 SDK (future phases)
+## VST3 SDK
 
-- Not vendored in Phase 0. When added: follow [Steinberg VST3 SDK](https://developer.steinberg.help/) license terms, trademark guidelines, and acceptance of the proprietary-vs-GPL compatibility constraints of your chosen UI/DSP stack.
+- The native VST3 wrapper is pinned to commit
+  `05c4a9763f311a58fe3f34b68a199e5eea92e2b4`. Follow the [Steinberg VST3 SDK](https://developer.steinberg.help/)
+  license terms and trademark guidelines.
+
+## AudioUnitSDK (macOS)
+
+- The native AUv2 wrapper is pinned to commit
+  `53a9a2008aae7fb1b0a9f093dd523b9b12f6c0d9`. Follow Apple Audio Unit and
+  AudioToolbox redistribution requirements.
 
 ## Distribution assumption (engineering default)
 
