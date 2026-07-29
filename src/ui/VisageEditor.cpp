@@ -8,7 +8,11 @@
 #include <visage_ui/popup_menu.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <memory>
+#include <optional>
+#include <string>
 
 namespace ats::ui
 {
@@ -20,6 +24,10 @@ class ProbeFrame final : public visage::Frame
 public:
     explicit ProbeFrame(EditorEventSink sink) : sink_(sink)
     {
+        for (std::size_t index = 0; index < analysisValues_.size(); ++index)
+            if (const auto* descriptor = analysisDescriptor(index))
+                analysisValues_[index] = descriptor->defaultValue;
+
         setAcceptsKeystrokes(true);
         onMouseDown() += [this](const visage::MouseEvent& event) {
             if (event.shouldTriggerPopup())
@@ -154,14 +162,37 @@ public:
                 requestKeyboardFocus();
                 return;
             }
-            if (shell_.state().page == EditorPage::analysis && point.y >= 190.0f &&
-                point.y < 228.0f && point.x >= 18.0f && point.x <= 438.0f)
+            if (shell_.state().page == EditorPage::analysis)
             {
-                parameterDragging_ = true;
-                parameterValue_ = parameterAt(point.x);
-                emitParameterGesture(parameterValue_, true, false);
-                requestKeyboardFocus();
-                return;
+                if (const auto control = analysisControlAt(point))
+                {
+                    const auto* descriptor = analysisDescriptor(*control);
+                    if (descriptor == nullptr)
+                        return;
+
+                    if (descriptor->type == ParameterType::boolean ||
+                        descriptor->type == ParameterType::choice)
+                    {
+                        float value = analysisValues_[*control];
+                        if (descriptor->type == ParameterType::boolean)
+                            value = value >= 0.5f ? 0.0f : 1.0f;
+                        else
+                            value = std::fmod(value + 1.0f,
+                                              static_cast<float>(descriptor->choiceCount));
+                        setAnalysisValue(*control, value);
+                        emitParameterGesture(*control, descriptor->normalize(value), true, true);
+                    }
+                    else
+                    {
+                        parameterDragging_ = true;
+                        activeAnalysisControl_ = *control;
+                        parameterValue_ = parameterAt(point.x, analysisControlBoundsFor(*control));
+                        emitParameterGesture(*control, parameterValue_, true, false);
+                    }
+                    requestKeyboardFocus();
+                    redraw();
+                    return;
+                }
             }
             if (sink_.mouseDown)
                 sink_.mouseDown(sink_.context);
@@ -180,8 +211,9 @@ public:
             }
             if (!parameterDragging_)
                 return;
-            parameterValue_ = parameterAt(event.relativePosition().x);
-            emitParameterGesture(parameterValue_, false, false);
+            parameterValue_ = parameterAt(event.relativePosition().x,
+                                          analysisControlBoundsFor(activeAnalysisControl_));
+            emitParameterGesture(activeAnalysisControl_, parameterValue_, false, false);
             redraw();
         };
         onMouseUp() += [this](const visage::MouseEvent&) {
@@ -193,7 +225,7 @@ public:
             }
             if (parameterDragging_)
             {
-                emitParameterGesture(parameterValue_, false, true);
+                emitParameterGesture(activeAnalysisControl_, parameterValue_, false, true);
                 parameterDragging_ = false;
                 return;
             }
@@ -202,6 +234,18 @@ public:
         };
         onMouseWheel() += [this](const visage::MouseEvent& event) {
             const auto point = event.relativePosition();
+            if (shell_.state().page == EditorPage::analysis && point.y >= 190.0f)
+            {
+                const auto delta = event.precise_wheel_delta_y != 0.0f
+                    ? event.precise_wheel_delta_y : event.wheel_delta_y;
+                if (delta != 0.0f)
+                {
+                    analysisScroll_ = std::clamp(analysisScroll_ - delta * 36.0f,
+                                                 0.0f, analysisMaximumScroll());
+                    redraw();
+                }
+                return true;
+            }
             if (!isSpectrumPoint(point))
                 return false;
             const auto delta = event.precise_wheel_delta_y != 0.0f
@@ -338,14 +382,9 @@ public:
                         labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
             canvas.text(shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT",
                         labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
-            canvas.text("FREQUENCY", labelFont, visage::Font::kLeft,
-                        18.0f, 184.0f, 140.0f, 14.0f);
-            canvas.setColor(tokens.surface);
-            canvas.roundedRectangle(18.0f, 198.0f, 420.0f, 18.0f, 4.0f);
             canvas.setColor(tokens.accent);
-            canvas.roundedRectangle(18.0f, 198.0f, 420.0f * parameterValue_, 18.0f, 4.0f);
-            canvas.setColor(tokens.accent);
-            canvas.rectangle(18.0f, 172.0f, 420.0f, 3.0f);
+            canvas.rectangle(18.0f, 172.0f, 620.0f, 3.0f);
+            drawAnalysisControls(canvas, tokens, labelFont);
         }
         else if (selected == static_cast<std::size_t>(EditorPage::synthesis))
         {
@@ -399,9 +438,144 @@ private:
         return point.x >= 24.0f && point.x < 632.0f && point.y >= 250.0f && point.y < 434.0f;
     }
 
-    [[nodiscard]] float parameterAt(float x) const noexcept
+    struct AnalysisControlBounds
     {
-        return std::clamp((x - 18.0f) / 420.0f, 0.0f, 1.0f);
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+    };
+
+    struct VisageTokens
+    {
+        std::uint32_t background;
+        std::uint32_t panel;
+        std::uint32_t surface;
+        std::uint32_t text;
+        std::uint32_t secondaryText;
+        std::uint32_t accent;
+    };
+
+    static constexpr std::array<std::size_t, AnalysisPageModel::kControlCount>
+        kAnalysisVisualOrder { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2 };
+
+    [[nodiscard]] static const ParameterDescriptor* analysisDescriptor(std::size_t index) noexcept
+    {
+        const auto ids = AnalysisPageModel::controlIds();
+        return index < ids.size() ? ParameterRegistry::find(ids[index]) : nullptr;
+    }
+
+    [[nodiscard]] AnalysisControlBounds analysisControlBounds(std::size_t visualIndex) const noexcept
+    {
+        if (visualIndex == 0)
+            // Preserve the original native-probe hit target around the compact
+            // slider while drawing the track inside that row.
+            return { 18.0f, 190.0f - analysisScroll_, 420.0f, 38.0f };
+        const auto gridIndex = visualIndex - 1;
+        constexpr float columnWidth = 300.0f;
+        constexpr float columnGap = 14.0f;
+        return { 18.0f + static_cast<float>(gridIndex % 2) * (columnWidth + columnGap),
+                 238.0f + static_cast<float>(gridIndex / 2) * 42.0f - analysisScroll_,
+                 columnWidth, 34.0f };
+    }
+
+    [[nodiscard]] AnalysisControlBounds analysisControlBoundsFor(std::size_t control) const noexcept
+    {
+        for (std::size_t visualIndex = 0; visualIndex < kAnalysisVisualOrder.size(); ++visualIndex)
+            if (kAnalysisVisualOrder[visualIndex] == control)
+                return analysisControlBounds(visualIndex);
+        return {};
+    }
+
+    [[nodiscard]] std::optional<std::size_t> analysisControlAt(const visage::Point& point) const noexcept
+    {
+        for (std::size_t visualIndex = 0; visualIndex < kAnalysisVisualOrder.size(); ++visualIndex)
+        {
+            const auto bounds = analysisControlBounds(visualIndex);
+            if (point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
+                point.y >= bounds.y && point.y <= bounds.y + bounds.height)
+                return kAnalysisVisualOrder[visualIndex];
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] static float parameterAt(float x, const AnalysisControlBounds& bounds) noexcept
+    {
+        return bounds.width <= 0.0f ? 0.0f
+                                   : std::clamp((x - bounds.x) / bounds.width, 0.0f, 1.0f);
+    }
+
+    [[nodiscard]] float analysisMaximumScroll() const noexcept
+    {
+        const auto last = analysisControlBounds(kAnalysisVisualOrder.size() - 1);
+        return std::max(0.0f, last.y + last.height + analysisScroll_ - height() + 16.0f);
+    }
+
+    void setAnalysisValue(std::size_t control, float value)
+    {
+        const auto* descriptor = analysisDescriptor(control);
+        if (descriptor == nullptr || control >= analysisValues_.size())
+            return;
+        analysisValues_[control] = descriptor->snap(value);
+        shell_.analysis().setControl(control, analysisValues_[control]);
+    }
+
+    void drawAnalysisControls(visage::Canvas& canvas, const VisageTokens& tokens,
+                              const visage::Font& labelFont) const
+    {
+        for (std::size_t visualIndex = 0; visualIndex < kAnalysisVisualOrder.size(); ++visualIndex)
+        {
+            const auto control = kAnalysisVisualOrder[visualIndex];
+            const auto* descriptor = analysisDescriptor(control);
+            if (descriptor == nullptr)
+                continue;
+            const auto bounds = analysisControlBounds(visualIndex);
+            if (bounds.y + bounds.height < 180.0f || bounds.y > height())
+                continue;
+
+            auto renderedBounds = bounds;
+            if (visualIndex == 0)
+            {
+                renderedBounds.y += 8.0f;
+                renderedBounds.height = 18.0f;
+            }
+            canvas.setColor(tokens.secondaryText);
+            canvas.text(descriptor->name.data(), labelFont, visage::Font::kLeft,
+                        renderedBounds.x, renderedBounds.y - 14.0f, renderedBounds.width, 13.0f);
+            canvas.setColor(tokens.surface);
+            canvas.roundedRectangle(renderedBounds.x, renderedBounds.y, renderedBounds.width,
+                                    renderedBounds.height, 4.0f);
+
+            const auto value = analysisValues_[control];
+            if (descriptor->type == ParameterType::boolean || descriptor->type == ParameterType::choice)
+            {
+                const auto active = descriptor->type == ParameterType::boolean && value >= 0.5f;
+                if (active)
+                {
+                    canvas.setColor(tokens.accent);
+                    canvas.roundedRectangle(renderedBounds.x, renderedBounds.y, renderedBounds.width,
+                                            renderedBounds.height, 4.0f);
+                }
+                canvas.setColor(active ? tokens.background : tokens.text);
+                const auto text = descriptor->text(value);
+                canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                            renderedBounds.x + 4.0f, renderedBounds.y + 3.0f,
+                            renderedBounds.width - 8.0f, renderedBounds.height - 6.0f);
+            }
+            else
+            {
+                const auto normalized = descriptor->normalize(value);
+                canvas.setColor(tokens.accent);
+                canvas.roundedRectangle(renderedBounds.x, renderedBounds.y,
+                                        renderedBounds.width * normalized,
+                                        renderedBounds.height, 4.0f);
+                canvas.setColor(tokens.background);
+                const auto text = descriptor->text(value);
+                canvas.text(text.c_str(), labelFont, visage::Font::kCenter,
+                            renderedBounds.x + 4.0f, renderedBounds.y + 3.0f,
+                            renderedBounds.width - 8.0f, renderedBounds.height - 6.0f);
+            }
+        }
     }
 
     [[nodiscard]] const char* spectrumModeLabel() const noexcept
@@ -414,15 +588,17 @@ private:
         return "Combined";
     }
 
-    void emitParameterGesture(float value, bool begin, bool end)
+    void emitParameterGesture(std::size_t control, float normalized, bool begin, bool end)
     {
-        const auto* descriptor = ParameterRegistry::find("analysisLowestFreq");
-        if (descriptor == nullptr)
+        const auto* descriptor = analysisDescriptor(control);
+        if (descriptor == nullptr || control >= analysisValues_.size())
             return;
-        const auto parameterValue = descriptor->denormalize(value);
-        emitAction(SetParameterAction { "analysisLowestFreq", parameterValue, begin, end });
+        setAnalysisValue(control, descriptor->denormalize(normalized));
+        const auto parameterValue = analysisValues_[control];
+        const auto id = std::string(descriptor->id);
+        emitAction(SetParameterAction { id, parameterValue, begin, end });
         if (sink_.parameterGesture)
-            sink_.parameterGesture(sink_.context, "analysisLowestFreq", parameterValue, begin, end);
+            sink_.parameterGesture(sink_.context, id.c_str(), parameterValue, begin, end);
     }
 
     void emitAction(const EditorAction& action)
@@ -430,16 +606,6 @@ private:
         if (sink_.action)
             sink_.action(sink_.context, &action);
     }
-
-    struct VisageTokens
-    {
-        std::uint32_t background;
-        std::uint32_t panel;
-        std::uint32_t surface;
-        std::uint32_t text;
-        std::uint32_t secondaryText;
-        std::uint32_t accent;
-    };
 
     [[nodiscard]] VisageTokens visageTokens() const noexcept
     {
@@ -454,6 +620,9 @@ private:
     void* dialogParent_ = nullptr;
     bool parameterDragging_ = false;
     float parameterValue_ = 0.5f;
+    std::size_t activeAnalysisControl_ = 3;
+    std::array<float, AnalysisPageModel::kControlCount> analysisValues_ {};
+    float analysisScroll_ = 0.0f;
     bool spectrumDragging_ = false;
     float spectrumLastX_ = 0.0f;
     float spectrumLastY_ = 0.0f;

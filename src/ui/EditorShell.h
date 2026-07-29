@@ -32,6 +32,7 @@ public:
     [[nodiscard]] const EditorShellState& state() const noexcept { return state_; }
     [[nodiscard]] const SessionPageModel& session() const noexcept { return session_; }
     [[nodiscard]] const AnalysisPageModel& analysis() const noexcept { return analysis_; }
+    [[nodiscard]] AnalysisPageModel& analysis() noexcept { return analysis_; }
     [[nodiscard]] const SynthesisPageModel& synthesis() const noexcept { return synthesis_; }
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
