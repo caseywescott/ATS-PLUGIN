@@ -64,6 +64,8 @@ public:
     }
 
     void markApplied() noexcept { applied_ = true; }
+    [[nodiscard]] ApplyAnalysisProfileAction profileAction() const noexcept
+    { return { static_cast<int>(profile_) }; }
     [[nodiscard]] AnalyzeCurrentAction applyAction() const noexcept { return {}; }
     [[nodiscard]] AnalyzeMorphSourceAction analyzeSourceAction(int slot) const noexcept { return { slot }; }
 

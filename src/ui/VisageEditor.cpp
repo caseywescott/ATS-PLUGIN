@@ -427,6 +427,7 @@ public:
                     {
                         analysisProfile_ = optionId;
                         shell_.analysis().setProfile(static_cast<AnalysisProfile>(optionId));
+                        emitAction(shell_.analysis().profileAction());
                         redraw();
                     }
                     if (sink_.popupDismissed)
@@ -727,6 +728,16 @@ public:
         redraw();
     }
 
+    void setTelemetry(TelemetrySnapshot snapshot)
+    {
+        telemetry_ = std::move(snapshot);
+        shell_.setActivity(telemetry_.analysisRunning, telemetry_.renderRunning);
+        shell_.analysis().setWorkerRunning(telemetry_.analysisRunning);
+        shell_.analysis().setHasSource(telemetry_.hasSourceA || telemetry_.hasSourceB ||
+                                       telemetry_.hasCurrentModel);
+        redraw();
+    }
+
     void draw(visage::Canvas& canvas) override
     {
         const auto tokens = visageTokens();
@@ -916,8 +927,16 @@ public:
             canvas.setColor(tokens.secondaryText);
             canvas.text("ANALYSIS PROFILE  |  18 CONTROLS  |  RANGE / TRACKING / THRESHOLDS",
                         labelFont, visage::Font::kLeft, 18.0f, 112.0f, 600.0f, 18.0f);
-            canvas.text(shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT",
-                        labelFont, visage::Font::kLeft, 18.0f, 140.0f, 520.0f, 18.0f);
+            const auto analysisStatus = telemetry_.status.empty()
+                ? (shell_.analysis().canCancel() ? "ANALYZING  |  CANCEL ENABLED" : "READY  |  APPLY / ANALYZE CURRENT")
+                : telemetry_.status;
+            canvas.text(analysisStatus.c_str(), labelFont, visage::Font::kLeft,
+                        18.0f, 140.0f, 520.0f, 18.0f);
+            if (telemetry_.analysisRunning)
+            {
+                canvas.setColor(tokens.accent);
+                canvas.rectangle(18.0f, 174.0f, 408.0f * std::clamp(telemetry_.progress, 0.0f, 1.0f), 3.0f);
+            }
             canvas.setColor(tokens.surface);
             canvas.roundedRectangle(450.0f, 112.0f, 188.0f, 28.0f, 5.0f);
             canvas.roundedRectangle(450.0f, 148.0f, 88.0f, 28.0f, 5.0f);
@@ -1590,6 +1609,7 @@ private:
     float analysisScroll_ = 0.0f;
     float sessionScroll_ = 0.0f;
     int analysisProfile_ = 0;
+    TelemetrySnapshot telemetry_ {};
     bool mathEditing_ = false;
     int partialIndex_ = 0;
     int partialFrame_ = 0;
@@ -1658,6 +1678,11 @@ void VisageEditor::setHistoryAvailability(bool canUndo, bool canRedo)
 void VisageEditor::setActivity(bool analysisRunning, bool renderRunning)
 {
     impl_->frame.setActivity(analysisRunning, renderRunning);
+}
+
+void VisageEditor::setTelemetry(TelemetrySnapshot snapshot)
+{
+    impl_->frame.setTelemetry(std::move(snapshot));
 }
 
 void VisageEditor::getSize(std::uint32_t& width, std::uint32_t& height) const

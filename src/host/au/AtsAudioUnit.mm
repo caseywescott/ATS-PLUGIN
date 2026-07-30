@@ -53,6 +53,7 @@ public:
     virtual ~AuEditorActionTarget() = default;
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
     virtual void pumpEditorWork() = 0;
+    [[nodiscard]] virtual ats::ui::TelemetrySnapshot editorTelemetry() const = 0;
     [[nodiscard]] virtual std::shared_ptr<AuEditorLifetime> editorLifetime() const = 0;
 };
 
@@ -69,11 +70,15 @@ public:
                 target->handleEditorAction(action);
     }
 
-    void poll()
+    ats::ui::TelemetrySnapshot poll()
     {
         if (const auto lifetime = lifetime_.lock())
             if (auto* target = lifetime->target.load(std::memory_order_acquire))
+            {
                 target->pumpEditorWork();
+                return target->editorTelemetry();
+            }
+        return {};
     }
 
 private:
@@ -127,8 +132,8 @@ AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
     _editor->show();
     auto* actionBridge = _actionBridge.get();
     _analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
-        if (actionBridge != nullptr)
-            actionBridge->poll();
+        if (actionBridge != nullptr && _editor != nullptr)
+            _editor->setTelemetry(actionBridge->poll());
     }];
     return self;
 }
@@ -522,6 +527,9 @@ private:
         ats::Error sessionError;
         if (host_.applySessionAction(action, sessionError))
             return;
+        ats::Error analysisError;
+        if (host_.applyAnalysisAction(action, analysisError))
+            return;
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
             (void) ats::state::applyFactoryPreset(factory->index, host_.parameters());
@@ -586,6 +594,9 @@ private:
         ats::Error error;
         (void) host_.pollAnalysis(error);
     }
+
+    [[nodiscard]] ats::ui::TelemetrySnapshot editorTelemetry() const override
+    { return host_.telemetry(); }
 
     [[nodiscard]] std::shared_ptr<AuEditorLifetime> editorLifetime() const override
     { return editorLifetime_; }

@@ -18,6 +18,7 @@ struct ImportAtsAction { ats::Path path; int slot = 0; };
 struct ExportAtsAction { ats::Path path; int source = 0; };
 struct AnalyzeCurrentAction {};
 struct AnalyzeMorphSourceAction { int slot = 0; };
+struct ApplyAnalysisProfileAction { int profile = 0; };
 struct CancelJobsAction {};
 struct PreviewAction { int source = 0; int layer = 0; bool start = false; };
 struct StopPreviewAction {};
@@ -46,6 +47,7 @@ using EditorAction = std::variant<SetParameterAction,
                                   ExportAtsAction,
                                   AnalyzeCurrentAction,
                                   AnalyzeMorphSourceAction,
+                                  ApplyAnalysisProfileAction,
                                   CancelJobsAction,
                                   PreviewAction,
                                   StopPreviewAction,

@@ -37,6 +37,7 @@ template <typename T>
     if constexpr (std::is_same_v<T, ExportAtsAction>) return { "ExportAts", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, AnalyzeCurrentAction>) return { "AnalyzeCurrent", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, AnalyzeMorphSourceAction>) return { "AnalyzeMorphSource", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::none };
+    if constexpr (std::is_same_v<T, ApplyAnalysisProfileAction>) return { "ApplyAnalysisProfile", ActionThreadDomain::ui, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, CancelJobsAction>) return { "CancelJobs", ActionThreadDomain::ui, ActionCancellation::explicitCancel, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, PreviewAction>) return { "PlayPreview", ActionThreadDomain::audioRt, ActionCancellation::teardown, ActionUndoPolicy::none };
     if constexpr (std::is_same_v<T, StopPreviewAction>) return { "StopPreview", ActionThreadDomain::audioRt, ActionCancellation::teardown, ActionUndoPolicy::none };
@@ -91,6 +92,11 @@ template <typename T>
     else if constexpr (std::is_same_v<T, AnalyzeMorphSourceAction>)
     {
         if (action.slot < 0) return { false, "invalid_slot", "source slot must be non-negative" };
+    }
+    else if constexpr (std::is_same_v<T, ApplyAnalysisProfileAction>)
+    {
+        if (action.profile < 0 || action.profile > 3)
+            return { false, "invalid_analysis_profile", "analysis profile must be in range" };
     }
     else if constexpr (std::is_same_v<T, PreviewAction>)
     {

@@ -31,6 +31,7 @@ public:
     void setTheme(ThemeId theme);
     void setHistoryAvailability(bool canUndo, bool canRedo);
     void setActivity(bool analysisRunning, bool renderRunning);
+    void setTelemetry(TelemetrySnapshot snapshot);
 
 private:
     struct Impl;

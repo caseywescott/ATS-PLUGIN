@@ -23,6 +23,9 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
     ats::Error sessionError;
     if (host->applySessionAction(*action, sessionError))
         return;
+    ats::Error analysisError;
+    if (host->applyAnalysisAction(*action, analysisError))
+        return;
     if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(action))
     {
         (void) ats::state::applyFactoryPreset(factory->index, host->parameters());
@@ -185,9 +188,11 @@ int main(int argc, char** argv)
             !host.attachStandaloneEditor(editor, 1.0f, 1280.0f, 940.0f))
             return 2;
         auto* hostAdapter = &host;
+        auto* editorView = &editor;
         NSTimer* analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
             ats::Error error;
             (void) hostAdapter->pollAnalysis(error);
+            editorView->setTelemetry(hostAdapter->telemetry());
         }];
         [application run];
         [analysisTimer invalidate];

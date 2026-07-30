@@ -11,6 +11,7 @@ int main()
     assert(analysis.controls()[0].id == "analysisType");
     assert(analysis.setControl(9, -48.0f));
     assert(analysis.profile() == ats::ui::AnalysisProfile::custom);
+    assert(analysis.profileAction().profile == 3);
     assert(!analysis.setControl(9, std::numeric_limits<float>::quiet_NaN()));
     analysis.setHasSource(true);
     analysis.setWorkerRunning(true);

@@ -132,6 +132,15 @@ public:
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
     [[nodiscard]] const HostStateChunk& stateChunk() const noexcept { return stateChunk_; }
+    [[nodiscard]] ui::TelemetrySnapshot telemetry() const
+    {
+        auto snapshot = telemetry_.snapshot();
+        snapshot.analysisRunning = analysisRunning_.load(std::memory_order_acquire);
+        snapshot.progress = analysisProgress_.load(std::memory_order_acquire);
+        if (snapshot.analysisRunning)
+            snapshot.state = ui::UiState::analyzing;
+        return snapshot;
+    }
     [[nodiscard]] SessionRuntimeSnapshot sessionSnapshot() const
     {
         SessionRuntimeSnapshot snapshot;
@@ -173,6 +182,14 @@ public:
         }
         sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
         ++sourceRevisions_[static_cast<std::size_t>(slot)];
+        auto snapshot = telemetry();
+        snapshot.hasSourceA = sources_[0].has_value();
+        snapshot.hasSourceB = sources_[1].has_value();
+        snapshot.hasCurrentModel = sources_[static_cast<std::size_t>(slot)]->sound.get() != nullptr;
+        snapshot.state = snapshot.hasCurrentModel ? ui::UiState::analyzed : ui::UiState::readyToAnalyze;
+        snapshot.status = snapshot.hasCurrentModel ? "ATS model imported" : "audio source decoded";
+        snapshot.error.clear();
+        telemetry_.publish(std::move(snapshot));
         return true;
     }
 
@@ -250,16 +267,28 @@ public:
         analysisCancellation_ = CancellationSource {};
         analysisSlot_ = slot;
         analysisSourceRevision_ = sourceRevisions_[static_cast<std::size_t>(slot)];
+        analysisProgress_.store(0.0f, std::memory_order_release);
         const auto generation = sourceGenerations_.next();
         auto samples = source.monoSamples;
         const auto sampleRate = source.sampleRate;
         const auto token = analysisCancellation_.token();
         analysisFuture_ = std::async(std::launch::async,
-            [generation, token, samples = std::move(samples), sampleRate]() mutable {
+            [this, generation, token, samples = std::move(samples), sampleRate]() mutable {
                 return AtsEngine::analyze(generation, token,
-                                          { samples.data(), samples.size(), sampleRate, {} });
+                                          { samples.data(), samples.size(), sampleRate, {} },
+                                          [this](double progress) {
+                                              analysisProgress_.store(static_cast<float>(progress),
+                                                                      std::memory_order_release);
+                                          });
             });
         analysisRunning_.store(true, std::memory_order_release);
+        auto snapshot = telemetry();
+        snapshot.state = ui::UiState::analyzing;
+        snapshot.analysisRunning = true;
+        snapshot.progress = 0.0f;
+        snapshot.status = std::string("analysing source ") + (slot == 0 ? "A" : "B");
+        snapshot.error.clear();
+        telemetry_.publish(std::move(snapshot));
         return true;
     }
 
@@ -275,15 +304,32 @@ public:
             return smearnovCompleted;
         auto analysed = analysisFuture_.get();
         analysisRunning_.store(false, std::memory_order_release);
+        analysisProgress_.store(analysed.status == JobResult<AnalysisOutput>::Status::success ? 1.0f : 0.0f,
+                                std::memory_order_release);
         if (analysed.status != JobResult<AnalysisOutput>::Status::success)
         {
             error = analysed.error;
+            auto snapshot = telemetry();
+            snapshot.analysisRunning = false;
+            snapshot.progress = 0.0f;
+            snapshot.state = analysed.status == JobResult<AnalysisOutput>::Status::cancelled
+                ? ui::UiState::readyToAnalyze : ui::UiState::error;
+            snapshot.status = analysed.status == JobResult<AnalysisOutput>::Status::cancelled
+                ? "analysis cancelled" : "analysis failed";
+            snapshot.error = error.text;
+            telemetry_.publish(std::move(snapshot));
             return true;
         }
         if (analysisSlot_ < 0 || !sources_[static_cast<std::size_t>(analysisSlot_)] ||
             sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_)
         {
             error = { "stale_analysis", "source changed while analysis was running" };
+            auto snapshot = telemetry();
+            snapshot.analysisRunning = false;
+            snapshot.state = ui::UiState::readyToAnalyze;
+            snapshot.status = "analysis result discarded";
+            snapshot.error = error.text;
+            telemetry_.publish(std::move(snapshot));
             return true;
         }
         auto& source = *sources_[static_cast<std::size_t>(analysisSlot_)];
@@ -304,12 +350,69 @@ public:
                                        : Error { "playback_publish_failed", "could not publish analysed playback" };
             }
         }
+        auto snapshot = telemetry();
+        snapshot.analysisRunning = false;
+        snapshot.progress = 1.0f;
+        snapshot.state = error ? ui::UiState::error : ui::UiState::analyzed;
+        snapshot.hasSourceA = sources_[0].has_value();
+        snapshot.hasSourceB = sources_[1].has_value();
+        snapshot.hasCurrentModel = source.sound.get() != nullptr;
+        snapshot.hasResidual = source.sound.get() != nullptr && source.sound.get()->res != nullptr;
+        snapshot.hasPhase = source.sound.get() != nullptr && source.sound.get()->pha != nullptr;
+        snapshot.status = error ? "analysis render failed" : "analysis complete";
+        snapshot.error = error.text;
+        telemetry_.publish(std::move(snapshot));
         return true;
     }
 
-    void cancelAnalysis() noexcept { analysisCancellation_.cancel(); }
+    void cancelAnalysis() noexcept
+    {
+        analysisCancellation_.cancel();
+        if (analysisRunning_.load(std::memory_order_acquire))
+        {
+            auto snapshot = telemetry();
+            snapshot.status = "cancelling analysis";
+            snapshot.error.clear();
+            telemetry_.publish(std::move(snapshot));
+        }
+    }
     [[nodiscard]] bool analysisRunning() const noexcept
     { return analysisRunning_.load(std::memory_order_acquire); }
+
+    bool applyAnalysisAction(const ui::EditorAction& action, Error& error)
+    {
+        error = {};
+        if (const auto* profile = std::get_if<ui::ApplyAnalysisProfileAction>(&action))
+        {
+            if (profile->profile < 0 || profile->profile > 3)
+            {
+                error = { "invalid_analysis_profile", "analysis profile is invalid" };
+                return true;
+            }
+            applyAnalysisProfile(profile->profile);
+            auto snapshot = telemetry();
+            snapshot.status = std::string("analysis profile: ") + analysisProfileName(profile->profile);
+            snapshot.error.clear();
+            telemetry_.publish(std::move(snapshot));
+            return true;
+        }
+        if (const auto* analyse = std::get_if<ui::AnalyzeMorphSourceAction>(&action))
+        {
+            (void) queueAnalysisSource(analyse->slot, error);
+            return true;
+        }
+        if (std::holds_alternative<ui::AnalyzeCurrentAction>(action))
+        {
+            (void) queueAnalysisSource(0, error);
+            return true;
+        }
+        if (std::holds_alternative<ui::CancelJobsAction>(action))
+        {
+            cancelAnalysis();
+            return true;
+        }
+        return false;
+    }
 
     // Applies the Session subset of EditorAction at the shared host boundary.
     // File import, analysis, and parameter automation deliberately remain
@@ -538,6 +641,7 @@ public:
         onsetRevision_ = 0;
         format_ = format;
         state_ = HostState::cold;
+        telemetry_.publish({});
         return true;
     }
 
@@ -740,6 +844,46 @@ private:
         AtsSoundPtr transformed;
         Error error;
     };
+
+    static const char* analysisProfileName(int profile) noexcept
+    {
+        switch (profile)
+        {
+        case 1: return "speech";
+        case 2: return "percussive";
+        case 3: return "custom";
+        default: return "default";
+        }
+    }
+
+    void applyAnalysisProfile(int profile) noexcept
+    {
+        if (profile == 0)
+        {
+            for (const auto& descriptor : ParameterRegistry::descriptors())
+                if (descriptor.id.rfind("analysis", 0) == 0)
+                    (void) parameters_.write(descriptor.denseIndex, descriptor.defaultValue);
+            return;
+        }
+        if (profile == 1)
+        {
+            (void) parameters_.write("analysisType", 4.0f);
+            (void) parameters_.write("analysisLowestFreq", 70.0f);
+            (void) parameters_.write("analysisHighestFreq", 9000.0f);
+            (void) parameters_.write("analysisSmrThreshold", 20.0f);
+            (void) parameters_.write("analysisTrackLen", 5.0f);
+            return;
+        }
+        if (profile == 2)
+        {
+            (void) parameters_.write("analysisType", 4.0f);
+            (void) parameters_.write("analysisLowestFreq", 30.0f);
+            (void) parameters_.write("analysisHighestFreq", 18000.0f);
+            (void) parameters_.write("analysisHopSize", 0.125f);
+            (void) parameters_.write("analysisTrackLen", 2.0f);
+            (void) parameters_.write("analysisMinSegLen", 1.0f);
+        }
+    }
 
     static bool strictlyOrderedNormalized(const std::vector<float>& values) noexcept
     {
@@ -945,6 +1089,8 @@ private:
     int analysisSlot_ = -1;
     std::uint64_t analysisSourceRevision_ = 0;
     std::atomic<bool> analysisRunning_ { false };
+    std::atomic<float> analysisProgress_ { 0.0f };
+    ui::TelemetryPublisher telemetry_;
     CancellationSource smearnovCancellation_;
     std::future<SmearnovWorkResult> smearnovFuture_;
     std::atomic<bool> smearnovRunning_ { false };

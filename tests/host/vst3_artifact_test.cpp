@@ -155,6 +155,9 @@ public:
         else if (std::strcmp(id, "kind") == 0) kind_ = value;
         else if (std::strcmp(id, "layer") == 0) layer_ = value;
         else if (std::strcmp(id, "start") == 0) start_ = value;
+        else if (std::strcmp(id, "profile") == 0) profile_ = value;
+        else if (std::strcmp(id, "running") == 0) running_ = value;
+        else if (std::strcmp(id, "progressMilli") == 0) progressMilli_ = value;
         else return Steinberg::kResultFalse;
         return Steinberg::kResultTrue;
     }
@@ -164,6 +167,9 @@ public:
         else if (std::strcmp(id, "kind") == 0) value = kind_;
         else if (std::strcmp(id, "layer") == 0) value = layer_;
         else if (std::strcmp(id, "start") == 0) value = start_;
+        else if (std::strcmp(id, "profile") == 0) value = profile_;
+        else if (std::strcmp(id, "running") == 0) value = running_;
+        else if (std::strcmp(id, "progressMilli") == 0) value = progressMilli_;
         else return Steinberg::kResultFalse;
         return Steinberg::kResultTrue;
     }
@@ -209,6 +215,9 @@ private:
     Steinberg::int64 kind_ = -1;
     Steinberg::int64 layer_ = -1;
     Steinberg::int64 start_ = 0;
+    Steinberg::int64 profile_ = -1;
+    Steinberg::int64 running_ = 0;
+    Steinberg::int64 progressMilli_ = 0;
     std::string path_;
     std::vector<std::byte> values_;
 };
@@ -348,6 +357,11 @@ int main(int argc, char** argv)
     require(processor->setupProcessing(setup) == Steinberg::kResultTrue, "setup processing");
     require(component->setActive(true) == Steinberg::kResultTrue, "activate");
     require(processor->setProcessing(true) == Steinberg::kResultTrue, "start processing");
+
+    TestMessage profileMessage("ats.editor.apply-analysis-profile");
+    require(profileMessage.getAttributes()->setInt("profile", 1) == Steinberg::kResultTrue &&
+            processorConnection->notify(&profileMessage) == Steinberg::kResultTrue,
+            "processor applies analysis profile");
 
     std::array<float, 64> left;
     std::array<float, 64> right;

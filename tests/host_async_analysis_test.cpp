@@ -61,13 +61,23 @@ int main()
     assert(host.initialize(ats::host::HostFormat::standalone));
     assert(host.prepare({ 48000.0, 512, 2, 0 }));
     ats::Error error;
+    assert(host.applyAnalysisAction(ats::ui::ApplyAnalysisProfileAction { 1 }, error));
+    assert(!error && host.parameters().read("analysisLowestFreq") == 70.0f);
+    assert(host.applyAnalysisAction(ats::ui::ApplyAnalysisProfileAction { 9 }, error));
+    assert(error.code == "invalid_analysis_profile");
     assert(host.importSource({ path.u8string() }, 0, ats::engine::SourceImportKind::audio, error));
     assert(host.queueAnalysisSource(0, error));
     assert(host.analysisRunning());
+    auto telemetry = host.telemetry();
+    assert(telemetry.analysisRunning && telemetry.state == ats::ui::UiState::analyzing);
+    assert(telemetry.hasSourceA && telemetry.status == "analysing source A");
     assert(!host.queueAnalysisSource(0, error) && error.code == "analysis_busy");
     error = waitForAnalysis(host);
     assert(!error && !host.analysisRunning());
     assert(host.source(0) != nullptr && host.source(0)->sound);
+    telemetry = host.telemetry();
+    assert(!telemetry.analysisRunning && telemetry.progress == 1.0f);
+    assert(telemetry.state == ats::ui::UiState::analyzed && telemetry.hasCurrentModel);
 
     float left[512] {}, right[512] {};
     float* channels[] { left, right };
@@ -79,6 +89,7 @@ int main()
 
     assert(host.queueAnalysisSource(0, error));
     host.cancelAnalysis();
+    assert(host.telemetry().status == "cancelling analysis");
     error = waitForAnalysis(host);
     assert(error.code == "cancelled");
     assert(!host.analysisRunning());

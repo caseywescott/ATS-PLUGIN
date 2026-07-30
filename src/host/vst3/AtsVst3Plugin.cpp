@@ -19,6 +19,7 @@
 #include <visage_ui/events.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -42,6 +43,8 @@ constexpr const char* kImportSourceMessage = "ats.editor.import-source";
 constexpr const char* kAnalyzeSourceMessage = "ats.editor.analyze-source";
 constexpr const char* kCancelAnalysisMessage = "ats.editor.cancel-analysis";
 constexpr const char* kPollAnalysisMessage = "ats.editor.poll-analysis";
+constexpr const char* kApplyAnalysisProfileMessage = "ats.editor.apply-analysis-profile";
+constexpr const char* kAnalysisTelemetryMessage = "ats.editor.analysis-telemetry";
 constexpr const char* kSessionPreviewMessage = "ats.editor.session-preview";
 constexpr const char* kSessionStopMessage = "ats.editor.session-stop-preview";
 constexpr const char* kSessionSeekMessage = "ats.editor.session-seek-preview";
@@ -59,6 +62,9 @@ constexpr const char* kPreviewLayerAttribute = "layer";
 constexpr const char* kPreviewStartAttribute = "start";
 constexpr const char* kVariationStoreAttribute = "store";
 constexpr const char* kSessionValuesAttribute = "values";
+constexpr const char* kAnalysisProfileAttribute = "profile";
+constexpr const char* kAnalysisRunningAttribute = "running";
+constexpr const char* kAnalysisProgressAttribute = "progressMilli";
 
 std::vector<std::byte> readStream(Steinberg::IBStream* stream)
 {
@@ -298,7 +304,19 @@ public:
             // callback.
             ats::Error error;
             (void) host_.pollAnalysis(error);
+            publishAnalysisTelemetry();
             return Steinberg::kResultTrue;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kApplyAnalysisProfileMessage))
+        {
+            Steinberg::int64 profile = -1;
+            if (attributes->getInt(kAnalysisProfileAttribute, profile) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            const auto accepted = host_.applyAnalysisAction(
+                ats::ui::ApplyAnalysisProfileAction { static_cast<int>(profile) }, error);
+            publishAnalysisTelemetry();
+            return accepted && !error ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kSessionPreviewMessage))
         {
@@ -375,6 +393,24 @@ public:
     }
 
 private:
+    void publishAnalysisTelemetry()
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return;
+        message->setMessageID(kAnalysisTelemetryMessage);
+        auto* attributes = message->getAttributes();
+        const auto telemetry = host_.telemetry();
+        if (attributes != nullptr)
+        {
+            (void) attributes->setInt(kAnalysisRunningAttribute, telemetry.analysisRunning ? 1 : 0);
+            (void) attributes->setInt(kAnalysisProgressAttribute,
+                                      static_cast<Steinberg::int64>(std::lround(telemetry.progress * 1000.0f)));
+            (void) sendMessage(message);
+        }
+        message->release();
+    }
+
     void applyParameterChanges(Steinberg::Vst::IParameterChanges* changes) noexcept
     {
         if (changes == nullptr)
@@ -402,6 +438,7 @@ public:
     virtual ~Vst3EditorActionTarget() = default;
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
     virtual void pumpEditorWork() = 0;
+    [[nodiscard]] virtual ats::ui::TelemetrySnapshot editorTelemetry() const = 0;
 };
 
 class Vst3EditorWorkPump final : public visage::EventTimer
@@ -409,14 +446,21 @@ class Vst3EditorWorkPump final : public visage::EventTimer
 public:
     explicit Vst3EditorWorkPump(Vst3EditorActionTarget* target) : target_(target) {}
 
+    void setEditor(ats::ui::VisageEditor* editor) noexcept { editor_ = editor; }
+
     void timerCallback() override
     {
         if (target_ != nullptr)
+        {
             target_->pumpEditorWork();
+            if (editor_ != nullptr)
+                editor_->setTelemetry(target_->editorTelemetry());
+        }
     }
 
 private:
     Vst3EditorActionTarget* target_ = nullptr;
+    ats::ui::VisageEditor* editor_ = nullptr;
 };
 
 class AtsVst3PlugView final : public Steinberg::FObject, public Steinberg::IPlugView
@@ -429,6 +473,7 @@ public:
         sink.context = actionTarget_;
         sink.action = &AtsVst3PlugView::editorAction;
         editor_ = std::make_unique<ats::ui::VisageEditor>(sink);
+        workPump_.setEditor(editor_.get());
     }
     ~AtsVst3PlugView() override
     {
@@ -578,8 +623,31 @@ public:
         return state == nullptr ? Steinberg::kResultFalse : Steinberg::kResultTrue;
     }
 
+    Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE
+    {
+        if (message == nullptr || !Steinberg::FIDStringsEqual(message->getMessageID(), kAnalysisTelemetryMessage))
+            return EditController::notify(message);
+        auto* attributes = message->getAttributes();
+        Steinberg::int64 running = 0, progressMilli = 0;
+        if (attributes == nullptr ||
+            attributes->getInt(kAnalysisRunningAttribute, running) != Steinberg::kResultTrue ||
+            attributes->getInt(kAnalysisProgressAttribute, progressMilli) != Steinberg::kResultTrue)
+            return Steinberg::kResultFalse;
+        editorTelemetry_.analysisRunning = running != 0;
+        editorTelemetry_.progress = std::clamp(static_cast<float>(progressMilli) / 1000.0f, 0.0f, 1.0f);
+        editorTelemetry_.state = editorTelemetry_.analysisRunning ? ats::ui::UiState::analyzing
+                                                                    : ats::ui::UiState::analyzed;
+        editorTelemetry_.status = editorTelemetry_.analysisRunning ? "analysing source" : "analysis complete";
+        return Steinberg::kResultTrue;
+    }
+
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
+        if (const auto* profile = std::get_if<ats::ui::ApplyAnalysisProfileAction>(&action))
+        {
+            (void) sendAnalysisProfile(profile->profile);
+            return;
+        }
         if (const auto* preview = std::get_if<ats::ui::PreviewAction>(&action))
         {
             (void) sendPreview(*preview);
@@ -704,7 +772,26 @@ public:
     void pumpEditorWork() override
     { (void) sendMessageId(kPollAnalysisMessage); }
 
+    [[nodiscard]] ats::ui::TelemetrySnapshot editorTelemetry() const override
+    { return editorTelemetry_; }
+
 private:
+    bool sendAnalysisProfile(int profile)
+    {
+        if (profile < 0 || profile > 3)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kApplyAnalysisProfileMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kAnalysisProfileAttribute, profile) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
     bool sendPreview(const ats::ui::PreviewAction& preview)
     {
         auto* message = allocateMessage();
@@ -827,6 +914,7 @@ private:
         }
     }
 
+    ats::ui::TelemetrySnapshot editorTelemetry_ {};
 };
 
 Steinberg::IPlugView* PLUGIN_API AtsVst3Controller::createView(Steinberg::FIDString name)
