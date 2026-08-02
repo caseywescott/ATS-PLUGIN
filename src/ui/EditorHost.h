@@ -33,7 +33,16 @@ struct SavePresetAction { ats::Path path; };
 struct LoadPresetAction { ats::Path path; };
 struct NoteAction { bool on = false; std::uint8_t note = 60; std::uint8_t velocity = 0; };
 struct HistoryAction { bool redo = false; };
-struct PartialEditAction { std::int32_t partial = -1; std::int32_t frame = -1; bool apply = false; };
+struct PartialEditAction
+{
+    std::int32_t partial = -1;
+    std::int32_t frame = -1;
+    bool apply = false;
+    // The first three fields preserve the original focus/select action ABI;
+    // these values are populated for a committed cell write.
+    double amplitude = 0.0;
+    double frequencyHz = 1.0;
+};
 struct ResidualEditAction { std::int32_t band = -1; std::int32_t frame = -1; float value = 0.0f; };
 struct ApplyMathAction { std::string script; };
 struct DetectSmearnovAction {};

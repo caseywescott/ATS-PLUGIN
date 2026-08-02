@@ -37,6 +37,7 @@ public:
     [[nodiscard]] const SynthesisPageModel& synthesis() const noexcept { return synthesis_; }
     [[nodiscard]] SynthesisPageModel& synthesis() noexcept { return synthesis_; }
     [[nodiscard]] const PartialPageModel& partials() const noexcept { return partials_; }
+    [[nodiscard]] PartialPageModel& partials() noexcept { return partials_; }
     [[nodiscard]] const MathPageModel& math() const noexcept { return math_; }
     [[nodiscard]] MathPageModel& math() noexcept { return math_; }
     [[nodiscard]] const SpectrumInteractionModel& spectrum() const noexcept { return spectrum_; }
@@ -47,7 +48,15 @@ public:
     {
         if (index >= kPageCount)
             return false;
-        state_.page = static_cast<EditorPage>(index);
+        const auto next = static_cast<EditorPage>(index);
+        if (next != state_.page)
+        {
+            if (state_.page == EditorPage::partials)
+                partials_.focusLoss();
+            if (state_.page == EditorPage::math)
+                math_.focusLoss();
+        }
+        state_.page = next;
         return true;
     }
 

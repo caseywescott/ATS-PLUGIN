@@ -86,6 +86,15 @@ target_compile_features(plugin_model_test PRIVATE cxx_std_17)
 target_link_libraries(plugin_model_test PRIVATE ats_plugin_model)
 add_test(NAME plugin_model_test COMMAND plugin_model_test)
 
+add_executable(plugin_model_surface_actions_test plugin_model_surface_actions_test.cpp)
+target_include_directories(plugin_model_surface_actions_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(plugin_model_surface_actions_test PRIVATE cxx_std_17)
+target_link_libraries(plugin_model_surface_actions_test PRIVATE ats_plugin_model ats_engine atsa)
+add_test(NAME plugin_model_surface_actions_test COMMAND plugin_model_surface_actions_test)
+
 add_executable(ui_backend_contract_test ui_backend_contract_test.cpp)
 target_include_directories(ui_backend_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -281,6 +290,31 @@ target_include_directories(partial_edit_transaction_test PRIVATE
 target_compile_features(partial_edit_transaction_test PRIVATE cxx_std_17)
 add_test(NAME partial_edit_transaction_test COMMAND partial_edit_transaction_test)
 
+add_executable(synth_partial_math_page_test synth_partial_math_page_test.cpp)
+target_include_directories(synth_partial_math_page_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(synth_partial_math_page_test PRIVATE cxx_std_17)
+add_test(NAME synth_partial_math_page_test COMMAND synth_partial_math_page_test)
+
+add_executable(spectrum_dispatch_test spectrum_dispatch_test.cpp)
+target_include_directories(spectrum_dispatch_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_dispatch_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_dispatch_test COMMAND spectrum_dispatch_test)
+
+add_executable(preset_file_workflow_test preset_file_workflow_test.cpp)
+target_include_directories(preset_file_workflow_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/platform"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/state"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(preset_file_workflow_test PRIVATE cxx_std_17)
+target_link_libraries(preset_file_workflow_test PRIVATE ats_preset_service)
+add_test(NAME preset_file_workflow_test COMMAND preset_file_workflow_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)
@@ -371,6 +405,18 @@ target_include_directories(host_session_behavior_test PRIVATE
 target_compile_features(host_session_behavior_test PRIVATE cxx_std_17)
 target_link_libraries(host_session_behavior_test PRIVATE ats_host_vst3)
 add_test(NAME host_session_behavior_test COMMAND host_session_behavior_test)
+
+add_executable(host_action_routing_test host_action_routing_test.cpp)
+target_include_directories(host_action_routing_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/platform"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/state"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(host_action_routing_test PRIVATE cxx_std_17)
+target_link_libraries(host_action_routing_test PRIVATE ats_host_vst3 ats_preset_service)
+add_test(NAME host_action_routing_test COMMAND host_action_routing_test)
 
 add_executable(midi_process_block_test midi_process_block_test.cpp ../src/core/ParameterRegistry.cpp)
 target_include_directories(midi_process_block_test PRIVATE

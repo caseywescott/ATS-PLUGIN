@@ -9,7 +9,9 @@
 
 #include <cstddef>
 #include <array>
+#include <memory>
 #include <optional>
+#include <vector>
 #include <utility>
 
 namespace ats::engine
@@ -49,8 +51,20 @@ public:
     void cancelJobs() noexcept;
 
 private:
+    struct ModelSnapshot
+    {
+        std::vector<float> parameters;
+        std::array<ats::AtsSoundPtr, 2> sounds;
+    };
+
     [[nodiscard]] ats::ui::ActionResult handle(const ats::ui::EditorAction& action);
     void publishTelemetry(ats::ui::TelemetrySnapshot snapshot);
+    [[nodiscard]] std::vector<std::byte> captureSnapshot();
+    [[nodiscard]] bool restoreSnapshot(const std::vector<std::byte>& bytes);
+    [[nodiscard]] bool restoreSnapshotId(std::uint64_t id);
+    void publishModelMutation(std::string status, ats::ui::UiState state,
+                              std::string error = {});
+    [[nodiscard]] int activeSourceSlot() const noexcept;
     [[nodiscard]] ats::ui::ActionResult importSource(const SourceImportRequest& request,
                                                       std::uint64_t generation);
 
@@ -65,6 +79,9 @@ private:
     ats::UndoHistory history_;
     std::array<std::optional<ImportedSource>, 2> sources_;
     std::uint64_t modelRevision_ = 0;
+    int activeSourceSlot_ = 0;
+    std::optional<std::vector<std::byte>> activeGestureBefore_;
+    std::vector<std::shared_ptr<ModelSnapshot>> snapshots_;
 };
 
 } // namespace ats::engine

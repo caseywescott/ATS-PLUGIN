@@ -589,7 +589,8 @@ public:
                 }
                 if (point.x >= 18.0f && point.x <= 180.0f && point.y >= 326.0f && point.y < 360.0f)
                 {
-                    emitAction(PartialEditAction { partialIndex_, partialFrame_, true });
+                    emitAction(PartialEditAction { partialIndex_, partialFrame_, true,
+                                                   partialAmplitude_, partialFrequencyHz_ });
                     requestKeyboardFocus();
                     return;
                 }

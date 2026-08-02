@@ -4,6 +4,7 @@
 #include "PartialEditView.h"
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -108,8 +109,49 @@ public:
     [[nodiscard]] const SynthesisPageState& state() const noexcept { return state_; }
     void setHasSource(bool value) noexcept { state_.hasSource = value; }
     void setShapeMode(FrequencyShapeMode mode) noexcept { state_.shapeMode = mode; }
+    void setUsePhase(bool value) noexcept { state_.usePhase = value; }
+    void setUseAllPartials(bool value) noexcept { state_.useAllPartials = value; }
+    void setUseIfftSynth(bool value) noexcept { state_.useIfftSynth = value; }
+    void setResidualOnly(bool value) noexcept { state_.residualOnly = value; }
+    void setLayerMixPlayback(bool value) noexcept { state_.layerMixPlayback = value; }
+
     [[nodiscard]] bool shapeControlsDimmed() const noexcept
     { return state_.shapeMode == FrequencyShapeMode::linear; }
+
+    bool setFrequencyFactor(float value) noexcept
+    {
+        if (!std::isfinite(value) || value <= 0.0f) return false;
+        state_.frequencyFactor = value;
+        return true;
+    }
+
+    bool setShapeAmount(float value) noexcept
+    {
+        if (!std::isfinite(value)) return false;
+        state_.shapeAmount = value;
+        return true;
+    }
+
+    bool setShapePivotHz(float value) noexcept
+    {
+        if (!std::isfinite(value) || value < 0.0f) return false;
+        state_.shapePivotHz = value;
+        return true;
+    }
+
+    bool setTimeStretch(float value) noexcept
+    {
+        if (!std::isfinite(value) || value <= 0.0f) return false;
+        state_.timeStretch = value;
+        return true;
+    }
+
+    bool setStartSeconds(float value) noexcept
+    {
+        if (!std::isfinite(value) || value < 0.0f) return false;
+        state_.startSeconds = value;
+        return true;
+    }
 
     bool setDuration(float seconds) noexcept
     {
@@ -120,7 +162,16 @@ public:
     }
 
     [[nodiscard]] std::string durationLabel() const
-    { return state_.durationSeconds == 0.0f ? "FULL" : std::to_string(state_.durationSeconds); }
+    { return state_.durationSeconds <= 0.0005f ? "FULL" : std::to_string(state_.durationSeconds); }
+
+    [[nodiscard]] std::string pivotLabel() const
+    {
+        if (state_.shapePivotHz <= 0.005f) return "Auto";
+        return std::to_string(static_cast<int>(state_.shapePivotHz + 0.5f)) + " Hz";
+    }
+
+    [[nodiscard]] std::string bothPlaybackLabel() const
+    { return state_.layerMixPlayback ? "Layer mix" : "Classic combined"; }
 
 private:
     SynthesisPageState state_{};
@@ -141,7 +192,8 @@ public:
     [[nodiscard]] bool cellIsValid(int partial, int frame, double amplitude, double frequencyHz) const noexcept
     {
         return partial >= 0 && partial < partialCount_ && frame >= 0 && frame < frameCount_
-            && std::isfinite(amplitude) && std::isfinite(frequencyHz) && frequencyHz > 0.0;
+            && std::isfinite(amplitude) && amplitude >= 0.0
+            && std::isfinite(frequencyHz) && frequencyHz > 0.0;
     }
 
     [[nodiscard]] std::optional<ats::PartialEditCommand> commitCell() noexcept
@@ -166,6 +218,8 @@ public:
         view_.setDraftFrequencyHz(frequencyHz);
     }
 
+    void focusLoss() noexcept { view_.cancelCellEdit(); }
+
 private:
     PartialEditView view_{};
     int partialCount_ = 0;
@@ -182,14 +236,19 @@ public:
     static constexpr std::string_view helpText() noexcept
     { return "MathExpr applies validated expressions to the selected ATS layer."; }
     static constexpr std::string_view starterText() noexcept
-    { return "amp = amp * 0.9\\nfrequency = frequency"; }
+    { return "a=a * 0.9\\nf=f"; }
 
     [[nodiscard]] const std::string& draft() const noexcept { return draft_; }
     [[nodiscard]] MathStatus status() const noexcept { return status_; }
     [[nodiscard]] const std::string& error() const noexcept { return error_; }
 
     void setDraft(std::string draft) { draft_ = std::move(draft); }
-    [[nodiscard]] bool canApply() const noexcept { return !draft_.empty() && status_ != MathStatus::running; }
+    [[nodiscard]] bool canApply() const noexcept
+    {
+        return std::any_of(draft_.begin(), draft_.end(), [](unsigned char character) {
+            return std::isspace(character) == 0;
+        }) && status_ != MathStatus::running;
+    }
 
     [[nodiscard]] std::optional<ApplyMathAction> applyAction() const
     {
@@ -216,6 +275,11 @@ public:
     }
 
     void cancel() noexcept { status_ = MathStatus::cancelled; }
+
+    // Called when the script editor loses focus. The draft is preserved so the
+    // user can return to it; in-flight workers are not interrupted.
+    void focusLoss() noexcept { if (status_ == MathStatus::idle) flashUntil_ = {}; }
+
     [[nodiscard]] bool successFlashActive(std::chrono::steady_clock::time_point now) const noexcept
     { return status_ == MathStatus::success && now < flashUntil_; }
 

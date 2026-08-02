@@ -2,7 +2,9 @@
 
 #include "EditorHost.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <string_view>
 #include <type_traits>
 
@@ -129,6 +131,9 @@ template <typename T>
     else if constexpr (std::is_same_v<T, PartialEditAction>)
     {
         if (action.partial < 0 || action.frame < 0) return { false, "invalid_partial_cell", "partial and frame are required" };
+        if (action.apply && (!std::isfinite(action.amplitude) || action.amplitude < 0.0
+                             || !std::isfinite(action.frequencyHz) || action.frequencyHz <= 0.0))
+            return { false, "invalid_partial_values", "amplitude must be finite and non-negative and frequency must be positive" };
     }
     else if constexpr (std::is_same_v<T, ResidualEditAction>)
     {
@@ -137,7 +142,10 @@ template <typename T>
     }
     else if constexpr (std::is_same_v<T, ApplyMathAction>)
     {
-        if (action.script.empty()) return { false, "empty_math_script", "MathExpr script is required" };
+        if (action.script.empty() || std::all_of(action.script.begin(), action.script.end(), [](unsigned char character) {
+                return std::isspace(character) != 0;
+            }))
+            return { false, "empty_math_script", "MathExpr script is required" };
     }
     else if constexpr (std::is_same_v<T, EditSmearnovOnsetsAction>)
     {
