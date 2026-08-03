@@ -17,10 +17,11 @@ int main()
         BounceMorphTimelineAction { { "b.wav" }, 0 }, SetSpectralViewAction { 0, 0 }, ApplyFactoryPresetAction { 0 },
         SavePresetAction { { "a.atspreset" } }, LoadPresetAction { { "a.atspreset" } }, NoteAction { true, 60, 100 },
         HistoryAction { false }, PartialEditAction { 1, 2, true }, ResidualEditAction { 1, 2, 0.5f },
+        SpectrumEditAction { SpectrumEditCommand::copyResidual, { 1, 2 }, 0, 4, 0.0f },
         ApplyMathAction { "amp *= 0.5;" }, DetectSmearnovAction {}, ApplySmearnovAction {},
         EditSmearnovOnsetsAction { { 0.2f, 0.8f } }, SetTimbreMotionPlanAction { { 0.0f, 1.0f } }
     };
-    assert(actions.size() == 28);
+    assert(actions.size() == 29);
     for (const auto& action : actions)
     {
         const auto contract = actionContract(action);

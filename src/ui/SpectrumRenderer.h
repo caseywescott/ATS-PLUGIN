@@ -20,6 +20,10 @@ enum class SpectrumDrawKind : std::uint8_t
     partialTrace,
     selectedPartial,
     playhead,
+    axis,
+    axisTick,
+    onsetMarker,
+    envelopeTrace,
     axisLabel,
     legend
 };
@@ -55,6 +59,18 @@ public:
                              tokens.spectrumCanvas.argb, 1.0f, -1 });
 
         const auto gridColor = tokens.secondaryText.argb;
+        commands.push_back({ SpectrumDrawKind::axis,
+                             { bounds.x, bounds.y, bounds.width, 1.0f },
+                             gridColor, 0.62f, 0 });
+        commands.push_back({ SpectrumDrawKind::axis,
+                             { bounds.x, bounds.y + bounds.height - 1.0f, bounds.width, 1.0f },
+                             gridColor, 0.62f, 1 });
+        commands.push_back({ SpectrumDrawKind::axis,
+                             { bounds.x, bounds.y, 1.0f, bounds.height },
+                             gridColor, 0.62f, 2 });
+        commands.push_back({ SpectrumDrawKind::axis,
+                             { bounds.x + bounds.width - 1.0f, bounds.y, 1.0f, bounds.height },
+                             gridColor, 0.62f, 3 });
         for (int i = 1; i < 4; ++i)
         {
             const auto x = bounds.x + bounds.width * static_cast<float>(i) / 4.0f;
@@ -66,6 +82,24 @@ public:
             const auto y = bounds.y + bounds.height * static_cast<float>(i) / 3.0f;
             commands.push_back({ SpectrumDrawKind::grid, { bounds.x, y, bounds.width, 1.0f },
                                  gridColor, 0.14f, i });
+        }
+
+        // Stable time ticks make the viewport readable even when the trace is
+        // empty. Frequency ticks use the model's logarithmic bounds and stay
+        // deterministic for screenshot and host-probe comparisons.
+        for (int i = 0; i <= 4; ++i)
+        {
+            const auto x = bounds.x + bounds.width * static_cast<float>(i) / 4.0f;
+            commands.push_back({ SpectrumDrawKind::axisTick,
+                                 { x, bounds.y + bounds.height - 5.0f, 1.0f, 5.0f },
+                                 gridColor, 0.72f, i });
+        }
+        for (int i = 0; i <= 4; ++i)
+        {
+            const auto normalized = static_cast<float>(i) / 4.0f;
+            const auto y = bounds.y + bounds.height * (1.0f - normalized);
+            commands.push_back({ SpectrumDrawKind::axisTick,
+                                 { bounds.x, y, 5.0f, 1.0f }, gridColor, 0.72f, 10 + i });
         }
 
         // Residual energy is a backdrop; partial traces are emitted afterward
@@ -92,14 +126,35 @@ public:
                 const auto& b = trace.points[i];
                 if (!a.active || !b.active)
                     continue;
-                const auto x1 = bounds.x + bounds.width * a.timeNorm;
-                const auto y1 = bounds.y + bounds.height * (1.0f - a.freqNorm);
-                const auto x2 = bounds.x + bounds.width * b.timeNorm;
-                const auto y2 = bounds.y + bounds.height * (1.0f - b.freqNorm);
+                const auto x1 = bounds.x + bounds.width * std::clamp(a.timeNorm, 0.0f, 1.0f);
+                const auto y1 = bounds.y + bounds.height * (1.0f - std::clamp(a.freqNorm, 0.0f, 1.0f));
+                const auto x2 = bounds.x + bounds.width * std::clamp(b.timeNorm, 0.0f, 1.0f);
+                const auto y2 = bounds.y + bounds.height * (1.0f - std::clamp(b.freqNorm, 0.0f, 1.0f));
                 commands.push_back({ kind, { x1, y1, x2 - x1, y2 - y1 },
                                      tokens.accent.argb, selected ? 0.92f : 0.15f + 0.77f * b.ampNorm,
                                      trace.partialIndex });
             }
+        }
+
+        for (std::size_t i = 1; i < snapshot.envelopeNorm.size(); ++i)
+        {
+            const auto x1 = bounds.x + bounds.width * static_cast<float>(i - 1)
+                / static_cast<float>(std::max<std::size_t>(1, snapshot.envelopeNorm.size() - 1));
+            const auto x2 = bounds.x + bounds.width * static_cast<float>(i)
+                / static_cast<float>(std::max<std::size_t>(1, snapshot.envelopeNorm.size() - 1));
+            const auto y1 = bounds.y + bounds.height * (1.0f
+                - std::clamp(snapshot.envelopeNorm[i - 1], 0.0f, 1.0f));
+            const auto y2 = bounds.y + bounds.height * (1.0f
+                - std::clamp(snapshot.envelopeNorm[i], 0.0f, 1.0f));
+            commands.push_back({ SpectrumDrawKind::envelopeTrace, { x1, y1, x2 - x1, y2 - y1 },
+                                 tokens.text.argb, 0.78f, static_cast<int>(i - 1) });
+        }
+
+        for (std::size_t i = 0; i < snapshot.onsetNorms.size(); ++i)
+        {
+            const auto x = bounds.x + bounds.width * std::clamp(snapshot.onsetNorms[i], 0.0f, 1.0f);
+            commands.push_back({ SpectrumDrawKind::onsetMarker, { x, bounds.y, 2.0f, bounds.height },
+                                 tokens.accent.argb, 0.52f, static_cast<int>(i) });
         }
 
         if (options.showPlayhead)

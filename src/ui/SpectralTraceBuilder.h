@@ -44,6 +44,12 @@ struct SpectralResidualBandInput
     std::vector<double> energy;
 };
 
+struct SpectralOnsetInput
+{
+    double normalizedTime = 0.0;
+    double strength = 1.0;
+};
+
 struct SpectralTraceInput
 {
     SpectralTraceSource source = SpectralTraceSource::current;
@@ -54,6 +60,8 @@ struct SpectralTraceInput
     double displayResidualPeak = 0.0;
     std::vector<SpectralPartialInput> partials;
     std::vector<SpectralResidualBandInput> residualBands;
+    std::vector<SpectralOnsetInput> onsets;
+    std::vector<double> envelope;
 };
 
 struct SpectralTraceLimits
@@ -109,6 +117,8 @@ struct SpectralTraceSnapshot
     double residualDisplayReferencePeak = 0.0;
     std::vector<SpectralTrace> partials;
     std::vector<SpectralResidualBandTrace> residualBands;
+    std::vector<float> onsetNorms;
+    std::vector<float> envelopeNorm;
 
     [[nodiscard]] bool hasResidual() const noexcept { return !residualBands.empty(); }
 };
@@ -128,6 +138,14 @@ public:
         output.durationSeconds = finitePositive(input.durationSeconds) ? input.durationSeconds : 0.0;
         output.partialCount = static_cast<std::uint32_t>(input.partials.size());
         output.frameCount = frameCount(input);
+
+        for (const auto& onset : input.onsets)
+            if (std::isfinite(onset.normalizedTime))
+                output.onsetNorms.push_back(clampUnit(onset.normalizedTime));
+        std::sort(output.onsetNorms.begin(), output.onsetNorms.end());
+        output.envelopeNorm.reserve(input.envelope.size());
+        for (const auto value : input.envelope)
+            output.envelopeNorm.push_back(clampUnit(value));
 
         const auto partialsEnabled = mode != SpectralTraceMode::residual
                                   && mode != SpectralTraceMode::isometricResidual;
@@ -166,6 +184,18 @@ public:
             if (candidate.activeFrames > 0)
                 candidates.push_back(candidate);
         }
+
+        // Residual-only views still need meaningful logarithmic axes. Include
+        // valid band extents when partials are absent (or do not define the
+        // visible frequency range for the selected mode).
+        if (residualEnabled)
+            for (const auto& band : input.residualBands)
+            {
+                if (finitePositive(band.lowHz))
+                    minHz = std::min(minHz, band.lowHz);
+                if (finitePositive(band.highHz))
+                    maxHz = std::max(maxHz, band.highHz);
+            }
 
         output.ampDisplayReferencePeak = finitePositive(input.displayAmpPeak)
             ? input.displayAmpPeak : maxAmp;
@@ -218,8 +248,9 @@ public:
 
         if (residualEnabled)
         {
-            const auto columns = std::min(limits.maxResidualColumns,
-                                          std::max<std::size_t>(1, maxResidualFrames(input)));
+            const auto columns = limits.maxResidualColumns == 0 || input.residualBands.empty()
+                ? 0
+                : std::min(limits.maxResidualColumns, std::max<std::size_t>(1, maxResidualFrames(input)));
             const auto reference = std::max(1.0e-20, output.residualDisplayReferencePeak);
             const auto floorDb = 10.0 * std::log10(reference) - 72.0;
             output.residualBands.reserve(input.residualBands.size());
@@ -267,6 +298,7 @@ private:
             result = std::max(result, partial.frames.size());
         for (const auto& band : input.residualBands)
             result = std::max(result, band.energy.size());
+        result = std::max(result, input.envelope.size());
         return result;
     }
 

@@ -10,7 +10,11 @@ int main()
     assert(menu.size() == 7);
     assert(menu[0].checked && menu[0].enabled);
     assert(!menu[2].enabled);
-    assert(menu[6].label == "Isometric envelope RDC");
+    assert(menu[0].label == "Trace + Residual");
+    assert(menu[3].label == "Iso 3D");
+    assert(menu[4].label == "Iso 3D Residual");
+    assert(menu[5].label == "Iso 3D Envelope");
+    assert(menu[6].label == "Iso 3D Env (RDC)");
     assert(model.selectMenuItem(2, true, false).mode == -1);
     const auto select = model.selectMenuItem(4, true, true);
     assert(select.source == 2 && select.mode == static_cast<int>(ats::ui::SpectralTraceMode::isometricResidual));

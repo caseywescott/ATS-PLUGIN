@@ -637,7 +637,8 @@ public:
                 {
                     const auto point = event.relativePosition();
                     const auto frame = spectrumFrameAt(point);
-                    if (shell_.spectrum().mode() == SpectralTraceMode::residual)
+                    if (shell_.spectrum().mode() == SpectralTraceMode::residual ||
+                        shell_.spectrum().mode() == SpectralTraceMode::isometricResidual)
                     {
                         const auto band = spectrumBandAt(point);
                         shell_.spectrum().selectBand(band);
@@ -739,6 +740,14 @@ public:
         redraw();
     }
 
+    void setSpectrumSnapshot(SpectralTraceSnapshot snapshot)
+    {
+        spectrumSnapshot_ = std::move(snapshot);
+        shell_.spectrum().setSource(spectrumSnapshot_.source);
+        shell_.spectrum().setMode(spectrumSnapshot_.mode);
+        redraw();
+    }
+
     void draw(visage::Canvas& canvas) override
     {
         const auto tokens = visageTokens();
@@ -832,7 +841,11 @@ public:
             {
                 if (command.kind == SpectrumDrawKind::background ||
                     command.kind == SpectrumDrawKind::grid ||
+                    command.kind == SpectrumDrawKind::axis ||
+                    command.kind == SpectrumDrawKind::axisTick ||
                     command.kind == SpectrumDrawKind::residualBand ||
+                    command.kind == SpectrumDrawKind::onsetMarker ||
+                    command.kind == SpectrumDrawKind::envelopeTrace ||
                     command.kind == SpectrumDrawKind::playhead)
                 {
                     canvas.setColor(command.color);
@@ -1017,6 +1030,30 @@ public:
     }
 
     bool receivesTextInput() override { return true; }
+
+    bool keyPress(const visage::KeyEvent& event) override
+    {
+        if (!event.key_down || shell_.state().page != EditorPage::session)
+            return false;
+        int key = static_cast<int>(event.keyCode());
+        if (event.keyCode() == visage::KeyCode::Delete)
+            key = SpectrumInteractionModel::kKeyDelete;
+        else if (event.keyCode() == visage::KeyCode::Backspace)
+            key = SpectrumInteractionModel::kKeyBackspace;
+        else if (event.keyCode() == visage::KeyCode::Escape)
+            key = SpectrumInteractionModel::kKeyEscape;
+        else if (event.keyCode() == visage::KeyCode::Home)
+            key = SpectrumInteractionModel::kKeyHome;
+        else if (event.keyCode() == visage::KeyCode::Return)
+            key = SpectrumInteractionModel::kKeyReturn;
+        const auto action = shell_.spectrum().handleKey(key, event.isShiftDown(),
+                                                        event.isMainModifier());
+        if (action)
+            emitAction(*action);
+        redraw();
+        return action.has_value() || key == SpectrumInteractionModel::kKeyEscape
+            || key == SpectrumInteractionModel::kKeyFit || key == SpectrumInteractionModel::kKeyHome;
+    }
 
     void textInput(const std::string& text) override
     {
@@ -1537,7 +1574,7 @@ private:
         for (const auto& item : items)
             if (item.mode == mode)
                 return item.label.data();
-        return "Combined";
+        return "Trace + Residual";
     }
 
     void emitParameterGesture(std::size_t control, float normalized, bool begin, bool end)
@@ -1684,6 +1721,11 @@ void VisageEditor::setActivity(bool analysisRunning, bool renderRunning)
 void VisageEditor::setTelemetry(TelemetrySnapshot snapshot)
 {
     impl_->frame.setTelemetry(std::move(snapshot));
+}
+
+void VisageEditor::setSpectrumSnapshot(SpectralTraceSnapshot snapshot)
+{
+    impl_->frame.setSpectrumSnapshot(std::move(snapshot));
 }
 
 void VisageEditor::getSize(std::uint32_t& width, std::uint32_t& height) const

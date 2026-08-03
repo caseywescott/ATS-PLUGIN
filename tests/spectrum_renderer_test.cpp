@@ -12,6 +12,8 @@ int main()
     trace.points = { { 0, 0.0f, 0.2f, 0.4f, 220.0, 220.0, 0.2, true },
                      { 1, 1.0f, 0.8f, 0.9f, 440.0, 440.0, 0.8, true } };
     snapshot.partials.push_back(trace);
+    snapshot.onsetNorms = { 0.25f, 0.75f };
+    snapshot.envelopeNorm = { 0.1f, 0.8f, 0.4f };
 
     const ats::ui::UiRect bounds { 10.0f, 20.0f, 400.0f, 200.0f };
     auto ember = ats::ui::SpectrumRenderer::render(snapshot, bounds,
@@ -26,14 +28,20 @@ int main()
     std::size_t traceIndex = ember.size();
     bool hasPlayhead = false;
     bool hasSelected = false;
+    bool hasAxes = false;
+    bool hasOnsets = false;
+    bool hasEnvelope = false;
     for (std::size_t i = 0; i < ember.size(); ++i)
     {
         if (ember[i].kind == ats::ui::SpectrumDrawKind::residualBand && residualIndex == ember.size()) residualIndex = i;
         if (ember[i].kind == ats::ui::SpectrumDrawKind::selectedPartial && traceIndex == ember.size()) traceIndex = i;
         if (ember[i].kind == ats::ui::SpectrumDrawKind::playhead) hasPlayhead = true;
         if (ember[i].kind == ats::ui::SpectrumDrawKind::selectedPartial) hasSelected = true;
+        if (ember[i].kind == ats::ui::SpectrumDrawKind::axisTick) hasAxes = true;
+        if (ember[i].kind == ats::ui::SpectrumDrawKind::onsetMarker) hasOnsets = true;
+        if (ember[i].kind == ats::ui::SpectrumDrawKind::envelopeTrace) hasEnvelope = true;
     }
-    assert(residualIndex < traceIndex && hasPlayhead && hasSelected);
+    assert(residualIndex < traceIndex && hasPlayhead && hasSelected && hasAxes && hasOnsets && hasEnvelope);
     assert(ember.back().kind == ats::ui::SpectrumDrawKind::legend);
     return 0;
 }

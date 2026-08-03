@@ -56,6 +56,7 @@ template <typename T>
     if constexpr (std::is_same_v<T, HistoryAction>) return { "History", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, PartialEditAction>) return { "PartialEdit", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, ResidualEditAction>) return { "ResidualEdit", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
+    if constexpr (std::is_same_v<T, SpectrumEditAction>) return { "SpectrumEdit", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, ApplyMathAction>) return { "ApplyMathExpr", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, DetectSmearnovAction>) return { "DetectSmearnov", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, ApplySmearnovAction>) return { "ApplySmearnov", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
@@ -139,6 +140,17 @@ template <typename T>
     {
         if (action.band < 0 || action.frame < 0 || !std::isfinite(action.value))
             return { false, "invalid_residual_edit", "residual band, frame, and value are required" };
+    }
+    else if constexpr (std::is_same_v<T, SpectrumEditAction>)
+    {
+        if (action.bands.empty() || action.firstFrame < 0 || action.lastFrame < action.firstFrame)
+            return { false, "invalid_spectrum_edit", "spectrum edit requires bands and an ordered frame range" };
+        if (action.bands.size() > 220)
+            return { false, "too_many_spectrum_bands", "spectrum edit exceeds the residual band limit" };
+        for (const auto band : action.bands)
+            if (band < 0) return { false, "invalid_spectrum_band", "spectrum band must be non-negative" };
+        if (!std::isfinite(action.value))
+            return { false, "invalid_spectrum_value", "spectrum edit value must be finite" };
     }
     else if constexpr (std::is_same_v<T, ApplyMathAction>)
     {

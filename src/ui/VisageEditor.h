@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor.h"
+#include "SpectralTraceBuilder.h"
 #include "ThemeTokens.h"
 
 #include <memory>
@@ -32,6 +33,7 @@ public:
     void setHistoryAvailability(bool canUndo, bool canRedo);
     void setActivity(bool analysisRunning, bool renderRunning);
     void setTelemetry(TelemetrySnapshot snapshot);
+    void setSpectrumSnapshot(SpectralTraceSnapshot snapshot);
 
 private:
     struct Impl;

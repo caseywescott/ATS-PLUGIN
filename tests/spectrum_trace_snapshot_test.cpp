@@ -26,6 +26,8 @@ int main()
     band.highHz = 350.0;
     band.energy = { 0.01, 0.02, 0.03, 0.04, 0.05 };
     input.residualBands.push_back(band);
+    input.onsets = { { 0.75, 1.0 }, { 0.25, 0.8 } };
+    input.envelope = { 0.1, 0.9, 0.4 };
 
     const ats::ui::SpectralTraceLimits limits { 2, 4, 3 };
     const auto snapshot = ats::ui::SpectralTraceBuilder::build(input,
@@ -37,6 +39,8 @@ int main()
     assert(snapshot.partials[0].points.front().active);
     assert(snapshot.residualBands.size() == 1);
     assert(snapshot.residualBands[0].energyNorm.size() == 3);
+    assert(snapshot.onsetNorms.size() == 2 && snapshot.onsetNorms[0] == 0.25f);
+    assert(snapshot.envelopeNorm.size() == 3 && snapshot.envelopeNorm[1] == 0.9f);
     for (const auto& trace : snapshot.partials)
         for (const auto& point : trace.points)
             assert(std::isfinite(point.freqNorm) && std::isfinite(point.ampNorm));
@@ -44,6 +48,13 @@ int main()
     const auto residualOnly = ats::ui::SpectralTraceBuilder::build(
         input, ats::ui::SpectralTraceMode::residual, limits);
     assert(residualOnly.partials.empty() && residualOnly.hasResidual());
+
+    ats::ui::SpectralTraceInput residualInput;
+    residualInput.residualBands.push_back({ 0, 800.0, 1200.0, { 1.0, 0.5 } });
+    const auto residualBounds = ats::ui::SpectralTraceBuilder::build(
+        residualInput, ats::ui::SpectralTraceMode::residual);
+    assert(residualBounds.minFrequencyHz < 800.0);
+    assert(residualBounds.maxFrequencyHz > 1200.0);
 
     ats::ui::SpectrumViewModel view;
     assert(view.accept(snapshot));

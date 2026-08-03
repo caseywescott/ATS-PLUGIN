@@ -44,6 +44,23 @@ struct PartialEditAction
     double frequencyHz = 1.0;
 };
 struct ResidualEditAction { std::int32_t band = -1; std::int32_t frame = -1; float value = 0.0f; };
+enum class SpectrumEditCommand : std::uint8_t
+{
+    copyResidual,
+    pasteResidual,
+    swapResidual,
+    smoothResidual,
+    tiltResidual,
+    redistResidual
+};
+struct SpectrumEditAction
+{
+    SpectrumEditCommand command = SpectrumEditCommand::copyResidual;
+    std::vector<int> bands;
+    std::int32_t firstFrame = 0;
+    std::int32_t lastFrame = 0;
+    float value = 0.0f;
+};
 struct ApplyMathAction { std::string script; };
 struct DetectSmearnovAction {};
 struct ApplySmearnovAction {};
@@ -73,6 +90,7 @@ using EditorAction = std::variant<SetParameterAction,
                                   HistoryAction,
                                   PartialEditAction,
                                   ResidualEditAction,
+                                  SpectrumEditAction,
                                   ApplyMathAction,
                                   DetectSmearnovAction,
                                   ApplySmearnovAction,
