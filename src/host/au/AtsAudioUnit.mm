@@ -524,69 +524,18 @@ private:
 
     void handleEditorAction(const ats::ui::EditorAction& action) override
     {
-        ats::Error sessionError;
-        if (host_.applySessionAction(action, sessionError))
-            return;
-        ats::Error analysisError;
-        if (host_.applyAnalysisAction(action, analysisError))
-            return;
-        if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
+        ats::Error error;
+        if (host_.applyEditorAction(action, error))
         {
-            (void) ats::state::applyFactoryPreset(factory->index, host_.parameters());
+            if (const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action))
+            {
+                const auto* descriptor = ats::ParameterRegistry::find(parameter->id);
+                if (descriptor != nullptr && descriptor->automatable && !descriptor->readOnly)
+                    (void) SetParameter(descriptor->hostNumericId, kAudioUnitScope_Global, 0,
+                                         parameter->value, 0);
+            }
             return;
         }
-        ats::platform::FileService files;
-        if (const auto* save = std::get_if<ats::ui::SavePresetAction>(&action))
-        {
-            (void) files.writeAtomic(save->path, ats::state::ParameterPresetCodec::encode(host_.parameters()), true);
-            return;
-        }
-        if (const auto* load = std::get_if<ats::ui::LoadPresetAction>(&action))
-        {
-            const auto payload = files.read(load->path);
-            std::string error;
-            if (payload.succeeded())
-                (void) ats::state::ParameterPresetCodec::decode(payload.bytes, host_.parameters(), error);
-            return;
-        }
-        ats::Error importError;
-        if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
-        {
-            (void) host_.importSource(wav->path, wav->slot,
-                                      ats::engine::SourceImportKind::audio, importError);
-            return;
-        }
-        if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(&action))
-        {
-            (void) host_.importSource(ats->path, ats->slot,
-                                      ats::engine::SourceImportKind::ats, importError);
-            return;
-        }
-        if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(&action))
-        {
-            ats::Error error;
-            (void) host_.queueAnalysisSource(analyse->slot, error);
-            return;
-        }
-        if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(action))
-        {
-            ats::Error error;
-            (void) host_.queueAnalysisSource(0, error);
-            return;
-        }
-        if (std::holds_alternative<ats::ui::CancelJobsAction>(action))
-        {
-            host_.cancelAnalysis();
-            return;
-        }
-        const auto* parameter = std::get_if<ats::ui::SetParameterAction>(&action);
-        if (parameter == nullptr)
-            return;
-        const auto* descriptor = ats::ParameterRegistry::find(parameter->id);
-        if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
-            return;
-        (void) SetParameter(descriptor->hostNumericId, kAudioUnitScope_Global, 0,
-                            parameter->value, 0);
     }
 
     void pumpEditorWork() override

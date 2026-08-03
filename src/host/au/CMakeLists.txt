@@ -10,7 +10,7 @@ target_include_directories(ats_resynth_au PRIVATE
   "${CMAKE_SOURCE_DIR}/src/host"
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_au PRIVATE
-  ats_audio_unit_sdk ats_host_au ats_file_service ats_visage_editor visage
+  ats_audio_unit_sdk ats_host_au ats_file_service ats_preset_service ats_visage_editor visage
   "-framework Cocoa" "-framework AudioToolbox" "-framework AudioUnit")
 set_target_properties(ats_resynth_au PROPERTIES
   OUTPUT_NAME "ATS Resynth"

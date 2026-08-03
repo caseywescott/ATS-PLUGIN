@@ -20,66 +20,8 @@ void forwardEditorAction(void* context, const ats::ui::EditorAction* action)
     auto* host = static_cast<ats::host::HostAdapter*>(context);
     if (host == nullptr || action == nullptr)
         return;
-    ats::Error sessionError;
-    if (host->applySessionAction(*action, sessionError))
-        return;
-    ats::Error analysisError;
-    if (host->applyAnalysisAction(*action, analysisError))
-        return;
-    if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(action))
-    {
-        (void) ats::state::applyFactoryPreset(factory->index, host->parameters());
-        return;
-    }
-    ats::platform::FileService files;
-    if (const auto* save = std::get_if<ats::ui::SavePresetAction>(action))
-    {
-        (void) files.writeAtomic(save->path, ats::state::ParameterPresetCodec::encode(host->parameters()), true);
-        return;
-    }
-    if (const auto* load = std::get_if<ats::ui::LoadPresetAction>(action))
-    {
-        const auto payload = files.read(load->path);
-        std::string error;
-        if (payload.succeeded())
-            (void) ats::state::ParameterPresetCodec::decode(payload.bytes, host->parameters(), error);
-        return;
-    }
-    ats::Error importError;
-    if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(action))
-    {
-        (void) host->importSource(wav->path, wav->slot, ats::engine::SourceImportKind::audio, importError);
-        return;
-    }
-    if (const auto* ats = std::get_if<ats::ui::ImportAtsAction>(action))
-    {
-        (void) host->importSource(ats->path, ats->slot, ats::engine::SourceImportKind::ats, importError);
-        return;
-    }
-    if (const auto* analyse = std::get_if<ats::ui::AnalyzeMorphSourceAction>(action))
-    {
-        ats::Error error;
-        (void) host->queueAnalysisSource(analyse->slot, error);
-        return;
-    }
-    if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(*action))
-    {
-        ats::Error error;
-        (void) host->queueAnalysisSource(0, error);
-        return;
-    }
-    if (std::holds_alternative<ats::ui::CancelJobsAction>(*action))
-    {
-        host->cancelAnalysis();
-        return;
-    }
-    const auto* parameter = std::get_if<ats::ui::SetParameterAction>(action);
-    if (parameter == nullptr)
-        return;
-    const auto* descriptor = ats::ParameterRegistry::find(parameter->id);
-    if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
-        return;
-    (void) host->applyParameterChange({ descriptor->denseIndex, parameter->value });
+    ats::Error error;
+    (void) host->applyEditorAction(*action, error);
 }
 
 void drainEvents(NSApplication* application, double seconds)

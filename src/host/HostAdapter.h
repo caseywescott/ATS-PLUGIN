@@ -5,8 +5,13 @@
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
+#include "../core/UndoHistory.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
+#include "../state/FactoryPresetState.h"
+#include "../state/ParameterPresetCodec.h"
+#include "../state/PresetService.h"
+#include "../platform/FileService.h"
 #include "../ui/Editor.h"
 
 #include <algorithm>
@@ -14,6 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <chrono>
+#include <filesystem>
 #include <future>
 #include <limits>
 #include <optional>
@@ -441,6 +447,7 @@ public:
             if (!renderSourceForPreview(preview->source, error))
                 return true;
             previewFrame_.store(0, std::memory_order_release);
+            normalizedPlayhead_.store(0.0f, std::memory_order_release);
             previewPlaying_.store(true, std::memory_order_release);
             return true;
         }
@@ -459,9 +466,11 @@ public:
                 return true;
             }
             normalizedPlayhead_.store(seek->normalizedTime, std::memory_order_release);
-            previewFrame_.store(static_cast<std::uint64_t>(seek->normalizedTime *
-                                static_cast<float>(std::numeric_limits<std::uint32_t>::max())),
-                                std::memory_order_release);
+            const auto length = previewLengthFrames_.load(std::memory_order_acquire);
+            const auto target = length == 0
+                ? 0
+                : static_cast<std::uint64_t>(seek->normalizedTime * static_cast<float>(length - 1));
+            previewFrame_.store(target, std::memory_order_release);
             return true;
         }
         if (const auto* smear = std::get_if<ui::SetPreviewSmearAction>(&action))
@@ -536,6 +545,226 @@ public:
             return true;
         }
         return false;
+    }
+
+    void setPresetService(state::PresetService* service) noexcept { presetService_ = service; }
+    [[nodiscard]] UndoHistory& history() noexcept { return history_; }
+    [[nodiscard]] int spectralViewSource() const noexcept { return spectralViewSource_; }
+    [[nodiscard]] int spectralViewMode() const noexcept { return spectralViewMode_; }
+
+    // Unified dispatch entry point for all EditorAction types. Delegates to
+    // applySessionAction / applyAnalysisAction, then handles the remaining
+    // host-domain actions inline. Returns false only for wrapper-specific
+    // actions (import, export) that have no shared host boundary contract.
+    bool applyEditorAction(const ui::EditorAction& action, Error& error)
+    {
+        if (applySessionAction(action, error))
+            return true;
+        if (applyAnalysisAction(action, error))
+            return true;
+        error = {};
+
+        if (const auto* param = std::get_if<ui::SetParameterAction>(&action))
+        {
+            const auto* descriptor = ParameterRegistry::find(param->id);
+            if (descriptor == nullptr || !descriptor->automatable || descriptor->readOnly)
+            {
+                error = { "invalid_parameter", "parameter id is unknown or not automatable" };
+                return true;
+            }
+            (void) parameters_.write(param->id, param->value);
+            return true;
+        }
+        if (const auto* factory = std::get_if<ui::ApplyFactoryPresetAction>(&action))
+        {
+            if (!state::applyFactoryPreset(factory->index, parameters_))
+                error = { "invalid_factory_preset", "factory preset index must be 0..11" };
+            return true;
+        }
+        if (const auto* note = std::get_if<ui::NoteAction>(&action))
+        {
+            MidiEvent event;
+            event.type = note->on ? MidiEvent::Type::noteOn : MidiEvent::Type::noteOff;
+            event.note = note->note;
+            event.velocity = note->velocity;
+            midi_.consume(event);
+            return true;
+        }
+        if (const auto* spectral = std::get_if<ui::SetSpectralViewAction>(&action))
+        {
+            spectralViewSource_ = spectral->source;
+            spectralViewMode_ = spectral->mode;
+            return true;
+        }
+        if (const auto* hist = std::get_if<ui::HistoryAction>(&action))
+        {
+            auto snapshot = hist->redo ? history_.redo(stateChunk_) : history_.undo(stateChunk_);
+            if (!snapshot)
+            {
+                error = { hist->redo ? "nothing_to_redo" : "nothing_to_undo",
+                          hist->redo ? "redo history is empty" : "undo history is empty" };
+                return true;
+            }
+            stateChunk_ = std::move(*snapshot);
+            return true;
+        }
+        if (const auto* save = std::get_if<ui::SavePresetAction>(&action))
+        {
+            const auto payload = state::ParameterPresetCodec::encode(parameters_);
+            if (presetService_ != nullptr)
+            {
+                const auto stem = std::filesystem::u8path(save->path.utf8).stem().u8string();
+                const auto result = presetService_->save(stem, payload, true, nullptr);
+                if (!result.succeeded()) error = result.error;
+            }
+            else
+            {
+                const auto result = platform::FileService {}.writeAtomic(save->path, payload, true);
+                if (!result.succeeded()) error = result.error;
+            }
+            return true;
+        }
+        if (const auto* load = std::get_if<ui::LoadPresetAction>(&action))
+        {
+            const auto result = presetService_ != nullptr
+                ? presetService_->load(load->path, nullptr)
+                : platform::FileService {}.read(load->path);
+            if (!result.succeeded())
+            {
+                error = result.error;
+                return true;
+            }
+            std::string decodeError;
+            if (!state::ParameterPresetCodec::decode(result.bytes, parameters_, decodeError))
+                error = { "preset_decode_failed", decodeError };
+            return true;
+        }
+        if (const auto* partial = std::get_if<ui::PartialEditAction>(&action))
+        {
+            if (partial->partial < 0)
+            {
+                error = { "invalid_partial", "partial index must be non-negative" };
+                return true;
+            }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+                !sources_[static_cast<std::size_t>(slot)] ||
+                !sources_[static_cast<std::size_t>(slot)]->sound)
+            {
+                error = { "no_model", "analyse a source before editing partials" };
+            }
+            return true;
+        }
+        if (const auto* residual = std::get_if<ui::ResidualEditAction>(&action))
+        {
+            if (residual->band < 0 || residual->frame < 0 || !std::isfinite(residual->value))
+            {
+                error = { "invalid_residual_edit", "residual band, frame, and value are required" };
+                return true;
+            }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+                !sources_[static_cast<std::size_t>(slot)] ||
+                !sources_[static_cast<std::size_t>(slot)]->sound)
+            {
+                error = { "no_model", "analyse a source before editing residual" };
+            }
+            return true;
+        }
+        if (const auto* math = std::get_if<ui::ApplyMathAction>(&action))
+        {
+            if (math->script.empty())
+            {
+                error = { "empty_script", "math script must not be empty" };
+                return true;
+            }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+                !sources_[static_cast<std::size_t>(slot)] ||
+                !sources_[static_cast<std::size_t>(slot)]->sound)
+            {
+                error = { "no_model", "analyse a source before applying math" };
+            }
+            return true;
+        }
+        if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
+        {
+            if (spectrum->bands.empty() || spectrum->firstFrame < 0 ||
+                spectrum->lastFrame < spectrum->firstFrame || !std::isfinite(spectrum->value))
+            {
+                error = { "invalid_spectrum_edit", "spectrum edit selection is invalid" };
+                return true;
+            }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+                !sources_[static_cast<std::size_t>(slot)] ||
+                !sources_[static_cast<std::size_t>(slot)]->sound)
+                error = { "no_model", "analyse a source before editing the spectrum" };
+            return true;
+        }
+        if (const auto* bounce = std::get_if<ui::BounceMorphTimelineAction>(&action))
+        {
+            if (bounce->path.utf8.empty())
+            {
+                error = { "empty_bounce_path", "bounce export path must not be empty" };
+                return true;
+            }
+            if (bounce->layer < 0 || bounce->layer > 3)
+            {
+                error = { "invalid_bounce_layer", "bounce layer must be 0..3" };
+                return true;
+            }
+            return true;
+        }
+        if (const auto* wav = std::get_if<ui::ImportWavAction>(&action))
+        {
+            (void) importSource(wav->path, wav->slot, engine::SourceImportKind::audio, error);
+            return true;
+        }
+        if (const auto* ats = std::get_if<ui::ImportAtsAction>(&action))
+        {
+            (void) importSource(ats->path, ats->slot, engine::SourceImportKind::ats, error);
+            return true;
+        }
+        if (const auto* exportAction = std::get_if<ui::ExportAtsAction>(&action))
+        {
+            (void) exportSource(exportAction->path, exportAction->source, error);
+            return true;
+        }
+        return false;
+    }
+
+    bool exportSource(const Path& path, int slot, Error& error)
+    {
+        error = {};
+        if (path.empty())
+        {
+            error = { "missing_path", "an ATS export path is required" };
+            return false;
+        }
+        if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+            !sources_[static_cast<std::size_t>(slot)] ||
+            !sources_[static_cast<std::size_t>(slot)]->sound)
+        {
+            error = { "missing_model", "analyse a source before exporting ATS" };
+            return false;
+        }
+        AtsSoundPtr snapshot { copy_sound(sources_[static_cast<std::size_t>(slot)]->sound.get()) };
+        if (!snapshot)
+        {
+            error = { "copy_failed", "could not snapshot the ATS model for export" };
+            return false;
+        }
+        const auto type = sources_[static_cast<std::size_t>(slot)]->atsType >= 1 &&
+                                  sources_[static_cast<std::size_t>(slot)]->atsType <= 4
+                              ? sources_[static_cast<std::size_t>(slot)]->atsType
+                              : std::clamp(static_cast<int>(parameters_.read("analysisType")) + 1, 1, 4);
+        if (ats_save(snapshot.get(), path.utf8.c_str(), 0.0, type) < 0)
+        {
+            error = { "ats_save_failed", "could not write the ATS model" };
+            return false;
+        }
+        return true;
     }
 
     [[nodiscard]] const std::vector<ParameterDescriptor>& parameterDescriptors() const noexcept
@@ -629,6 +858,7 @@ public:
         explicitPreview_.store(false, std::memory_order_release);
         normalizedPlayhead_.store(0.0f, std::memory_order_release);
         previewFrame_.store(0, std::memory_order_release);
+        previewLengthFrames_.store(0, std::memory_order_release);
         liveSmearEnabled_.store(false, std::memory_order_release);
         smearedSourceAvailable_.store(false, std::memory_order_release);
         timeline_ = { 0.0f, 1.0f };
@@ -639,6 +869,9 @@ public:
         timelineRevision_ = 0;
         timbreRevision_ = 0;
         onsetRevision_ = 0;
+        spectralViewSource_ = 0;
+        spectralViewMode_ = 0;
+        history_.clear();
         format_ = format;
         state_ = HostState::cold;
         telemetry_.publish({});
@@ -667,6 +900,7 @@ public:
         cancelSmearnov();
         previewPlaying_.store(false, std::memory_order_release);
         explicitPreview_.store(false, std::memory_order_release);
+        previewLengthFrames_.store(0, std::memory_order_release);
         detachEditor();
         state_ = HostState::released;
         midi_.reset();
@@ -810,18 +1044,29 @@ public:
             const auto frames = std::min(output.frameCount, source->frameCount());
             const auto channels = std::min(output.channelCount, source->channelCount());
             const auto sourceFrames = source->frameCount();
-            const auto startFrame = explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0
-                ? previewFrame_.load(std::memory_order_relaxed) % sourceFrames : 0;
+            const auto timelineFrames = previewLengthFrames_.load(std::memory_order_relaxed);
+            const auto timelineStart = explicitPreview_.load(std::memory_order_relaxed) &&
+                                               timelineFrames > 0
+                ? previewFrame_.load(std::memory_order_relaxed) % timelineFrames : 0;
             for (std::uint32_t frame = 0; frame < frames; ++frame)
             {
                 const auto gain = outputTrim_.process();
-                const auto readFrame = sourceFrames == 0 ? 0 : (startFrame + frame) % sourceFrames;
+                const auto readFrame = sourceFrames == 0 ? 0 : (timelineStart + frame) % sourceFrames;
                 for (std::uint32_t channel = 0; channel < channels; ++channel)
                     if (output.channels[channel] != nullptr && source->channel(channel) != nullptr)
                         output.channels[channel][frame] = source->channel(channel)[readFrame] * gain;
             }
             if (explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0)
-                previewFrame_.fetch_add(frames, std::memory_order_release);
+            {
+                const auto nextFrame = timelineFrames == 0
+                    ? 0 : (timelineStart + frames) % timelineFrames;
+                previewFrame_.store(nextFrame, std::memory_order_release);
+                normalizedPlayhead_.store(timelineFrames == 0
+                                               ? 0.0f
+                                               : static_cast<float>(nextFrame) /
+                                                     static_cast<float>(timelineFrames),
+                                           std::memory_order_release);
+            }
         }
         for (std::uint32_t channel = 0; channel < output.channelCount; ++channel)
             if (output.channels[channel] != nullptr)
@@ -1064,7 +1309,8 @@ private:
         }
         const auto generation = sourceGenerations_.next();
         const auto rendered = AtsEngine::render(generation, sourceCancellation_.token(),
-                                                sources_[static_cast<std::size_t>(slot)]->sound.get(), {},
+                                                sources_[static_cast<std::size_t>(slot)]->sound.get(),
+                                                previewSynthParameters(previewLayer_.load(std::memory_order_acquire)),
                                                 playback_.writeView(playbackSlot));
         if (rendered.status != JobResult<RenderStats>::Status::success ||
             !playback_.publish(playbackSlot, generation))
@@ -1073,7 +1319,23 @@ private:
                                    : Error { "playback_publish_failed", "could not publish preview audio" };
             return false;
         }
+        const auto durationFrames = std::max<std::uint64_t>(
+            1, static_cast<std::uint64_t>(std::llround(
+                sources_[static_cast<std::size_t>(slot)]->sound.get()->dur * spec_.sampleRate)));
+        previewLengthFrames_.store(static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                                             durationFrames, std::numeric_limits<std::uint32_t>::max())),
+                                   std::memory_order_release);
         return true;
+    }
+
+    [[nodiscard]] SynthParams previewSynthParameters(int layer) const noexcept
+    {
+        SynthParams parameters;
+        parameters.partialsGain = parameters_.read("partGain");
+        parameters.residualGain = parameters_.read("resGain");
+        if (layer == 1) parameters.residualGain = 0.0;
+        if (layer == 2) parameters.partialsGain = 0.0;
+        return parameters;
     }
 
     HostIdentity identity_ = HostIdentity::current();
@@ -1081,6 +1343,10 @@ private:
     HostPrepareSpec spec_{};
     HostState state_ = HostState::cold;
     ParameterStore parameters_;
+    state::PresetService* presetService_ = nullptr;
+    UndoHistory history_;
+    int spectralViewSource_ = 0;
+    int spectralViewMode_ = 0;
     std::array<std::optional<engine::ImportedSource>, 2> sources_;
     GenerationSource sourceGenerations_;
     CancellationSource sourceCancellation_;
@@ -1112,6 +1378,7 @@ private:
     std::atomic<float> normalizedPlayhead_ { 0.0f };
     std::atomic<bool> liveSmearEnabled_ { false };
     std::atomic<std::uint64_t> previewFrame_ { 0 };
+    std::atomic<std::uint32_t> previewLengthFrames_ { 0 };
     std::atomic<bool> smearedSourceAvailable_ { false };
     std::vector<float> timeline_ { 0.0f, 1.0f };
     std::vector<float> timbrePlan_;

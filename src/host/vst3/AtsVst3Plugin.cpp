@@ -55,6 +55,18 @@ constexpr const char* kSessionDetectSmearnovMessage = "ats.editor.session-detect
 constexpr const char* kSessionApplySmearnovMessage = "ats.editor.session-apply-smearnov";
 constexpr const char* kSessionOnsetsMessage = "ats.editor.session-onsets";
 constexpr const char* kSessionTimbreMessage = "ats.editor.session-timbre";
+constexpr const char* kExportSourceMessage = "ats.editor.export-source";
+constexpr const char* kFactoryPresetMessage = "ats.editor.factory-preset";
+constexpr const char* kSavePresetMessage = "ats.editor.save-preset";
+constexpr const char* kLoadPresetMessage = "ats.editor.load-preset";
+constexpr const char* kHistoryMessage = "ats.editor.history";
+constexpr const char* kSpectralViewMessage = "ats.editor.spectral-view";
+constexpr const char* kNoteMessage = "ats.editor.note";
+constexpr const char* kPartialEditMessage = "ats.editor.partial-edit";
+constexpr const char* kResidualEditMessage = "ats.editor.residual-edit";
+constexpr const char* kSpectrumEditMessage = "ats.editor.spectrum-edit";
+constexpr const char* kMathMessage = "ats.editor.math";
+constexpr const char* kBounceTimelineMessage = "ats.editor.bounce-timeline";
 constexpr const char* kSourceSlotAttribute = "slot";
 constexpr const char* kSourceKindAttribute = "kind";
 constexpr const char* kSourcePathAttribute = "path";
@@ -65,6 +77,22 @@ constexpr const char* kSessionValuesAttribute = "values";
 constexpr const char* kAnalysisProfileAttribute = "profile";
 constexpr const char* kAnalysisRunningAttribute = "running";
 constexpr const char* kAnalysisProgressAttribute = "progressMilli";
+constexpr const char* kRedoAttribute = "redo";
+constexpr const char* kNoteOnAttribute = "on";
+constexpr const char* kNoteAttribute = "note";
+constexpr const char* kVelocityAttribute = "velocity";
+constexpr const char* kPartialAttribute = "partial";
+constexpr const char* kFrameAttribute = "frame";
+constexpr const char* kApplyAttribute = "apply";
+constexpr const char* kAmplitudeAttribute = "amplitude";
+constexpr const char* kFrequencyAttribute = "frequencyHz";
+constexpr const char* kBandAttribute = "band";
+constexpr const char* kCommandAttribute = "command";
+constexpr const char* kFirstFrameAttribute = "firstFrame";
+constexpr const char* kLastFrameAttribute = "lastFrame";
+constexpr const char* kValueAttribute = "value";
+constexpr const char* kPathAttribute = "path";
+constexpr const char* kSourceAttribute = "source";
 
 std::vector<std::byte> readStream(Steinberg::IBStream* stream)
 {
@@ -103,6 +131,34 @@ bool readFloatVector(Steinberg::Vst::IAttributeList* attributes, const char* key
         return false;
     const auto count = static_cast<std::size_t>(size / sizeof(float));
     if (count > 4096)
+        return false;
+    values.resize(count);
+    std::memcpy(values.data(), bytes, size);
+    return true;
+}
+
+bool readString(Steinberg::Vst::IAttributeList* attributes, const char* key,
+                std::string& value)
+{
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr || attributes->getBinary(key, bytes, size) != Steinberg::kResultTrue ||
+        bytes == nullptr || size == 0)
+        return false;
+    value.assign(static_cast<const char*>(bytes), size);
+    return true;
+}
+
+bool readIntVector(Steinberg::Vst::IAttributeList* attributes, const char* key,
+                   std::vector<int>& values)
+{
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr || attributes->getBinary(key, bytes, size) != Steinberg::kResultTrue ||
+        bytes == nullptr || size == 0 || size % sizeof(std::int32_t) != 0)
+        return false;
+    const auto count = static_cast<std::size_t>(size / sizeof(std::int32_t));
+    if (count > 220)
         return false;
     values.resize(count);
     std::memcpy(values.data(), bytes, size);
@@ -387,6 +443,143 @@ public:
                 ? ats::ui::EditorAction { ats::ui::DetectSmearnovAction {} }
                 : ats::ui::EditorAction { ats::ui::ApplySmearnovAction {} };
             return host_.applySessionAction(action, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kExportSourceMessage))
+        {
+            Steinberg::int64 source = -1;
+            std::string path;
+            if (attributes->getInt(kSourceAttribute, source) != Steinberg::kResultTrue ||
+                !readString(attributes, kPathAttribute, path))
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::ExportAtsAction { ats::Path { path }, static_cast<int>(source) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kFactoryPresetMessage))
+        {
+            Steinberg::int64 index = -1;
+            if (attributes->getInt(kSourceAttribute, index) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::ApplyFactoryPresetAction { static_cast<std::int32_t>(index) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSavePresetMessage) ||
+            Steinberg::FIDStringsEqual(messageId, kLoadPresetMessage))
+        {
+            std::string path;
+            if (!readString(attributes, kPathAttribute, path))
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            const ats::ui::EditorAction action = Steinberg::FIDStringsEqual(messageId, kSavePresetMessage)
+                ? ats::ui::EditorAction { ats::ui::SavePresetAction { ats::Path { path } } }
+                : ats::ui::EditorAction { ats::ui::LoadPresetAction { ats::Path { path } } };
+            return host_.applyEditorAction(action, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kHistoryMessage))
+        {
+            Steinberg::int64 redo = 0;
+            if (attributes->getInt(kRedoAttribute, redo) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::HistoryAction { redo != 0 }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSpectralViewMessage))
+        {
+            Steinberg::int64 source = -1, mode = -1;
+            if (attributes->getInt(kSourceAttribute, source) != Steinberg::kResultTrue ||
+                attributes->getInt(kCommandAttribute, mode) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::SetSpectralViewAction {
+                                                static_cast<int>(source), static_cast<int>(mode) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kNoteMessage))
+        {
+            Steinberg::int64 on = 0, note = 60, velocity = 0;
+            if (attributes->getInt(kNoteOnAttribute, on) != Steinberg::kResultTrue ||
+                attributes->getInt(kNoteAttribute, note) != Steinberg::kResultTrue ||
+                attributes->getInt(kVelocityAttribute, velocity) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::NoteAction {
+                                                on != 0, static_cast<std::uint8_t>(note),
+                                                static_cast<std::uint8_t>(velocity) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kPartialEditMessage))
+        {
+            Steinberg::int64 partial = -1, frame = -1, apply = 0;
+            double amplitude = 0.0, frequency = 1.0;
+            if (attributes->getInt(kPartialAttribute, partial) != Steinberg::kResultTrue ||
+                attributes->getInt(kFrameAttribute, frame) != Steinberg::kResultTrue ||
+                attributes->getInt(kApplyAttribute, apply) != Steinberg::kResultTrue ||
+                attributes->getFloat(kAmplitudeAttribute, amplitude) != Steinberg::kResultTrue ||
+                attributes->getFloat(kFrequencyAttribute, frequency) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::PartialEditAction {
+                                                static_cast<std::int32_t>(partial),
+                                                static_cast<std::int32_t>(frame), apply != 0,
+                                                amplitude, frequency }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kResidualEditMessage))
+        {
+            Steinberg::int64 band = -1, frame = -1;
+            double value = 0.0;
+            if (attributes->getInt(kBandAttribute, band) != Steinberg::kResultTrue ||
+                attributes->getInt(kFrameAttribute, frame) != Steinberg::kResultTrue ||
+                attributes->getFloat(kValueAttribute, value) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::ResidualEditAction {
+                                                static_cast<std::int32_t>(band),
+                                                static_cast<std::int32_t>(frame),
+                                                static_cast<float>(value) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSpectrumEditMessage))
+        {
+            Steinberg::int64 command = 0, first = 0, last = 0;
+            double value = 0.0;
+            std::vector<int> bands;
+            if (attributes->getInt(kCommandAttribute, command) != Steinberg::kResultTrue ||
+                !readIntVector(attributes, kSessionValuesAttribute, bands) ||
+                attributes->getInt(kFirstFrameAttribute, first) != Steinberg::kResultTrue ||
+                attributes->getInt(kLastFrameAttribute, last) != Steinberg::kResultTrue ||
+                attributes->getFloat(kValueAttribute, value) != Steinberg::kResultTrue)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::SpectrumEditAction {
+                                                static_cast<ats::ui::SpectrumEditCommand>(command),
+                                                std::move(bands), static_cast<std::int32_t>(first),
+                                                static_cast<std::int32_t>(last), static_cast<float>(value) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kMathMessage))
+        {
+            std::string script;
+            if (!readString(attributes, kSessionValuesAttribute, script))
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::ApplyMathAction { std::move(script) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kBounceTimelineMessage))
+        {
+            Steinberg::int64 layer = -1;
+            std::string path;
+            if (attributes->getInt(kCommandAttribute, layer) != Steinberg::kResultTrue ||
+                !readString(attributes, kPathAttribute, path))
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::BounceMorphTimelineAction {
+                                                ats::Path { path }, static_cast<int>(layer) }, error) && !error
                        ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         return AudioEffect::notify(message);
@@ -698,33 +891,79 @@ public:
             (void) sendFloatValues(kSessionTimbreMessage, timbre->normalizedPlan);
             return;
         }
+        if (const auto* exportAction = std::get_if<ats::ui::ExportAtsAction>(&action))
+        {
+            (void) sendPathAction(kExportSourceMessage, exportAction->path,
+                                  kSourceAttribute, exportAction->source);
+            return;
+        }
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
             ats::ParameterStore preset;
             if (!ats::state::applyFactoryPreset(factory->index, preset))
                 return;
+            (void) sendIntAction(kFactoryPresetMessage, kSourceAttribute, factory->index);
             applyPreset(preset);
             return;
         }
-        ats::platform::FileService files;
         if (const auto* save = std::get_if<ats::ui::SavePresetAction>(&action))
         {
-            ats::ParameterStore current;
-            for (const auto& descriptor : ats::ParameterRegistry::descriptors())
-                (void) current.write(descriptor.denseIndex, descriptor.denormalize(
-                    static_cast<float>(getParamNormalized(
-                        static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId)))));
-            (void) files.writeAtomic(save->path, ats::state::ParameterPresetCodec::encode(current), true);
+            (void) sendPathAction(kSavePresetMessage, save->path);
             return;
         }
         if (const auto* load = std::get_if<ats::ui::LoadPresetAction>(&action))
         {
+            (void) sendPathAction(kLoadPresetMessage, load->path);
+            ats::platform::FileService files;
             const auto payload = files.read(load->path);
             ats::ParameterStore preset;
             std::string error;
             if (payload.succeeded() &&
                 ats::state::ParameterPresetCodec::decode(payload.bytes, preset, error))
                 applyPreset(preset);
+            return;
+        }
+        if (const auto* history = std::get_if<ats::ui::HistoryAction>(&action))
+        {
+            (void) sendIntAction(kHistoryMessage, kRedoAttribute, history->redo ? 1 : 0);
+            return;
+        }
+        if (const auto* view = std::get_if<ats::ui::SetSpectralViewAction>(&action))
+        {
+            (void) sendTwoInts(kSpectralViewMessage, kSourceAttribute, view->source,
+                               kCommandAttribute, view->mode);
+            return;
+        }
+        if (const auto* note = std::get_if<ats::ui::NoteAction>(&action))
+        {
+            (void) sendThreeInts(kNoteMessage, kNoteOnAttribute, note->on ? 1 : 0,
+                                 kNoteAttribute, note->note, kVelocityAttribute, note->velocity);
+            return;
+        }
+        if (const auto* partial = std::get_if<ats::ui::PartialEditAction>(&action))
+        {
+            (void) sendPartialEdit(*partial);
+            return;
+        }
+        if (const auto* residual = std::get_if<ats::ui::ResidualEditAction>(&action))
+        {
+            (void) sendResidualEdit(*residual);
+            return;
+        }
+        if (const auto* spectrum = std::get_if<ats::ui::SpectrumEditAction>(&action))
+        {
+            (void) sendSpectrumEdit(*spectrum);
+            return;
+        }
+        if (const auto* math = std::get_if<ats::ui::ApplyMathAction>(&action))
+        {
+            (void) sendStringAction(kMathMessage, kSessionValuesAttribute, math->script);
+            return;
+        }
+        if (const auto* bounce = std::get_if<ats::ui::BounceMorphTimelineAction>(&action))
+        {
+            (void) sendPathAction(kBounceTimelineMessage, bounce->path,
+                                  kCommandAttribute, bounce->layer);
             return;
         }
         if (const auto* wav = std::get_if<ats::ui::ImportWavAction>(&action))
@@ -776,6 +1015,144 @@ public:
     { return editorTelemetry_; }
 
 private:
+    bool sendIntAction(const char* messageId, const char* attribute, std::int64_t value)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(attribute, value) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendTwoInts(const char* messageId, const char* firstKey, std::int64_t first,
+                     const char* secondKey, std::int64_t second)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(firstKey, first) == Steinberg::kResultTrue &&
+            attributes->setInt(secondKey, second) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendThreeInts(const char* messageId, const char* firstKey, std::int64_t first,
+                       const char* secondKey, std::int64_t second,
+                       const char* thirdKey, std::int64_t third)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(firstKey, first) == Steinberg::kResultTrue &&
+            attributes->setInt(secondKey, second) == Steinberg::kResultTrue &&
+            attributes->setInt(thirdKey, third) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendStringAction(const char* messageId, const char* attribute, std::string_view value)
+    {
+        if (value.empty() || value.size() > UINT32_MAX)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setBinary(attribute, value.data(), static_cast<Steinberg::uint32>(value.size())) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendPathAction(const char* messageId, const ats::Path& path,
+                        const char* numericKey = nullptr, std::int64_t numericValue = 0)
+    {
+        if (path.empty() || path.string().size() > UINT32_MAX)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(messageId);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setBinary(kPathAttribute, path.string().data(),
+                                  static_cast<Steinberg::uint32>(path.string().size())) == Steinberg::kResultTrue &&
+            (numericKey == nullptr || attributes->setInt(numericKey, numericValue) == Steinberg::kResultTrue) &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendPartialEdit(const ats::ui::PartialEditAction& edit)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kPartialEditMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kPartialAttribute, edit.partial) == Steinberg::kResultTrue &&
+            attributes->setInt(kFrameAttribute, edit.frame) == Steinberg::kResultTrue &&
+            attributes->setInt(kApplyAttribute, edit.apply ? 1 : 0) == Steinberg::kResultTrue &&
+            attributes->setFloat(kAmplitudeAttribute, edit.amplitude) == Steinberg::kResultTrue &&
+            attributes->setFloat(kFrequencyAttribute, edit.frequencyHz) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendResidualEdit(const ats::ui::ResidualEditAction& edit)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kResidualEditMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kBandAttribute, edit.band) == Steinberg::kResultTrue &&
+            attributes->setInt(kFrameAttribute, edit.frame) == Steinberg::kResultTrue &&
+            attributes->setFloat(kValueAttribute, edit.value) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendSpectrumEdit(const ats::ui::SpectrumEditAction& edit)
+    {
+        if (edit.bands.empty() || edit.bands.size() > 220)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSpectrumEditMessage);
+        auto* attributes = message->getAttributes();
+        const auto bytes = static_cast<Steinberg::uint32>(edit.bands.size() * sizeof(std::int32_t));
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kCommandAttribute, static_cast<std::int64_t>(edit.command)) == Steinberg::kResultTrue &&
+            attributes->setBinary(kSessionValuesAttribute, edit.bands.data(), bytes) == Steinberg::kResultTrue &&
+            attributes->setInt(kFirstFrameAttribute, edit.firstFrame) == Steinberg::kResultTrue &&
+            attributes->setInt(kLastFrameAttribute, edit.lastFrame) == Steinberg::kResultTrue &&
+            attributes->setFloat(kValueAttribute, edit.value) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
     bool sendAnalysisProfile(int profile)
     {
         if (profile < 0 || profile > 3)

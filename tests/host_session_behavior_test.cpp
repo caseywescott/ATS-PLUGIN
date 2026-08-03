@@ -75,9 +75,12 @@ int main()
     bool audible = false;
     for (const auto sample : left) audible = audible || std::abs(sample) > 1.0e-6f;
     assert(audible);
+    assert(host.sessionSnapshot().normalizedPlayhead > 0.0f);
 
     assert(host.applySessionAction(ats::ui::SeekPreviewAction { 0.5f }, error));
     assert(!error && host.sessionSnapshot().normalizedPlayhead == 0.5f);
+    assert(host.process({ channels, 2, 512 }, {}));
+    assert(host.sessionSnapshot().normalizedPlayhead != 0.5f);
     assert(host.applySessionAction(ats::ui::SetMorphTimelineAction { { 0.0f, 0.35f, 1.0f } }, error));
     assert(!error && host.sessionSnapshot().timelineRevision == 1);
     assert(host.applySessionAction(ats::ui::SetTimbreMotionPlanAction { { 0.0f, 0.8f, 1.0f } }, error));
