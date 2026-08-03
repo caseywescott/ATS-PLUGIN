@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorHost.h"
+#include "EditorActionProtocol.h"
 #include "PopupManager.h"
 
 #include <cstdint>
@@ -12,6 +13,7 @@ namespace ats::ui
 {
 
 enum class DialogKind : std::uint8_t { importWav, importAts, exportAts, savePreset, loadPreset, bounceTimeline };
+enum class DialogOutcome : std::uint8_t { idle, pending, accepted, cancelled, invalid, closed };
 
 struct DialogRequest
 {
@@ -32,48 +34,88 @@ public:
         request.generation = ++generation_;
         request_ = std::move(request);
         active_ = true;
+        outcome_ = DialogOutcome::pending;
+        error_ = {};
         return true;
     }
 
     [[nodiscard]] bool active() const noexcept { return active_; }
     [[nodiscard]] const DialogRequest& request() const noexcept { return request_; }
+    [[nodiscard]] DialogOutcome outcome() const noexcept { return outcome_; }
+    [[nodiscard]] const Error& error() const noexcept { return error_; }
 
     [[nodiscard]] std::optional<EditorAction> accept(ats::Path path)
     {
-        if (!active_ || path.empty())
+        if (!active_)
+        {
+            outcome_ = DialogOutcome::invalid;
+            error_ = { "dialog_not_active", "no native dialog is awaiting a result" };
             return std::nullopt;
+        }
+        if (path.empty())
+        {
+            outcome_ = DialogOutcome::invalid;
+            error_ = { "empty_dialog_path", "accepted dialogs must provide a path" };
+            return std::nullopt;
+        }
         const auto request = request_;
-        close();
+        std::optional<EditorAction> action;
         switch (request.kind)
         {
-            case DialogKind::importWav: return EditorAction { ImportWavAction { std::move(path), request.slot } };
-            case DialogKind::importAts: return EditorAction { ImportAtsAction { std::move(path), request.slot } };
-            case DialogKind::exportAts: return EditorAction { ExportAtsAction { std::move(path), request.slot } };
-            case DialogKind::savePreset: return EditorAction { SavePresetAction { std::move(path) } };
-            case DialogKind::loadPreset: return EditorAction { LoadPresetAction { std::move(path) } };
-            case DialogKind::bounceTimeline: return EditorAction { BounceMorphTimelineAction { std::move(path), request.slot } };
+            case DialogKind::importWav: action = EditorAction { ImportWavAction { std::move(path), request.slot } }; break;
+            case DialogKind::importAts: action = EditorAction { ImportAtsAction { std::move(path), request.slot } }; break;
+            case DialogKind::exportAts: action = EditorAction { ExportAtsAction { std::move(path), request.slot } }; break;
+            case DialogKind::savePreset: action = EditorAction { SavePresetAction { std::move(path) } }; break;
+            case DialogKind::loadPreset: action = EditorAction { LoadPresetAction { std::move(path) } }; break;
+            case DialogKind::bounceTimeline: action = EditorAction { BounceMorphTimelineAction { std::move(path), request.slot } }; break;
         }
-        return std::nullopt;
+        if (!action)
+        {
+            outcome_ = DialogOutcome::invalid;
+            error_ = { "unknown_dialog_kind", "dialog kind cannot produce an action" };
+            return std::nullopt;
+        }
+        const auto validation = validateAction(*action);
+        if (!validation.valid)
+        {
+            outcome_ = DialogOutcome::invalid;
+            error_ = { std::string(validation.code), std::string(validation.text) };
+            return std::nullopt;
+        }
+        finish(DialogOutcome::accepted);
+        return action;
     }
 
     bool cancel() noexcept
     {
         if (!active_)
             return false;
-        close();
+        finish(DialogOutcome::cancelled);
         return true;
     }
 
     void close() noexcept
     {
+        if (active_)
+            outcome_ = DialogOutcome::closed;
         active_ = false;
         request_ = {};
     }
 
 private:
+    void finish(DialogOutcome outcome) noexcept
+    {
+        active_ = false;
+        request_ = {};
+        outcome_ = outcome;
+        error_ = {};
+    }
+
     std::uint64_t generation_ = 0;
     bool active_ = false;
     DialogRequest request_{};
+    DialogOutcome outcome_ = DialogOutcome::idle;
+    Error error_{};
 };
 
 class EditorLifecycleModel

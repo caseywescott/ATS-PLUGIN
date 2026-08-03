@@ -18,10 +18,14 @@ int main()
     // accepted path is treated as an error and keeps the active dialog open
     // until the backend explicitly resolves it as cancelled.
     assert(lifecycle.openDialog({ ats::ui::DialogKind::importAts, 0, 0, "source-b", {} }));
+    assert(lifecycle.dialog().outcome() == ats::ui::DialogOutcome::pending);
     assert(!lifecycle.acceptDialog({}).has_value());
     assert(lifecycle.dialog().active());
+    assert(lifecycle.dialog().outcome() == ats::ui::DialogOutcome::invalid);
+    assert(lifecycle.dialog().error().code == "empty_dialog_path");
     assert(lifecycle.cancelDialog());
     assert(!lifecycle.dialog().active());
+    assert(lifecycle.dialog().outcome() == ats::ui::DialogOutcome::cancelled);
 
     assert(lifecycle.openDialog({ ats::ui::DialogKind::exportAts, 0, 1, "export", {} }));
     const auto exportAction = lifecycle.acceptDialog({ "/tmp/export.ats" });
@@ -31,6 +35,7 @@ int main()
     assert(lifecycle.openDialog({ ats::ui::DialogKind::savePreset, 0, 0, "preset", {} }));
     const auto saveAction = lifecycle.acceptDialog({ "/tmp/preset.atspreset" });
     assert(saveAction && std::get_if<ats::ui::SavePresetAction>(&*saveAction) != nullptr);
+    assert(lifecycle.dialog().outcome() == ats::ui::DialogOutcome::accepted);
     assert(lifecycle.openDialog({ ats::ui::DialogKind::loadPreset, 0, 0, "preset", {} }));
     const auto loadAction = lifecycle.acceptDialog({ "/tmp/preset.atspreset" });
     assert(loadAction && std::get_if<ats::ui::LoadPresetAction>(&*loadAction) != nullptr);

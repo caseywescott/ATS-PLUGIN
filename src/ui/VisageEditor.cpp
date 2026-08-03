@@ -1,5 +1,6 @@
 #include "VisageEditor.h"
 #include "EditorShell.h"
+#include "FileDialogModel.h"
 #include "SessionFileDrop.h"
 #include "VisageNativeMac.h"
 #include "../core/ParameterRegistry.h"
@@ -137,16 +138,15 @@ public:
                         if (sink_.dialogRequested)
                             sink_.dialogRequested(sink_.context, static_cast<int>(kind));
                         const auto result = detail::runNativeFileDialog(request);
-                        if (sink_.dialogResolved)
-                            sink_.dialogResolved(sink_.context, static_cast<int>(kind),
-                                                 result.path.c_str(), result.accepted);
-                        if (result.accepted)
-                        {
-                            if (kind == NativeFileDialogKind::savePreset)
-                                emitAction(SavePresetAction { ats::Path { result.path } });
-                            else
-                                emitAction(LoadPresetAction { ats::Path { result.path } });
-                        }
+                if (sink_.dialogResolved)
+                    sink_.dialogResolved(sink_.context, static_cast<int>(kind),
+                                         result.path.c_str(), result.accepted);
+                if ((result.status == NativeFileDialogStatus::initializationFailed ||
+                     result.status == NativeFileDialogStatus::failed) && sink_.dialogError)
+                    sink_.dialogError(sink_.context, static_cast<int>(kind),
+                                      "native_dialog_failed", result.error.c_str());
+                if (const auto action = FileDialogModel::resolve(kind, result))
+                        emitAction(*action);
                     }
                     if (sink_.popupDismissed)
                         sink_.popupDismissed(sink_.context);
@@ -277,13 +277,12 @@ public:
                 if (sink_.dialogResolved)
                     sink_.dialogResolved(sink_.context, static_cast<int>(request.kind),
                                          result.path.c_str(), result.accepted);
-                if (result.accepted)
-                {
-                    if (kind == NativeFileDialogKind::importWav)
-                        emitAction(ImportWavAction { ats::Path { result.path }, slot });
-                    else
-                        emitAction(ImportAtsAction { ats::Path { result.path }, slot });
-                }
+                if ((result.status == NativeFileDialogStatus::initializationFailed ||
+                     result.status == NativeFileDialogStatus::failed) && sink_.dialogError)
+                    sink_.dialogError(sink_.context, static_cast<int>(request.kind),
+                                      "native_dialog_failed", result.error.c_str());
+                if (const auto action = FileDialogModel::resolve(kind, result, slot))
+                    emitAction(*action);
                 requestKeyboardFocus();
                 return;
             }

@@ -7,6 +7,12 @@
 namespace ats::ui::detail
 {
 
+namespace
+{
+NativeFileDialogTestOverride testOverride = nullptr;
+void* testOverrideContext = nullptr;
+}
+
 void setNativeViewHidden(void* nativeHandle, bool hidden)
 {
     NSView* view = (__bridge NSView*)nativeHandle;
@@ -29,6 +35,9 @@ void setNativeViewFrame(void* nativeHandle, float width, float height)
 
 NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& request)
 {
+    if (testOverride != nullptr)
+        return testOverride(request, testOverrideContext);
+
     NSView* parent = (__bridge NSView*)request.parentView;
     NSWindow* window = parent != nil ? [parent window] : nil;
     NSSavePanel* savePanel = nil;
@@ -73,12 +82,28 @@ NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& reques
         response = [openPanel runModal];
 
     if (response != NSModalResponseOK)
-        return {};
+        return { false, {}, NativeFileDialogStatus::cancelled, {} };
     NSURL* url = savePanel != nil ? savePanel.URL : openPanel.URL;
     if (url == nil || url.path == nil)
-        return {};
+        return { false, {}, NativeFileDialogStatus::initializationFailed,
+                 "native dialog returned no URL" };
     const char* utf8 = url.path.UTF8String;
-    return { utf8 != nullptr, utf8 != nullptr ? std::string(utf8) : std::string() };
+    if (utf8 == nullptr || *utf8 == '\0')
+        return { false, {}, NativeFileDialogStatus::initializationFailed,
+                 "native dialog returned no UTF-8 path" };
+    return { true, std::string(utf8), NativeFileDialogStatus::accepted, {} };
+}
+
+void setNativeFileDialogTestOverride(NativeFileDialogTestOverride override, void* context)
+{
+    testOverride = override;
+    testOverrideContext = context;
+}
+
+void clearNativeFileDialogTestOverride()
+{
+    testOverride = nullptr;
+    testOverrideContext = nullptr;
 }
 
 } // namespace ats::ui::detail

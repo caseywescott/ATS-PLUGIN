@@ -36,6 +36,7 @@ struct EditorEventSink
     // so hosts can expose unsupported/multi-file rejection without guessing
     // from an absent import action.
     void (*fileDrop)(void* context, int slot, const char* path, bool accepted) = nullptr;
+    void (*dialogError)(void* context, int kind, const char* code, const char* text) = nullptr;
 };
 
 class IEditor

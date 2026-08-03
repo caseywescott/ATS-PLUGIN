@@ -533,6 +533,14 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
     target_link_libraries(real_dispatch_harness_test PRIVATE
       ats_visage_editor ats_core ats_source_import visage "-framework Cocoa")
     add_test(NAME real_dispatch_harness_test COMMAND real_dispatch_harness_test)
+
+    add_executable(native_file_dialog_contract_test tests/ui/native_file_dialog_contract_test.mm)
+    target_include_directories(native_file_dialog_contract_test PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(native_file_dialog_contract_test PRIVATE cxx_std_17)
+    target_link_libraries(native_file_dialog_contract_test PRIVATE
+      ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME native_file_dialog_contract_test COMMAND native_file_dialog_contract_test)
   endif()
 endif()
 

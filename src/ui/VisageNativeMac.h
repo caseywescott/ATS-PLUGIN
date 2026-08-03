@@ -12,5 +12,7 @@ void setNativeViewHidden(void* nativeHandle, bool hidden);
 bool nativeViewIsHidden(void* nativeHandle);
 void setNativeViewFrame(void* nativeHandle, float width, float height);
 NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& request);
+void setNativeFileDialogTestOverride(NativeFileDialogTestOverride override, void* context);
+void clearNativeFileDialogTestOverride();
 
 } // namespace ats::ui::detail
