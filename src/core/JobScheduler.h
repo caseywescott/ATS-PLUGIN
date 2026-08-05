@@ -73,6 +73,19 @@ public:
         return true;
     }
 
+    template <typename F>
+    bool submitVoid(F&& f)
+    {
+        // Wrap in shared_ptr so move-only callables are accepted by std::function.
+        auto shared = std::make_shared<std::decay_t<F>>(std::forward<F>(f));
+        std::function<void()> task = [shared]() mutable { (*shared)(); };
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_) return false;
+        queue_.push(std::move(task));
+        workAvailable_.notify_one();
+        return true;
+    }
+
     void waitIdle()
     {
         std::unique_lock<std::mutex> lock(mutex_);

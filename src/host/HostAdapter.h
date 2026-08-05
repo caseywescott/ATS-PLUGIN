@@ -2,6 +2,7 @@
 
 #include "../core/AtsStateCodec.h"
 #include "../core/AtsTransientSmear.h"
+#include "../core/JobScheduler.h"
 #include "../core/MidiNoteRouter.h"
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
@@ -282,15 +283,22 @@ public:
         auto samples = source.monoSamples;
         const auto sampleRate = source.sampleRate;
         const auto token = analysisCancellation_.token();
-        analysisFuture_ = std::async(std::launch::async,
-            [this, generation, token, samples = std::move(samples), sampleRate]() mutable {
-                return AtsEngine::analyze(generation, token,
-                                          { samples.data(), samples.size(), sampleRate, {} },
-                                          [this](double progress) {
-                                              analysisProgress_.store(static_cast<float>(progress),
-                                                                      std::memory_order_release);
-                                          });
-            });
+        {
+            auto promise = std::make_shared<std::promise<JobResult<AnalysisOutput>>>();
+            analysisFuture_ = promise->get_future();
+            analysisScheduler_.submitVoid(
+                [this, generation, token, samples = std::move(samples), sampleRate,
+                 promise]() mutable {
+                    auto result = AtsEngine::analyze(generation, token,
+                                                     { samples.data(), samples.size(), sampleRate, {} },
+                                                     [this](double progress) {
+                                                         analysisProgress_.store(
+                                                             static_cast<float>(progress),
+                                                             std::memory_order_release);
+                                                     });
+                    promise->set_value(std::move(result));
+                });
+        }
         analysisRunning_.store(true, std::memory_order_release);
         auto snapshot = telemetry();
         snapshot.state = ui::UiState::analyzing;
@@ -1648,47 +1656,55 @@ private:
         const auto requested = onsetOverlay_;
         smearnovCancellation_.cancel();
         smearnovCancellation_ = CancellationSource {};
+        const auto generation = sourceGenerations_.next();
         const auto token = smearnovCancellation_.token();
-        smearnovFuture_ = std::async(std::launch::async,
-            [apply, slot, sourceRevision, snapshot = AtsSoundPtr { copied }, detect, transform,
-             requested, token]() mutable {
-                SmearnovWorkResult result;
-                result.apply = apply;
-                result.slot = slot;
-                result.sourceRevision = sourceRevision;
-                if (token.isCancelled())
-                {
-                    result.error = { "cancelled", "Smearnov work was cancelled" };
-                    return result;
-                }
-                auto onsets = detectOnsets(snapshot.get(), detect);
-                if (!requested.empty())
-                {
-                    onsets.clear();
-                    const auto frameCount = std::max(1, snapshot.get()->frames - 1);
-                    for (const auto normalized : requested)
+        {
+            auto promise = std::make_shared<std::promise<SmearnovWorkResult>>();
+            smearnovFuture_ = promise->get_future();
+            smearnovScheduler_.submitVoid(
+                [apply, slot, sourceRevision, snapshot = AtsSoundPtr { copied }, detect, transform,
+                 requested, token, promise]() mutable {
+                    SmearnovWorkResult result;
+                    result.apply = apply;
+                    result.slot = slot;
+                    result.sourceRevision = sourceRevision;
+                    if (token.isCancelled())
                     {
-                        const auto frame = static_cast<int>(std::lround(normalized * frameCount));
-                        onsets.push_back({ frame, frame, frame, 0.0 });
+                        result.error = { "cancelled", "Smearnov work was cancelled" };
+                        promise->set_value(std::move(result));
+                        return;
                     }
-                }
-                if (token.isCancelled())
-                {
-                    result.error = { "cancelled", "Smearnov work was cancelled" };
-                    return result;
-                }
-                result.onsets = std::move(onsets);
-                if (apply)
-                {
-                    if (!smearAttacks(snapshot.get(), result.onsets, transform))
+                    auto onsets = detectOnsets(snapshot.get(), detect);
+                    if (!requested.empty())
                     {
-                        result.error = { "smearnov_no_change", "Smearnov did not modify the selected source" };
-                        return result;
+                        onsets.clear();
+                        const auto frameCount = std::max(1, snapshot.get()->frames - 1);
+                        for (const auto normalized : requested)
+                        {
+                            const auto frame = static_cast<int>(std::lround(normalized * frameCount));
+                            onsets.push_back({ frame, frame, frame, 0.0 });
+                        }
                     }
-                    result.transformed = std::move(snapshot);
-                }
-                return result;
-            });
+                    if (token.isCancelled())
+                    {
+                        result.error = { "cancelled", "Smearnov work was cancelled" };
+                        promise->set_value(std::move(result));
+                        return;
+                    }
+                    result.onsets = std::move(onsets);
+                    if (apply)
+                    {
+                        if (!smearAttacks(snapshot.get(), result.onsets, transform))
+                        {
+                            result.error = { "smearnov_no_change", "Smearnov did not modify the selected source" };
+                            promise->set_value(std::move(result));
+                            return;
+                        }
+                        result.transformed = std::move(snapshot);
+                    }
+                    promise->set_value(std::move(result));
+                });
+        }
         smearnovRunning_.store(true, std::memory_order_release);
         return true;
     }
@@ -1857,6 +1873,7 @@ private:
     GenerationSource sourceGenerations_;
     CancellationSource sourceCancellation_;
     CancellationSource analysisCancellation_;
+    JobScheduler analysisScheduler_ { 1 };
     std::future<JobResult<AnalysisOutput>> analysisFuture_;
     int analysisSlot_ = -1;
     std::uint64_t analysisSourceRevision_ = 0;
@@ -1864,6 +1881,7 @@ private:
     std::atomic<float> analysisProgress_ { 0.0f };
     ui::TelemetryPublisher telemetry_;
     CancellationSource smearnovCancellation_;
+    JobScheduler smearnovScheduler_ { 1 };
     std::future<SmearnovWorkResult> smearnovFuture_;
     std::atomic<bool> smearnovRunning_ { false };
     std::array<std::uint64_t, 2> sourceRevisions_ {};
