@@ -823,12 +823,13 @@
         "tests/fixtures/morph_fixture_manifest.json"
       ],
       "evidence": [
-        "cmake --build build-review --target analysis_cancel_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'analysis_cancel_test|dsp_contract_matrix_test'"
+        "HostAdapter::analyzeSource in src/host/HostAdapter.h implements the analysis contract using a JobScheduler worker. AtsAnalysisService is a no-caller thin wrapper."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-001",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::analyzeSource is the production owner; AtsAnalysisService is a thin delegation wrapper with no callers outside tests. Analysis now uses a persistent JobScheduler worker."
     },
     {
       "trace_id": "DSP-SYNTH-001",
@@ -931,12 +932,13 @@
         "required: residual/partial mix audio golden"
       ],
       "evidence": [
-        "cmake --build build-review --target atsa_residual_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'atsa_residual_test|dsp_contract_matrix_test'"
+        "HostAdapter::renderSourceForPreview provides combined/partials/residual layers via three PlaybackBufferPool members. PlaybackEngine::mixLayers has no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-002",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::renderSourceForPreview is the production owner; PlaybackEngine::mixLayers has no callers outside tests. Three PlaybackBufferPool members in HostAdapter provide combined/partials/residual layers."
     },
     {
       "trace_id": "DSP-SYNTH-003",
@@ -1613,12 +1615,13 @@
         "required: real-dispatch gesture traces"
       ],
       "evidence": [
-        "cmake --build build-review --target partial_edit_transaction_test -j2 && ctest --test-dir build-review --output-on-failure -R partial_edit_transaction_test"
+        "HostAdapter::applyEditorAction handles PartialEditAction with direct ATS_SOUND mutation and re-render. PartialEditService has no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-003",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::applyEditorAction handles PartialEditAction with direct ATS_SOUND mutation; PartialEditService has no callers outside tests and src/ui/PartialEditView.h."
     },
     {
       "trace_id": "DSP-PLAY-001",
@@ -1674,12 +1677,13 @@
         "required: publication stress trace"
       ],
       "evidence": [
-        "cmake --build build-review --target playback_buffer_test playback_engine_test playback_audio_golden_test -j2 && ctest --test-dir build-review --output-on-failure -R 'playback_buffer_test|playback_engine_test|playback_audio_golden_test'"
+        "HostAdapter owns all playback machinery inline. PlaybackEngine header/impl exist but have no production callers outside tests."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-004",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter owns all playback: three PlaybackBufferPool members, OnePoleSmoother gains, and process(); PlaybackEngine has no callers outside tests."
     },
     {
       "trace_id": "DSP-METER-001",
@@ -1786,12 +1790,13 @@
         "required: MIDI event process-block trace fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target midi_process_block_test -j2 && ctest --test-dir build-review --output-on-failure -R midi_process_block_test"
+        "HostAdapter::process owns MIDI translation via MidiNoteRouter. PlaybackEngine MIDI path is tested but has no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-005",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::process owns MIDI translation via MidiNoteRouter; PlaybackEngine MIDI path has no callers outside tests."
     },
     {
       "trace_id": "ARCH-SCHED-002",
@@ -2005,12 +2010,13 @@
         "required: preview-versus-bounce audio golden"
       ],
       "evidence": [
-        "cmake --build build-review --target morph_timeline_service_test -j2 && ctest --test-dir build-review --output-on-failure -R morph_timeline_service_test"
+        "HostAdapter stores timeline as vector<float>. MorphTimelineService/MorphRenderService are tested but have no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-006",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::applyEditorAction handles SetMorphTimelineAction inline; MorphRenderService/MorphTimelineService have no callers outside tests."
     },
     {
       "trace_id": "DSP-PLAY-002",
@@ -2101,12 +2107,13 @@
         "required: note routing event fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target midi_note_router_test midi_process_block_test -j2 && ctest --test-dir build-review --output-on-failure -R 'midi_note_router_test|midi_process_block_test'"
+        "HostAdapter::buildRenderInputs applies MidiNoteRouter::semitoneOffset. PlaybackEngine MIDI transpose is tested but has no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-007",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter::buildRenderInputs applies MidiNoteRouter::semitoneOffset; PlaybackEngine MIDI transpose has no callers outside tests."
     },
     {
       "trace_id": "DSP-RT-001",
@@ -2147,12 +2154,13 @@
         "required: gain step/automation response fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target ats_primitives_test -j2 && ctest --test-dir build-review --output-on-failure -R ats_primitives_test"
+        "HostAdapter::process uses dense-indexed OnePoleSmoother for partGain/resGain/outputTrim. PlaybackEngine smoothers are duplicate with no production callers."
       ],
-      "status": "implemented",
-      "deviation_id": null,
+      "status": "deviated",
+      "deviation_id": "DEV-SVCL-008",
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-05",
+      "deviation_note": "HostAdapter uses dense-indexed OnePoleSmoother for partGain/resGain/outputTrim; PlaybackEngine smoothers are duplicate, no callers outside tests."
     }
   ]
 }
