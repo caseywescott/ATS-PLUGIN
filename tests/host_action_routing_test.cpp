@@ -302,11 +302,12 @@ static void test_bounce_validation()
         ats::ui::BounceMorphTimelineAction{ ats::Path{"/tmp/out.ats"}, 4 }, error));
     assert(static_cast<bool>(error));
 
-    // Valid path + layer → accepted (full worker is format-specific)
+    // Valid path + layer but no prepared model → not_ready error
     error = {};
     assert(host.applyEditorAction(
         ats::ui::BounceMorphTimelineAction{ ats::Path{"/tmp/out.ats"}, 0 }, error));
-    assert(!error);
+    assert(static_cast<bool>(error));
+    assert(error.code == "not_ready");
 }
 
 static void test_cross_wrapper_file_and_rich_actions()

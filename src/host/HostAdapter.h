@@ -6,6 +6,8 @@
 #include "../core/ParameterRegistry.h"
 #include "../core/PlaybackBuffers.h"
 #include "../core/UndoHistory.h"
+#include "../core/AtsMathExpr.h"
+#include "../engine/ResidualEditService.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
 #include "../state/FactoryPresetState.h"
@@ -655,7 +657,27 @@ public:
                 !sources_[static_cast<std::size_t>(slot)]->sound)
             {
                 error = { "no_model", "analyse a source before editing partials" };
+                return true;
             }
+            if (!partial->apply || partial->frame < 0)
+                return true; // focus/select only — no mutation
+            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            if (partial->partial >= sound->partials || partial->frame >= sound->frames)
+            {
+                error = { "partial_out_of_range", "partial or frame index is out of range" };
+                return true;
+            }
+            if (!std::isfinite(partial->amplitude) || partial->amplitude < 0.0 ||
+                !std::isfinite(partial->frequencyHz) || partial->frequencyHz <= 0.0)
+            {
+                error = { "invalid_partial_values", "amplitude and frequency must be finite and positive" };
+                return true;
+            }
+            sound->amp[partial->partial][partial->frame] = partial->amplitude;
+            sound->frq[partial->partial][partial->frame] = partial->frequencyHz;
+            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            if (state_ == HostState::prepared)
+                (void) renderSourceForPreview(slot, error);
             return true;
         }
         if (const auto* residual = std::get_if<ui::ResidualEditAction>(&action))
@@ -671,7 +693,20 @@ public:
                 !sources_[static_cast<std::size_t>(slot)]->sound)
             {
                 error = { "no_model", "analyse a source before editing residual" };
+                return true;
             }
+            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            if (sound->band_energy == nullptr || residual->band >= ATSA_CRITICAL_BANDS ||
+                residual->frame >= sound->frames)
+            {
+                error = { "residual_out_of_range", "residual band or frame index is out of range" };
+                return true;
+            }
+            sound->band_energy[residual->band][residual->frame] =
+                static_cast<double>(std::max(0.0f, residual->value));
+            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            if (state_ == HostState::prepared)
+                (void) renderSourceForPreview(slot, error);
             return true;
         }
         if (const auto* math = std::get_if<ui::ApplyMathAction>(&action))
@@ -687,7 +722,24 @@ public:
                 !sources_[static_cast<std::size_t>(slot)]->sound)
             {
                 error = { "no_model", "analyse a source before applying math" };
+                return true;
             }
+            AtsSoundPtr working { copy_sound(sources_[static_cast<std::size_t>(slot)]->sound.get()) };
+            if (!working)
+            {
+                error = { "copy_failed", "could not copy the ATS model for math processing" };
+                return true;
+            }
+            std::string mathError;
+            if (!applyMathExprScript(working.get(), math->script, mathError))
+            {
+                error = { "math_failed", mathError };
+                return true;
+            }
+            sources_[static_cast<std::size_t>(slot)]->sound = std::move(working);
+            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            if (state_ == HostState::prepared)
+                (void) renderSourceForPreview(slot, error);
             return true;
         }
         if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
@@ -702,7 +754,67 @@ public:
             if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
                 !sources_[static_cast<std::size_t>(slot)] ||
                 !sources_[static_cast<std::size_t>(slot)]->sound)
+            {
                 error = { "no_model", "analyse a source before editing the spectrum" };
+                return true;
+            }
+            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            if (sound->band_energy == nullptr || sound->frames <= 0)
+            {
+                error = { "no_residual", "source has no residual data to edit" };
+                return true;
+            }
+
+            engine::ResidualMatrix matrix;
+            matrix.bands.reserve(ATSA_CRITICAL_BANDS);
+            for (int b = 0; b < ATSA_CRITICAL_BANDS; ++b)
+            {
+                engine::ResidualBandData band;
+                band.bandIndex = b;
+                band.energy.resize(static_cast<std::size_t>(sound->frames));
+                for (int f = 0; f < sound->frames; ++f)
+                    band.energy[static_cast<std::size_t>(f)] = sound->band_energy[b][f];
+                matrix.bands.push_back(std::move(band));
+            }
+
+            using Cmd = ui::SpectrumEditCommand;
+            using Op  = engine::ResidualEditOperation;
+            Op operation = Op::smooth;
+            switch (spectrum->command)
+            {
+            case Cmd::copyResidual:   operation = Op::copy;         break;
+            case Cmd::pasteResidual:  operation = Op::paste;        break;
+            case Cmd::swapResidual:   operation = Op::swap;         break;
+            case Cmd::smoothResidual: operation = Op::smooth;       break;
+            case Cmd::tiltResidual:   operation = Op::tilt;         break;
+            case Cmd::redistResidual: operation = Op::redistribute; break;
+            }
+
+            engine::ResidualSelection selection { spectrum->bands, spectrum->firstFrame, spectrum->lastFrame };
+            engine::ResidualEditParameters params;
+            params.smoothRadiusFrames = std::max(1, static_cast<int>(std::round(spectrum->value)));
+            params.tiltDbPerBandStep  = static_cast<double>(spectrum->value);
+
+            const auto editResult = engine::ResidualEditService::apply(
+                matrix, operation, selection, params, &residualClipboard_);
+            if (!editResult.success)
+            {
+                error = { "spectrum_edit_failed", editResult.error };
+                return true;
+            }
+            if (editResult.changed)
+            {
+                for (const auto& band : matrix.bands)
+                {
+                    if (band.bandIndex < 0 || band.bandIndex >= ATSA_CRITICAL_BANDS) continue;
+                    for (std::size_t f = 0; f < band.energy.size() &&
+                         f < static_cast<std::size_t>(sound->frames); ++f)
+                        sound->band_energy[band.bandIndex][static_cast<int>(f)] = band.energy[f];
+                }
+                ++sourceRevisions_[static_cast<std::size_t>(slot)];
+                if (state_ == HostState::prepared)
+                    (void) renderSourceForPreview(slot, error);
+            }
             return true;
         }
         if (const auto* bounce = std::get_if<ui::BounceMorphTimelineAction>(&action))
@@ -717,6 +829,36 @@ public:
                 error = { "invalid_bounce_layer", "bounce layer must be 0..3" };
                 return true;
             }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            if (state_ != HostState::prepared ||
+                slot < 0 || slot >= static_cast<int>(sources_.size()) ||
+                !sources_[static_cast<std::size_t>(slot)] ||
+                !sources_[static_cast<std::size_t>(slot)]->sound)
+            {
+                error = { "not_ready", "host must be prepared and a source analysed before bouncing" };
+                return true;
+            }
+            const auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            const auto sr = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
+            const auto totalFrames = static_cast<std::uint32_t>(
+                std::max<std::int64_t>(1, std::llround(sound->dur * sr)));
+            std::vector<float> leftData(totalFrames, 0.0f);
+            std::vector<float> rightData(totalFrames, 0.0f);
+            float* channels[2] = { leftData.data(), rightData.data() };
+            AudioBufferView view { channels, 2, totalFrames };
+            const auto gen = sourceGenerations_.next();
+            const auto tok = sourceCancellation_.token();
+            const auto renderResult = AtsEngine::render(gen, tok, sound, buildRenderInputs(bounce->layer), view);
+            if (renderResult.status != JobResult<RenderStats>::Status::success)
+            {
+                error = renderResult.error ? renderResult.error
+                                           : Error { "render_failed", "bounce render failed" };
+                return true;
+            }
+            const auto wavBytes = buildBounceWav(leftData, rightData, static_cast<std::uint32_t>(sr));
+            const auto writeResult = platform::FileService {}.writeAtomic(bounce->path, wavBytes, true);
+            if (!writeResult.succeeded())
+                error = writeResult.error;
             return true;
         }
         if (const auto* wav = std::get_if<ui::ImportWavAction>(&action))
@@ -1645,6 +1787,33 @@ private:
         return true;
     }
 
+    static std::vector<std::byte> buildBounceWav(const std::vector<float>& left,
+                                                  const std::vector<float>& right,
+                                                  std::uint32_t sampleRate)
+    {
+        const auto frames = static_cast<std::uint32_t>(std::min(left.size(), right.size()));
+        const std::uint32_t dataBytes = frames * 4u; // stereo 16-bit
+        ByteWriter w;
+        w.reserve(44 + dataBytes);
+        w.writeU8('R'); w.writeU8('I'); w.writeU8('F'); w.writeU8('F');
+        w.writeU32(36 + dataBytes);
+        w.writeU8('W'); w.writeU8('A'); w.writeU8('V'); w.writeU8('E');
+        w.writeU8('f'); w.writeU8('m'); w.writeU8('t'); w.writeU8(' ');
+        w.writeU32(16); w.writeU16(1); w.writeU16(2);
+        w.writeU32(sampleRate); w.writeU32(sampleRate * 4u);
+        w.writeU16(4); w.writeU16(16);
+        w.writeU8('d'); w.writeU8('a'); w.writeU8('t'); w.writeU8('a');
+        w.writeU32(dataBytes);
+        for (std::uint32_t i = 0; i < frames; ++i)
+        {
+            w.writeU16(static_cast<std::uint16_t>(static_cast<std::int16_t>(
+                std::lround(std::clamp(left[i],  -1.0f, 1.0f) * 32767.0f))));
+            w.writeU16(static_cast<std::uint16_t>(static_cast<std::int16_t>(
+                std::lround(std::clamp(right[i], -1.0f, 1.0f) * 32767.0f))));
+        }
+        return std::move(w).take();
+    }
+
     // Build SynthParams for a specific render layer. Mixing gains (partGain,
     // resGain) are always 1.0 at render time — they are applied per-sample
     // via OnePoleSmoother in process() to satisfy the 20 ms ramp contract.
@@ -1699,6 +1868,7 @@ private:
     std::atomic<bool> smearnovRunning_ { false };
     std::array<std::uint64_t, 2> sourceRevisions_ {};
     HostStateChunk stateChunk_;
+    engine::ResidualClipboard residualClipboard_;
     PlaybackBufferPool playback_;
     PlaybackBufferPool playbackPartials_;
     PlaybackBufferPool playbackResidual_;
