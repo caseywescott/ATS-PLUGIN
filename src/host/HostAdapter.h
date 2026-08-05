@@ -9,6 +9,7 @@
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
 #include "../state/FactoryPresetState.h"
+#include "../state/LegacyStateCodec.h"
 #include "../state/ParameterPresetCodec.h"
 #include "../state/PresetService.h"
 #include "../platform/FileService.h"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <chrono>
 #include <filesystem>
@@ -598,14 +600,15 @@ public:
         }
         if (const auto* hist = std::get_if<ui::HistoryAction>(&action))
         {
-            auto snapshot = hist->redo ? history_.redo(stateChunk_) : history_.undo(stateChunk_);
+            const auto current = captureState();
+            auto snapshot = hist->redo ? history_.redo(current) : history_.undo(current);
             if (!snapshot)
             {
                 error = { hist->redo ? "nothing_to_redo" : "nothing_to_undo",
                           hist->redo ? "redo history is empty" : "undo history is empty" };
                 return true;
             }
-            stateChunk_ = std::move(*snapshot);
+            applyStateChunk(std::move(*snapshot));
             return true;
         }
         if (const auto* save = std::get_if<ui::SavePresetAction>(&action))
@@ -822,6 +825,105 @@ public:
         return descriptor->fromText(text, value) && parameters_.write(id, value);
     }
 
+    // Build the current full plugin state from live parameters and engine state.
+    // Called by native wrappers on getState so the DAW always receives a
+    // snapshot of what the plugin is currently doing, not a stale saved chunk.
+    [[nodiscard]] HostStateChunk captureState() const
+    {
+        LegacyState ls;
+        const auto sr = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
+
+        ls.synth.startTime        = static_cast<double>(parameters_.read("synStart"));
+        ls.synth.duration         = static_cast<double>(parameters_.read("synDur"));
+        ls.synth.useAllPartials   = parameters_.read("useAllPartials") >= 0.5f;
+        ls.synth.usePartialsPhase = parameters_.read("usePhase") >= 0.5f;
+        ls.synth.partialsGain     = static_cast<double>(parameters_.read("partGain"));
+        ls.synth.residualGain     = static_cast<double>(parameters_.read("resGain"));
+        ls.synth.frequencyFactor  = static_cast<double>(parameters_.read("freq"));
+        ls.synth.timeFactor       = static_cast<double>(parameters_.read("timeStretch"));
+        ls.synth.sampleRate       = sr;
+        ls.synth.useIfftSynth     = parameters_.read("useIfftSynth") >= 0.5f;
+        ls.synth.frequencyShape.mode    = static_cast<FrequencyShapeMode>(
+            static_cast<int>(std::round(parameters_.read("freqShapeMode"))));
+        ls.synth.frequencyShape.amount  = static_cast<double>(parameters_.read("freqShapeAmount"));
+        ls.synth.frequencyShape.pivotHz = static_cast<double>(parameters_.read("freqShapePivotHz"));
+        ls.frequencyShape  = ls.synth.frequencyShape;
+        ls.outputTrim      = static_cast<double>(parameters_.read("outputTrim"));
+        ls.residualOnly    = parameters_.read("residualOnly") >= 0.5f;
+        ls.classicPreviewMode = static_cast<std::int32_t>(std::round(parameters_.read("classicPreviewMode")));
+
+        // AnalysisParams: param choice 0-3 maps to ATSA type 1-4
+        ls.analysis.type        = static_cast<int>(std::round(parameters_.read("analysisType"))) + 1;
+        ls.analysis.start       = static_cast<double>(parameters_.read("analysisStart"));
+        ls.analysis.duration    = static_cast<double>(parameters_.read("analysisDuration"));
+        ls.analysis.lowest_freq = static_cast<double>(parameters_.read("analysisLowestFreq"));
+        ls.analysis.highest_freq = static_cast<double>(parameters_.read("analysisHighestFreq"));
+        ls.analysis.freq_dev    = static_cast<double>(parameters_.read("analysisFreqDev"));
+        ls.analysis.win_cycles  = static_cast<int>(std::round(parameters_.read("analysisWinCycles")));
+        ls.analysis.win_type    = static_cast<int>(std::round(parameters_.read("analysisWinType")));
+        ls.analysis.hop_size    = static_cast<double>(parameters_.read("analysisHopSize"));
+        ls.analysis.lowest_mag  = static_cast<double>(parameters_.read("analysisLowestMag"));
+        ls.analysis.track_len   = static_cast<int>(std::round(parameters_.read("analysisTrackLen")));
+        ls.analysis.min_seg_len = static_cast<int>(std::round(parameters_.read("analysisMinSegLen")));
+        ls.analysis.min_gap_len = static_cast<int>(std::round(parameters_.read("analysisMinGapLen")));
+        ls.analysis.SMR_thres   = static_cast<double>(parameters_.read("analysisSmrThreshold"));
+        ls.analysis.min_seg_SMR = static_cast<double>(parameters_.read("analysisMinSegSmr"));
+        ls.analysis.last_peak_cont = static_cast<double>(parameters_.read("analysisLastPeakContribution"));
+        ls.analysis.SMR_cont    = static_cast<double>(parameters_.read("analysisSmrContribution"));
+        ls.analysis.multiRes    = parameters_.read("analysisMultiRes") >= 0.5f;
+
+        ls.morphAmount            = static_cast<double>(parameters_.read("morphAmount"));
+        ls.morphPerformanceMacro  = static_cast<double>(parameters_.read("morphPerformanceMacro"));
+        ls.morphSmoothingMs       = static_cast<double>(parameters_.read("morphSmoothingMs"));
+        ls.morphGridType          = static_cast<std::int32_t>(std::round(parameters_.read("morphGridType")));
+        ls.morphCorrespondenceStrategy = static_cast<std::int32_t>(std::round(parameters_.read("morphCorrespondenceStrategy")));
+        ls.morphQuality           = static_cast<std::int32_t>(std::round(parameters_.read("morphQuality")));
+        ls.morphUnmatchedSourcePolicy = static_cast<std::int32_t>(std::round(parameters_.read("morphUnmatchedSourcePolicy")));
+        ls.morphUnmatchedTargetPolicy = static_cast<std::int32_t>(std::round(parameters_.read("morphUnmatchedTargetPolicy")));
+        ls.morphDiscardOptIn      = parameters_.read("morphDiscardOptIn") >= 0.5f;
+        ls.morphFrequencyDomain   = static_cast<std::int32_t>(std::round(parameters_.read("morphFrequencyInterpolationDomain")));
+        ls.morphAmplitudeDomain   = static_cast<std::int32_t>(std::round(parameters_.read("morphAmplitudeInterpolationDomain")));
+        ls.morphPhaseStrategy     = static_cast<std::int32_t>(std::round(parameters_.read("morphPhaseStrategy")));
+        ls.morphTransientPolicy   = static_cast<std::int32_t>(std::round(parameters_.read("morphTransientPolicy")));
+
+        constexpr std::array<std::string_view, 6> kLaneAmounts {
+            "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
+            "morphLaneTimeAmount",      "morphLaneTransientAmount", "morphLanePhaseAmount"
+        };
+        constexpr std::array<std::string_view, 6> kLaneLinks {
+            "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
+            "morphLaneTimeLinked",      "morphLaneTransientLinked", "morphLanePhaseLinked"
+        };
+        for (std::size_t n = 0; n < ls.morphLaneAmounts.size(); ++n)
+        {
+            ls.morphLaneAmounts[n] = static_cast<double>(parameters_.read(kLaneAmounts[n]));
+            ls.morphLaneLinked[n]  = parameters_.read(kLaneLinks[n]) >= 0.5f;
+        }
+
+        ls.smearnov.blurMs              = static_cast<double>(parameters_.read("smearnovBlurMs"));
+        ls.smearnov.sharpen             = static_cast<double>(parameters_.read("smearnovSharpenAmount"));
+        ls.smearnov.exaggerateDb        = static_cast<double>(parameters_.read("smearnovExaggerateDb"));
+        ls.smearnov.mix                 = static_cast<double>(parameters_.read("smearnovMix"));
+        ls.smearnov.maxDb               = static_cast<double>(parameters_.read("smearnovMaxDb"));
+        ls.smearnov.targets             = static_cast<std::int32_t>(std::round(parameters_.read("smearnovTargets")));
+        ls.smearnov.scope               = static_cast<std::int32_t>(std::round(parameters_.read("smearnovScope")));
+        ls.smearnov.weightDetFlux       = static_cast<double>(parameters_.read("smearnovWeightDetFlux"));
+        ls.smearnov.weightResFlux       = static_cast<double>(parameters_.read("smearnovWeightResFlux"));
+        ls.smearnov.weightHfcFlux       = static_cast<double>(parameters_.read("smearnovWeightHfcFlux"));
+        ls.smearnov.weightBirth         = static_cast<double>(parameters_.read("smearnovWeightBirth"));
+        ls.smearnov.weightPhaseDev      = static_cast<double>(parameters_.read("smearnovWeightPhaseDev"));
+        ls.smearnov.thresholdLambda     = static_cast<double>(parameters_.read("smearnovThresholdLambda"));
+        ls.smearnov.thresholdAutoScale  = static_cast<double>(parameters_.read("smearnovThresholdAutoScale"));
+        ls.smearnov.peakWindowFrames    = static_cast<std::int32_t>(std::round(parameters_.read("smearnovPeakWindowFrames")));
+        ls.smearnov.minGapFrames        = static_cast<std::int32_t>(std::round(parameters_.read("smearnovMinGapFrames")));
+        ls.smearnov.preMarginMs         = static_cast<double>(parameters_.read("smearnovPreMarginMs"));
+        ls.smearnov.maxAttackFrames     = static_cast<std::int32_t>(std::round(parameters_.read("smearnovMaxAttackFrames")));
+        ls.smearnov.usePhaseDeviation   = parameters_.read("smearnovUsePhaseDeviation") >= 0.5f;
+        ls.smearnov.useRpcaFallback     = parameters_.read("smearnovUseRpcaFallback") >= 0.5f;
+
+        return LegacyStateCodec::encode(ls);
+    }
+
     // The native wrapper owns the format-specific state callback. It passes
     // the complete ATSP payload here; validation happens before replacing the
     // previously published chunk so a rejected host restore cannot partially
@@ -834,8 +936,7 @@ public:
 
         HostStateChunk next(static_cast<const std::byte*>(data),
                             static_cast<const std::byte*>(data) + size);
-        stateChunk_ = std::move(next);
-        return true;
+        return applyStateChunk(std::move(next));
     }
 
     bool restoreState(const HostStateChunk& chunk)
@@ -886,9 +987,10 @@ public:
             spec.inputChannels != 0)
             return false;
         spec_ = spec;
+        resolveParameterIndices();
         playback_.prepare(spec.outputChannels, spec.maximumBlockSize);
         outputTrim_.prepare(spec.sampleRate, 20.0);
-        outputTrim_.reset(parameters_.read("outputTrim"));
+        outputTrim_.reset(parameters_.read(outputTrimIndex_));
         midi_.reset();
         state_ = HostState::prepared;
         return true;
@@ -1037,7 +1139,7 @@ public:
         }
         const auto slot = playback_.beginAudioRead();
         const auto* source = playback_.readBuffer(slot);
-        const auto trimTarget = parameters_.read("outputTrim");
+        const auto trimTarget = parameters_.read(outputTrimIndex_);
         outputTrim_.setTarget(trimTarget);
         if (source != nullptr)
         {
@@ -1089,6 +1191,132 @@ private:
         AtsSoundPtr transformed;
         Error error;
     };
+
+    void resolveParameterIndices() noexcept
+    {
+        outputTrimIndex_       = ParameterRegistry::indexOf("outputTrim");
+        partGainIndex_         = ParameterRegistry::indexOf("partGain");
+        resGainIndex_          = ParameterRegistry::indexOf("resGain");
+        freqIndex_             = ParameterRegistry::indexOf("freq");
+        freqShapeModeIndex_    = ParameterRegistry::indexOf("freqShapeMode");
+        freqShapeAmountIndex_  = ParameterRegistry::indexOf("freqShapeAmount");
+        freqShapePivotHzIndex_ = ParameterRegistry::indexOf("freqShapePivotHz");
+        timeStretchIndex_      = ParameterRegistry::indexOf("timeStretch");
+        synStartIndex_         = ParameterRegistry::indexOf("synStart");
+        synDurIndex_           = ParameterRegistry::indexOf("synDur");
+        usePhaseIndex_         = ParameterRegistry::indexOf("usePhase");
+        useAllPartialsIndex_   = ParameterRegistry::indexOf("useAllPartials");
+        residualOnlyIndex_     = ParameterRegistry::indexOf("residualOnly");
+        useIfftSynthIndex_     = ParameterRegistry::indexOf("useIfftSynth");
+        classicPreviewModeIndex_ = ParameterRegistry::indexOf("classicPreviewMode");
+    }
+
+    // Decode the chunk and apply its parameters to the live store. The chunk
+    // must already have passed header validation. Returns true even when the
+    // full decode fails (header-only chunk) so callers do not reject valid
+    // minimal states from earlier plugin versions.
+    bool applyStateChunk(HostStateChunk chunk)
+    {
+        if (chunk.size() > 8)
+        {
+            auto legacy = LegacyStateCodec::decode(chunk.data(), chunk.size());
+            if (legacy)
+                applyLegacyStateToParameters(*legacy);
+        }
+        stateChunk_ = std::move(chunk);
+        return true;
+    }
+
+    void applyLegacyStateToParameters(const LegacyState& ls) noexcept
+    {
+        // SynthParams
+        (void) parameters_.write("synStart",        static_cast<float>(ls.synth.startTime));
+        (void) parameters_.write("synDur",          static_cast<float>(ls.synth.duration));
+        (void) parameters_.write("useAllPartials",  ls.synth.useAllPartials   ? 1.0f : 0.0f);
+        (void) parameters_.write("usePhase",        ls.synth.usePartialsPhase ? 1.0f : 0.0f);
+        (void) parameters_.write("partGain",        static_cast<float>(ls.synth.partialsGain));
+        (void) parameters_.write("resGain",         static_cast<float>(ls.synth.residualGain));
+        (void) parameters_.write("freq",            static_cast<float>(ls.synth.frequencyFactor));
+        (void) parameters_.write("timeStretch",     static_cast<float>(ls.synth.timeFactor));
+        (void) parameters_.write("useIfftSynth",    ls.synth.useIfftSynth ? 1.0f : 0.0f);
+        (void) parameters_.write("freqShapeMode",   static_cast<float>(static_cast<int>(ls.synth.frequencyShape.mode)));
+        (void) parameters_.write("freqShapeAmount", static_cast<float>(ls.synth.frequencyShape.amount));
+        (void) parameters_.write("freqShapePivotHz", static_cast<float>(ls.synth.frequencyShape.pivotHz));
+        (void) parameters_.write("outputTrim",      static_cast<float>(ls.outputTrim));
+        (void) parameters_.write("residualOnly",    ls.residualOnly ? 1.0f : 0.0f);
+        (void) parameters_.write("classicPreviewMode", static_cast<float>(ls.classicPreviewMode));
+
+        // AnalysisParams: ATSA type 1-4 back to choice index 0-3
+        (void) parameters_.write("analysisType",               static_cast<float>(std::max(0, ls.analysis.type - 1)));
+        (void) parameters_.write("analysisStart",              static_cast<float>(ls.analysis.start));
+        (void) parameters_.write("analysisDuration",           static_cast<float>(ls.analysis.duration));
+        (void) parameters_.write("analysisLowestFreq",         static_cast<float>(ls.analysis.lowest_freq));
+        (void) parameters_.write("analysisHighestFreq",        static_cast<float>(ls.analysis.highest_freq));
+        (void) parameters_.write("analysisFreqDev",            static_cast<float>(ls.analysis.freq_dev));
+        (void) parameters_.write("analysisWinCycles",          static_cast<float>(ls.analysis.win_cycles));
+        (void) parameters_.write("analysisWinType",            static_cast<float>(ls.analysis.win_type));
+        (void) parameters_.write("analysisHopSize",            static_cast<float>(ls.analysis.hop_size));
+        (void) parameters_.write("analysisLowestMag",          static_cast<float>(ls.analysis.lowest_mag));
+        (void) parameters_.write("analysisTrackLen",           static_cast<float>(ls.analysis.track_len));
+        (void) parameters_.write("analysisMinSegLen",          static_cast<float>(ls.analysis.min_seg_len));
+        (void) parameters_.write("analysisMinGapLen",          static_cast<float>(ls.analysis.min_gap_len));
+        (void) parameters_.write("analysisSmrThreshold",       static_cast<float>(ls.analysis.SMR_thres));
+        (void) parameters_.write("analysisMinSegSmr",          static_cast<float>(ls.analysis.min_seg_SMR));
+        (void) parameters_.write("analysisLastPeakContribution", static_cast<float>(ls.analysis.last_peak_cont));
+        (void) parameters_.write("analysisSmrContribution",    static_cast<float>(ls.analysis.SMR_cont));
+        (void) parameters_.write("analysisMultiRes",           ls.analysis.multiRes ? 1.0f : 0.0f);
+
+        // Morph params
+        (void) parameters_.write("morphAmount",           static_cast<float>(ls.morphAmount));
+        (void) parameters_.write("morphPerformanceMacro", static_cast<float>(ls.morphPerformanceMacro));
+        (void) parameters_.write("morphSmoothingMs",      static_cast<float>(ls.morphSmoothingMs));
+        (void) parameters_.write("morphGridType",         static_cast<float>(ls.morphGridType));
+        (void) parameters_.write("morphCorrespondenceStrategy", static_cast<float>(ls.morphCorrespondenceStrategy));
+        (void) parameters_.write("morphQuality",          static_cast<float>(ls.morphQuality));
+        (void) parameters_.write("morphUnmatchedSourcePolicy", static_cast<float>(ls.morphUnmatchedSourcePolicy));
+        (void) parameters_.write("morphUnmatchedTargetPolicy", static_cast<float>(ls.morphUnmatchedTargetPolicy));
+        (void) parameters_.write("morphDiscardOptIn",     ls.morphDiscardOptIn ? 1.0f : 0.0f);
+        (void) parameters_.write("morphFrequencyInterpolationDomain", static_cast<float>(ls.morphFrequencyDomain));
+        (void) parameters_.write("morphAmplitudeInterpolationDomain", static_cast<float>(ls.morphAmplitudeDomain));
+        (void) parameters_.write("morphPhaseStrategy",    static_cast<float>(ls.morphPhaseStrategy));
+        (void) parameters_.write("morphTransientPolicy",  static_cast<float>(ls.morphTransientPolicy));
+
+        constexpr std::array<std::string_view, 6> kLaneAmounts {
+            "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
+            "morphLaneTimeAmount",      "morphLaneTransientAmount", "morphLanePhaseAmount"
+        };
+        constexpr std::array<std::string_view, 6> kLaneLinks {
+            "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
+            "morphLaneTimeLinked",      "morphLaneTransientLinked", "morphLanePhaseLinked"
+        };
+        for (std::size_t n = 0; n < ls.morphLaneAmounts.size(); ++n)
+        {
+            (void) parameters_.write(kLaneAmounts[n], static_cast<float>(ls.morphLaneAmounts[n]));
+            (void) parameters_.write(kLaneLinks[n],   ls.morphLaneLinked[n] ? 1.0f : 0.0f);
+        }
+
+        // Smearnov
+        (void) parameters_.write("smearnovBlurMs",             static_cast<float>(ls.smearnov.blurMs));
+        (void) parameters_.write("smearnovSharpenAmount",      static_cast<float>(ls.smearnov.sharpen));
+        (void) parameters_.write("smearnovExaggerateDb",       static_cast<float>(ls.smearnov.exaggerateDb));
+        (void) parameters_.write("smearnovMix",                static_cast<float>(ls.smearnov.mix));
+        (void) parameters_.write("smearnovMaxDb",              static_cast<float>(ls.smearnov.maxDb));
+        (void) parameters_.write("smearnovTargets",            static_cast<float>(ls.smearnov.targets));
+        (void) parameters_.write("smearnovScope",              static_cast<float>(ls.smearnov.scope));
+        (void) parameters_.write("smearnovWeightDetFlux",      static_cast<float>(ls.smearnov.weightDetFlux));
+        (void) parameters_.write("smearnovWeightResFlux",      static_cast<float>(ls.smearnov.weightResFlux));
+        (void) parameters_.write("smearnovWeightHfcFlux",      static_cast<float>(ls.smearnov.weightHfcFlux));
+        (void) parameters_.write("smearnovWeightBirth",        static_cast<float>(ls.smearnov.weightBirth));
+        (void) parameters_.write("smearnovWeightPhaseDev",     static_cast<float>(ls.smearnov.weightPhaseDev));
+        (void) parameters_.write("smearnovThresholdLambda",    static_cast<float>(ls.smearnov.thresholdLambda));
+        (void) parameters_.write("smearnovThresholdAutoScale", static_cast<float>(ls.smearnov.thresholdAutoScale));
+        (void) parameters_.write("smearnovPeakWindowFrames",   static_cast<float>(ls.smearnov.peakWindowFrames));
+        (void) parameters_.write("smearnovMinGapFrames",       static_cast<float>(ls.smearnov.minGapFrames));
+        (void) parameters_.write("smearnovPreMarginMs",        static_cast<float>(ls.smearnov.preMarginMs));
+        (void) parameters_.write("smearnovMaxAttackFrames",    static_cast<float>(ls.smearnov.maxAttackFrames));
+        (void) parameters_.write("smearnovUsePhaseDeviation",  ls.smearnov.usePhaseDeviation ? 1.0f : 0.0f);
+        (void) parameters_.write("smearnovUseRpcaFallback",    ls.smearnov.useRpcaFallback   ? 1.0f : 0.0f);
+    }
 
     static const char* analysisProfileName(int profile) noexcept
     {
@@ -1310,7 +1538,7 @@ private:
         const auto generation = sourceGenerations_.next();
         const auto rendered = AtsEngine::render(generation, sourceCancellation_.token(),
                                                 sources_[static_cast<std::size_t>(slot)]->sound.get(),
-                                                previewSynthParameters(previewLayer_.load(std::memory_order_acquire)),
+                                                buildRenderInputs(previewLayer_.load(std::memory_order_acquire)),
                                                 playback_.writeView(playbackSlot));
         if (rendered.status != JobResult<RenderStats>::Status::success ||
             !playback_.publish(playbackSlot, generation))
@@ -1328,14 +1556,38 @@ private:
         return true;
     }
 
-    [[nodiscard]] SynthParams previewSynthParameters(int layer) const noexcept
+    // Compile all synthesis parameters into a SynthParams struct for a render
+    // call.  This is the single source of truth for preview, bounce, and any
+    // offline render; it covers every field the renderer accepts.
+    [[nodiscard]] SynthParams buildRenderInputs(int layer) const noexcept
     {
-        SynthParams parameters;
-        parameters.partialsGain = parameters_.read("partGain");
-        parameters.residualGain = parameters_.read("resGain");
-        if (layer == 1) parameters.residualGain = 0.0;
-        if (layer == 2) parameters.partialsGain = 0.0;
-        return parameters;
+        SynthParams params;
+        params.partialsGain     = static_cast<double>(parameters_.read(partGainIndex_));
+        params.residualGain     = static_cast<double>(parameters_.read(resGainIndex_));
+        params.frequencyFactor  = static_cast<double>(parameters_.read(freqIndex_));
+        params.timeFactor       = static_cast<double>(parameters_.read(timeStretchIndex_));
+        params.startTime        = static_cast<double>(parameters_.read(synStartIndex_));
+        params.duration         = static_cast<double>(parameters_.read(synDurIndex_));
+        params.useAllPartials   = parameters_.read(useAllPartialsIndex_) >= 0.5f;
+        params.usePartialsPhase = parameters_.read(usePhaseIndex_) >= 0.5f;
+        params.useIfftSynth     = parameters_.read(useIfftSynthIndex_) >= 0.5f;
+        params.sampleRate       = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
+        params.frequencyShape.mode    = static_cast<FrequencyShapeMode>(
+            static_cast<int>(std::round(parameters_.read(freqShapeModeIndex_))));
+        params.frequencyShape.amount  = static_cast<double>(parameters_.read(freqShapeAmountIndex_));
+        params.frequencyShape.pivotHz = static_cast<double>(parameters_.read(freqShapePivotHzIndex_));
+
+        const auto semitones = midi_.semitoneOffset();
+        if (semitones != 0)
+            params.frequencyFactor *= std::pow(2.0, static_cast<double>(semitones) / 12.0);
+
+        // Layer and residual-only override applied after MIDI transpose so the
+        // gain zeroing is purely a mixing decision, not a parameter mutation.
+        const auto residualOnly = parameters_.read(residualOnlyIndex_) >= 0.5f;
+        if (residualOnly || layer == 2) params.partialsGain = 0.0;
+        if (layer == 1)                 params.residualGain = 0.0;
+
+        return params;
     }
 
     HostIdentity identity_ = HostIdentity::current();
@@ -1388,6 +1640,23 @@ private:
     std::uint64_t timelineRevision_ = 0;
     std::uint64_t timbreRevision_ = 0;
     std::uint64_t onsetRevision_ = 0;
+
+    // Dense indices resolved in prepare() for RT-safe access in process().
+    std::size_t outputTrimIndex_       = 0;
+    std::size_t partGainIndex_         = 0;
+    std::size_t resGainIndex_          = 0;
+    std::size_t freqIndex_             = 0;
+    std::size_t freqShapeModeIndex_    = 0;
+    std::size_t freqShapeAmountIndex_  = 0;
+    std::size_t freqShapePivotHzIndex_ = 0;
+    std::size_t timeStretchIndex_      = 0;
+    std::size_t synStartIndex_         = 0;
+    std::size_t synDurIndex_           = 0;
+    std::size_t usePhaseIndex_         = 0;
+    std::size_t useAllPartialsIndex_   = 0;
+    std::size_t residualOnlyIndex_     = 0;
+    std::size_t useIfftSynthIndex_     = 0;
+    std::size_t classicPreviewModeIndex_ = 0;
 };
 
 } // namespace ats::host

@@ -298,10 +298,8 @@ public:
     {
         if (state == nullptr)
             return Steinberg::kResultFalse;
-        const auto& chunk = host_.stateChunk();
-        const auto defaultChunk = ats::AtsStateCodec::encodeHeader();
-        return writeStream(state, chunk.empty() ? defaultChunk : chunk) ? Steinberg::kResultTrue
-                                                                         : Steinberg::kResultFalse;
+        return writeStream(state, host_.captureState()) ? Steinberg::kResultTrue
+                                                        : Steinberg::kResultFalse;
     }
 
     // Editor-originated file and analysis work is deliberately received by
