@@ -989,8 +989,14 @@ public:
         spec_ = spec;
         resolveParameterIndices();
         playback_.prepare(spec.outputChannels, spec.maximumBlockSize);
+        playbackPartials_.prepare(spec.outputChannels, spec.maximumBlockSize);
+        playbackResidual_.prepare(spec.outputChannels, spec.maximumBlockSize);
         outputTrim_.prepare(spec.sampleRate, 20.0);
+        partGainSmoother_.prepare(spec.sampleRate, 20.0);
+        resGainSmoother_.prepare(spec.sampleRate, 20.0);
         outputTrim_.reset(parameters_.read(outputTrimIndex_));
+        partGainSmoother_.reset(parameters_.read(partGainIndex_));
+        resGainSmoother_.reset(parameters_.read(resGainIndex_));
         midi_.reset();
         state_ = HostState::prepared;
         return true;
@@ -1137,31 +1143,95 @@ public:
             output.clear();
             return true;
         }
-        const auto slot = playback_.beginAudioRead();
-        const auto* source = playback_.readBuffer(slot);
-        const auto trimTarget = parameters_.read(outputTrimIndex_);
-        outputTrim_.setTarget(trimTarget);
-        if (source != nullptr)
+
+        // Acquire read slots for all three layers atomically before mixing.
+        const auto combinedSlot  = playback_.beginAudioRead();
+        const auto partialsSlot  = playbackPartials_.beginAudioRead();
+        const auto residualSlot  = playbackResidual_.beginAudioRead();
+        const auto* combinedBuf  = playback_.readBuffer(combinedSlot);
+        const auto* partialsBuf  = playbackPartials_.readBuffer(partialsSlot);
+        const auto* residualBuf  = playbackResidual_.readBuffer(residualSlot);
+
+        // Update per-sample smoother targets. All three are ticked every callback
+        // so their internal state stays consistent regardless of which layer is active.
+        outputTrim_.setTarget(parameters_.read(outputTrimIndex_));
+        partGainSmoother_.setTarget(parameters_.read(partGainIndex_));
+        resGainSmoother_.setTarget(parameters_.read(resGainIndex_));
+
+        const auto layer        = previewLayer_.load(std::memory_order_acquire);
+        const auto classicMode  = parameters_.read(classicPreviewModeIndex_) < 0.5f;
+        const auto residualOnly = parameters_.read(residualOnlyIndex_) >= 0.5f;
+
+        // Select the buffer(s) for the current layer.  residualOnly overrides
+        // all layer settings to residual-only regardless of classicPreviewMode.
+        const OwnedAudioBuffer* primary = nullptr;
+        const OwnedAudioBuffer* second  = nullptr;
+        bool layerMix = false;
+
+        if (residualOnly || layer == 2)
         {
-            const auto frames = std::min(output.frameCount, source->frameCount());
-            const auto channels = std::min(output.channelCount, source->channelCount());
-            const auto sourceFrames = source->frameCount();
+            primary = residualBuf;
+        }
+        else if (layer == 1)
+        {
+            primary = partialsBuf;
+        }
+        else // layer == 0 (both)
+        {
+            if (classicMode)
+                primary = combinedBuf;
+            else
+            {
+                primary  = partialsBuf;
+                second   = residualBuf;
+                layerMix = true;
+            }
+        }
+
+        const auto* lengthRef = primary ? primary : second;
+        if (lengthRef != nullptr)
+        {
+            const auto sourceFrames   = lengthRef->frameCount();
             const auto timelineFrames = previewLengthFrames_.load(std::memory_order_relaxed);
-            const auto timelineStart = explicitPreview_.load(std::memory_order_relaxed) &&
-                                               timelineFrames > 0
-                ? previewFrame_.load(std::memory_order_relaxed) % timelineFrames : 0;
+            const auto timelineStart  = explicitPreview_.load(std::memory_order_relaxed) && timelineFrames > 0
+                ? previewFrame_.load(std::memory_order_relaxed) % timelineFrames : 0u;
+            const auto frames   = std::min(output.frameCount, sourceFrames);
+            const auto channels = std::min(output.channelCount,
+                primary ? primary->channelCount() : output.channelCount);
+
             for (std::uint32_t frame = 0; frame < frames; ++frame)
             {
-                const auto gain = outputTrim_.process();
-                const auto readFrame = sourceFrames == 0 ? 0 : (timelineStart + frame) % sourceFrames;
+                const auto trim   = outputTrim_.process();
+                const auto partGn = partGainSmoother_.process();
+                const auto resGn  = resGainSmoother_.process();
+                const auto rf     = sourceFrames == 0 ? 0u : (timelineStart + frame) % sourceFrames;
+
                 for (std::uint32_t channel = 0; channel < channels; ++channel)
-                    if (output.channels[channel] != nullptr && source->channel(channel) != nullptr)
-                        output.channels[channel][frame] = source->channel(channel)[readFrame] * gain;
+                {
+                    if (output.channels[channel] == nullptr) continue;
+                    float sample = 0.0f;
+                    if (layerMix)
+                    {
+                        if (primary && primary->channel(channel))
+                            sample += primary->channel(channel)[rf] * partGn;
+                        if (second  && second->channel(channel))
+                            sample += second->channel(channel)[rf]  * resGn;
+                    }
+                    else if (primary && primary->channel(channel))
+                    {
+                        const float raw = primary->channel(channel)[rf];
+                        if (residualOnly || layer == 2)      sample = raw * resGn;
+                        else if (layer == 1)                  sample = raw * partGn;
+                        else /* classicMode both */           sample = raw;
+                    }
+                    output.channels[channel][frame] = sample * trim;
+                }
             }
+
             if (explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0)
             {
                 const auto nextFrame = timelineFrames == 0
-                    ? 0 : (timelineStart + frames) % timelineFrames;
+                    ? 0u : (timelineStart + frames) % timelineFrames;
                 previewFrame_.store(nextFrame, std::memory_order_release);
                 normalizedPlayhead_.store(timelineFrames == 0
                                                ? 0.0f
@@ -1170,12 +1240,17 @@ public:
                                            std::memory_order_release);
             }
         }
+
+        // Zero any frames beyond what the buffer covers.
+        const auto filled = lengthRef ? std::min(output.frameCount, lengthRef->frameCount()) : 0u;
         for (std::uint32_t channel = 0; channel < output.channelCount; ++channel)
             if (output.channels[channel] != nullptr)
-                for (std::uint32_t frame = source == nullptr ? 0 : std::min(output.frameCount, source->frameCount());
-                     frame < output.frameCount; ++frame)
+                for (std::uint32_t frame = filled; frame < output.frameCount; ++frame)
                     output.channels[channel][frame] = 0.0f;
-        playback_.endAudioRead(slot);
+
+        playback_.endAudioRead(combinedSlot);
+        playbackPartials_.endAudioRead(partialsSlot);
+        playbackResidual_.endAudioRead(residualSlot);
         return true;
     }
 
@@ -1529,41 +1604,54 @@ private:
             error = { "missing_model", "analyse the selected source before starting preview" };
             return false;
         }
-        const auto playbackSlot = playback_.tryAcquireWriteSlot();
-        if (playbackSlot == PlaybackBufferPool::kNoBuffer)
-        {
-            error = { "playback_busy", "no playback buffer is available for preview" };
-            return false;
-        }
+        const auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
         const auto generation = sourceGenerations_.next();
-        const auto rendered = AtsEngine::render(generation, sourceCancellation_.token(),
-                                                sources_[static_cast<std::size_t>(slot)]->sound.get(),
-                                                buildRenderInputs(previewLayer_.load(std::memory_order_acquire)),
-                                                playback_.writeView(playbackSlot));
-        if (rendered.status != JobResult<RenderStats>::Status::success ||
-            !playback_.publish(playbackSlot, generation))
+        const auto token = sourceCancellation_.token();
+
+        // Render all three layers: combined, partials-only, residual-only.
+        // Per-sample gain mixing in process() applies partGain/resGain via smoothers.
+        struct LayerRender { PlaybackBufferPool& pool; int layer; const char* label; };
+        std::array<LayerRender, 3> layers {{
+            { playback_,         0, "combined" },
+            { playbackPartials_, 1, "partials" },
+            { playbackResidual_, 2, "residual" }
+        }};
+        for (auto& lr : layers)
         {
-            error = rendered.error ? rendered.error
-                                   : Error { "playback_publish_failed", "could not publish preview audio" };
-            return false;
+            const auto writeSlot = lr.pool.tryAcquireWriteSlot();
+            if (writeSlot == PlaybackBufferPool::kNoBuffer)
+            {
+                error = { "playback_busy", std::string("no buffer for ") + lr.label + " layer" };
+                return false;
+            }
+            const auto result = AtsEngine::render(generation, token, sound,
+                                                   buildRenderInputs(lr.layer),
+                                                   lr.pool.writeView(writeSlot));
+            if (result.status != JobResult<RenderStats>::Status::success ||
+                !lr.pool.publish(writeSlot, generation))
+            {
+                error = result.error ? result.error
+                                     : Error { "playback_publish_failed",
+                                               std::string("could not publish ") + lr.label };
+                return false;
+            }
         }
+
         const auto durationFrames = std::max<std::uint64_t>(
-            1, static_cast<std::uint64_t>(std::llround(
-                sources_[static_cast<std::size_t>(slot)]->sound.get()->dur * spec_.sampleRate)));
+            1, static_cast<std::uint64_t>(std::llround(sound->dur * spec_.sampleRate)));
         previewLengthFrames_.store(static_cast<std::uint32_t>(std::min<std::uint64_t>(
                                              durationFrames, std::numeric_limits<std::uint32_t>::max())),
                                    std::memory_order_release);
         return true;
     }
 
-    // Compile all synthesis parameters into a SynthParams struct for a render
-    // call.  This is the single source of truth for preview, bounce, and any
-    // offline render; it covers every field the renderer accepts.
+    // Build SynthParams for a specific render layer. Mixing gains (partGain,
+    // resGain) are always 1.0 at render time — they are applied per-sample
+    // via OnePoleSmoother in process() to satisfy the 20 ms ramp contract.
+    // layer: 0=combined, 1=partials-only, 2=residual-only.
     [[nodiscard]] SynthParams buildRenderInputs(int layer) const noexcept
     {
         SynthParams params;
-        params.partialsGain     = static_cast<double>(parameters_.read(partGainIndex_));
-        params.residualGain     = static_cast<double>(parameters_.read(resGainIndex_));
         params.frequencyFactor  = static_cast<double>(parameters_.read(freqIndex_));
         params.timeFactor       = static_cast<double>(parameters_.read(timeStretchIndex_));
         params.startTime        = static_cast<double>(parameters_.read(synStartIndex_));
@@ -1581,11 +1669,8 @@ private:
         if (semitones != 0)
             params.frequencyFactor *= std::pow(2.0, static_cast<double>(semitones) / 12.0);
 
-        // Layer and residual-only override applied after MIDI transpose so the
-        // gain zeroing is purely a mixing decision, not a parameter mutation.
-        const auto residualOnly = parameters_.read(residualOnlyIndex_) >= 0.5f;
-        if (residualOnly || layer == 2) params.partialsGain = 0.0;
-        if (layer == 1)                 params.residualGain = 0.0;
+        params.partialsGain = (layer == 2) ? 0.0 : 1.0;
+        params.residualGain = (layer == 1) ? 0.0 : 1.0;
 
         return params;
     }
@@ -1615,8 +1700,12 @@ private:
     std::array<std::uint64_t, 2> sourceRevisions_ {};
     HostStateChunk stateChunk_;
     PlaybackBufferPool playback_;
+    PlaybackBufferPool playbackPartials_;
+    PlaybackBufferPool playbackResidual_;
     MidiNoteRouter midi_;
     OnePoleSmoother outputTrim_;
+    OnePoleSmoother partGainSmoother_;
+    OnePoleSmoother resGainSmoother_;
     ui::IEditor* editor_ = nullptr;
     bool editorAttached_ = false;
     bool editorVisible_ = false;
