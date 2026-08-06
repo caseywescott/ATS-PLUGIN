@@ -838,18 +838,49 @@ public:
                   0.0f, false });
             for (const auto& command : commands)
             {
-                if (command.kind == SpectrumDrawKind::background ||
-                    command.kind == SpectrumDrawKind::grid ||
-                    command.kind == SpectrumDrawKind::axis ||
-                    command.kind == SpectrumDrawKind::axisTick ||
-                    command.kind == SpectrumDrawKind::residualBand ||
-                    command.kind == SpectrumDrawKind::onsetMarker ||
-                    command.kind == SpectrumDrawKind::envelopeTrace ||
-                    command.kind == SpectrumDrawKind::playhead)
+                const auto& b = command.bounds;
+                switch (command.kind)
                 {
+                case SpectrumDrawKind::background:
+                case SpectrumDrawKind::grid:
+                case SpectrumDrawKind::axis:
+                case SpectrumDrawKind::axisTick:
+                case SpectrumDrawKind::residualBand:
+                case SpectrumDrawKind::onsetMarker:
+                case SpectrumDrawKind::playhead:
                     canvas.setColor(command.color);
-                    canvas.rectangle(command.bounds.x, command.bounds.y,
-                                    command.bounds.width, command.bounds.height);
+                    canvas.rectangle(b.x, b.y, b.width, b.height);
+                    break;
+                case SpectrumDrawKind::envelopeTrace:
+                case SpectrumDrawKind::partialTrace:
+                    canvas.setColor(command.color);
+                    // Line segment stored as (x1, y1, dx, dy); draw as 1px rect
+                    // on the dominant axis to approximate a diagonal stroke.
+                    if (std::abs(b.width) >= std::abs(b.height))
+                        canvas.rectangle(b.x, b.y, std::max(1.0f, std::abs(b.width)), 1.0f);
+                    else
+                        canvas.rectangle(b.x, b.y, 1.0f, std::max(1.0f, std::abs(b.height)));
+                    break;
+                case SpectrumDrawKind::selectedPartial:
+                    canvas.setColor(command.color);
+                    // Selected partial drawn as 2px stroke to distinguish from unselected.
+                    if (std::abs(b.width) >= std::abs(b.height))
+                        canvas.rectangle(b.x, b.y - 0.5f, std::max(1.0f, std::abs(b.width)), 2.0f);
+                    else
+                        canvas.rectangle(b.x - 0.5f, b.y, 2.0f, std::max(1.0f, std::abs(b.height)));
+                    break;
+                case SpectrumDrawKind::ridgeline:
+                case SpectrumDrawKind::isometricTile:
+                case SpectrumDrawKind::dustPoint:
+                    canvas.setColor(command.color);
+                    canvas.rectangle(b.x, b.y, b.width, b.height);
+                    break;
+                case SpectrumDrawKind::glowHalo:
+                    canvas.setColor(command.color);
+                    canvas.roundedRectangle(b.x, b.y, b.width, b.height, 3.0f);
+                    break;
+                default:
+                    break;
                 }
             }
             canvas.setColor(tokens.secondaryText);

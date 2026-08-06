@@ -303,9 +303,20 @@ Ordered by dependency, not by size.
     — 13 surface records written in `docs/juce-removal-baseline/ui-surfaces/`:
       UI-SHELL-01/02/03/04, UI-SESSION-01/02/03/04/05/06/07/08/09
     — Manifest updated: 13 rows promoted from `planned` → `implemented`
-14. Make `SpectrumRenderer` branch on all seven modes; paint `partialTrace` and
+14. ✓ Make `SpectrumRenderer` branch on all seven modes; paint `partialTrace` and
     `selectedPartial` in `VisageEditor`; add the LUT/dust/glow/ridgeline/
     isometric layers and the cache/revision rules from §22.3.
+    — Added `SpectrumDrawKind`: `ridgeline`, `glowHalo`, `isometricTile`, `dustPoint`
+    — Added `SpectrumLUT::colorForAmp(ampNorm, theme)` for ember/porcelain gradients
+    — `render()` branches on all 7 `SpectralTraceMode` values: combined/partials/
+      residual use flat 2D draw commands; isometric/isometricResidual/isometricEnvelope/
+      isometricEnvelopeRdc call `emitIsometric()` cabinet-oblique projection
+    — Selected partial now emits `glowHalo` + 2px `selectedPartial` stroke
+    — Low-amplitude partial points emitted as `dustPoint` (alpha 0.25) rather than
+      full traces
+    — `VisageEditor` dispatch loop updated to paint all 8 draw-kind groups including
+      `partialTrace`/`selectedPartial` as 1-2px rectangle strokes
+    — `spectrum_renderer_test` extended to cover all 7 modes + `SpectrumLUT`
 15. Build the §22.1 menu tree, navigation, and the SP-* gesture set.
 16. Native dialogs, focus restoration, click-through overlays, teardown.
 
