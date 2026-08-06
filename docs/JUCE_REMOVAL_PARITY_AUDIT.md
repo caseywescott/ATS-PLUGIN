@@ -283,9 +283,17 @@ Ordered by dependency, not by size.
 
 11. Record the card 03 promote/defer decisions for keyboard / output spectrum /
     output meter / `uiTheme` / editor geometry (1180×820 vs 1280×940).
-12. Build real Visage frame composites: slider, combo/popup, toggle, segmented
+12. ✓ Build real Visage frame composites: slider, combo/popup, toggle, segmented
     selector, text field, tooltip, page container. Prove each through the real
     dispatcher before composing pages.
+    — `src/ui/VisageWidgets.h`: AtsSlider, AtsToggle, AtsCombo, AtsSegmented,
+      AtsTextField, AtsTooltip, AtsPageContainer as `visage::Frame` subclasses
+      with `handleDragBegin/Move/End`, `handleClick`, `handleSelect`, etc.
+    — `tests/ui/ats_widget_dispatch_test.mm`: proves all 7 widgets route through
+      the real `ParameterActionDispatcher`; passes (registered in
+      `ATS_BUILD_VISAGE_UI_PROBE` block of `CMakeLists.txt`)
+    — `ats_visage_editor` CMake target now exposes `VisageEmbeddedFonts`
+      include path as PUBLIC so widget consumers find `<embedded/fonts.h>`
 13. Port page by page against the §23 copy/geometry contracts, writing the
     surface record before the code.
 14. Make `SpectrumRenderer` branch on all seven modes; paint `partialTrace` and
@@ -320,7 +328,7 @@ Ordered by dependency, not by size.
 | VST3 identity/buses/MIDI/latency/tail/state | identity ok; **state fails** |
 | AU + standalone load on macOS | artifact + `auval` ok; arm64 GUI probes trap |
 | Both themes at all sizes/scales | not proven |
-| Every widget class passes real-dispatch | **no widget classes exist** |
+| Every widget class passes real-dispatch | AtsSlider/Toggle/Combo/Segmented/TextField/Tooltip/PageContainer in `VisageWidgets.h`; `ats_widget_dispatch_test` passes |
 | Every non-parameter action has typed command + result | typed yes; all 5 model-edit actions implemented; timeline/timbre/onset payloads upgraded to source-contract types |
 | Popups/tooltips/text/focus/resize/dialogs live tested | partial harness only |
 | Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | Smearnov only |

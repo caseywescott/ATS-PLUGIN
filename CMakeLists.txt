@@ -513,8 +513,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
 
   add_library(ats_visage_editor STATIC src/ui/VisageEditor.cpp src/ui/VisageNativeMac.mm)
   target_include_directories(ats_visage_editor PUBLIC
-    "${CMAKE_SOURCE_DIR}/src/ui" "${CMAKE_SOURCE_DIR}/src/core")
-  target_include_directories(ats_visage_editor PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/ui" "${CMAKE_SOURCE_DIR}/src/core"
     $<TARGET_PROPERTY:VisageEmbeddedFonts,INTERFACE_INCLUDE_DIRECTORIES>)
   target_compile_features(ats_visage_editor PUBLIC cxx_std_17)
   target_link_libraries(ats_visage_editor PUBLIC visage)
@@ -541,6 +540,14 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
     target_link_libraries(native_file_dialog_contract_test PRIVATE
       ats_visage_editor ats_core visage "-framework Cocoa")
     add_test(NAME native_file_dialog_contract_test COMMAND native_file_dialog_contract_test)
+
+    add_executable(ats_widget_dispatch_test tests/ui/ats_widget_dispatch_test.mm)
+    target_include_directories(ats_widget_dispatch_test PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(ats_widget_dispatch_test PRIVATE cxx_std_17)
+    target_link_libraries(ats_widget_dispatch_test PRIVATE
+      ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME ats_widget_dispatch_test COMMAND ats_widget_dispatch_test)
   endif()
 endif()
 
