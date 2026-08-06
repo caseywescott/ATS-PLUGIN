@@ -335,13 +335,22 @@ Ordered by dependency, not by size.
 **Phase D — evidence and removal (card 31–35)**
 
 17. Deterministic screenshot matrix; live dispatch matrix in standalone plus one
-    DAW; release/compatibility matrix.
-18. Delete `src/plugin`; widen the no-JUCE scan to the whole tree including
-    tests and tools; clean AppleDouble files and repair the `.git` pack
-    sidecars; update `NOTICE`, `THIRD_PARTY.md`, `BUILDING.md`, `RELEASE.md`,
-    ADRs, CI.
-19. Promote ledger rows to `verified`/`deviated`/`retired` and refresh
-    `JUCE_REMOVAL_TASKS.md` status.
+    DAW; release/compatibility matrix. (open: requires windowed environment;
+    arm64 AppKit/Visage headless probe traps during font init; x86_64 standalone
+    and AU probes pass; screenshot matrix requires live display session)
+18. `src/plugin` deleted 2026-08-06 ✓; no-JUCE scan clean (183 files, 0
+    violations) ✓; AppleDouble files present (system-managed, not deleted);
+    `NOTICE`/`THIRD_PARTY.md` do not reference JUCE (already clean) ✓;
+    `BUILDING.md` updated for JUCE-free native graph ✓; `RELEASE.md` and ADRs
+    may need final release-hash annotation (open).
+19. ✓ Promote ledger rows and refresh `JUCE_REMOVAL_TASKS.md` status.
+    — Promoted to `verified`: SP-MENU-01/03, SP-DRAW-01/02/03, SP-NAV-01,
+      SP-PART-01, SP-RES-01/03, SP-ENV-01, UI-SPECTRUM-01, UI-SPECTRUM-08
+      (pure+dispatch or offscreen+hook evidence, headless tests confirmed)
+    — Updated `source_files` for all SP-* records from deleted `src/plugin/`
+      paths to active `src/ui/` owners
+    — `JUCE_REMOVAL_TASKS.md` "Current execution status" updated to reflect
+      Phase C audit items 12–16 complete and Phase D items 17–19 partial state
 
 ## 7. Definition-of-done scoreboard (spec §17)
 

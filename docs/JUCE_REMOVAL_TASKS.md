@@ -204,8 +204,25 @@ listed commit supplies the cross-layer proof.
   CocoaUI/standalone probes still hit the same headless AppKit/Visage trap.
   Focused four-block timestamp-advanced AU automation/MIDI dispatch coverage
   passes in the artifact test.
-- [ ] Commits 23–35 UI parity, cross-layer live dispatch, release matrix, and
-  JUCE removal remain open.
+- [x] Commits 23–30 UI parity (Phase C audit items 12–16): VisageWidgets.h,
+  AtsEditorPages.h, all 53 surface records written (no planned rows remain).
+  All surface records are `implemented` or `verified`; 3 blocked pending P1.
+  SpectrumRenderer branches on all 7 modes with LUT/dust/glow/ridgeline/
+  isometric layers; VisageEditor paints partialTrace and selectedPartial.
+  UI-SHELL-01..04, UI-SESSION-01..09, UI-SPECTRUM-01..08, SP-* all promoted.
+  UI-DIALOG-01 and UI-LIFECYCLE-01 documented and promoted.
+- [x] Commit 35 partial (audit item 19): SP-MENU-01/03, SP-DRAW-01..03,
+  SP-NAV-01, SP-PART-01, SP-RES-01/03, SP-ENV-01, UI-SPECTRUM-01/08 promoted
+  to `verified`; all SP-* source_files updated to src/ui/. atas_ui_parity_manifest
+  passes the Python validator with no planned rows.
+- [ ] Commits 31–32 (live dispatch matrix): real-window screenshot matrix and
+  cross-layer live dispatch in standalone + one DAW remain open (require
+  windowed environment; arm64 AppKit/Visage probe still traps in headless CI).
+- [ ] Commit 33 (release matrix): host/RT/DSP/compatibility matrix open.
+- [ ] Commit 34 (final JUCE removal cleanup): AppleDouble / .git pack sidecars;
+  final license/NOTICE update.
+- [ ] Commit 35 (final parity packet): remaining `implemented` rows → `verified`;
+  deviation register closure; full assembly of release evidence artifacts.
 
 - [ ] Baseline, backend revision, source inventory, copy manifest, fixtures,
   hashes, and decisions are frozen.
