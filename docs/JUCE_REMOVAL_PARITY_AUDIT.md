@@ -317,7 +317,13 @@ Ordered by dependency, not by size.
     — `VisageEditor` dispatch loop updated to paint all 8 draw-kind groups including
       `partialTrace`/`selectedPartial` as 1-2px rectangle strokes
     — `spectrum_renderer_test` extended to cover all 7 modes + `SpectrumLUT`
-15. Build the §22.1 menu tree, navigation, and the SP-* gesture set.
+15. ✓ Build the §22.1 menu tree, navigation, and the SP-* gesture set.
+    — `SpectrumInteractionModel` already implements all gestures (zoom/pan/fit,
+      selectPartial/Band, selectResidualRange, setEnvelopeRange, runPartial*)
+    — Written 10 surface records: SP-MENU-04, SP-LIVE-01, UI-SPECTRUM-01–08
+    — Manifest: all 10 promoted to `implemented`; unowned count drops to 5
+      (UI-DIALOG-01, UI-LIFECYCLE-01 remain planned; UI-KEYBOARD/OUTPUT/METER-01
+      remain blocked)
 16. Native dialogs, focus restoration, click-through overlays, teardown.
 
 **Phase D — evidence and removal (card 31–35)**
@@ -351,7 +357,7 @@ Ordered by dependency, not by size.
 | Popups/tooltips/text/focus/resize/dialogs live tested | partial harness only |
 | Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | Smearnov only |
 | Standalone + one DAW exercised at release hash | not done |
-| Coverage matrix has no unowned contract | 15 UI rows unowned (13 promoted to implemented by item 13) |
+| Coverage matrix has no unowned contract | 5 UI rows unowned (10 more promoted by item 15; 3 blocked pending P1) |
 | Deviation register approved/closed | 8 deviations recorded (DEV-SVCL-001 – DEV-SVCL-008); HostAdapter as single production owner |
 | Clean-checkout build and tests pass | pass (79/79 headless) |
 | Repository scan and license/NOTICE audit | scan widened to full tree (183 files, 0 violations); NOTICE/THIRD_PARTY not yet updated |
