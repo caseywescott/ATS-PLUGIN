@@ -294,8 +294,15 @@ Ordered by dependency, not by size.
       `ATS_BUILD_VISAGE_UI_PROBE` block of `CMakeLists.txt`)
     — `ats_visage_editor` CMake target now exposes `VisageEmbeddedFonts`
       include path as PUBLIC so widget consumers find `<embedded/fonts.h>`
-13. Port page by page against the §23 copy/geometry contracts, writing the
+13. ✓ Port page by page against the §23 copy/geometry contracts, writing the
     surface record before the code.
+    — `src/ui/AtsEditorPages.h`: five Visage page frames (`AtsAnalysisPage`,
+      `AtsSynthesisPage`, `AtsSessionPage`, `AtsPartialsPage`, `AtsMathPage`)
+      plus `PageActionBridge`; each page owns a `ParameterStore` +
+      `ParameterActionDispatcher` and exposes `setControlValue`
+    — 13 surface records written in `docs/juce-removal-baseline/ui-surfaces/`:
+      UI-SHELL-01/02/03/04, UI-SESSION-01/02/03/04/05/06/07/08/09
+    — Manifest updated: 13 rows promoted from `planned` → `implemented`
 14. Make `SpectrumRenderer` branch on all seven modes; paint `partialTrace` and
     `selectedPartial` in `VisageEditor`; add the LUT/dust/glow/ridgeline/
     isometric layers and the cache/revision rules from §22.3.
@@ -333,7 +340,7 @@ Ordered by dependency, not by size.
 | Popups/tooltips/text/focus/resize/dialogs live tested | partial harness only |
 | Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | Smearnov only |
 | Standalone + one DAW exercised at release hash | not done |
-| Coverage matrix has no unowned contract | 28 UI rows unowned |
+| Coverage matrix has no unowned contract | 15 UI rows unowned (13 promoted to implemented by item 13) |
 | Deviation register approved/closed | 8 deviations recorded (DEV-SVCL-001 – DEV-SVCL-008); HostAdapter as single production owner |
 | Clean-checkout build and tests pass | pass (79/79 headless) |
 | Repository scan and license/NOTICE audit | scan widened to full tree (183 files, 0 violations); NOTICE/THIRD_PARTY not yet updated |
