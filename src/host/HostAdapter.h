@@ -635,7 +635,12 @@ public:
         }
         if (const auto* save = std::get_if<ui::SavePresetAction>(&action))
         {
-            const auto payload = state::ParameterPresetCodec::encode(parameters_);
+            const auto payload = captureState();
+            if (payload.empty())
+            {
+                error = { "preset_encode_failed", "failed to encode current state as preset" };
+                return true;
+            }
             if (presetService_ != nullptr)
             {
                 const auto stem = std::filesystem::u8path(save->path.utf8).stem().u8string();
@@ -659,9 +664,19 @@ public:
                 error = result.error;
                 return true;
             }
-            std::string decodeError;
-            if (!state::ParameterPresetCodec::decode(result.bytes, parameters_, decodeError))
-                error = { "preset_decode_failed", decodeError };
+            // Try full-state format (new saves); fall back to parameter-only for
+            // backward compatibility with presets saved by older plugin versions.
+            auto legacy = LegacyStateCodec::decode(result.bytes.data(), result.bytes.size());
+            if (legacy)
+            {
+                applyLegacyStateToParameters(*legacy);
+            }
+            else
+            {
+                std::string decodeError;
+                if (!state::ParameterPresetCodec::decode(result.bytes, parameters_, decodeError))
+                    error = { "preset_decode_failed", decodeError };
+            }
             return true;
         }
         if (const auto* partial = std::get_if<ui::PartialEditAction>(&action))
