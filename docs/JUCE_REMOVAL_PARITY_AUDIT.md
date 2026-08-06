@@ -324,7 +324,13 @@ Ordered by dependency, not by size.
     — Manifest: all 10 promoted to `implemented`; unowned count drops to 5
       (UI-DIALOG-01, UI-LIFECYCLE-01 remain planned; UI-KEYBOARD/OUTPUT/METER-01
       remain blocked)
-16. Native dialogs, focus restoration, click-through overlays, teardown.
+16. ✓ Native dialogs, focus restoration, click-through overlays, teardown.
+    — Written UI-DIALOG-01 (`DialogModel` + `NativeFileDialog` + `FileDialogModel`
+      lifecycle: open/accept/cancel/error for all 6 dialog kinds)
+    — Written UI-LIFECYCLE-01 (`VisageEditor` sink callbacks, resize contract
+      1100×860–1900×1400, teardown cancel via `CancelJobsAction`)
+    — Manifest: both promoted to `implemented`; all 53 surfaces now
+      implemented or blocked (no remaining planned rows)
 
 **Phase D — evidence and removal (card 31–35)**
 
@@ -357,7 +363,7 @@ Ordered by dependency, not by size.
 | Popups/tooltips/text/focus/resize/dialogs live tested | partial harness only |
 | Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | Smearnov only |
 | Standalone + one DAW exercised at release hash | not done |
-| Coverage matrix has no unowned contract | 5 UI rows unowned (10 more promoted by item 15; 3 blocked pending P1) |
+| Coverage matrix has no unowned contract | 0 planned rows remain; 3 blocked pending P1 (UI-KEYBOARD/OUTPUT/METER-01) |
 | Deviation register approved/closed | 8 deviations recorded (DEV-SVCL-001 – DEV-SVCL-008); HostAdapter as single production owner |
 | Clean-checkout build and tests pass | pass (79/79 headless) |
 | Repository scan and license/NOTICE audit | scan widened to full tree (183 files, 0 violations); NOTICE/THIRD_PARTY not yet updated |
