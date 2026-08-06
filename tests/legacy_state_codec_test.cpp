@@ -25,8 +25,11 @@ int main()
     source.residualStates[0].bands.push_back({ 2, 3.0, 4.0 });
     source.smearnov.mix = 42.0;
     source.morphSoundData[1] = { static_cast<std::byte>(0x7f) };
+    source.morphTimeline = { 0.0f, 0.25f, 0.75f, 1.0f };
+    source.timbreJson = "{\"version\":1,\"plan\":[]}";
+    source.smearnovOnsets = { 0.1f, 0.5f, 0.9f };
 
-    for (std::uint32_t version = 2; version <= 17; ++version)
+    for (std::uint32_t version = 2; version <= ats::LegacyStateCodec::kCurrentVersion; ++version)
     {
         const auto bytes = ats::LegacyStateCodec::encode(source, version);
         assert(!bytes.empty());
@@ -37,6 +40,19 @@ int main()
         if (version >= 7) assert(decoded->morphLaneLinked[2] == false);
         if (version >= 9) assert(decoded->variations[1].name == "saved");
         if (version >= 17) assert(decoded->morphSoundData[1] == source.morphSoundData[1]);
+        if (version >= 18)
+        {
+            assert(decoded->morphTimeline == source.morphTimeline);
+            assert(decoded->timbreJson == source.timbreJson);
+            assert(decoded->smearnovOnsets == source.smearnovOnsets);
+        }
+        else
+        {
+            // Older versions default to {0.0, 1.0} and empty
+            assert(decoded->morphTimeline == std::vector<float>({ 0.0f, 1.0f }));
+            assert(decoded->timbreJson.empty());
+            assert(decoded->smearnovOnsets.empty());
+        }
         auto truncated = bytes;
         truncated.pop_back();
         assert(!ats::LegacyStateCodec::decode(truncated.data(), truncated.size()));
@@ -45,6 +61,16 @@ int main()
     auto malformed = source;
     malformed.outputTrim = std::numeric_limits<double>::quiet_NaN();
     assert(ats::LegacyStateCodec::encode(malformed).empty());
+
+    // v18 field validation: non-finite timeline value → encode fails
+    auto badTimeline = source;
+    badTimeline.morphTimeline = { 0.0f, std::numeric_limits<float>::infinity(), 1.0f };
+    assert(ats::LegacyStateCodec::encode(badTimeline).empty());
+
+    // v18 field validation: too many timeline points → encode fails
+    auto tooManyPoints = source;
+    tooManyPoints.morphTimeline.resize(33, 0.5f);
+    assert(ats::LegacyStateCodec::encode(tooManyPoints).empty());
 
     auto corrupt = ats::LegacyStateCodec::encode(source);
     // ATSP v17 stores outputTrim after analysis, synthesis, and
@@ -56,5 +82,5 @@ int main()
     for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
         corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
     assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
-    std::cout << "legacy_state_codec_test: ATSP v2-v17 payload round-trip ok\n";
+    std::cout << "legacy_state_codec_test: ATSP v2-v18 payload round-trip ok\n";
 }

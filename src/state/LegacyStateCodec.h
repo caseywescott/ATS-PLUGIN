@@ -94,12 +94,15 @@ struct LegacyState
     std::array<ResidualState, 2> residualStates;
     SmearnovState smearnov;
     std::array<std::vector<std::byte>, 2> morphSoundData;
+    std::vector<float> morphTimeline { 0.0f, 1.0f };
+    std::string timbreJson;
+    std::vector<float> smearnovOnsets;
 };
 
 class LegacyStateCodec
 {
 public:
-    static constexpr std::uint32_t kCurrentVersion = 17;
+    static constexpr std::uint32_t kCurrentVersion = 18;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     [[nodiscard]] static std::vector<std::byte> encode(const LegacyState& state,

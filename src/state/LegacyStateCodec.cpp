@@ -39,6 +39,21 @@ bool readBlob(ByteReader& reader, std::vector<std::byte>& blob)
     return size == 0 || reader.readBytes(blob.data(), static_cast<std::size_t>(size));
 }
 
+void writeFloatVec(ByteWriter& writer, const std::vector<float>& values)
+{
+    writer.writeU32(static_cast<std::uint32_t>(values.size()));
+    for (float v : values) writer.writeF32(v);
+}
+
+bool readFloatVec(ByteReader& reader, std::vector<float>& values, std::uint32_t maxCount)
+{
+    std::uint32_t count = 0;
+    if (!reader.readU32(count) || count > maxCount) return false;
+    values.resize(count);
+    for (auto& v : values) if (!reader.readF32(v)) return false;
+    return true;
+}
+
 void writeAnalysis(ByteWriter& writer, const AnalysisParams& a)
 {
     writer.writeF64(a.start); writer.writeF64(a.duration); writer.writeF64(a.lowest_freq);
@@ -149,6 +164,13 @@ bool validState(const LegacyState& state) noexcept
         if (!finite(value)) return false;
     for (const auto& blob : state.morphSoundData)
         if (blob.size() > kMaxBlobBytes) return false;
+    if (state.morphTimeline.size() > 32) return false;
+    for (float v : state.morphTimeline)
+        if (!std::isfinite(v) || v < 0.0f || v > 1.0f) return false;
+    if (state.timbreJson.size() > kMaxBlobBytes) return false;
+    if (state.smearnovOnsets.size() > 4096) return false;
+    for (float v : state.smearnovOnsets)
+        if (!std::isfinite(v) || v < 0.0f || v > 1.0f) return false;
     return true;
 }
 }
@@ -212,6 +234,12 @@ std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::u
     if (version >= 15) writer.writeF64(state.smearnov.mix);
     if (version >= 16) writer.writeI32(state.morphQuality);
     if (version >= 17) for (const auto& blob : state.morphSoundData) writeBlob(writer, blob);
+    if (version >= 18)
+    {
+        writeFloatVec(writer, state.morphTimeline);
+        writeString(writer, state.timbreJson);
+        writeFloatVec(writer, state.smearnovOnsets);
+    }
     return std::move(writer).take();
 }
 
@@ -286,6 +314,12 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
     if (version >= 15 && !reader.readF64(state.smearnov.mix)) return std::nullopt;
     if (version >= 16 && !reader.readI32(state.morphQuality)) return std::nullopt;
     if (version >= 17) for (auto& blob : state.morphSoundData) if (!readBlob(reader, blob)) return std::nullopt;
+    if (version >= 18)
+    {
+        if (!readFloatVec(reader, state.morphTimeline, 32)) return std::nullopt;
+        if (!readString(reader, state.timbreJson)) return std::nullopt;
+        if (!readFloatVec(reader, state.smearnovOnsets, 4096)) return std::nullopt;
+    }
     if (!validState(state)) return std::nullopt;
     return state;
 }

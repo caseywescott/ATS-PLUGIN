@@ -8,6 +8,7 @@
 #include "../core/PlaybackBuffers.h"
 #include "../core/UndoHistory.h"
 #include "../core/AtsMathExpr.h"
+#include "../engine/MorphTimelineService.h"
 #include "../engine/ResidualEditService.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
@@ -523,7 +524,18 @@ public:
                 error = { "invalid_timeline", "timeline points must be ordered normalized values" };
                 return true;
             }
-            timeline_ = timeline->normalizedPoints;
+            // Convert floats to TimelinePoints, sanitize to enforce endpoint
+            // invariants (0.0 and 1.0 morph anchors always present), then
+            // convert back so timeline_ satisfies the source-contract type.
+            std::vector<engine::TimelinePoint> pts;
+            pts.reserve(timeline->normalizedPoints.size());
+            for (float p : timeline->normalizedPoints)
+                pts.push_back({ static_cast<double>(p), static_cast<double>(p),
+                                 engine::TimelinePointKind::morph });
+            pts = engine::MorphTimelineService::sanitize(std::move(pts));
+            timeline_.clear();
+            timeline_.reserve(pts.size());
+            for (const auto& pt : pts) timeline_.push_back(static_cast<float>(pt.timeNorm));
             ++timelineRevision_;
             return true;
         }
@@ -1071,6 +1083,10 @@ public:
         ls.smearnov.usePhaseDeviation   = parameters_.read("smearnovUsePhaseDeviation") >= 0.5f;
         ls.smearnov.useRpcaFallback     = parameters_.read("smearnovUseRpcaFallback") >= 0.5f;
 
+        ls.morphTimeline   = timeline_;
+        ls.smearnovOnsets  = onsetOverlay_;
+        // timbreJson is a forward-compat placeholder; timbrePlan_ has no stable codec yet
+
         return LegacyStateCodec::encode(ls);
     }
 
@@ -1541,6 +1557,9 @@ private:
         (void) parameters_.write("smearnovMaxAttackFrames",    static_cast<float>(ls.smearnov.maxAttackFrames));
         (void) parameters_.write("smearnovUsePhaseDeviation",  ls.smearnov.usePhaseDeviation ? 1.0f : 0.0f);
         (void) parameters_.write("smearnovUseRpcaFallback",    ls.smearnov.useRpcaFallback   ? 1.0f : 0.0f);
+
+        if (!ls.morphTimeline.empty()) timeline_ = ls.morphTimeline;
+        onsetOverlay_ = ls.smearnovOnsets;
     }
 
     static const char* analysisProfileName(int profile) noexcept
