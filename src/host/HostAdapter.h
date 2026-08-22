@@ -119,15 +119,19 @@ struct SessionRuntimeSnapshot
 
 using HostStateChunk = std::vector<std::byte>;
 
-inline std::vector<std::byte> serializeAtsSoundForState(const ATS_SOUND* sound,
-                                                         int atsType) noexcept
+inline std::vector<std::byte> serializeAtsSoundForState(const ATS_SOUND* sound) noexcept
 {
     if (sound == nullptr)
         return {};
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto path = std::filesystem::temp_directory_path() /
                       ("ats-state-" + std::to_string(stamp) + ".ats");
-    const auto type = atsType >= 1 && atsType <= 4 ? atsType : 1;
+    // ats_save dereferences pha/band_energy unconditionally for the types that
+    // claim them, and the source's recorded atsType can be stale or unset (an
+    // audio analysis leaves it at the amp+freq default). Derive the type from
+    // what the sound actually carries, or residual edits are dropped on the way
+    // into the state chunk and undo sees an unchanged state.
+    const int type = 1 + (sound->pha != nullptr ? 1 : 0) + (sound->band_energy != nullptr ? 2 : 0);
     if (ats_save(const_cast<ATS_SOUND*>(sound), path.u8string().c_str(), 0.0, type) < 0)
         return {};
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -1425,8 +1429,7 @@ public:
         // fields. The ATS codec intentionally stores opaque ATS blobs so the
         // host state remains independent of the filesystem.
         if (currentSource_ && currentSource_->sound)
-            ls.atsModel = serializeAtsSoundForState(currentSource_->sound.get(),
-                                                     currentSource_->atsType);
+            ls.atsModel = serializeAtsSoundForState(currentSource_->sound.get());
         for (std::size_t slot = 0; slot < sources_.size(); ++slot)
         {
             if (!sources_[slot])
@@ -1434,8 +1437,7 @@ public:
             ls.morphSourcePaths[slot] = sources_[slot]->path.utf8;
             if (sources_[slot]->sound)
             {
-                ls.morphSoundData[slot] = serializeAtsSoundForState(
-                    sources_[slot]->sound.get(), sources_[slot]->atsType);
+                ls.morphSoundData[slot] = serializeAtsSoundForState(sources_[slot]->sound.get());
                 ls.residualStates[slot] = residualStateForSound(sources_[slot]->sound.get());
             }
         }

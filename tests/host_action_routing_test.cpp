@@ -294,15 +294,26 @@ static void test_model_edits_follow_the_current_selection()
     assert(sound->frq[0][0] == 220.0);
 
     error = {};
+    assert(sound->band_energy != nullptr);
+    const auto bandBeforeEdit = sound->band_energy[0][0];
+    assert(bandBeforeEdit != 0.375);
     assert(host.applyEditorAction(ats::ui::ResidualEditAction{ 0, 0, 0.375f }, error));
     assert(!error);
-    assert(sound->band_energy != nullptr);
     assert(sound->band_energy[0][0] == 0.375);
 
     // Undo has to restore the Current model, not just the parameter table. The
     // restore replaces currentSource_, so the earlier sound pointer is stale.
-    // Only the partial edit is on the undo stack: band_energy is absent from the
-    // captured chunk, so the residual edit commits an unchanged state.
+    // The residual edit needs its own history entry, which only holds if the
+    // state chunk carries band_energy: written as an amp+freq ATS file the chunk
+    // compares equal before and after and the entry is dropped.
+    error = {};
+    assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
+    assert(!error);
+    const auto* afterResidualUndo = host.source(ats::host::SourceIdentity::current);
+    assert(afterResidualUndo != nullptr && afterResidualUndo->sound.get() != nullptr);
+    assert(afterResidualUndo->sound.get()->band_energy != nullptr);
+    assert(afterResidualUndo->sound.get()->band_energy[0][0] == bandBeforeEdit);
+
     error = {};
     assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
     assert(!error);
