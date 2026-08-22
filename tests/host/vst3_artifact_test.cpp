@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -151,26 +152,15 @@ public:
 
     Steinberg::tresult PLUGIN_API setInt(const char* id, Steinberg::int64 value) override
     {
-        if (std::strcmp(id, "slot") == 0) slot_ = value;
-        else if (std::strcmp(id, "kind") == 0) kind_ = value;
-        else if (std::strcmp(id, "layer") == 0) layer_ = value;
-        else if (std::strcmp(id, "start") == 0) start_ = value;
-        else if (std::strcmp(id, "profile") == 0) profile_ = value;
-        else if (std::strcmp(id, "running") == 0) running_ = value;
-        else if (std::strcmp(id, "progressMilli") == 0) progressMilli_ = value;
-        else return Steinberg::kResultFalse;
+        integers_[id] = value;
         return Steinberg::kResultTrue;
     }
     Steinberg::tresult PLUGIN_API getInt(const char* id, Steinberg::int64& value) override
     {
-        if (std::strcmp(id, "slot") == 0) value = slot_;
-        else if (std::strcmp(id, "kind") == 0) value = kind_;
-        else if (std::strcmp(id, "layer") == 0) value = layer_;
-        else if (std::strcmp(id, "start") == 0) value = start_;
-        else if (std::strcmp(id, "profile") == 0) value = profile_;
-        else if (std::strcmp(id, "running") == 0) value = running_;
-        else if (std::strcmp(id, "progressMilli") == 0) value = progressMilli_;
-        else return Steinberg::kResultFalse;
+        const auto entry = integers_.find(id);
+        if (entry == integers_.end())
+            return Steinberg::kResultFalse;
+        value = entry->second;
         return Steinberg::kResultTrue;
     }
     Steinberg::tresult PLUGIN_API setFloat(const char*, double) override { return Steinberg::kResultFalse; }
@@ -184,42 +174,24 @@ public:
     {
         if (data == nullptr || size == 0)
             return Steinberg::kResultFalse;
-        if (std::strcmp(id, "path") == 0)
-            path_.assign(static_cast<const char*>(data), size);
-        else if (std::strcmp(id, "values") == 0)
-            values_.assign(static_cast<const std::byte*>(data), static_cast<const std::byte*>(data) + size);
-        else
-            return Steinberg::kResultFalse;
+        const auto* bytes = static_cast<const std::byte*>(data);
+        binaries_[id].assign(bytes, bytes + size);
         return Steinberg::kResultTrue;
     }
     Steinberg::tresult PLUGIN_API getBinary(const char* id, const void*& data,
                                             Steinberg::uint32& size) override
     {
-        if (std::strcmp(id, "path") == 0 && !path_.empty())
-        {
-            data = path_.data();
-            size = static_cast<Steinberg::uint32>(path_.size());
-        }
-        else if (std::strcmp(id, "values") == 0 && !values_.empty())
-        {
-            data = values_.data();
-            size = static_cast<Steinberg::uint32>(values_.size());
-        }
-        else
+        const auto entry = binaries_.find(id);
+        if (entry == binaries_.end() || entry->second.empty())
             return Steinberg::kResultFalse;
+        data = entry->second.data();
+        size = static_cast<Steinberg::uint32>(entry->second.size());
         return Steinberg::kResultTrue;
     }
 
 private:
-    Steinberg::int64 slot_ = -1;
-    Steinberg::int64 kind_ = -1;
-    Steinberg::int64 layer_ = -1;
-    Steinberg::int64 start_ = 0;
-    Steinberg::int64 profile_ = -1;
-    Steinberg::int64 running_ = 0;
-    Steinberg::int64 progressMilli_ = 0;
-    std::string path_;
-    std::vector<std::byte> values_;
+    std::map<std::string, Steinberg::int64, std::less<>> integers_;
+    std::map<std::string, std::vector<std::byte>, std::less<>> binaries_;
 };
 
 class TestMessage final : public Steinberg::FObject, public Steinberg::Vst::IMessage
@@ -421,6 +393,16 @@ int main(int argc, char** argv)
     for (float sample : left) require(sample == 0.0f, "left output silence");
     for (float sample : right) require(sample == 0.0f, "right output silence");
 
+    // The automation sweep intentionally writes every parameter, including
+    // analysis thresholds. Restore a defined analysis profile before using
+    // the imported-source fixture; this keeps the artifact test focused on
+    // controller/processor ownership rather than an all-parameters-at-75%
+    // analysis preset that legitimately rejects the fixture tone.
+    TestMessage resetProfileMessage("ats.editor.apply-analysis-profile");
+    require(resetProfileMessage.getAttributes()->setInt("profile", 0) == Steinberg::kResultTrue &&
+            processorConnection->notify(&resetProfileMessage) == Steinberg::kResultTrue,
+            "processor restores analysis profile after automation sweep");
+
     // A controller/editor command reaches the processor connection point.
     // The processor, not the controller, decodes the source, owns the queued
     // analysis, and publishes the audible buffer consumed by process().
@@ -485,6 +467,83 @@ int main(int argc, char** argv)
                 Steinberg::kResultTrue &&
             processorConnection->notify(&timelineMessage) == Steinberg::kResultTrue,
             "processor accepts session timeline");
+    // The timeline and timbre actions carry a typed payload alongside the simple
+    // curve. The bridge used to forward only the curve, so a typed-points-only
+    // action produced different processor state under VST3 than under AU.
+    const auto captureChunk = [&component] {
+        Steinberg::MemoryStream chunk;
+        require(component->getState(&chunk) == Steinberg::kResultTrue && chunk.getSize() > 0,
+                "capture processor state chunk");
+        Steinberg::int64 position = -1;
+        require(chunk.seek(0, Steinberg::IBStream::kIBSeekSet, &position) == Steinberg::kResultTrue,
+                "rewind processor state chunk");
+        std::vector<char> bytes(static_cast<std::size_t>(chunk.getSize()));
+        Steinberg::int32 bytesRead = 0;
+        require(chunk.read(bytes.data(), static_cast<Steinberg::int32>(bytes.size()), &bytesRead) ==
+                    Steinberg::kResultTrue,
+                "read processor state chunk");
+        bytes.resize(static_cast<std::size_t>(bytesRead));
+        return bytes;
+    };
+
+    struct TimelinePointPayload
+    {
+        float timeNorm;
+        float amount;
+        std::uint8_t kind;
+        std::uint8_t curve;
+        std::uint8_t reserved[2];
+    };
+    static_assert(sizeof(TimelinePointPayload) == 12, "timeline point payload layout");
+
+    const auto beforeTypedTimeline = captureChunk();
+    const std::array<TimelinePointPayload, 3> typedPoints {
+        TimelinePointPayload { 0.0f, 0.25f, 0, 0 },
+        TimelinePointPayload { 0.5f, 0.75f, 0, 0 },
+        TimelinePointPayload { 1.0f, 0.5f, 0, 0 }
+    };
+    TestMessage typedTimelineMessage("ats.editor.session-timeline");
+    require(typedTimelineMessage.getAttributes()->setBinary("timelinePoints", typedPoints.data(),
+                                                            sizeof(typedPoints)) ==
+                    Steinberg::kResultTrue &&
+                processorConnection->notify(&typedTimelineMessage) == Steinberg::kResultTrue,
+            "processor accepts a typed-points-only timeline");
+    require(captureChunk() != beforeTypedTimeline,
+            "typed timeline points reach the processor state");
+
+    TestMessage emptyTimelineMessage("ats.editor.session-timeline");
+    require(processorConnection->notify(&emptyTimelineMessage) == Steinberg::kResultFalse,
+            "processor rejects a timeline with no payload");
+    std::array<TimelinePointPayload, 33> oversizePoints {};
+    TestMessage oversizeTimelineMessage("ats.editor.session-timeline");
+    require(oversizeTimelineMessage.getAttributes()->setBinary("timelinePoints",
+                                                               oversizePoints.data(),
+                                                               sizeof(oversizePoints)) ==
+                    Steinberg::kResultTrue &&
+                processorConnection->notify(&oversizeTimelineMessage) == Steinberg::kResultFalse,
+            "processor rejects an oversize typed timeline");
+    TestMessage raggedTimelineMessage("ats.editor.session-timeline");
+    const std::array<char, 7> raggedBytes {};
+    require(raggedTimelineMessage.getAttributes()->setBinary("timelinePoints", raggedBytes.data(),
+                                                             sizeof(raggedBytes)) ==
+                    Steinberg::kResultTrue &&
+                processorConnection->notify(&raggedTimelineMessage) == Steinberg::kResultFalse,
+            "processor rejects a partial typed timeline record");
+
+    const auto beforeTimbrePlan = captureChunk();
+    const std::string timbrePlan = R"({"version":1,"lanes":[{"id":"brightness","points":[]}]})";
+    TestMessage timbreMessage("ats.editor.session-timbre");
+    require(timbreMessage.getAttributes()->setBinary(
+                "timbrePlan", timbrePlan.data(),
+                static_cast<Steinberg::uint32>(timbrePlan.size())) == Steinberg::kResultTrue &&
+                processorConnection->notify(&timbreMessage) == Steinberg::kResultTrue,
+            "processor accepts a serialized-plan-only timbre action");
+    require(captureChunk() != beforeTimbrePlan,
+            "serialized timbre plan reaches the processor state");
+    TestMessage emptyTimbreMessage("ats.editor.session-timbre");
+    require(processorConnection->notify(&emptyTimbreMessage) == Steinberg::kResultFalse,
+            "processor rejects a timbre action with no payload");
+
     TestMessage stopMessage("ats.editor.session-stop-preview");
     require(processorConnection->notify(&stopMessage) == Steinberg::kResultTrue,
             "processor accepts session stop");
@@ -507,6 +566,71 @@ int main(int argc, char** argv)
             "processor state rewind");
     require(component->setState(&state) == Steinberg::kResultTrue,
             "processor state reopen");
+
+    // The controller keeps its own parameter table, so a restored project only
+    // shows saved values if setComponentState actually consumes the stream.
+    const auto rewindState = [&state] {
+        Steinberg::int64 position = -1;
+        require(state.seek(0, Steinberg::IBStream::kIBSeekSet, &position) == Steinberg::kResultTrue
+                    && position == 0,
+                "component state rewind");
+    };
+    std::vector<Steinberg::Vst::ParamID> parameterIds;
+    for (Steinberg::int32 index = 0; index < controller->getParameterCount(); ++index)
+    {
+        Steinberg::Vst::ParameterInfo info {};
+        require(controller->getParameterInfo(index, info) == Steinberg::kResultTrue,
+                "controller parameter info");
+        parameterIds.push_back(info.id);
+    }
+
+    rewindState();
+    require(controller->setComponentState(&state) == Steinberg::kResultTrue,
+            "controller consumes component state");
+    std::vector<double> restored;
+    for (const auto id : parameterIds)
+        restored.push_back(controller->getParamNormalized(id));
+
+    bool anyNonZero = false;
+    for (const auto value : restored)
+        anyNonZero = anyNonZero || value > 1.0e-9;
+    require(anyNonZero, "controller state projection is not all zero");
+
+    for (const auto id : parameterIds)
+        (void) controller->setParamNormalized(id, 0.0);
+    rewindState();
+    require(controller->setComponentState(&state) == Steinberg::kResultTrue,
+            "controller re-consumes component state");
+    for (std::size_t index = 0; index < parameterIds.size(); ++index)
+        require(std::abs(controller->getParamNormalized(parameterIds[index]) - restored[index])
+                    < 1.0e-6,
+                "controller state projection is deterministic");
+
+    // A truncated chunk is not a state; it must be rejected rather than
+    // partially applied.
+    Steinberg::MemoryStream truncated;
+    {
+        rewindState();
+        std::vector<char> bytes(static_cast<std::size_t>(state.getSize()));
+        Steinberg::int32 bytesRead = 0;
+        require(state.read(bytes.data(), static_cast<Steinberg::int32>(bytes.size()), &bytesRead)
+                    == Steinberg::kResultTrue,
+                "read component state bytes");
+        Steinberg::int32 written = 0;
+        const auto half = static_cast<Steinberg::int32>(bytes.size() / 2);
+        require(truncated.write(bytes.data(), half, &written) == Steinberg::kResultTrue,
+                "write truncated state");
+        Steinberg::int64 position = -1;
+        require(truncated.seek(0, Steinberg::IBStream::kIBSeekSet, &position)
+                    == Steinberg::kResultTrue,
+                "truncated state rewind");
+    }
+    require(controller->setComponentState(&truncated) == Steinberg::kResultFalse,
+            "controller rejects truncated component state");
+    for (std::size_t index = 0; index < parameterIds.size(); ++index)
+        require(std::abs(controller->getParamNormalized(parameterIds[index]) - restored[index])
+                    < 1.0e-6,
+                "rejected state leaves controller parameters untouched");
 
     processor->setProcessing(false);
     component->setActive(false);

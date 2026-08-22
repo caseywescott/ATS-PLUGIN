@@ -3,7 +3,10 @@
 #include "../src/state/PresetService.h"
 
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -232,6 +235,93 @@ static void test_partial_edit_validation()
     assert(error.code == "no_model");
 }
 
+static void writeTestWave(const std::filesystem::path& path)
+{
+    const auto u16 = [](std::ofstream& stream, std::uint16_t value) {
+        stream.put(static_cast<char>(value));
+        stream.put(static_cast<char>(value >> 8));
+    };
+    const auto u32 = [&u16](std::ofstream& stream, std::uint32_t value) {
+        u16(stream, static_cast<std::uint16_t>(value));
+        u16(stream, static_cast<std::uint16_t>(value >> 16));
+    };
+    constexpr std::uint32_t frames = 32768;
+    constexpr std::uint32_t rate = 48000;
+    constexpr std::uint32_t bytes = frames * 2;
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    assert(stream);
+    stream.write("RIFF", 4); u32(stream, 36 + bytes); stream.write("WAVEfmt ", 8); u32(stream, 16);
+    u16(stream, 1); u16(stream, 1); u32(stream, rate); u32(stream, rate * 2); u16(stream, 2);
+    u16(stream, 16);
+    stream.write("data", 4); u32(stream, bytes);
+    for (std::uint32_t frame = 0; frame < frames; ++frame)
+        u16(stream, static_cast<std::uint16_t>(static_cast<std::int16_t>(
+                        std::lround(9000.0 * std::sin(2.0 * 3.14159265358979 * 440.0 * frame / rate)))));
+    assert(stream);
+}
+
+// Preview slot 3 is the Current model, not an entry in the two-element import
+// table. Model edits used to index that table directly, so with Current
+// selected every edit reported "no model" and left the model on screen
+// untouched.
+static void test_model_edits_follow_the_current_selection()
+{
+    const auto path = std::filesystem::temp_directory_path() / "ats-routing-current.wav";
+    writeTestWave(path);
+
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+    ats::Error error;
+    assert(host.importSource({ path.u8string() }, 3, ats::engine::SourceImportKind::audio, error));
+    assert(!error);
+    assert(host.analyzeSource(3, error));
+    assert(!error);
+
+    const auto* current = host.source(ats::host::SourceIdentity::current);
+    assert(current != nullptr && current->sound.get() != nullptr);
+    const auto* sound = current->sound.get();
+    assert(sound->partials > 0 && sound->frames > 0);
+
+    assert(host.applySessionAction(ats::ui::PreviewAction{ 3, 0, false }, error));
+    assert(!error);
+
+    assert(sound->amp[0][0] != 0.125 && sound->frq[0][0] != 220.0);
+
+    error = {};
+    assert(host.applyEditorAction(ats::ui::PartialEditAction{ 0, 0, true, 0.125, 220.0 }, error));
+    assert(!error);
+    assert(sound->amp[0][0] == 0.125);
+    assert(sound->frq[0][0] == 220.0);
+
+    error = {};
+    assert(host.applyEditorAction(ats::ui::ResidualEditAction{ 0, 0, 0.375f }, error));
+    assert(!error);
+    assert(sound->band_energy != nullptr);
+    assert(sound->band_energy[0][0] == 0.375);
+
+    // Undo has to restore the Current model, not just the parameter table. The
+    // restore replaces currentSource_, so the earlier sound pointer is stale.
+    // Only the partial edit is on the undo stack: band_energy is absent from the
+    // captured chunk, so the residual edit commits an unchanged state.
+    error = {};
+    assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
+    assert(!error);
+    const auto* afterUndo = host.source(ats::host::SourceIdentity::current);
+    assert(afterUndo != nullptr && afterUndo->sound.get() != nullptr);
+    assert(afterUndo->sound.get()->amp[0][0] != 0.125);
+    assert(afterUndo->sound.get()->frq[0][0] != 220.0);
+
+    // Selecting the morph timeline still has no editable model.
+    assert(host.applySessionAction(ats::ui::PreviewAction{ 2, 0, false }, error));
+    error = {};
+    assert(host.applyEditorAction(ats::ui::PartialEditAction{ 0, 0, true, 0.5, 330.0 }, error));
+    assert(static_cast<bool>(error));
+    assert(error.code == "no_model");
+
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 static void test_residual_edit_validation()
 {
     ats::host::HostAdapter host;
@@ -374,6 +464,58 @@ static void test_analysis_actions_dispatched_through_unified()
     assert(!error);
 }
 
+// Every profile must write descriptor-legal values. Writing an ATSA type where
+// a choice ordinal belongs used to survive only because ParameterStore::write
+// silently clamps, which would have selected a different analysis type than the
+// profile named.
+static void test_analysis_profiles_write_descriptor_ordinals()
+{
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+
+    for (int profile = 0; profile <= 3; ++profile)
+    {
+        // Check the recipe before it reaches ParameterStore::write, which would
+        // clamp an out-of-range value into a silently different setting.
+        for (const auto& write : ats::host::HostAdapter::analysisProfileWrites(profile))
+        {
+            const auto* descriptor = ats::ParameterRegistry::find(write.id);
+            assert(descriptor != nullptr);
+            assert(std::isfinite(write.value));
+            assert(write.value >= descriptor->minimum);
+            assert(write.value <= descriptor->maximum);
+            if (descriptor->type == ats::ParameterType::choice)
+            {
+                assert(write.value == std::round(write.value));
+                assert(write.value < static_cast<float>(descriptor->choiceCount));
+            }
+        }
+
+        ats::Error error;
+        assert(host.applyEditorAction(ats::ui::ApplyAnalysisProfileAction{ profile }, error));
+        assert(!error);
+
+        // The captured legacy state maps the ordinal to an ATSA type; an
+        // out-of-range ordinal would escape here as type 5.
+        const auto chunk = host.captureState();
+        const auto legacy = ats::LegacyStateCodec::decode(chunk.data(), chunk.size());
+        assert(legacy);
+        assert(legacy->analysis.type >= 1 && legacy->analysis.type <= 4);
+    }
+
+    // Speech and percussive both ask for the full analysis, ordinal 3.
+    const auto* type = ats::ParameterRegistry::find("analysisType");
+    assert(type != nullptr);
+    for (const int profile : { 1, 2 })
+    {
+        ats::Error error;
+        assert(host.applyEditorAction(ats::ui::ApplyAnalysisProfileAction{ profile }, error));
+        assert(!error);
+        assert(host.parameters().read("analysisType") == 3.0f);
+        assert(type->text(host.parameters().read("analysisType")) == "4 full");
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 int main()
@@ -388,11 +530,13 @@ int main()
     test_preset_direct_file_roundtrip();
     test_preset_save_load_roundtrip();
     test_partial_edit_validation();
+    test_model_edits_follow_the_current_selection();
     test_residual_edit_validation();
     test_apply_math_validation();
     test_bounce_validation();
     test_cross_wrapper_file_and_rich_actions();
     test_session_actions_dispatched_through_unified();
     test_analysis_actions_dispatched_through_unified();
+    test_analysis_profiles_write_descriptor_ordinals();
     return 0;
 }

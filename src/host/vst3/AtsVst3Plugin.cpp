@@ -74,6 +74,12 @@ constexpr const char* kPreviewLayerAttribute = "layer";
 constexpr const char* kPreviewStartAttribute = "start";
 constexpr const char* kVariationStoreAttribute = "store";
 constexpr const char* kSessionValuesAttribute = "values";
+constexpr const char* kTimelinePointsAttribute = "timelinePoints";
+constexpr const char* kTimbrePlanAttribute = "timbrePlan";
+constexpr const char* kPayloadVersionAttribute = "payloadVersion";
+constexpr std::int64_t kPayloadVersion = 1;
+constexpr std::size_t kMaxTimelinePoints = 32;
+constexpr std::size_t kMaxTimbrePlanBytes = 1024 * 1024;
 constexpr const char* kAnalysisProfileAttribute = "profile";
 constexpr const char* kAnalysisRunningAttribute = "running";
 constexpr const char* kAnalysisProgressAttribute = "progressMilli";
@@ -137,6 +143,18 @@ bool readFloatVector(Steinberg::Vst::IAttributeList* attributes, const char* key
     return true;
 }
 
+// Complex editor messages are versioned independently of the message ID so
+// the payload can evolve without silently reinterpreting an older vector or
+// edit structure. Missing versions remain accepted for compatibility with
+// hosts that predate the versioned contract.
+bool validPayloadVersion(Steinberg::Vst::IAttributeList* attributes)
+{
+    Steinberg::int64 version = kPayloadVersion;
+    return attributes != nullptr &&
+        (attributes->getInt(kPayloadVersionAttribute, version) != Steinberg::kResultTrue ||
+         version == kPayloadVersion);
+}
+
 bool readString(Steinberg::Vst::IAttributeList* attributes, const char* key,
                 std::string& value)
 {
@@ -146,6 +164,39 @@ bool readString(Steinberg::Vst::IAttributeList* attributes, const char* key,
         bytes == nullptr || size == 0)
         return false;
     value.assign(static_cast<const char*>(bytes), size);
+    return true;
+}
+
+// Wire layout for a typed timeline point, spelled out so the payload does not
+// depend on the padding the compiler picks for MorphTimelineActionPoint.
+struct TimelinePointWire
+{
+    float timeNorm = 0.0f;
+    float amount = 0.0f;
+    std::uint8_t kind = 0;
+    std::uint8_t curve = 0;
+    std::uint8_t reserved[2] = { 0, 0 };
+};
+static_assert(sizeof(TimelinePointWire) == 12, "timeline point wire layout changed");
+
+bool readTimelinePoints(Steinberg::Vst::IAttributeList* attributes,
+                        std::vector<ats::ui::MorphTimelineActionPoint>& points)
+{
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr || attributes->getBinary(kTimelinePointsAttribute, bytes, size) !=
+                                     Steinberg::kResultTrue ||
+        bytes == nullptr || size == 0 || size % sizeof(TimelinePointWire) != 0)
+        return false;
+    const auto count = static_cast<std::size_t>(size / sizeof(TimelinePointWire));
+    if (count > kMaxTimelinePoints)
+        return false;
+    std::vector<TimelinePointWire> wire(count);
+    std::memcpy(wire.data(), bytes, size);
+    points.clear();
+    points.reserve(count);
+    for (const auto& entry : wire)
+        points.push_back({ entry.timeNorm, entry.amount, entry.kind, entry.curve });
     return true;
 }
 
@@ -411,26 +462,55 @@ public:
                        ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kSessionSeekMessage) ||
-            Steinberg::FIDStringsEqual(messageId, kSessionTimelineMessage) ||
-            Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage) ||
-            Steinberg::FIDStringsEqual(messageId, kSessionTimbreMessage))
+            Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage))
         {
             std::vector<float> values;
-            if (!readFloatVector(attributes, kSessionValuesAttribute, values))
+            if (!validPayloadVersion(attributes) ||
+                !readFloatVector(attributes, kSessionValuesAttribute, values))
                 return Steinberg::kResultFalse;
             ats::ui::EditorAction action;
             if (Steinberg::FIDStringsEqual(messageId, kSessionSeekMessage) && values.size() == 1)
                 action = ats::ui::SeekPreviewAction { values.front() };
-            else if (Steinberg::FIDStringsEqual(messageId, kSessionTimelineMessage))
-                action = ats::ui::SetMorphTimelineAction { std::move(values) };
             else if (Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage))
                 action = ats::ui::EditSmearnovOnsetsAction { std::move(values) };
-            else if (Steinberg::FIDStringsEqual(messageId, kSessionTimbreMessage))
-                action = ats::ui::SetTimbreMotionPlanAction { std::move(values) };
             else
                 return Steinberg::kResultFalse;
             ats::Error error;
             return host_.applySessionAction(action, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionTimelineMessage))
+        {
+            if (!validPayloadVersion(attributes))
+                return Steinberg::kResultFalse;
+            // Either representation may be absent: the compact editor sends the
+            // simple curve, the timeline editor sends typed points. Dropping the
+            // typed points here used to make VST3 produce different state than
+            // AU and standalone from the same editor action.
+            ats::ui::SetMorphTimelineAction timeline;
+            const bool haveCurve =
+                readFloatVector(attributes, kSessionValuesAttribute, timeline.normalizedPoints);
+            const bool havePoints = readTimelinePoints(attributes, timeline.points);
+            if (!haveCurve && !havePoints)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(timeline, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSessionTimbreMessage))
+        {
+            if (!validPayloadVersion(attributes))
+                return Steinberg::kResultFalse;
+            ats::ui::SetTimbreMotionPlanAction timbre;
+            const bool haveCurve =
+                readFloatVector(attributes, kSessionValuesAttribute, timbre.normalizedPlan);
+            const bool havePlan = readString(attributes, kTimbrePlanAttribute, timbre.serializedPlan);
+            if (!haveCurve && !havePlan)
+                return Steinberg::kResultFalse;
+            if (timbre.serializedPlan.size() > kMaxTimbrePlanBytes)
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applySessionAction(timbre, error) && !error
                        ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kSessionDetectSmearnovMessage) ||
@@ -513,7 +593,8 @@ public:
         {
             Steinberg::int64 partial = -1, frame = -1, apply = 0;
             double amplitude = 0.0, frequency = 1.0;
-            if (attributes->getInt(kPartialAttribute, partial) != Steinberg::kResultTrue ||
+            if (!validPayloadVersion(attributes) ||
+                attributes->getInt(kPartialAttribute, partial) != Steinberg::kResultTrue ||
                 attributes->getInt(kFrameAttribute, frame) != Steinberg::kResultTrue ||
                 attributes->getInt(kApplyAttribute, apply) != Steinberg::kResultTrue ||
                 attributes->getFloat(kAmplitudeAttribute, amplitude) != Steinberg::kResultTrue ||
@@ -530,7 +611,8 @@ public:
         {
             Steinberg::int64 band = -1, frame = -1;
             double value = 0.0;
-            if (attributes->getInt(kBandAttribute, band) != Steinberg::kResultTrue ||
+            if (!validPayloadVersion(attributes) ||
+                attributes->getInt(kBandAttribute, band) != Steinberg::kResultTrue ||
                 attributes->getInt(kFrameAttribute, frame) != Steinberg::kResultTrue ||
                 attributes->getFloat(kValueAttribute, value) != Steinberg::kResultTrue)
                 return Steinberg::kResultFalse;
@@ -546,7 +628,8 @@ public:
             Steinberg::int64 command = 0, first = 0, last = 0;
             double value = 0.0;
             std::vector<int> bands;
-            if (attributes->getInt(kCommandAttribute, command) != Steinberg::kResultTrue ||
+            if (!validPayloadVersion(attributes) ||
+                attributes->getInt(kCommandAttribute, command) != Steinberg::kResultTrue ||
                 !readIntVector(attributes, kSessionValuesAttribute, bands) ||
                 attributes->getInt(kFirstFrameAttribute, first) != Steinberg::kResultTrue ||
                 attributes->getInt(kLastFrameAttribute, last) != Steinberg::kResultTrue ||
@@ -630,6 +713,7 @@ public:
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
     virtual void pumpEditorWork() = 0;
     [[nodiscard]] virtual ats::ui::TelemetrySnapshot editorTelemetry() const = 0;
+    [[nodiscard]] virtual ats::ui::EditorSnapshot editorSnapshot() const = 0;
 };
 
 class Vst3EditorWorkPump final : public visage::EventTimer
@@ -645,7 +729,7 @@ public:
         {
             target_->pumpEditorWork();
             if (editor_ != nullptr)
-                editor_->setTelemetry(target_->editorTelemetry());
+                editor_->setEditorSnapshot(target_->editorSnapshot());
         }
     }
 
@@ -809,9 +893,29 @@ public:
         return Steinberg::kResultTrue;
     }
 
+    // The processor owns the authoritative state, but the controller keeps its
+    // own parameter table that the host reads for automation and generic UI.
+    // Consuming the same ATSP chunk here is what makes a restored project show
+    // its saved values instead of the defaults from initialize().
     Steinberg::tresult PLUGIN_API setComponentState(Steinberg::IBStream* state) SMTG_OVERRIDE
     {
-        return state == nullptr ? Steinberg::kResultFalse : Steinberg::kResultTrue;
+        if (state == nullptr)
+            return Steinberg::kResultFalse;
+        const auto bytes = readStream(state);
+        if (bytes == ats::AtsStateCodec::encodeHeader())
+            return Steinberg::kResultTrue; // empty project round-trip
+        const auto legacy = ats::LegacyStateCodec::decode(bytes.data(), bytes.size());
+        if (!legacy)
+            return Steinberg::kResultFalse;
+
+        ats::ParameterStore restored;
+        ats::applyLegacyStateToParameterStore(*legacy, restored);
+        for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+        {
+            const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId);
+            setParamNormalized(tag, descriptor.normalize(restored.read(descriptor.denseIndex)));
+        }
+        return Steinberg::kResultTrue;
     }
 
     Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE
@@ -866,7 +970,7 @@ public:
         }
         if (const auto* timeline = std::get_if<ats::ui::SetMorphTimelineAction>(&action))
         {
-            (void) sendFloatValues(kSessionTimelineMessage, timeline->normalizedPoints);
+            (void) sendMorphTimeline(*timeline);
             return;
         }
         if (std::holds_alternative<ats::ui::DetectSmearnovAction>(action))
@@ -886,7 +990,7 @@ public:
         }
         if (const auto* timbre = std::get_if<ats::ui::SetTimbreMotionPlanAction>(&action))
         {
-            (void) sendFloatValues(kSessionTimbreMessage, timbre->normalizedPlan);
+            (void) sendTimbreMotionPlan(*timbre);
             return;
         }
         if (const auto* exportAction = std::get_if<ats::ui::ExportAtsAction>(&action))
@@ -1012,6 +1116,18 @@ public:
     [[nodiscard]] ats::ui::TelemetrySnapshot editorTelemetry() const override
     { return editorTelemetry_; }
 
+    [[nodiscard]] ats::ui::EditorSnapshot editorSnapshot() const override
+    {
+        ats::ui::EditorSnapshot snapshot;
+        snapshot.telemetry = editorTelemetry_;
+        for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+            if (descriptor.denseIndex < snapshot.parameters.size())
+                snapshot.parameters[descriptor.denseIndex] = static_cast<float>(
+                    descriptor.denormalize(const_cast<AtsVst3Controller*>(this)->
+                                          getParamNormalized(descriptor.hostNumericId)));
+        return snapshot;
+    }
+
 private:
     bool sendIntAction(const char* messageId, const char* attribute, std::int64_t value)
     {
@@ -1104,6 +1220,7 @@ private:
         message->setMessageID(kPartialEditMessage);
         auto* attributes = message->getAttributes();
         const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
             attributes->setInt(kPartialAttribute, edit.partial) == Steinberg::kResultTrue &&
             attributes->setInt(kFrameAttribute, edit.frame) == Steinberg::kResultTrue &&
             attributes->setInt(kApplyAttribute, edit.apply ? 1 : 0) == Steinberg::kResultTrue &&
@@ -1122,6 +1239,7 @@ private:
         message->setMessageID(kResidualEditMessage);
         auto* attributes = message->getAttributes();
         const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
             attributes->setInt(kBandAttribute, edit.band) == Steinberg::kResultTrue &&
             attributes->setInt(kFrameAttribute, edit.frame) == Steinberg::kResultTrue &&
             attributes->setFloat(kValueAttribute, edit.value) == Steinberg::kResultTrue &&
@@ -1141,6 +1259,7 @@ private:
         auto* attributes = message->getAttributes();
         const auto bytes = static_cast<Steinberg::uint32>(edit.bands.size() * sizeof(std::int32_t));
         const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
             attributes->setInt(kCommandAttribute, static_cast<std::int64_t>(edit.command)) == Steinberg::kResultTrue &&
             attributes->setBinary(kSessionValuesAttribute, edit.bands.data(), bytes) == Steinberg::kResultTrue &&
             attributes->setInt(kFirstFrameAttribute, edit.firstFrame) == Steinberg::kResultTrue &&
@@ -1223,8 +1342,71 @@ private:
         auto* attributes = message->getAttributes();
         const auto byteCount = static_cast<Steinberg::uint32>(values.size() * sizeof(float));
         const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
             attributes->setBinary(kSessionValuesAttribute, values.data(), byteCount) == Steinberg::kResultTrue &&
             sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendMorphTimeline(const ats::ui::SetMorphTimelineAction& timeline)
+    {
+        if (timeline.normalizedPoints.size() > kMaxTimelinePoints ||
+            timeline.points.size() > kMaxTimelinePoints ||
+            (timeline.normalizedPoints.empty() && timeline.points.empty()))
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSessionTimelineMessage);
+        auto* attributes = message->getAttributes();
+        bool result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue;
+        if (result && !timeline.normalizedPoints.empty())
+            result = attributes->setBinary(
+                         kSessionValuesAttribute, timeline.normalizedPoints.data(),
+                         static_cast<Steinberg::uint32>(timeline.normalizedPoints.size() *
+                                                        sizeof(float))) == Steinberg::kResultTrue;
+        if (result && !timeline.points.empty())
+        {
+            std::vector<TimelinePointWire> wire;
+            wire.reserve(timeline.points.size());
+            for (const auto& point : timeline.points)
+                wire.push_back({ point.timeNorm, point.amount, point.kind, point.curve, { 0, 0 } });
+            result = attributes->setBinary(
+                         kTimelinePointsAttribute, wire.data(),
+                         static_cast<Steinberg::uint32>(wire.size() * sizeof(TimelinePointWire))) ==
+                     Steinberg::kResultTrue;
+        }
+        result = result && sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendTimbreMotionPlan(const ats::ui::SetTimbreMotionPlanAction& timbre)
+    {
+        if (timbre.normalizedPlan.size() > 4096 ||
+            timbre.serializedPlan.size() > kMaxTimbrePlanBytes ||
+            (timbre.normalizedPlan.empty() && timbre.serializedPlan.empty()))
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSessionTimbreMessage);
+        auto* attributes = message->getAttributes();
+        bool result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue;
+        if (result && !timbre.normalizedPlan.empty())
+            result = attributes->setBinary(
+                         kSessionValuesAttribute, timbre.normalizedPlan.data(),
+                         static_cast<Steinberg::uint32>(timbre.normalizedPlan.size() *
+                                                        sizeof(float))) == Steinberg::kResultTrue;
+        if (result && !timbre.serializedPlan.empty())
+            result = attributes->setBinary(
+                         kTimbrePlanAttribute, timbre.serializedPlan.data(),
+                         static_cast<Steinberg::uint32>(timbre.serializedPlan.size())) ==
+                     Steinberg::kResultTrue;
+        result = result && sendMessage(message) == Steinberg::kResultTrue;
         message->release();
         return result;
     }

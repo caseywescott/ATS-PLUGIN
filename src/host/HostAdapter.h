@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/AtsStateCodec.h"
+#include "../core/AtsFrequencyShape.h"
 #include "../core/AtsTransientSmear.h"
 #include "../core/JobScheduler.h"
 #include "../core/MidiNoteRouter.h"
@@ -8,12 +9,16 @@
 #include "../core/PlaybackBuffers.h"
 #include "../core/UndoHistory.h"
 #include "../core/AtsMathExpr.h"
+#include "../core/AtsMorphRecipe.h"
+#include "../core/AtsMorphTransportCorrespondence.h"
+#include "../dsp/MorphTrajectoryRenderer.h"
 #include "../engine/MorphTimelineService.h"
 #include "../engine/ResidualEditService.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
 #include "../state/FactoryPresetState.h"
 #include "../state/LegacyStateCodec.h"
+#include "../state/LegacyStateParameters.h"
 #include "../state/ParameterPresetCodec.h"
 #include "../state/PresetService.h"
 #include "../platform/FileService.h"
@@ -27,6 +32,7 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -37,6 +43,7 @@ namespace ats::host
 {
 
 enum class HostFormat : std::uint8_t { vst3, au, standalone };
+enum class SourceIdentity : std::uint8_t { current, sourceA, sourceB, morphTimeline };
 
 struct HostIdentity
 {
@@ -112,6 +119,101 @@ struct SessionRuntimeSnapshot
 
 using HostStateChunk = std::vector<std::byte>;
 
+inline std::vector<std::byte> serializeAtsSoundForState(const ATS_SOUND* sound,
+                                                         int atsType) noexcept
+{
+    if (sound == nullptr)
+        return {};
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("ats-state-" + std::to_string(stamp) + ".ats");
+    const auto type = atsType >= 1 && atsType <= 4 ? atsType : 1;
+    if (ats_save(const_cast<ATS_SOUND*>(sound), path.u8string().c_str(), 0.0, type) < 0)
+        return {};
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    std::vector<std::byte> bytes;
+    if (stream)
+    {
+        const auto size = stream.tellg();
+        if (size >= 0)
+        {
+            bytes.resize(static_cast<std::size_t>(size));
+            stream.seekg(0);
+            stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!stream)
+                bytes.clear();
+        }
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    return bytes;
+}
+
+inline std::optional<engine::ImportedSource> deserializeAtsSoundForState(
+    const std::vector<std::byte>& bytes, int slot, std::string pathHint = {})
+{
+    if (bytes.empty())
+        return std::nullopt;
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("ats-state-restore-" + std::to_string(stamp) + ".ats");
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream)
+        return std::nullopt;
+    stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    stream.close();
+    auto* raw = static_cast<ATS_SOUND*>(std::calloc(1, sizeof(ATS_SOUND)));
+    int type = 0;
+    const auto loaded = raw != nullptr && ats_load(raw, path.u8string().c_str(), &type) >= 0;
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    if (!loaded)
+    {
+        if (raw != nullptr) std::free(raw);
+        return std::nullopt;
+    }
+    engine::ImportedSource source;
+    source.path = { std::move(pathHint) };
+    source.slot = slot;
+    source.kind = engine::SourceImportKind::ats;
+    source.name = source.path.utf8;
+    source.atsType = type;
+    source.sound.reset(raw);
+    return source;
+}
+
+inline ResidualState residualStateForSound(const ATS_SOUND* sound)
+{
+    ResidualState state;
+    if (sound == nullptr || sound->band_energy == nullptr || sound->frames <= 0)
+        return state;
+    for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+    {
+        ResidualBandState bandState;
+        bandState.bandIndex = band;
+        for (int frame = 0; frame < sound->frames; ++frame)
+        {
+            const auto energy = std::max(0.0, sound->band_energy[band][frame]);
+            bandState.orphanResidualPower += energy;
+            state.totalEnergy += energy;
+            if (energy > 0.0)
+                ++state.activeBandFrameCount;
+        }
+        if (bandState.orphanResidualPower > 0.0)
+        {
+            state.hasResidual = true;
+            ++state.activeBandCount;
+            if (bandState.orphanResidualPower > state.peakBandEnergy)
+            {
+                state.peakBandEnergy = bandState.orphanResidualPower;
+                state.peakBandIndex = band;
+            }
+        }
+        state.bands.push_back(bandState);
+    }
+    return state;
+}
+
 class HostAdapter
 {
 public:
@@ -153,6 +255,87 @@ public:
             snapshot.state = ui::UiState::analyzing;
         return snapshot;
     }
+
+    [[nodiscard]] ui::EditorSnapshot editorSnapshot() const
+    {
+        ui::EditorSnapshot snapshot;
+        snapshot.revision = editorSnapshotRevision_.fetch_add(1, std::memory_order_relaxed) + 1;
+        snapshot.telemetry = telemetry();
+        snapshot.telemetry.canUndo = history_.canUndo();
+        snapshot.telemetry.canRedo = history_.canRedo();
+        for (const auto& descriptor : ParameterRegistry::descriptors())
+            if (descriptor.denseIndex < snapshot.parameters.size())
+                snapshot.parameters[descriptor.denseIndex] = parameters_.read(descriptor.denseIndex);
+
+        const auto publishSource = [&snapshot](std::size_t index,
+                                                const engine::ImportedSource* source) {
+            if (source == nullptr)
+                return;
+            snapshot.sourceAvailable[index] = true;
+            snapshot.sourceNames[index] = source->name;
+            if (source->sound)
+            {
+                snapshot.sourceDurations[index] = static_cast<float>(source->sound.get()->dur);
+                snapshot.sourcePartialCounts[index] = source->sound.get()->partials;
+            }
+            else if (source->sampleRate > 0)
+                snapshot.sourceDurations[index] = static_cast<float>(source->monoSamples.size()) /
+                                                  static_cast<float>(source->sampleRate);
+        };
+        publishSource(0, currentSource_ ? &*currentSource_ : nullptr);
+        publishSource(1, sources_[0] ? &*sources_[0] : nullptr);
+        publishSource(2, sources_[1] ? &*sources_[1] : nullptr);
+        snapshot.timeline = timeline_;
+        snapshot.timbrePlan = timbrePlan_;
+        snapshot.onsets = onsetOverlay_;
+
+        const auto* spectrumSource = spectralViewSource_ == 0
+            ? (currentSource_ ? &*currentSource_ : nullptr)
+            : (spectralViewSource_ <= 2 && sources_[static_cast<std::size_t>(spectralViewSource_ - 1)]
+                   ? &*sources_[static_cast<std::size_t>(spectralViewSource_ - 1)] : nullptr);
+        if (spectrumSource && spectrumSource->sound)
+        {
+            const auto* sound = spectrumSource->sound.get();
+            ui::SpectralTraceInput input;
+            input.source = static_cast<ui::SpectralTraceSource>(std::clamp(spectralViewSource_, 0, 2));
+            input.sourceRevision = spectralViewSource_ == 0
+                ? editorSnapshotRevision_.load(std::memory_order_relaxed)
+                : sourceRevisions_[static_cast<std::size_t>(spectralViewSource_ - 1)];
+            input.durationSeconds = sound->dur;
+            input.partials.reserve(static_cast<std::size_t>(std::max(0, sound->partials)));
+            for (int partial = 0; partial < sound->partials; ++partial)
+            {
+                ui::SpectralPartialInput trace;
+                trace.partialIndex = partial;
+                trace.frames.reserve(static_cast<std::size_t>(std::max(0, sound->frames)));
+                for (int frame = 0; frame < sound->frames; ++frame)
+                {
+                    const auto amplitude = sound->amp ? sound->amp[partial][frame] : 0.0;
+                    const auto frequency = sound->frq ? sound->frq[partial][frame] : 0.0;
+                    trace.frames.push_back({ frequency, amplitude });
+                    input.displayAmpPeak = std::max(input.displayAmpPeak, amplitude);
+                }
+                input.partials.push_back(std::move(trace));
+            }
+            if (sound->band_energy)
+                for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+                {
+                    ui::SpectralResidualBandInput residual;
+                    residual.bandIndex = band;
+                    residual.energy.reserve(static_cast<std::size_t>(std::max(0, sound->frames)));
+                    for (int frame = 0; frame < sound->frames; ++frame)
+                    {
+                        const auto energy = sound->band_energy[band][frame];
+                        residual.energy.push_back(energy);
+                        input.displayResidualPeak = std::max(input.displayResidualPeak, energy);
+                    }
+                    input.residualBands.push_back(std::move(residual));
+                }
+            snapshot.spectrum = ui::SpectralTraceBuilder::build(
+                input, static_cast<ui::SpectralTraceMode>(std::clamp(spectralViewMode_, 0, 6)));
+        }
+        return snapshot;
+    }
     [[nodiscard]] SessionRuntimeSnapshot sessionSnapshot() const
     {
         SessionRuntimeSnapshot snapshot;
@@ -179,6 +362,42 @@ public:
                    : nullptr;
     }
 
+    [[nodiscard]] const engine::ImportedSource* source(SourceIdentity identity) const noexcept
+    {
+        switch (identity)
+        {
+        case SourceIdentity::current: return currentSource_ ? &*currentSource_ : nullptr;
+        case SourceIdentity::sourceA: return source(0);
+        case SourceIdentity::sourceB: return source(1);
+        case SourceIdentity::morphTimeline: return nullptr;
+        }
+        return nullptr;
+    }
+
+    static constexpr int sourceActionSlot(SourceIdentity identity) noexcept
+    {
+        switch (identity)
+        {
+        case SourceIdentity::current: return 3;
+        case SourceIdentity::sourceA: return 0;
+        case SourceIdentity::sourceB: return 1;
+        case SourceIdentity::morphTimeline: return 2;
+        }
+        return -1;
+    }
+
+    static constexpr std::optional<SourceIdentity> sourceIdentityForSlot(int slot) noexcept
+    {
+        switch (slot)
+        {
+        case 0: return SourceIdentity::sourceA;
+        case 1: return SourceIdentity::sourceB;
+        case 2: return SourceIdentity::morphTimeline;
+        case 3: return SourceIdentity::current;
+        default: return std::nullopt;
+        }
+    }
+
     // The wrapper calls this from its UI/action domain. Decoding is kept out
     // of process() and accepts only host-neutral paths and slots.
     bool importSource(const Path& path, int slot, engine::SourceImportKind kind,
@@ -192,17 +411,33 @@ public:
             error = imported.error;
             return false;
         }
-        sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
-        ++sourceRevisions_[static_cast<std::size_t>(slot)];
+        if (slot == 3)
+            currentSource_ = std::move(imported.value);
+        else
+        {
+            sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
+            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+        }
         auto snapshot = telemetry();
         snapshot.hasSourceA = sources_[0].has_value();
         snapshot.hasSourceB = sources_[1].has_value();
-        snapshot.hasCurrentModel = sources_[static_cast<std::size_t>(slot)]->sound.get() != nullptr;
+        snapshot.hasCurrentModel = currentSource_ && currentSource_->sound;
         snapshot.state = snapshot.hasCurrentModel ? ui::UiState::analyzed : ui::UiState::readyToAnalyze;
         snapshot.status = snapshot.hasCurrentModel ? "ATS model imported" : "audio source decoded";
         snapshot.error.clear();
         telemetry_.publish(std::move(snapshot));
         return true;
+    }
+
+    bool importSource(const Path& path, SourceIdentity identity,
+                      engine::SourceImportKind kind, Error& error)
+    {
+        if (identity == SourceIdentity::morphTimeline)
+        {
+            error = { "invalid_source_identity", "morph timeline is generated, not imported" };
+            return false;
+        }
+        return importSource(path, sourceActionSlot(identity), kind, error);
     }
 
     // Non-real-time action entry point. It converts an imported WAV/AIFF slot
@@ -211,20 +446,26 @@ public:
     bool analyzeSource(int slot, Error& error)
     {
         error = {};
-        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)])
+        const auto* selectedSource = slot == 3
+            ? (currentSource_ ? &*currentSource_ : nullptr)
+            : (slot >= 0 && slot < static_cast<int>(sources_.size()) && sources_[static_cast<std::size_t>(slot)]
+                   ? &*sources_[static_cast<std::size_t>(slot)] : nullptr);
+        if (selectedSource == nullptr)
         {
             error = { "missing_source", "select an imported audio source before analysis" };
             return false;
         }
-        auto& source = *sources_[static_cast<std::size_t>(slot)];
+        auto& source = *const_cast<engine::ImportedSource*>(selectedSource);
         if (source.kind != engine::SourceImportKind::audio || source.monoSamples.empty() || source.sampleRate <= 0)
         {
             error = { "source_not_audio", "selected source does not contain audio samples to analyse" };
             return false;
         }
         const auto generation = sourceGenerations_.next();
+        const auto parameters = analysisParamsForSource(source);
         auto analysed = AtsEngine::analyze(generation, sourceCancellation_.token(),
-            { source.monoSamples.data(), source.monoSamples.size(), source.sampleRate, {} });
+            { source.monoSamples.data(), source.monoSamples.size(), source.sampleRate,
+              parameters });
         if (analysed.status != JobResult<AnalysisOutput>::Status::success)
         {
             error = analysed.error;
@@ -253,6 +494,16 @@ public:
         return true;
     }
 
+    bool analyzeSource(SourceIdentity identity, Error& error)
+    {
+        if (identity == SourceIdentity::morphTimeline)
+        {
+            error = { "invalid_source_identity", "morph timeline has no analyzable source" };
+            return false;
+        }
+        return analyzeSource(sourceActionSlot(identity), error);
+    }
+
     // Queues a copy of the decoded source so no worker observes mutable UI
     // ownership. Completion is committed by pollAnalysis() on the host/UI
     // domain; process() remains strictly audio-thread-only.
@@ -264,12 +515,16 @@ public:
             error = { "analysis_busy", "an analysis job is already running" };
             return false;
         }
-        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)])
+        const auto* selectedSource = slot == 3
+            ? (currentSource_ ? &*currentSource_ : nullptr)
+            : (slot >= 0 && slot < static_cast<int>(sources_.size()) && sources_[static_cast<std::size_t>(slot)]
+                   ? &*sources_[static_cast<std::size_t>(slot)] : nullptr);
+        if (selectedSource == nullptr)
         {
             error = { "missing_source", "select an imported audio source before analysis" };
             return false;
         }
-        const auto& source = *sources_[static_cast<std::size_t>(slot)];
+        const auto& source = *selectedSource;
         if (source.kind != engine::SourceImportKind::audio || source.monoSamples.empty() || source.sampleRate <= 0)
         {
             error = { "source_not_audio", "selected source does not contain audio samples to analyse" };
@@ -278,20 +533,22 @@ public:
         analysisCancellation_.cancel();
         analysisCancellation_ = CancellationSource {};
         analysisSlot_ = slot;
-        analysisSourceRevision_ = sourceRevisions_[static_cast<std::size_t>(slot)];
+        analysisSourceRevision_ = slot == 3 ? editorSnapshotRevision_.load(std::memory_order_relaxed)
+                                            : sourceRevisions_[static_cast<std::size_t>(slot)];
         analysisProgress_.store(0.0f, std::memory_order_release);
         const auto generation = sourceGenerations_.next();
         auto samples = source.monoSamples;
         const auto sampleRate = source.sampleRate;
+        const auto parameters = analysisParamsForSource(source);
         const auto token = analysisCancellation_.token();
         {
             auto promise = std::make_shared<std::promise<JobResult<AnalysisOutput>>>();
             analysisFuture_ = promise->get_future();
             analysisScheduler_.submitVoid(
-                [this, generation, token, samples = std::move(samples), sampleRate,
+                [this, generation, token, samples = std::move(samples), sampleRate, parameters,
                  promise]() mutable {
                     auto result = AtsEngine::analyze(generation, token,
-                                                     { samples.data(), samples.size(), sampleRate, {} },
+                                                     { samples.data(), samples.size(), sampleRate, parameters },
                                                      [this](double progress) {
                                                          analysisProgress_.store(
                                                              static_cast<float>(progress),
@@ -339,8 +596,13 @@ public:
             telemetry_.publish(std::move(snapshot));
             return true;
         }
-        if (analysisSlot_ < 0 || !sources_[static_cast<std::size_t>(analysisSlot_)] ||
-            sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_)
+        const auto* analysedSource = analysisSlot_ == 3
+            ? (currentSource_ ? &*currentSource_ : nullptr)
+            : (analysisSlot_ >= 0 && analysisSlot_ < static_cast<int>(sources_.size()) &&
+               sources_[static_cast<std::size_t>(analysisSlot_)]
+                   ? &*sources_[static_cast<std::size_t>(analysisSlot_)] : nullptr);
+        if (analysedSource == nullptr ||
+            (analysisSlot_ != 3 && sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_))
         {
             error = { "stale_analysis", "source changed while analysis was running" };
             auto snapshot = telemetry();
@@ -351,7 +613,7 @@ public:
             telemetry_.publish(std::move(snapshot));
             return true;
         }
-        auto& source = *sources_[static_cast<std::size_t>(analysisSlot_)];
+        auto& source = *const_cast<engine::ImportedSource*>(analysedSource);
         source.sound = std::move(analysed.value.sound);
         source.residual = std::move(analysed.value.residual);
         if (state_ == HostState::prepared)
@@ -375,7 +637,11 @@ public:
         snapshot.state = error ? ui::UiState::error : ui::UiState::analyzed;
         snapshot.hasSourceA = sources_[0].has_value();
         snapshot.hasSourceB = sources_[1].has_value();
-        snapshot.hasCurrentModel = source.sound.get() != nullptr;
+        // Preserve the legacy telemetry flag for hosts that use it as the
+        // generic "analyzed model available" indicator. Typed source APIs and
+        // EditorSnapshot source roles remain distinct.
+        snapshot.hasCurrentModel = (currentSource_ && currentSource_->sound) ||
+                                   (analysisSlot_ != 3 && source.sound.get() != nullptr);
         snapshot.hasResidual = source.sound.get() != nullptr && source.sound.get()->res != nullptr;
         snapshot.hasPhase = source.sound.get() != nullptr && source.sound.get()->pha != nullptr;
         snapshot.status = error ? "analysis render failed" : "analysis complete";
@@ -422,7 +688,12 @@ public:
         }
         if (std::holds_alternative<ui::AnalyzeCurrentAction>(action))
         {
-            (void) queueAnalysisSource(0, error);
+            if (!currentSource_)
+            {
+                error = { "missing_current_source", "select an imported current source before analysis" };
+                return true;
+            }
+            (void) queueAnalysisSource(3, error);
             return true;
         }
         if (std::holds_alternative<ui::CancelJobsAction>(action))
@@ -443,7 +714,7 @@ public:
         error = {};
         if (const auto* preview = std::get_if<ui::PreviewAction>(&action))
         {
-            if (preview->source < 0 || preview->source >= static_cast<int>(sources_.size()) ||
+            if (preview->source < 0 || preview->source > 3 ||
                 preview->layer < 0 || preview->layer > 3)
             {
                 error = { "invalid_preview", "preview source or audition layer is invalid" };
@@ -457,7 +728,14 @@ public:
                 previewPlaying_.store(false, std::memory_order_release);
                 return true;
             }
-            if (!renderSourceForPreview(preview->source, error))
+            bool rendered = false;
+            if (preview->source == 2)
+                rendered = renderMorphForPreview(error);
+            else if (preview->source == 3)
+                rendered = renderCurrentForPreview(error);
+            else
+                rendered = renderSourceForPreview(preview->source, error);
+            if (!rendered)
                 return true;
             previewFrame_.store(0, std::memory_order_release);
             normalizedPlayhead_.store(0.0f, std::memory_order_release);
@@ -493,6 +771,7 @@ public:
         }
         if (const auto* variation = std::get_if<ui::MorphVariationAction>(&action))
         {
+            const auto before = captureState();
             if (variation->slot < 0 || variation->slot >= static_cast<int>(variations_.size()))
             {
                 error = { "invalid_variation", "variation slot is invalid" };
@@ -514,29 +793,34 @@ public:
                 for (std::size_t parameter = 0; parameter < variations_[index].size(); ++parameter)
                     (void) parameters_.write(parameter, variations_[index][parameter]);
             }
+            recordMutation("Morph variation", before);
             return true;
         }
         if (const auto* timeline = std::get_if<ui::SetMorphTimelineAction>(&action))
         {
-            if (timeline->normalizedPoints.empty() || timeline->normalizedPoints.size() > 32 ||
-                !strictlyOrderedNormalized(timeline->normalizedPoints))
+            const auto before = captureState();
+            if (timeline->points.empty() && timeline->normalizedPoints.empty())
             {
-                error = { "invalid_timeline", "timeline points must be ordered normalized values" };
+                error = { "invalid_timeline", "timeline requires at least one point" };
                 return true;
             }
-            // Convert floats to TimelinePoints, sanitize to enforce endpoint
-            // invariants (0.0 and 1.0 morph anchors always present), then
-            // convert back so timeline_ satisfies the source-contract type.
-            std::vector<engine::TimelinePoint> pts;
-            pts.reserve(timeline->normalizedPoints.size());
-            for (float p : timeline->normalizedPoints)
-                pts.push_back({ static_cast<double>(p), static_cast<double>(p),
-                                 engine::TimelinePointKind::morph });
-            pts = engine::MorphTimelineService::sanitize(std::move(pts));
-            timeline_.clear();
-            timeline_.reserve(pts.size());
-            for (const auto& pt : pts) timeline_.push_back(static_cast<float>(pt.timeNorm));
+            typedTimeline_.clear();
+            if (!timeline->points.empty())
+            {
+                typedTimeline_.reserve(timeline->points.size());
+                for (const auto& point : timeline->points)
+                    typedTimeline_.push_back({ point.timeNorm, point.amount,
+                        static_cast<engine::TimelinePointKind>(point.kind),
+                        static_cast<MorphCurveShape>(point.curve) });
+                typedTimeline_ = engine::MorphTimelineService::sanitize(std::move(typedTimeline_));
+                timeline_.clear();
+                for (const auto& point : typedTimeline_)
+                    if (point.kind == engine::TimelinePointKind::morph)
+                        timeline_.push_back(static_cast<float>(point.amount));
+            }
+            else timeline_ = timeline->normalizedPoints;
             ++timelineRevision_;
+            recordMutation("Morph timeline", before);
             return true;
         }
         if (const auto* onsets = std::get_if<ui::EditSmearnovOnsetsAction>(&action))
@@ -547,8 +831,10 @@ public:
                 error = { "invalid_onsets", "Smearnov onsets must be ordered normalized values" };
                 return true;
             }
+            const auto before = captureState();
             onsetOverlay_ = onsets->normalizedOnsets;
             ++onsetRevision_;
+            recordMutation("Smearnov onsets", before);
             return true;
         }
         if (std::holds_alternative<ui::DetectSmearnovAction>(action))
@@ -564,8 +850,11 @@ public:
                 error = { "invalid_timbre_plan", "timbre curve values must be normalized" };
                 return true;
             }
+            const auto before = captureState();
             timbrePlan_ = timbre->normalizedPlan;
+            timbrePlanJson_ = timbre->serializedPlan;
             ++timbreRevision_;
+            recordMutation("Timbre motion", before);
             return true;
         }
         return false;
@@ -596,13 +885,27 @@ public:
                 error = { "invalid_parameter", "parameter id is unknown or not automatable" };
                 return true;
             }
+            if (param->begin)
+                parameterGestureBefore_ = captureState();
+            const auto singleActionBefore = (!param->begin && !param->end && !parameterGestureBefore_)
+                ? std::optional<HostStateChunk>(captureState()) : std::nullopt;
             (void) parameters_.write(param->id, param->value);
+            if (param->end && parameterGestureBefore_)
+            {
+                recordMutation("Parameter gesture", *parameterGestureBefore_);
+                parameterGestureBefore_.reset();
+            }
+            else if (singleActionBefore)
+                recordMutation("Parameter change", *singleActionBefore);
             return true;
         }
         if (const auto* factory = std::get_if<ui::ApplyFactoryPresetAction>(&action))
         {
+            const auto before = captureState();
             if (!state::applyFactoryPreset(factory->index, parameters_))
                 error = { "invalid_factory_preset", "factory preset index must be 0..11" };
+            else
+                recordMutation("Factory preset", before);
             return true;
         }
         if (const auto* note = std::get_if<ui::NoteAction>(&action))
@@ -669,13 +972,18 @@ public:
             auto legacy = LegacyStateCodec::decode(result.bytes.data(), result.bytes.size());
             if (legacy)
             {
-                applyLegacyStateToParameters(*legacy);
+                if (!applyStateChunk(result.bytes))
+                    error = { "preset_decode_failed", "full-state preset contains an invalid ATS payload" };
+                else
+                    history_.clear();
             }
             else
             {
                 std::string decodeError;
                 if (!state::ParameterPresetCodec::decode(result.bytes, parameters_, decodeError))
                     error = { "preset_decode_failed", decodeError };
+                else
+                    history_.clear();
             }
             return true;
         }
@@ -687,16 +995,18 @@ public:
                 return true;
             }
             const auto slot = previewSource_.load(std::memory_order_acquire);
-            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
-                !sources_[static_cast<std::size_t>(slot)] ||
-                !sources_[static_cast<std::size_t>(slot)]->sound)
+            auto* target = editableSource(slot);
+            if (target == nullptr)
             {
                 error = { "no_model", "analyse a source before editing partials" };
                 return true;
             }
             if (!partial->apply || partial->frame < 0)
                 return true; // focus/select only — no mutation
-            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            const auto before = captureState();
+            selectionFirstFrame_ = partial->frame;
+            selectionLastFrame_ = partial->frame;
+            auto* sound = target->sound.get();
             if (partial->partial >= sound->partials || partial->frame >= sound->frames)
             {
                 error = { "partial_out_of_range", "partial or frame index is out of range" };
@@ -710,9 +1020,10 @@ public:
             }
             sound->amp[partial->partial][partial->frame] = partial->amplitude;
             sound->frq[partial->partial][partial->frame] = partial->frequencyHz;
-            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            noteSourceMutation(slot);
             if (state_ == HostState::prepared)
                 (void) renderSourceForPreview(slot, error);
+            recordMutation("Partial edit", before);
             return true;
         }
         if (const auto* residual = std::get_if<ui::ResidualEditAction>(&action))
@@ -722,15 +1033,15 @@ public:
                 error = { "invalid_residual_edit", "residual band, frame, and value are required" };
                 return true;
             }
+            const auto before = captureState();
             const auto slot = previewSource_.load(std::memory_order_acquire);
-            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
-                !sources_[static_cast<std::size_t>(slot)] ||
-                !sources_[static_cast<std::size_t>(slot)]->sound)
+            auto* target = editableSource(slot);
+            if (target == nullptr)
             {
                 error = { "no_model", "analyse a source before editing residual" };
                 return true;
             }
-            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            auto* sound = target->sound.get();
             if (sound->band_energy == nullptr || residual->band >= ATSA_CRITICAL_BANDS ||
                 residual->frame >= sound->frames)
             {
@@ -739,9 +1050,12 @@ public:
             }
             sound->band_energy[residual->band][residual->frame] =
                 static_cast<double>(std::max(0.0f, residual->value));
-            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            selectionFirstFrame_ = residual->frame;
+            selectionLastFrame_ = residual->frame;
+            noteSourceMutation(slot);
             if (state_ == HostState::prepared)
                 (void) renderSourceForPreview(slot, error);
+            recordMutation("Residual edit", before);
             return true;
         }
         if (const auto* math = std::get_if<ui::ApplyMathAction>(&action))
@@ -751,15 +1065,15 @@ public:
                 error = { "empty_script", "math script must not be empty" };
                 return true;
             }
+            const auto before = captureState();
             const auto slot = previewSource_.load(std::memory_order_acquire);
-            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
-                !sources_[static_cast<std::size_t>(slot)] ||
-                !sources_[static_cast<std::size_t>(slot)]->sound)
+            auto* target = editableSource(slot);
+            if (target == nullptr)
             {
                 error = { "no_model", "analyse a source before applying math" };
                 return true;
             }
-            AtsSoundPtr working { copy_sound(sources_[static_cast<std::size_t>(slot)]->sound.get()) };
+            AtsSoundPtr working { copy_sound(target->sound.get()) };
             if (!working)
             {
                 error = { "copy_failed", "could not copy the ATS model for math processing" };
@@ -771,10 +1085,11 @@ public:
                 error = { "math_failed", mathError };
                 return true;
             }
-            sources_[static_cast<std::size_t>(slot)]->sound = std::move(working);
-            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            target->sound = std::move(working);
+            noteSourceMutation(slot);
             if (state_ == HostState::prepared)
                 (void) renderSourceForPreview(slot, error);
+            recordMutation("Math expression", before);
             return true;
         }
         if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
@@ -786,14 +1101,14 @@ public:
                 return true;
             }
             const auto slot = previewSource_.load(std::memory_order_acquire);
-            if (slot < 0 || slot >= static_cast<int>(sources_.size()) ||
-                !sources_[static_cast<std::size_t>(slot)] ||
-                !sources_[static_cast<std::size_t>(slot)]->sound)
+            auto* target = editableSource(slot);
+            if (target == nullptr)
             {
                 error = { "no_model", "analyse a source before editing the spectrum" };
                 return true;
             }
-            auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            const auto before = captureState();
+            auto* sound = target->sound.get();
             if (sound->band_energy == nullptr || sound->frames <= 0)
             {
                 error = { "no_residual", "source has no residual data to edit" };
@@ -826,6 +1141,8 @@ public:
             }
 
             engine::ResidualSelection selection { spectrum->bands, spectrum->firstFrame, spectrum->lastFrame };
+            selectionFirstFrame_ = spectrum->firstFrame;
+            selectionLastFrame_ = spectrum->lastFrame;
             engine::ResidualEditParameters params;
             params.smoothRadiusFrames = std::max(1, static_cast<int>(std::round(spectrum->value)));
             params.tiltDbPerBandStep  = static_cast<double>(spectrum->value);
@@ -846,9 +1163,10 @@ public:
                          f < static_cast<std::size_t>(sound->frames); ++f)
                         sound->band_energy[band.bandIndex][static_cast<int>(f)] = band.energy[f];
                 }
-                ++sourceRevisions_[static_cast<std::size_t>(slot)];
+                noteSourceMutation(slot);
                 if (state_ == HostState::prepared)
                     (void) renderSourceForPreview(slot, error);
+                recordMutation("Spectrum edit", before);
             }
             return true;
         }
@@ -864,32 +1182,32 @@ public:
                 error = { "invalid_bounce_layer", "bounce layer must be 0..3" };
                 return true;
             }
-            const auto slot = previewSource_.load(std::memory_order_acquire);
-            if (state_ != HostState::prepared ||
-                slot < 0 || slot >= static_cast<int>(sources_.size()) ||
-                !sources_[static_cast<std::size_t>(slot)] ||
-                !sources_[static_cast<std::size_t>(slot)]->sound)
+            if (state_ != HostState::prepared || !sources_[0] || !sources_[1] ||
+                !sources_[0]->sound || !sources_[1]->sound)
             {
-                error = { "not_ready", "host must be prepared and a source analysed before bouncing" };
+                error = { "not_ready", "host must be prepared and both morph sources analysed before bouncing" };
                 return true;
             }
-            const auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+            if (!renderMorphForPreview(error))
+            {
+                return true;
+            }
+            auto* pool = bounce->layer == 1 ? &playbackPartials_
+                       : bounce->layer == 2 ? &playbackResidual_ : &playback_;
+            const auto readSlot = pool->beginAudioRead();
+            const auto* rendered = pool->readBuffer(readSlot);
+            if (rendered == nullptr || rendered->frameCount() == 0)
+            {
+                pool->endAudioRead(readSlot);
+                error = { "render_failed", "morph timeline bounce produced no audio" };
+                return true;
+            }
+            std::vector<float> leftData(rendered->channel(0),
+                                        rendered->channel(0) + rendered->frameCount());
+            const auto* right = rendered->channelCount() > 1 ? rendered->channel(1) : rendered->channel(0);
+            std::vector<float> rightData(right, right + rendered->frameCount());
+            pool->endAudioRead(readSlot);
             const auto sr = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
-            const auto totalFrames = static_cast<std::uint32_t>(
-                std::max<std::int64_t>(1, std::llround(sound->dur * sr)));
-            std::vector<float> leftData(totalFrames, 0.0f);
-            std::vector<float> rightData(totalFrames, 0.0f);
-            float* channels[2] = { leftData.data(), rightData.data() };
-            AudioBufferView view { channels, 2, totalFrames };
-            const auto gen = sourceGenerations_.next();
-            const auto tok = sourceCancellation_.token();
-            const auto renderResult = AtsEngine::render(gen, tok, sound, buildRenderInputs(bounce->layer), view);
-            if (renderResult.status != JobResult<RenderStats>::Status::success)
-            {
-                error = renderResult.error ? renderResult.error
-                                           : Error { "render_failed", "bounce render failed" };
-                return true;
-            }
             const auto wavBytes = buildBounceWav(leftData, rightData, static_cast<std::uint32_t>(sr));
             const auto writeResult = platform::FileService {}.writeAtomic(bounce->path, wavBytes, true);
             if (!writeResult.succeeded())
@@ -1100,7 +1418,55 @@ public:
 
         ls.morphTimeline   = timeline_;
         ls.smearnovOnsets  = onsetOverlay_;
-        // timbreJson is a forward-compat placeholder; timbrePlan_ has no stable codec yet
+        ls.timbreJson      = timbrePlanJson_.empty()
+            ? serializeTimbreMotionPlan(makeTimbreMotionPlan()) : timbrePlanJson_;
+
+        // Keep the three legacy model roles in their corresponding v17
+        // fields. The ATS codec intentionally stores opaque ATS blobs so the
+        // host state remains independent of the filesystem.
+        if (currentSource_ && currentSource_->sound)
+            ls.atsModel = serializeAtsSoundForState(currentSource_->sound.get(),
+                                                     currentSource_->atsType);
+        for (std::size_t slot = 0; slot < sources_.size(); ++slot)
+        {
+            if (!sources_[slot])
+                continue;
+            ls.morphSourcePaths[slot] = sources_[slot]->path.utf8;
+            if (sources_[slot]->sound)
+            {
+                ls.morphSoundData[slot] = serializeAtsSoundForState(
+                    sources_[slot]->sound.get(), sources_[slot]->atsType);
+                ls.residualStates[slot] = residualStateForSound(sources_[slot]->sound.get());
+            }
+        }
+        for (std::size_t index = 0; index < variations_.size(); ++index)
+        {
+            auto& variation = ls.variations[index];
+            variation.hasSnapshot = variationStored_[index];
+            variation.name = "Variation " + std::to_string(index + 1);
+            if (variationStored_[index] && variations_[index].size() == parameters_.size())
+            {
+                variation.morphAmount = variations_[index][ParameterRegistry::indexOf("morphAmount")];
+                variation.performanceMacro = variations_[index][ParameterRegistry::indexOf("morphPerformanceMacro")];
+                variation.smoothingMs = variations_[index][ParameterRegistry::indexOf("morphSmoothingMs")];
+                constexpr std::array<std::string_view, 6> amounts {
+                    "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
+                    "morphLaneTimeAmount", "morphLaneTransientAmount", "morphLanePhaseAmount" };
+                constexpr std::array<std::string_view, 6> links {
+                    "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
+                    "morphLaneTimeLinked", "morphLaneTransientLinked", "morphLanePhaseLinked" };
+                for (std::size_t lane = 0; lane < amounts.size(); ++lane)
+                {
+                    variation.laneAmounts[lane] = variations_[index][ParameterRegistry::indexOf(amounts[lane])];
+                    variation.laneLinked[lane] = variations_[index][ParameterRegistry::indexOf(links[lane])] >= 0.5f;
+                }
+            }
+        }
+
+        if (!morphRecipeJson_.empty())
+            ls.morphRecipe = morphRecipeJson_;
+        else if (sources_[0] && sources_[1] && sources_[0]->sound && sources_[1]->sound)
+            ls.morphRecipe = serializeMorphRecipe(buildMorphRecipe());
 
         return LegacyStateCodec::encode(ls);
     }
@@ -1134,6 +1500,8 @@ public:
         cancelAnalysis();
         cancelSmearnov();
         sources_ = {};
+        currentSource_.reset();
+        editorSnapshotRevision_.store(0, std::memory_order_relaxed);
         previewSource_.store(0, std::memory_order_release);
         previewLayer_.store(0, std::memory_order_release);
         previewPlaying_.store(false, std::memory_order_release);
@@ -1144,9 +1512,12 @@ public:
         liveSmearEnabled_.store(false, std::memory_order_release);
         smearedSourceAvailable_.store(false, std::memory_order_release);
         timeline_ = { 0.0f, 1.0f };
+        typedTimeline_.clear();
         timbrePlan_.clear();
+        timbrePlanJson_.clear();
         onsetOverlay_.clear();
         variations_ = {};
+        morphRecipeJson_.clear();
         variationStored_ = {};
         timelineRevision_ = 0;
         timbreRevision_ = 0;
@@ -1154,6 +1525,7 @@ public:
         spectralViewSource_ = 0;
         spectralViewMode_ = 0;
         history_.clear();
+        parameterGestureBefore_.reset();
         format_ = format;
         state_ = HostState::cold;
         telemetry_.publish({});
@@ -1172,6 +1544,7 @@ public:
         playback_.prepare(spec.outputChannels, spec.maximumBlockSize);
         playbackPartials_.prepare(spec.outputChannels, spec.maximumBlockSize);
         playbackResidual_.prepare(spec.outputChannels, spec.maximumBlockSize);
+        playbackCapacityFrames_ = spec.maximumBlockSize;
         outputTrim_.prepare(spec.sampleRate, 20.0);
         partGainSmoother_.prepare(spec.sampleRate, 20.0);
         resGainSmoother_.prepare(spec.sampleRate, 20.0);
@@ -1369,6 +1742,20 @@ public:
             }
         }
 
+        // Analysis completion initially publishes the classic combined
+        // render. Until an explicit preview has produced matching split-layer
+        // buffers, do not let an automated Both-mode selector route playback
+        // into stale/empty partial and residual pools.
+        if (!explicitPreview_.load(std::memory_order_relaxed) && combinedBuf != nullptr &&
+            playback_.generation(combinedSlot).value >
+                std::max(playbackPartials_.generation(partialsSlot).value,
+                         playbackResidual_.generation(residualSlot).value))
+        {
+            primary = combinedBuf;
+            second = nullptr;
+            layerMix = false;
+        }
+
         const auto* lengthRef = primary ? primary : second;
         if (lengthRef != nullptr)
         {
@@ -1437,6 +1824,42 @@ public:
 
     [[nodiscard]] int semitoneOffset() const noexcept { return midi_.semitoneOffset(); }
 
+    struct AnalysisProfileWrite
+    {
+        std::string_view id;
+        float value = 0.0f;
+    };
+
+    // The profile recipes are exposed as data so a test can check each value
+    // against its descriptor range. Applying them through ParameterStore::write
+    // clamps silently, which would otherwise hide a value that names the wrong
+    // choice ordinal.
+    [[nodiscard]] static std::vector<AnalysisProfileWrite> analysisProfileWrites(int profile)
+    {
+        // analysisType ordinals 0-3 map to ATSA types 1-4, so the full
+        // analysis is ordinal 3.
+        constexpr float kAnalysisTypeFull = 3.0f;
+        switch (profile)
+        {
+        case 1:
+            return { { "analysisType", kAnalysisTypeFull },
+                     { "analysisLowestFreq", 70.0f },
+                     { "analysisHighestFreq", 9000.0f },
+                     { "analysisSmrThreshold", 20.0f },
+                     { "analysisTrackLen", 5.0f } };
+        case 2:
+            return { { "analysisType", kAnalysisTypeFull },
+                     { "analysisLowestFreq", 30.0f },
+                     { "analysisHighestFreq", 18000.0f },
+                     { "analysisHopSize", 0.125f },
+                     { "analysisTrackLen", 2.0f },
+                     { "analysisMinSegLen", 1.0f } };
+        default:
+            // 0 restores descriptor defaults; 3 (custom) leaves values alone.
+            return {};
+        }
+    }
+
 private:
     struct SmearnovWorkResult
     {
@@ -1447,6 +1870,14 @@ private:
         AtsSoundPtr transformed;
         Error error;
     };
+
+    void recordMutation(std::string label, const HostStateChunk& before)
+    {
+        if (before.empty())
+            return;
+        history_.begin(std::move(label), before);
+        (void) history_.commit(captureState());
+    }
 
     void resolveParameterIndices() noexcept
     {
@@ -1467,114 +1898,108 @@ private:
         classicPreviewModeIndex_ = ParameterRegistry::indexOf("classicPreviewMode");
     }
 
-    // Decode the chunk and apply its parameters to the live store. The chunk
-    // must already have passed header validation. Returns true even when the
-    // full decode fails (header-only chunk) so callers do not reject valid
-    // minimal states from earlier plugin versions.
+    // Decode the complete chunk before replacing either the live parameters or
+    // the accepted byte payload. A header-valid but truncated chunk is not a
+    // state and must leave the previous state untouched.
     bool applyStateChunk(HostStateChunk chunk)
     {
-        if (chunk.size() > 8)
+        const auto headerOnly = ats::AtsStateCodec::encodeHeader();
+        if (chunk == headerOnly)
         {
-            auto legacy = LegacyStateCodec::decode(chunk.data(), chunk.size());
-            if (legacy)
-                applyLegacyStateToParameters(*legacy);
+            // AU class-info and a few neutral hosts legitimately round-trip
+            // an empty project as the header-only ATSP payload.
+            stateChunk_ = std::move(chunk);
+            return true;
+        }
+        if (chunk.size() <= 8)
+            return false;
+        auto legacy = LegacyStateCodec::decode(chunk.data(), chunk.size());
+        // A small header-extension chunk was emitted by the early neutral
+        // host probe. Keep that narrowly scoped compatibility form readable;
+        // every real ATSP payload still has to pass the complete decoder.
+        const bool legacyProbeChunk = chunk.size() == 9 &&
+            AtsStateCodec::decodeHeader(chunk.data(), chunk.size());
+        if (!legacy && !legacyProbeChunk)
+            return false;
+        if (legacy)
+        {
+            if (!legacy->morphRecipe.empty())
+            {
+                MorphRecipe recipe;
+                std::string recipeError;
+                if (!deserializeMorphRecipe(legacy->morphRecipe, recipe, &recipeError))
+                    return false;
+            }
+            if (!legacy->atsModel.empty() && !deserializeAtsSoundForState(legacy->atsModel, 3))
+                return false;
+            for (std::size_t slot = 0; slot < legacy->morphSoundData.size(); ++slot)
+                if (!legacy->morphSoundData[slot].empty() &&
+                    !deserializeAtsSoundForState(legacy->morphSoundData[slot], static_cast<int>(slot),
+                                                  legacy->morphSourcePaths[slot]))
+                    return false;
+            applyLegacyStateToParameters(*legacy);
         }
         stateChunk_ = std::move(chunk);
         return true;
     }
 
-    void applyLegacyStateToParameters(const LegacyState& ls) noexcept
+    void applyLegacyStateToParameters(const LegacyState& ls)
     {
-        // SynthParams
-        (void) parameters_.write("synStart",        static_cast<float>(ls.synth.startTime));
-        (void) parameters_.write("synDur",          static_cast<float>(ls.synth.duration));
-        (void) parameters_.write("useAllPartials",  ls.synth.useAllPartials   ? 1.0f : 0.0f);
-        (void) parameters_.write("usePhase",        ls.synth.usePartialsPhase ? 1.0f : 0.0f);
-        (void) parameters_.write("partGain",        static_cast<float>(ls.synth.partialsGain));
-        (void) parameters_.write("resGain",         static_cast<float>(ls.synth.residualGain));
-        (void) parameters_.write("freq",            static_cast<float>(ls.synth.frequencyFactor));
-        (void) parameters_.write("timeStretch",     static_cast<float>(ls.synth.timeFactor));
-        (void) parameters_.write("useIfftSynth",    ls.synth.useIfftSynth ? 1.0f : 0.0f);
-        (void) parameters_.write("freqShapeMode",   static_cast<float>(static_cast<int>(ls.synth.frequencyShape.mode)));
-        (void) parameters_.write("freqShapeAmount", static_cast<float>(ls.synth.frequencyShape.amount));
-        (void) parameters_.write("freqShapePivotHz", static_cast<float>(ls.synth.frequencyShape.pivotHz));
-        (void) parameters_.write("outputTrim",      static_cast<float>(ls.outputTrim));
-        (void) parameters_.write("residualOnly",    ls.residualOnly ? 1.0f : 0.0f);
-        (void) parameters_.write("classicPreviewMode", static_cast<float>(ls.classicPreviewMode));
-
-        // AnalysisParams: ATSA type 1-4 back to choice index 0-3
-        (void) parameters_.write("analysisType",               static_cast<float>(std::max(0, ls.analysis.type - 1)));
-        (void) parameters_.write("analysisStart",              static_cast<float>(ls.analysis.start));
-        (void) parameters_.write("analysisDuration",           static_cast<float>(ls.analysis.duration));
-        (void) parameters_.write("analysisLowestFreq",         static_cast<float>(ls.analysis.lowest_freq));
-        (void) parameters_.write("analysisHighestFreq",        static_cast<float>(ls.analysis.highest_freq));
-        (void) parameters_.write("analysisFreqDev",            static_cast<float>(ls.analysis.freq_dev));
-        (void) parameters_.write("analysisWinCycles",          static_cast<float>(ls.analysis.win_cycles));
-        (void) parameters_.write("analysisWinType",            static_cast<float>(ls.analysis.win_type));
-        (void) parameters_.write("analysisHopSize",            static_cast<float>(ls.analysis.hop_size));
-        (void) parameters_.write("analysisLowestMag",          static_cast<float>(ls.analysis.lowest_mag));
-        (void) parameters_.write("analysisTrackLen",           static_cast<float>(ls.analysis.track_len));
-        (void) parameters_.write("analysisMinSegLen",          static_cast<float>(ls.analysis.min_seg_len));
-        (void) parameters_.write("analysisMinGapLen",          static_cast<float>(ls.analysis.min_gap_len));
-        (void) parameters_.write("analysisSmrThreshold",       static_cast<float>(ls.analysis.SMR_thres));
-        (void) parameters_.write("analysisMinSegSmr",          static_cast<float>(ls.analysis.min_seg_SMR));
-        (void) parameters_.write("analysisLastPeakContribution", static_cast<float>(ls.analysis.last_peak_cont));
-        (void) parameters_.write("analysisSmrContribution",    static_cast<float>(ls.analysis.SMR_cont));
-        (void) parameters_.write("analysisMultiRes",           ls.analysis.multiRes ? 1.0f : 0.0f);
-
-        // Morph params
-        (void) parameters_.write("morphAmount",           static_cast<float>(ls.morphAmount));
-        (void) parameters_.write("morphPerformanceMacro", static_cast<float>(ls.morphPerformanceMacro));
-        (void) parameters_.write("morphSmoothingMs",      static_cast<float>(ls.morphSmoothingMs));
-        (void) parameters_.write("morphGridType",         static_cast<float>(ls.morphGridType));
-        (void) parameters_.write("morphCorrespondenceStrategy", static_cast<float>(ls.morphCorrespondenceStrategy));
-        (void) parameters_.write("morphQuality",          static_cast<float>(ls.morphQuality));
-        (void) parameters_.write("morphUnmatchedSourcePolicy", static_cast<float>(ls.morphUnmatchedSourcePolicy));
-        (void) parameters_.write("morphUnmatchedTargetPolicy", static_cast<float>(ls.morphUnmatchedTargetPolicy));
-        (void) parameters_.write("morphDiscardOptIn",     ls.morphDiscardOptIn ? 1.0f : 0.0f);
-        (void) parameters_.write("morphFrequencyInterpolationDomain", static_cast<float>(ls.morphFrequencyDomain));
-        (void) parameters_.write("morphAmplitudeInterpolationDomain", static_cast<float>(ls.morphAmplitudeDomain));
-        (void) parameters_.write("morphPhaseStrategy",    static_cast<float>(ls.morphPhaseStrategy));
-        (void) parameters_.write("morphTransientPolicy",  static_cast<float>(ls.morphTransientPolicy));
-
-        constexpr std::array<std::string_view, 6> kLaneAmounts {
-            "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
-            "morphLaneTimeAmount",      "morphLaneTransientAmount", "morphLanePhaseAmount"
-        };
-        constexpr std::array<std::string_view, 6> kLaneLinks {
-            "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
-            "morphLaneTimeLinked",      "morphLaneTransientLinked", "morphLanePhaseLinked"
-        };
-        for (std::size_t n = 0; n < ls.morphLaneAmounts.size(); ++n)
-        {
-            (void) parameters_.write(kLaneAmounts[n], static_cast<float>(ls.morphLaneAmounts[n]));
-            (void) parameters_.write(kLaneLinks[n],   ls.morphLaneLinked[n] ? 1.0f : 0.0f);
-        }
-
-        // Smearnov
-        (void) parameters_.write("smearnovBlurMs",             static_cast<float>(ls.smearnov.blurMs));
-        (void) parameters_.write("smearnovSharpenAmount",      static_cast<float>(ls.smearnov.sharpen));
-        (void) parameters_.write("smearnovExaggerateDb",       static_cast<float>(ls.smearnov.exaggerateDb));
-        (void) parameters_.write("smearnovMix",                static_cast<float>(ls.smearnov.mix));
-        (void) parameters_.write("smearnovMaxDb",              static_cast<float>(ls.smearnov.maxDb));
-        (void) parameters_.write("smearnovTargets",            static_cast<float>(ls.smearnov.targets));
-        (void) parameters_.write("smearnovScope",              static_cast<float>(ls.smearnov.scope));
-        (void) parameters_.write("smearnovWeightDetFlux",      static_cast<float>(ls.smearnov.weightDetFlux));
-        (void) parameters_.write("smearnovWeightResFlux",      static_cast<float>(ls.smearnov.weightResFlux));
-        (void) parameters_.write("smearnovWeightHfcFlux",      static_cast<float>(ls.smearnov.weightHfcFlux));
-        (void) parameters_.write("smearnovWeightBirth",        static_cast<float>(ls.smearnov.weightBirth));
-        (void) parameters_.write("smearnovWeightPhaseDev",     static_cast<float>(ls.smearnov.weightPhaseDev));
-        (void) parameters_.write("smearnovThresholdLambda",    static_cast<float>(ls.smearnov.thresholdLambda));
-        (void) parameters_.write("smearnovThresholdAutoScale", static_cast<float>(ls.smearnov.thresholdAutoScale));
-        (void) parameters_.write("smearnovPeakWindowFrames",   static_cast<float>(ls.smearnov.peakWindowFrames));
-        (void) parameters_.write("smearnovMinGapFrames",       static_cast<float>(ls.smearnov.minGapFrames));
-        (void) parameters_.write("smearnovPreMarginMs",        static_cast<float>(ls.smearnov.preMarginMs));
-        (void) parameters_.write("smearnovMaxAttackFrames",    static_cast<float>(ls.smearnov.maxAttackFrames));
-        (void) parameters_.write("smearnovUsePhaseDeviation",  ls.smearnov.usePhaseDeviation ? 1.0f : 0.0f);
-        (void) parameters_.write("smearnovUseRpcaFallback",    ls.smearnov.useRpcaFallback   ? 1.0f : 0.0f);
+        applyLegacyStateToParameterStore(ls, parameters_);
 
         if (!ls.morphTimeline.empty()) timeline_ = ls.morphTimeline;
+        typedTimeline_.clear();
+        timbrePlanJson_ = ls.timbreJson;
         onsetOverlay_ = ls.smearnovOnsets;
+
+        if (!ls.atsModel.empty())
+            currentSource_ = deserializeAtsSoundForState(ls.atsModel, 3);
+        else
+            currentSource_.reset();
+        for (std::size_t slot = 0; slot < sources_.size(); ++slot)
+        {
+            if (ls.morphSoundData[slot].empty())
+                sources_[slot].reset();
+            else
+                sources_[slot] = deserializeAtsSoundForState(
+                    ls.morphSoundData[slot], static_cast<int>(slot), ls.morphSourcePaths[slot]);
+            ++sourceRevisions_[slot];
+        }
+        morphRecipeJson_ = ls.morphRecipe;
+        if (!morphRecipeJson_.empty())
+        {
+            MorphRecipe restoredRecipe;
+            std::string recipeError;
+            if (!deserializeMorphRecipe(morphRecipeJson_, restoredRecipe, &recipeError))
+                morphRecipeJson_.clear();
+        }
+        for (std::size_t index = 0; index < ls.variations.size(); ++index)
+        {
+            variations_[index].clear();
+            variationStored_[index] = ls.variations[index].hasSnapshot;
+            if (!variationStored_[index])
+                continue;
+            variations_[index] = parameters_.snapshot();
+            const auto set = [this, &index](std::string_view id, float value) {
+                const auto dense = ParameterRegistry::indexOf(id);
+                if (dense < variations_[index].size())
+                    variations_[index][dense] = value;
+            };
+            set("morphAmount", static_cast<float>(ls.variations[index].morphAmount));
+            set("morphPerformanceMacro", static_cast<float>(ls.variations[index].performanceMacro));
+            set("morphSmoothingMs", static_cast<float>(ls.variations[index].smoothingMs));
+            constexpr std::array<std::string_view, 6> amounts {
+                "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
+                "morphLaneTimeAmount", "morphLaneTransientAmount", "morphLanePhaseAmount" };
+            constexpr std::array<std::string_view, 6> links {
+                "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
+                "morphLaneTimeLinked", "morphLaneTransientLinked", "morphLanePhaseLinked" };
+            for (std::size_t lane = 0; lane < amounts.size(); ++lane)
+            {
+                set(amounts[lane], static_cast<float>(ls.variations[index].laneAmounts[lane]));
+                set(links[lane], ls.variations[index].laneLinked[lane] ? 1.0f : 0.0f);
+            }
+        }
     }
 
     static const char* analysisProfileName(int profile) noexcept
@@ -1588,7 +2013,7 @@ private:
         }
     }
 
-    void applyAnalysisProfile(int profile) noexcept
+    void applyAnalysisProfile(int profile)
     {
         if (profile == 0)
         {
@@ -1597,24 +2022,8 @@ private:
                     (void) parameters_.write(descriptor.denseIndex, descriptor.defaultValue);
             return;
         }
-        if (profile == 1)
-        {
-            (void) parameters_.write("analysisType", 4.0f);
-            (void) parameters_.write("analysisLowestFreq", 70.0f);
-            (void) parameters_.write("analysisHighestFreq", 9000.0f);
-            (void) parameters_.write("analysisSmrThreshold", 20.0f);
-            (void) parameters_.write("analysisTrackLen", 5.0f);
-            return;
-        }
-        if (profile == 2)
-        {
-            (void) parameters_.write("analysisType", 4.0f);
-            (void) parameters_.write("analysisLowestFreq", 30.0f);
-            (void) parameters_.write("analysisHighestFreq", 18000.0f);
-            (void) parameters_.write("analysisHopSize", 0.125f);
-            (void) parameters_.write("analysisTrackLen", 2.0f);
-            (void) parameters_.write("analysisMinSegLen", 1.0f);
-        }
+        for (const auto& write : analysisProfileWrites(profile))
+            (void) parameters_.write(write.id, write.value);
     }
 
     static bool strictlyOrderedNormalized(const std::vector<float>& values) noexcept
@@ -1644,6 +2053,47 @@ private:
         params.minGapFramesOverride = static_cast<int>(parameters_.read("smearnovMinGapFrames"));
         params.preMarginSeconds = parameters_.read("smearnovPreMarginMs") / 1000.0;
         params.maxAttackFrames = static_cast<int>(parameters_.read("smearnovMaxAttackFrames"));
+        return params;
+    }
+
+    [[nodiscard]] AnalysisParams analysisParams() const noexcept
+    {
+        AnalysisParams params;
+        params.type = static_cast<int>(std::lround(parameters_.read("analysisType"))) + 1;
+        params.start = parameters_.read("analysisStart");
+        params.duration = parameters_.read("analysisDuration");
+        params.lowest_freq = parameters_.read("analysisLowestFreq");
+        params.highest_freq = parameters_.read("analysisHighestFreq");
+        params.freq_dev = parameters_.read("analysisFreqDev");
+        params.win_cycles = static_cast<int>(std::lround(parameters_.read("analysisWinCycles")));
+        params.win_type = static_cast<int>(std::lround(parameters_.read("analysisWinType")));
+        params.hop_size = parameters_.read("analysisHopSize");
+        params.lowest_mag = parameters_.read("analysisLowestMag");
+        params.track_len = static_cast<int>(std::lround(parameters_.read("analysisTrackLen")));
+        params.min_seg_len = static_cast<int>(std::lround(parameters_.read("analysisMinSegLen")));
+        params.min_gap_len = static_cast<int>(std::lround(parameters_.read("analysisMinGapLen")));
+        params.SMR_thres = parameters_.read("analysisSmrThreshold");
+        params.min_seg_SMR = parameters_.read("analysisMinSegSmr");
+        params.last_peak_cont = parameters_.read("analysisLastPeakContribution");
+        params.SMR_cont = parameters_.read("analysisSmrContribution");
+        params.multiRes = parameters_.read("analysisMultiRes") >= 0.5f;
+        return params;
+    }
+
+    [[nodiscard]] AnalysisParams analysisParamsForSource(const engine::ImportedSource& source) const noexcept
+    {
+        auto params = analysisParams();
+        const auto sourceDuration = source.sampleRate > 0
+            ? static_cast<double>(source.monoSamples.size()) / static_cast<double>(source.sampleRate) : 0.0;
+        if (sourceDuration > 0.0)
+        {
+            // ATSA's legacy tracker does not safely handle a host-automated start at/past EOF.
+            params.start = params.start >= sourceDuration ? 0.0 : std::max(0.0, params.start);
+            if (params.duration > 0.0)
+                params.duration = std::min(params.duration, sourceDuration - params.start);
+        }
+        params.highest_freq = std::min(params.highest_freq, source.sampleRate * 0.5);
+        params.lowest_freq = std::min(params.lowest_freq, std::max(1.0, params.highest_freq - 1.0));
         return params;
     }
 
@@ -1688,6 +2138,9 @@ private:
         const auto detect = smearnovDetectParams();
         const auto transform = smearnovParams();
         const auto requested = onsetOverlay_;
+        const auto scope = static_cast<int>(std::lround(parameters_.read("smearnovScope")));
+        const auto selectionFirst = selectionFirstFrame_;
+        const auto selectionLast = selectionLastFrame_;
         smearnovCancellation_.cancel();
         smearnovCancellation_ = CancellationSource {};
         const auto generation = sourceGenerations_.next();
@@ -1697,7 +2150,7 @@ private:
             smearnovFuture_ = promise->get_future();
             smearnovScheduler_.submitVoid(
                 [apply, slot, sourceRevision, snapshot = AtsSoundPtr { copied }, detect, transform,
-                 requested, token, promise]() mutable {
+                 requested, scope, selectionFirst, selectionLast, token, promise]() mutable {
                     SmearnovWorkResult result;
                     result.apply = apply;
                     result.slot = slot;
@@ -1711,13 +2164,41 @@ private:
                     auto onsets = detectOnsets(snapshot.get(), detect);
                     if (!requested.empty())
                     {
+                        const auto detected = onsets;
                         onsets.clear();
                         const auto frameCount = std::max(1, snapshot.get()->frames - 1);
                         for (const auto normalized : requested)
                         {
                             const auto frame = static_cast<int>(std::lround(normalized * frameCount));
-                            onsets.push_back({ frame, frame, frame, 0.0 });
+                            auto nearest = detected.end();
+                            if (!detected.empty())
+                                nearest = std::min_element(detected.begin(), detected.end(),
+                                    [frame](const AtsOnset& a, const AtsOnset& b) {
+                                        return std::abs(a.frame - frame) < std::abs(b.frame - frame);
+                                    });
+                            if (nearest != detected.end())
+                            {
+                                auto edited = *nearest;
+                                const auto delta = frame - edited.frame;
+                                edited.frame = frame;
+                                edited.peakFrame = std::clamp(edited.peakFrame + delta, 0, frameCount);
+                                edited.preFrame = std::clamp(edited.preFrame + delta, 0, edited.peakFrame);
+                                onsets.push_back(edited);
+                            }
+                            else
+                            {
+                                onsets.push_back({ frame, frame, frame, 0.0 });
+                            }
                         }
+                    }
+                    std::string scopeError;
+                    onsets = applySmearnovScope(scope, std::move(onsets), selectionFirst,
+                                                selectionLast, scopeError);
+                    if (!scopeError.empty())
+                    {
+                        result.error = { "smearnov_scope", std::move(scopeError) };
+                        promise->set_value(std::move(result));
+                        return;
                     }
                     if (token.isCancelled())
                     {
@@ -1782,6 +2263,471 @@ private:
 
     void cancelSmearnov() noexcept { smearnovCancellation_.cancel(); }
 
+    [[nodiscard]] static std::vector<AtsOnset> applySmearnovScope(
+        int scope, std::vector<AtsOnset> onsets, int firstFrame, int lastFrame,
+        std::string& error)
+    {
+        error.clear();
+        if (scope == 1)
+        {
+            if (firstFrame < 0 || lastFrame < 0)
+            {
+                error = "select a spectrum frame range, or set Smearnov scope to All";
+                return {};
+            }
+            const auto lo = std::min(firstFrame, lastFrame);
+            const auto hi = std::max(firstFrame, lastFrame);
+            onsets.erase(std::remove_if(onsets.begin(), onsets.end(), [lo, hi](const AtsOnset& onset) {
+                return onset.peakFrame < lo || onset.preFrame > hi;
+            }), onsets.end());
+        }
+        else if (scope == 2 && onsets.size() > 1)
+        {
+            double strengthSum = 0.0;
+            for (const auto& onset : onsets) strengthSum += onset.strength;
+            const auto mean = strengthSum / static_cast<double>(onsets.size());
+            onsets.erase(std::remove_if(onsets.begin(), onsets.end(), [mean](const AtsOnset& onset) {
+                return onset.strength < mean;
+            }), onsets.end());
+        }
+        return onsets;
+    }
+
+    [[nodiscard]] static MorphSourceMetadata makeMorphSourceMetadata(
+        const engine::ImportedSource& source, int slot, std::uint64_t revision)
+    {
+        MorphSourceMetadata metadata;
+        const auto* sound = source.sound.get();
+        if (sound == nullptr)
+            return metadata;
+        metadata.id = slot == 0 ? "source_a" : "source_b";
+        metadata.name = source.name.empty() ? (slot == 0 ? "Source A" : "Source B") : source.name;
+        metadata.hash = "rev:" + std::to_string(revision) + ";frames:" +
+                        std::to_string(sound->frames) + ";partials:" +
+                        std::to_string(sound->partials);
+        metadata.sampleRate = sound->srate;
+        metadata.durationSeconds = sound->dur;
+        metadata.frameCount = sound->frames;
+        metadata.partialCount = sound->partials;
+        metadata.frameHopSeconds = sound->frames > 1 && sound->dur > 0.0
+            ? sound->dur / static_cast<double>(sound->frames - 1) : 0.0;
+        metadata.channelCount = 1;
+        metadata.hasPhase = sound->pha != nullptr;
+        metadata.hasResidual = sound->band_energy != nullptr;
+        auto low = std::numeric_limits<double>::max();
+        auto high = 0.0;
+        if (sound->frq != nullptr)
+            for (int partial = 0; partial < sound->partials; ++partial)
+                if (sound->frq[partial] != nullptr)
+                    for (int frame = 0; frame < sound->frames; ++frame)
+                    {
+                        const auto frequency = sound->frq[partial][frame];
+                        const auto active = sound->amp == nullptr || sound->amp[partial] == nullptr ||
+                                            sound->amp[partial][frame] > 0.0;
+                        if (active && std::isfinite(frequency) && frequency > 0.0)
+                        {
+                            low = std::min(low, frequency);
+                            high = std::max(high, frequency);
+                        }
+                    }
+        metadata.lowestFrequencyHz = low == std::numeric_limits<double>::max() ? 0.0 : low;
+        metadata.highestFrequencyHz = high > 0.0 ? high : std::max(0.0, sound->srate * 0.5);
+        return metadata;
+    }
+
+    [[nodiscard]] static std::vector<MorphBandAssignment> makeMorphAssignments(
+        const ATS_SOUND* sound, const MorphFrequencyGrid& grid)
+    {
+        std::vector<MorphPartialFrame> frames;
+        if (sound == nullptr || sound->partials <= 0 || sound->frames <= 0 || sound->frq == nullptr)
+            return {};
+        frames.reserve(static_cast<std::size_t>(sound->partials));
+        for (int partial = 0; partial < sound->partials; ++partial)
+        {
+            if (sound->frq[partial] == nullptr) continue;
+            double weightedFrequency = 0.0;
+            double totalAmplitude = 0.0;
+            double peakAmplitude = 0.0;
+            int peakFrame = -1;
+            int activeFrames = 0;
+            for (int frame = 0; frame < sound->frames; ++frame)
+            {
+                const auto frequency = sound->frq[partial][frame];
+                const auto amplitude = sound->amp != nullptr && sound->amp[partial] != nullptr
+                    ? sound->amp[partial][frame] : 1.0;
+                if (!std::isfinite(frequency) || frequency <= 0.0 ||
+                    !std::isfinite(amplitude) || amplitude <= 0.0)
+                    continue;
+                weightedFrequency += frequency * amplitude;
+                totalAmplitude += amplitude;
+                if (amplitude > peakAmplitude)
+                {
+                    peakAmplitude = amplitude;
+                    peakFrame = frame;
+                }
+                ++activeFrames;
+            }
+            if (activeFrames == 0 || totalAmplitude <= 0.0) continue;
+            frames.push_back({ partial, peakFrame, weightedFrequency / totalAmplitude,
+                               totalAmplitude / static_cast<double>(activeFrames), true });
+        }
+        return assignPartialFramesToFrequencyBands(grid, frames);
+    }
+
+    [[nodiscard]] static std::vector<MorphResidualNoiseBand> makeMorphResidualBands(
+        const ATS_SOUND* sound)
+    {
+        std::vector<MorphResidualNoiseBand> bands;
+        if (sound == nullptr || sound->band_energy == nullptr || sound->frames <= 0)
+            return bands;
+        for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+        {
+            if (sound->band_energy[band] == nullptr) continue;
+            double energy = 0.0;
+            int count = 0;
+            for (int frame = 0; frame < sound->frames; ++frame)
+            {
+                const auto value = sound->band_energy[band][frame];
+                if (std::isfinite(value) && value > 0.0) { energy += value; ++count; }
+            }
+            if (count > 0 && energy > 0.0)
+            {
+                MorphResidualNoiseBand value;
+                value.bandIndex = band;
+                value.orphanResidualPower = energy / static_cast<double>(count) /
+                    (static_cast<double>(std::max(1, sound->window_size)) * ATSA_NOISE_VARIANCE);
+                bands.push_back(value);
+            }
+        }
+        return bands;
+    }
+
+    [[nodiscard]] static std::vector<MorphTransientMarker> detectMorphTransients(
+        const ATS_SOUND* sound, double hopSeconds)
+    {
+        std::vector<MorphTransientMarker> markers;
+        if (sound == nullptr || sound->frames <= 1 || sound->amp == nullptr || sound->partials <= 0)
+            return markers;
+        std::vector<double> energy(static_cast<std::size_t>(sound->frames), 0.0);
+        for (int frame = 0; frame < sound->frames; ++frame)
+            for (int partial = 0; partial < sound->partials; ++partial)
+                if (sound->amp[partial] != nullptr)
+                {
+                    const auto amplitude = sound->amp[partial][frame];
+                    if (std::isfinite(amplitude) && amplitude > 0.0)
+                        energy[static_cast<std::size_t>(frame)] += amplitude;
+                }
+        std::vector<double> flux(static_cast<std::size_t>(sound->frames), 0.0);
+        double maximumFlux = 0.0;
+        for (int frame = 1; frame < sound->frames; ++frame)
+        {
+            flux[static_cast<std::size_t>(frame)] = std::max(
+                0.0, energy[static_cast<std::size_t>(frame)] - energy[static_cast<std::size_t>(frame - 1)]);
+            maximumFlux = std::max(maximumFlux, flux[static_cast<std::size_t>(frame)]);
+        }
+        if (maximumFlux <= 0.0) return markers;
+        const auto threshold = maximumFlux * 0.25;
+        for (int frame = 1; frame < sound->frames; ++frame)
+        {
+            const auto value = flux[static_cast<std::size_t>(frame)];
+            if (value < threshold || value < flux[static_cast<std::size_t>(frame - 1)] ||
+                (frame + 1 < sound->frames && value < flux[static_cast<std::size_t>(frame + 1)]))
+                continue;
+            markers.push_back({ std::max(0.0, hopSeconds) * frame, value / maximumFlux, frame });
+        }
+        return markers;
+    }
+
+    [[nodiscard]] MorphRecipe buildMorphRecipe() const
+    {
+        auto recipe = makeDefaultMorphRecipe();
+        if (!sources_[0] || !sources_[1] || !sources_[0]->sound || !sources_[1]->sound)
+            return recipe;
+        const auto maxFrequency = std::max(20.0, std::min(
+            sources_[0]->sound.get()->srate, sources_[1]->sound.get()->srate) * 0.5);
+        recipe.frequencyGrid = parameters_.read("morphGridType") >= 0.5f
+            ? makeMelFrequencyGrid(25, 0.0, maxFrequency)
+            : makeBarkFrequencyGrid(25, 0.0, maxFrequency);
+        recipe.sourceA = makeMorphSourceMetadata(*sources_[0], 0, sourceRevisions_[0]);
+        recipe.sourceB = makeMorphSourceMetadata(*sources_[1], 1, sourceRevisions_[1]);
+        recipe.sourceATransients = detectMorphTransients(sources_[0]->sound.get(), recipe.sourceA.frameHopSeconds);
+        recipe.sourceBTransients = detectMorphTransients(sources_[1]->sound.get(), recipe.sourceB.frameHopSeconds);
+        const auto a = makeMorphAssignments(sources_[0]->sound.get(), recipe.frequencyGrid);
+        const auto b = makeMorphAssignments(sources_[1]->sound.get(), recipe.frequencyGrid);
+        const auto strategy = static_cast<int>(std::lround(parameters_.read("morphCorrespondenceStrategy")));
+        if (strategy == 1)
+            recipe.correspondenceRecords = buildGreedyNearestCorrespondence(a, b);
+        else if (strategy == 2)
+        {
+            MorphAssignmentMatrixOptions options;
+            options.advancedStrategyEnabled = true;
+            options.amplitudeRankWeight = 0.25;
+            recipe.correspondenceRecords = buildAssignmentMatrixCorrespondence(a, b, options).records;
+        }
+        else if (strategy == 3)
+        {
+            const auto quality = static_cast<int>(std::lround(parameters_.read("morphQuality")));
+            const auto minimumMass = quality == 0 ? 1.0e-5 : quality == 2 ? 1.0e-2 : 1.0e-3;
+            recipe.correspondenceRecords = buildOptimalTransportRecords(a, b, { minimumMass });
+        }
+        else
+            recipe.correspondenceRecords = buildFrequencyRankCorrespondence(a, b, 0.25);
+        recipe.defaultMorphAmount = parameters_.read("morphAmount");
+        constexpr std::array<std::string_view, 6> amounts {
+            "morphLaneFrequencyAmount", "morphLaneAmplitudeAmount", "morphLaneResidualAmount",
+            "morphLaneTimeAmount", "morphLaneTransientAmount", "morphLanePhaseAmount" };
+        constexpr std::array<std::string_view, 6> links {
+            "morphLaneFrequencyLinked", "morphLaneAmplitudeLinked", "morphLaneResidualLinked",
+            "morphLaneTimeLinked", "morphLaneTransientLinked", "morphLanePhaseLinked" };
+        for (std::size_t lane = 0; lane < recipe.lanes.size(); ++lane)
+        {
+            recipe.lanes[lane].amount = parameters_.read(amounts[lane]);
+            recipe.lanes[lane].linkedToMainMorph = parameters_.read(links[lane]) >= 0.5f;
+        }
+        const auto policy = [](int choice) {
+            switch (choice) {
+            case 1: return MorphUnmatchedPartialPolicy::FadeIn;
+            case 2: return MorphUnmatchedPartialPolicy::Hold;
+            case 3: return MorphUnmatchedPartialPolicy::MergeIntoResidual;
+            case 4: return MorphUnmatchedPartialPolicy::Discard;
+            default: return MorphUnmatchedPartialPolicy::FadeOut;
+            }
+        };
+        recipe.unmatchedPartialPolicies.sourcePolicy = policy(
+            static_cast<int>(std::lround(parameters_.read("morphUnmatchedSourcePolicy"))));
+        recipe.unmatchedPartialPolicies.targetPolicy = policy(
+            static_cast<int>(std::lround(parameters_.read("morphUnmatchedTargetPolicy"))));
+        recipe.unmatchedPartialPolicies.discardOptIn = parameters_.read("morphDiscardOptIn") >= 0.5f;
+        if (!recipe.unmatchedPartialPolicies.discardOptIn)
+        {
+            if (recipe.unmatchedPartialPolicies.sourcePolicy == MorphUnmatchedPartialPolicy::Discard)
+                recipe.unmatchedPartialPolicies.sourcePolicy = MorphUnmatchedPartialPolicy::FadeOut;
+            if (recipe.unmatchedPartialPolicies.targetPolicy == MorphUnmatchedPartialPolicy::Discard)
+                recipe.unmatchedPartialPolicies.targetPolicy = MorphUnmatchedPartialPolicy::FadeIn;
+        }
+        recipe.phase.strategy = static_cast<MorphPhaseStrategy>(std::clamp(
+            static_cast<int>(std::lround(parameters_.read("morphPhaseStrategy"))), 0, 4));
+        recipe.transient.policy = static_cast<MorphTransientPolicy>(std::clamp(
+            static_cast<int>(std::lround(parameters_.read("morphTransientPolicy"))), 0, 3));
+        return recipe;
+    }
+
+    [[nodiscard]] std::vector<engine::TimelinePoint> morphTimelinePoints() const
+    {
+        if (!typedTimeline_.empty()) return typedTimeline_;
+        std::vector<engine::TimelinePoint> points;
+        points.reserve(timeline_.size());
+        for (std::size_t index = 0; index < timeline_.size(); ++index)
+        {
+            const auto time = timeline_.size() > 1
+                ? static_cast<double>(index) / static_cast<double>(timeline_.size() - 1) : 0.0;
+            points.push_back({ time, static_cast<double>(timeline_[index]),
+                               engine::TimelinePointKind::morph, MorphCurveShape::Linear });
+        }
+        return engine::MorphTimelineService::sanitize(std::move(points));
+    }
+
+    [[nodiscard]] TimbreMotionPlan makeTimbreMotionPlan() const
+    {
+        if (!timbrePlanJson_.empty()) return deserializeTimbreMotionPlan(timbrePlanJson_);
+        TimbreMotionPlan plan;
+        if (timbrePlan_.empty()) return plan;
+        TimbreTargetCurve curve;
+        curve.descriptorId = "combined.centroid_axis";
+        curve.mode = TimbreTargetMode::AbsoluteTarget;
+        curve.smoothingMs = parameters_.read("morphSmoothingMs");
+        curve.points.reserve(timbrePlan_.size());
+        for (std::size_t index = 0; index < timbrePlan_.size(); ++index)
+        {
+            const auto time = timbrePlan_.size() > 1
+                ? static_cast<double>(index) / static_cast<double>(timbrePlan_.size() - 1) : 0.0;
+            curve.points.push_back({ time, static_cast<double>(timbrePlan_[index]), 0 });
+        }
+        plan.targetCurves.push_back(std::move(curve));
+        return plan;
+    }
+
+    bool renderMorphForPreview(Error& error)
+    {
+        error = {};
+        if (state_ != HostState::prepared)
+        {
+            error = { "host_not_prepared", "prepare the audio host before starting morph preview" };
+            return false;
+        }
+        if (!sources_[0] || !sources_[1] || !sources_[0]->sound || !sources_[1]->sound)
+        {
+            error = { "missing_morph_sources", "analyse Source A and Source B before playing the morph" };
+            return false;
+        }
+
+        const auto recipe = buildMorphRecipe();
+        if (recipe.correspondenceRecords.empty())
+        {
+            error = { "missing_correspondence", "no morph correspondences could be built" };
+            return false;
+        }
+        const FrequencyShapeSettings frequencyShape {
+            static_cast<FrequencyShapeMode>(static_cast<int>(std::lround(parameters_.read("freqShapeMode")))),
+            parameters_.read("freqShapeAmount"), parameters_.read("freqShapePivotHz"), 0.0 };
+        AtsSoundPtr shapedA;
+        AtsSoundPtr shapedB;
+        const ATS_SOUND* renderA = sources_[0]->sound.get();
+        const ATS_SOUND* renderB = sources_[1]->sound.get();
+        const auto prepareSource = [&](const ATS_SOUND* original, AtsSoundPtr& holder,
+                                       const ATS_SOUND*& prepared) -> bool {
+            const auto shape = isFrequencyShapeActive(
+                resolveFrequencyShapeSettingsForSound(original, frequencyShape));
+            const auto smear = liveSmearEnabled_.load(std::memory_order_acquire);
+            if (!shape && !smear) return true;
+            holder.reset(copy_sound(const_cast<ATS_SOUND*>(original)));
+            if (!holder)
+            {
+                error = { "copy_failed", "could not copy a morph source for rendering" };
+                return false;
+            }
+            if (smear)
+            {
+                auto onsets = detectOnsets(holder.get(), smearnovDetectParams());
+                std::string scopeError;
+                onsets = applySmearnovScope(
+                    static_cast<int>(std::lround(parameters_.read("smearnovScope"))),
+                    std::move(onsets), selectionFirstFrame_, selectionLastFrame_, scopeError);
+                if (!scopeError.empty())
+                {
+                    error = { "smearnov_scope", std::move(scopeError) };
+                    return false;
+                }
+                if (!onsets.empty()) (void) smearAttacks(holder.get(), onsets, smearnovParams());
+            }
+            if (shape) applyFrequencyShapeToSound(holder.get(), frequencyShape);
+            prepared = holder.get();
+            return true;
+        };
+        if (!prepareSource(renderA, shapedA, renderA) || !prepareSource(renderB, shapedB, renderB))
+            return false;
+
+        const auto timelinePoints = morphTimelinePoints();
+        const auto timbreMotion = makeTimbreMotionPlan();
+        dsp::MorphTrajectorySettings settings;
+        settings.timeline = timelinePoints.empty() ? nullptr : &timelinePoints;
+        settings.fixedMorphAmount = parameters_.read("morphAmount");
+        settings.sampleRate = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
+        settings.durationSeconds = std::max(0.25, std::max(
+            recipe.sourceA.durationSeconds, recipe.sourceB.durationSeconds));
+        settings.envelopeCache = &morphEnvelopeCache_;
+        settings.sourcesRevision = sourceRevisions_[0] ^ (sourceRevisions_[1] << 32u);
+        settings.timbrePlan = timbreMotion.empty() ? nullptr : &timbreMotion;
+        settings.brightnessDb = parameters_.read("timbreBrightnessDb");
+        settings.tiltDbPerOctave = parameters_.read("timbreTiltDbPerOct");
+        settings.noiseBalance = parameters_.read("timbreNoiseBalance");
+        settings.interpolationDomains = {
+            parameters_.read("morphFrequencyInterpolationDomain") >= 0.5f,
+            parameters_.read("morphAmplitudeInterpolationDomain") >= 0.5f };
+        settings.smoothingMs = parameters_.read("morphSmoothingMs");
+        settings.performanceMacro = parameters_.read("morphPerformanceMacro");
+        const auto rendered = dsp::renderMorphTrajectory(renderA, renderB, recipe, settings);
+        const auto frameCount = static_cast<std::uint32_t>(rendered.frameCount());
+        if (frameCount == 0)
+        {
+            error = { "morph_render_failed", "morph renderer produced no samples" };
+            return false;
+        }
+        ensurePlaybackCapacity(frameCount);
+        const auto generation = sourceGenerations_.next();
+        struct LayerOutput
+        {
+            PlaybackBufferPool& pool;
+            int layer;
+        };
+        std::array<LayerOutput, 3> outputs {{
+            { playback_, 0 }, { playbackPartials_, 1 }, { playbackResidual_, 2 }
+        }};
+        for (auto& output : outputs)
+        {
+            const auto slot = output.pool.tryAcquireWriteSlot();
+            if (slot == PlaybackBufferPool::kNoBuffer)
+            {
+                error = { "playback_busy", "no buffer is available for morph preview" };
+                return false;
+            }
+            auto view = output.pool.writeView(slot);
+            view.clear();
+            for (std::uint32_t frame = 0; frame < frameCount; ++frame)
+            {
+                const auto partial = rendered.partialSamples[frame];
+                const auto residual = rendered.residualSamples[frame];
+                const auto sample = output.layer == 1 ? partial
+                                  : output.layer == 2 ? residual : partial + residual;
+                for (std::uint32_t channel = 0; channel < view.channelCount; ++channel)
+                    if (view.channels[channel] != nullptr)
+                        view.channels[channel][frame] = sample;
+            }
+            if (!output.pool.publish(slot, generation))
+            {
+                error = { "playback_publish_failed", "could not publish morph preview" };
+                return false;
+            }
+        }
+        previewLengthFrames_.store(frameCount, std::memory_order_release);
+        return true;
+    }
+
+    bool renderCurrentForPreview(Error& error)
+    {
+        if (!currentSource_ || !currentSource_->sound)
+        {
+            error = { "missing_current_model", "analyse the current source before starting preview" };
+            return false;
+        }
+        // Reuse the established single-source renderer without exposing the
+        // current role as Source A to callers. The temporary slot is restored
+        // before returning, including on render failure.
+        auto saved = std::move(sources_[0]);
+        engine::ImportedSource temporary;
+        temporary.path = currentSource_->path;
+        temporary.name = currentSource_->name;
+        temporary.kind = engine::SourceImportKind::ats;
+        temporary.atsType = currentSource_->atsType;
+        temporary.sound.reset(copy_sound(currentSource_->sound.get()));
+        sources_[0] = std::move(temporary);
+        auto rendered = renderSourceForPreview(0, error);
+        sources_[0] = std::move(saved);
+        return rendered;
+    }
+
+    // Model edits and preview renders both follow the preview selector, whose
+    // slot 3 is the current analysed model rather than an import slot. Indexing
+    // sources_ directly made a Current selection resolve to nothing, so the
+    // edits silently reported "no model" instead of mutating the model on screen.
+    [[nodiscard]] engine::ImportedSource* editableSource(SourceIdentity identity) noexcept
+    {
+        engine::ImportedSource* resolved = nullptr;
+        switch (identity)
+        {
+        case SourceIdentity::current: resolved = currentSource_ ? &*currentSource_ : nullptr; break;
+        case SourceIdentity::sourceA: resolved = sources_[0] ? &*sources_[0] : nullptr; break;
+        case SourceIdentity::sourceB: resolved = sources_[1] ? &*sources_[1] : nullptr; break;
+        case SourceIdentity::morphTimeline: return nullptr;
+        }
+        return resolved && resolved->sound ? resolved : nullptr;
+    }
+
+    [[nodiscard]] engine::ImportedSource* editableSource(int slot) noexcept
+    {
+        const auto identity = sourceIdentityForSlot(slot);
+        return identity ? editableSource(*identity) : nullptr;
+    }
+
+    // Only the two import slots carry a revision counter. The Current model's
+    // spectral trace is keyed on the editor snapshot revision instead, so an
+    // edit to it is picked up by the next publication.
+    void noteSourceMutation(int slot) noexcept
+    {
+        if (slot == 0 || slot == 1)
+            ++sourceRevisions_[static_cast<std::size_t>(slot)];
+    }
+
     bool renderSourceForPreview(int slot, Error& error)
     {
         error = {};
@@ -1790,15 +2736,44 @@ private:
             error = { "host_not_prepared", "prepare the audio host before starting preview" };
             return false;
         }
-        if (slot < 0 || slot >= static_cast<int>(sources_.size()) || !sources_[static_cast<std::size_t>(slot)] ||
-            !sources_[static_cast<std::size_t>(slot)]->sound)
+        const auto* selected = editableSource(slot);
+        if (selected == nullptr)
         {
             error = { "missing_model", "analyse the selected source before starting preview" };
             return false;
         }
-        const auto* sound = sources_[static_cast<std::size_t>(slot)]->sound.get();
+        const auto* sound = selected->sound.get();
+        AtsSoundPtr liveSmearSound;
+        if (liveSmearEnabled_.load(std::memory_order_acquire))
+        {
+            if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(sound)))
+            {
+                liveSmearSound.reset(copy);
+                auto onsets = detectOnsets(liveSmearSound.get(), smearnovDetectParams());
+                std::string scopeError;
+                onsets = applySmearnovScope(
+                    static_cast<int>(std::lround(parameters_.read("smearnovScope"))),
+                    std::move(onsets), selectionFirstFrame_, selectionLastFrame_, scopeError);
+                if (!scopeError.empty())
+                {
+                    error = { "smearnov_scope", std::move(scopeError) };
+                    return false;
+                }
+                if (!onsets.empty())
+                    (void) smearAttacks(liveSmearSound.get(), onsets, smearnovParams());
+                sound = liveSmearSound.get();
+            }
+        }
         const auto generation = sourceGenerations_.next();
         const auto token = sourceCancellation_.token();
+        const auto durationSeconds = buildRenderInputs(0).duration > 0.0
+            ? buildRenderInputs(0).duration
+            : std::max(0.0, sound->dur - buildRenderInputs(0).startTime);
+        const auto renderFrames = static_cast<std::uint32_t>(std::max<std::uint64_t>(
+            1, static_cast<std::uint64_t>(std::llround(
+                   durationSeconds * buildRenderInputs(0).timeFactor *
+                   (spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0)))));
+        ensurePlaybackCapacity(renderFrames);
 
         // Render all three layers: combined, partials-only, residual-only.
         // Per-sample gain mixing in process() applies partGain/resGain via smoothers.
@@ -1864,6 +2839,17 @@ private:
         return std::move(w).take();
     }
 
+    void ensurePlaybackCapacity(std::uint32_t frames)
+    {
+        if (frames <= playbackCapacityFrames_)
+            return;
+        previewPlaying_.store(false, std::memory_order_release);
+        playback_.prepare(spec_.outputChannels, frames);
+        playbackPartials_.prepare(spec_.outputChannels, frames);
+        playbackResidual_.prepare(spec_.outputChannels, frames);
+        playbackCapacityFrames_ = frames;
+    }
+
     // Build SynthParams for a specific render layer. Mixing gains (partGain,
     // resGain) are always 1.0 at render time — they are applied per-sample
     // via OnePoleSmoother in process() to satisfy the 20 ms ramp contract.
@@ -1901,9 +2887,15 @@ private:
     ParameterStore parameters_;
     state::PresetService* presetService_ = nullptr;
     UndoHistory history_;
+    std::optional<HostStateChunk> parameterGestureBefore_;
     int spectralViewSource_ = 0;
     int spectralViewMode_ = 0;
     std::array<std::optional<engine::ImportedSource>, 2> sources_;
+    // Current analysis is a distinct role from morph Source A/B. The legacy
+    // integer slots remain at the file/action boundary for compatibility, but
+    // this storage prevents Analyze Current from overwriting Source A.
+    std::optional<engine::ImportedSource> currentSource_;
+    mutable std::atomic<std::uint64_t> editorSnapshotRevision_ { 0 };
     GenerationSource sourceGenerations_;
     CancellationSource sourceCancellation_;
     CancellationSource analysisCancellation_;
@@ -1924,6 +2916,7 @@ private:
     PlaybackBufferPool playback_;
     PlaybackBufferPool playbackPartials_;
     PlaybackBufferPool playbackResidual_;
+    std::uint32_t playbackCapacityFrames_ = 0;
     MidiNoteRouter midi_;
     OnePoleSmoother outputTrim_;
     OnePoleSmoother partGainSmoother_;
@@ -1944,9 +2937,15 @@ private:
     std::atomic<std::uint32_t> previewLengthFrames_ { 0 };
     std::atomic<bool> smearedSourceAvailable_ { false };
     std::vector<float> timeline_ { 0.0f, 1.0f };
+    std::vector<engine::TimelinePoint> typedTimeline_;
     std::vector<float> timbrePlan_;
+    std::string timbrePlanJson_;
+    dsp::MorphEnvelopeCache morphEnvelopeCache_;
     std::vector<float> onsetOverlay_;
+    int selectionFirstFrame_ = -1;
+    int selectionLastFrame_ = -1;
     std::array<std::vector<float>, 3> variations_;
+    std::string morphRecipeJson_;
     std::array<bool, 3> variationStored_ {};
     std::uint64_t timelineRevision_ = 0;
     std::uint64_t timbreRevision_ = 0;
