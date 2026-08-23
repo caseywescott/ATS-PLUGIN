@@ -276,6 +276,26 @@ target_include_directories(ui_ownership_contract_test PRIVATE
 target_compile_features(ui_ownership_contract_test PRIVATE cxx_std_17)
 add_test(NAME ui_ownership_contract_test COMMAND ui_ownership_contract_test)
 
+add_executable(theme_token_spec_test theme_token_spec_test.cpp)
+target_include_directories(theme_token_spec_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(theme_token_spec_test PRIVATE cxx_std_17)
+add_test(NAME theme_token_spec_test COMMAND theme_token_spec_test)
+
+add_executable(theme_recipe_spec_test theme_recipe_spec_test.cpp)
+target_include_directories(theme_recipe_spec_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(theme_recipe_spec_test PRIVATE cxx_std_17)
+add_test(NAME theme_recipe_spec_test COMMAND theme_recipe_spec_test)
+
+add_executable(theme_layout_spec_test theme_layout_spec_test.cpp)
+target_include_directories(theme_layout_spec_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(theme_layout_spec_test PRIVATE cxx_std_17)
+add_test(NAME theme_layout_spec_test COMMAND theme_layout_spec_test)
+
 add_executable(editor_action_protocol_test editor_action_protocol_test.cpp)
 target_include_directories(editor_action_protocol_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -339,6 +359,14 @@ target_compile_features(playback_engine_test PRIVATE cxx_std_17)
 target_link_libraries(playback_engine_test PRIVATE ats_playback)
 add_test(NAME playback_engine_test COMMAND playback_engine_test)
 
+add_executable(playback_rt_guard_test playback_rt_guard_test.cpp)
+target_include_directories(playback_rt_guard_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine")
+target_compile_features(playback_rt_guard_test PRIVATE cxx_std_17)
+target_link_libraries(playback_rt_guard_test PRIVATE ats_playback)
+add_test(NAME playback_rt_guard_test COMMAND playback_rt_guard_test)
+
 add_executable(playback_audio_golden_test audio/playback_audio_golden_test.cpp)
 target_include_directories(playback_audio_golden_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -346,6 +374,16 @@ target_include_directories(playback_audio_golden_test PRIVATE
 target_compile_features(playback_audio_golden_test PRIVATE cxx_std_17)
 target_link_libraries(playback_audio_golden_test PRIVATE ats_playback)
 add_test(NAME playback_audio_golden_test COMMAND playback_audio_golden_test)
+
+add_executable(ats_audio_golden_matrix_test audio/ats_audio_golden_matrix_test.cpp)
+target_include_directories(ats_audio_golden_matrix_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_audio_golden_matrix_test PRIVATE cxx_std_17)
+target_link_libraries(ats_audio_golden_matrix_test PRIVATE ats_engine)
+add_test(NAME ats_audio_golden_matrix_test COMMAND ats_audio_golden_matrix_test
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_executable(legacy_state_codec_test legacy_state_codec_test.cpp)
 target_include_directories(legacy_state_codec_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/state" "${ATS_ATSA_SOURCE_DIR}")
@@ -403,7 +441,7 @@ target_include_directories(host_session_behavior_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/host"
   "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(host_session_behavior_test PRIVATE cxx_std_17)
-target_link_libraries(host_session_behavior_test PRIVATE ats_host_vst3)
+target_link_libraries(host_session_behavior_test PRIVATE ats_host_vst3 ats_preset_service)
 add_test(NAME host_session_behavior_test COMMAND host_session_behavior_test)
 
 add_executable(host_action_routing_test host_action_routing_test.cpp)
@@ -430,6 +468,15 @@ add_test(NAME midi_process_block_test COMMAND midi_process_block_test)
 add_executable(morph_recipe_test morph_recipe_test.cpp ../src/core/AtsMorphRecipe.cpp)
 target_include_directories(morph_recipe_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
 target_compile_features(morph_recipe_test PRIVATE cxx_std_17)
+
+add_executable(morph_trajectory_renderer_test morph_trajectory_renderer_test.cpp)
+target_include_directories(morph_trajectory_renderer_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/dsp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(morph_trajectory_renderer_test PRIVATE cxx_std_17)
+target_link_libraries(morph_trajectory_renderer_test PRIVATE ats_core)
 
 add_executable(morph_transport_test morph_transport_test.cpp ../src/core/AtsMorphTransport.cpp)
 target_include_directories(morph_transport_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
@@ -581,6 +628,7 @@ add_test(NAME ifft_synth_test COMMAND $<TARGET_FILE:ifft_synth_test> WORKING_DIR
 add_test(NAME morph_transport_test COMMAND $<TARGET_FILE:morph_transport_test>)
 add_test(NAME morph_transport_correspondence_test COMMAND $<TARGET_FILE:morph_transport_correspondence_test>)
 add_test(NAME morph_recipe_roundtrip COMMAND $<TARGET_FILE:morph_recipe_test>)
+add_test(NAME morph_trajectory_renderer COMMAND $<TARGET_FILE:morph_trajectory_renderer_test>)
 add_test(NAME frequency_shape_test COMMAND $<TARGET_FILE:frequency_shape_test>)
 add_test(NAME spectral_envelope_transfer_test COMMAND $<TARGET_FILE:spectral_envelope_transfer_test>)
 add_test(NAME ats_transient_smear_test COMMAND $<TARGET_FILE:ats_transient_smear_test>)

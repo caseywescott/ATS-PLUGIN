@@ -527,6 +527,121 @@ static void test_analysis_profiles_write_descriptor_ordinals()
     }
 }
 
+static void test_timeline_edit_undo_roundtrip()
+{
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+    ats::Error error;
+
+    const std::vector<float> defaultTimeline{ 0.0f, 1.0f };
+    assert(host.sessionSnapshot().timeline == defaultTimeline);
+
+    const std::vector<float> newTimeline{ 0.0f, 0.25f, 0.75f, 1.0f };
+    assert(host.applyEditorAction(
+        ats::ui::SetMorphTimelineAction{ newTimeline }, error));
+    assert(!error);
+    assert(host.sessionSnapshot().timeline == newTimeline);
+
+    assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
+    assert(!error);
+    assert(host.sessionSnapshot().timeline == defaultTimeline);
+}
+
+static void test_timbre_plan_undo_roundtrip()
+{
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+    ats::Error error;
+
+    // Decode the initial state to capture the baseline timbreJson string.
+    // Full chunk comparison is not used here because the float→double→float
+    // roundtrip through applyLegacyStateToParameters introduces rounding drift
+    // in unrelated parameter values; checking the timbreJson field directly is
+    // sufficient to prove the undo restored the timbre plan.
+    const auto chunkBefore = host.captureState();
+    const auto lsBefore = ats::LegacyStateCodec::decode(chunkBefore.data(), chunkBefore.size());
+    assert(lsBefore.has_value());
+    const auto timbreJsonBefore = lsBefore->timbreJson;
+
+    // Build a non-trivial serialized plan so the state chunks differ and
+    // UndoHistory::commit does not drop the entry as a no-op.
+    ats::TimbreMotionPlan plan;
+    ats::TimbreTargetCurve curve;
+    curve.descriptorId = "combined.centroid_axis";
+    curve.mode = ats::TimbreTargetMode::AbsoluteTarget;
+    curve.points = { { 0.0, 0.2, 0 }, { 1.0, 0.8, 0 } };
+    plan.targetCurves.push_back(std::move(curve));
+    ats::ui::SetTimbreMotionPlanAction action;
+    action.serializedPlan = ats::serializeTimbreMotionPlan(plan);
+    assert(host.applyEditorAction(action, error));
+    assert(!error);
+
+    // Verify the timbre plan JSON actually changed in the captured state.
+    const auto chunkAfter = host.captureState();
+    const auto lsAfter = ats::LegacyStateCodec::decode(chunkAfter.data(), chunkAfter.size());
+    assert(lsAfter.has_value());
+    assert(lsAfter->timbreJson != timbreJsonBefore);
+
+    // Undo → timbreJson restored to the baseline value.
+    assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
+    assert(!error);
+    const auto chunkRestored = host.captureState();
+    const auto lsRestored = ats::LegacyStateCodec::decode(chunkRestored.data(), chunkRestored.size());
+    assert(lsRestored.has_value());
+    assert(lsRestored->timbreJson == timbreJsonBefore);
+}
+
+static void test_spectrum_edit_undo_roundtrip()
+{
+    const auto wavPath = std::filesystem::temp_directory_path() / "ats-spectrum-edit-undo.wav";
+    writeTestWave(wavPath);
+
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+    ats::Error error;
+
+    assert(host.importSource({ wavPath.u8string() }, 3, ats::engine::SourceImportKind::audio, error));
+    assert(!error);
+    assert(host.analyzeSource(3, error));
+    assert(!error);
+    assert(host.applySessionAction(ats::ui::PreviewAction{ 3, 0, false }, error));
+    assert(!error);
+
+    const auto* current = host.source(ats::host::SourceIdentity::current);
+    assert(current != nullptr && current->sound.get() != nullptr);
+    const auto* sound = current->sound.get();
+    assert(sound->band_energy != nullptr && sound->frames > 0);
+
+    // Prime band 0 frame 0 to a known value so the smooth is guaranteed to
+    // produce a cell change (neighbours remain at their original values).
+    assert(host.applyEditorAction(ats::ui::ResidualEditAction{ 0, 0, 0.375f }, error));
+    assert(!error);
+
+    const auto chunkAfterResidualEdit = host.captureState();
+
+    // Smooth band 0 across all frames; this redistributes energy around the
+    // primed cell and must produce editResult.changed = true.
+    assert(host.applyEditorAction(
+        ats::ui::SpectrumEditAction{
+            ats::ui::SpectrumEditCommand::smoothResidual,
+            { 0 }, 0, sound->frames - 1, 3.0f },
+        error));
+    assert(!error);
+    assert(host.captureState() != chunkAfterResidualEdit);
+
+    // Undo the smooth → residual-edit state restored; band_energy[0][0] == 0.375.
+    assert(host.applyEditorAction(ats::ui::HistoryAction{ false }, error));
+    assert(!error);
+    // Undo replaces currentSource_, so re-fetch the pointer.
+    const auto* afterUndo = host.source(ats::host::SourceIdentity::current);
+    assert(afterUndo != nullptr && afterUndo->sound.get() != nullptr);
+    assert(afterUndo->sound.get()->band_energy != nullptr);
+    assert(afterUndo->sound.get()->band_energy[0][0] == 0.375f);
+
+    std::error_code ignored;
+    std::filesystem::remove(wavPath, ignored);
+}
+
 // ---------------------------------------------------------------------------
 
 int main()
@@ -549,5 +664,8 @@ int main()
     test_session_actions_dispatched_through_unified();
     test_analysis_actions_dispatched_through_unified();
     test_analysis_profiles_write_descriptor_ordinals();
+    test_timeline_edit_undo_roundtrip();
+    test_timbre_plan_undo_roundtrip();
+    test_spectrum_edit_undo_roundtrip();
     return 0;
 }

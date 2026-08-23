@@ -1,6 +1,6 @@
 # Release, signing, and packaging (Phase 5)
 
-Checklist and templates for shipping **ATS Resynth** binaries. **This is not legal advice.** Verify Apple, Microsoft, Steinberg, and JUCE obligations for your distribution model.
+Checklist and templates for shipping **ATS Resynth** binaries. **This is not legal advice.** Verify Apple, Microsoft, and Steinberg obligations for your distribution model. JUCE has been removed from this project; see `THIRD_PARTY.md` for current dependency inventory.
 
 ## License pointers for release notes
 
@@ -10,10 +10,10 @@ Every public release should link or name:
 |-----------|---------|
 | **This project** | Repository `LICENSE` (add one if missing before distribution). |
 | **ATSA / synthesis** | Qatsh `qatsh/src/atsa/` — see upstream `README.txt` / `LICENSE`; see `THIRD_PARTY.md`. |
-| **JUCE** | [juce.com](https://juce.com/) — GPL vs commercial terms per your JUCE license. |
-| **VST3** | [Steinberg VST3 SDK](https://developer.steinberg.help/) — SDK and trademark guidelines for VST3 builds. |
-| **AU (macOS)** | Apple Audio Unit distribution requirements; code signing and (for distribution outside Mac App Store) **notarization** expectations. |
-| **libsndfile** | LGPL — comply if linking statically (see `THIRD_PARTY.md`). |
+| **Visage** (UI backend) | VitalAudio/visage — see upstream license; retain notices in distributed binaries. |
+| **VST3 SDK** | [Steinberg VST3 SDK](https://developer.steinberg.help/) — SDK and trademark guidelines for VST3 builds. |
+| **AudioUnitSDK** (macOS) | Apple AudioUnitSDK — AU and AudioToolbox redistribution requirements; notarization for outside-MAS distribution. |
+| **libsndfile** | LGPL — comply if linking statically; arm64 bundle in `vendor/sndfile-arm64/`. See `THIRD_PARTY.md`. |
 
 ### Release notes template (copy for `CHANGELOG` or GitHub Release)
 
@@ -21,7 +21,7 @@ Every public release should link or name:
 ## ATS Resynth <version>
 
 ### Binaries
-- macOS: VST3, AU, Standalone (architecture: …)
+- macOS: VST3, AU, Standalone (arm64 / x86_64)
 - Windows: VST3, Standalone (x64) — …
 
 ### Highlights
@@ -30,8 +30,10 @@ Every public release should link or name:
 
 ### Upstream / licenses
 - DSP: ATSA via Qatsh (`https://gitlab.com/dxarts/projects/ats/qatsh`). See bundled `THIRD_PARTY.md`.
-- UI / plug-in shell: JUCE (`https://juce.com/`).
+- UI backend: Visage (VitalAudio/visage). See upstream license.
+- Audio I/O: libsndfile (LGPL). See `THIRD_PARTY.md`.
 - VST3: Steinberg VST3 SDK terms apply to VST3 builds.
+- AU (macOS): Apple AudioUnitSDK and AudioToolbox terms apply.
 
 ### Install
 - macOS: copy `.vst3` / `.component` / `.app` to the usual plug-in or Applications locations.

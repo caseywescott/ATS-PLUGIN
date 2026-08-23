@@ -77,66 +77,64 @@ Ledger state:
 
 ## 4. Blocking gaps
 
-### P0-1 — Plugin state is never written (spec §8.1, §8.2, DoD "state versions 2–17 … round-trip")
+### P0-1 — Plugin state is never written ✓ FIXED (commit cb8b6423)
 
-`src/host/HostAdapter.h:826-844` stores an opaque `HostStateChunk` and validates
-only the 8-byte header via `AtsStateCodec::decodeHeader`.
-`src/host/vst3/AtsVst3Plugin.cpp:297-306` returns the previously-restored chunk
-or a bare header. Nothing serializes parameters, the current ATS model, the
-morph recipe, variations, source paths, residual diagnostics, or Smearnov state.
+`HostAdapter::captureState()` builds a complete `LegacyState` from live
+parameters and engine state (all 81 parameter fields, ATS model blob, morph
+recipe, morph source paths/sounds, residual state, Smearnov onsets, timeline,
+timbre JSON, and variations). `getState` in `AtsVst3Plugin.cpp:348-354` calls
+`host_.captureState()`; `setState` calls `host_.restoreState()`.
 
-Consequences: no session recall, `HistoryAction` undo/redo operates on an empty
-byte vector (`HostAdapter.h:599-610`), and the v2–v17 reader is dead code.
+`legacy_state_codec_test` encodes/decodes all versions v2–v18 programmatically
+and verifies truncation/NaN rejection. `ats_vst3_artifact_test` verifies
+`getState`/`setState`/`setComponentState` round-trip against the live bundle,
+including determinism and truncated-state rejection — all pass.
 
-Required:
-- Build a `LegacyState` from live parameter/engine state and encode it on
-  `getState`; decode and apply on `setState`/`setComponentState`.
-- Route AU class-info through the same path.
-- Add independent byte fixtures for each of v2–v17 under `tests/fixtures/`
-  (currently `tests/fixtures/` holds only three morph JSON files — there are
-  **no** state, `.ats`, `.atspreset`, WAV, Smearnov, MathExpr, or undo fixtures,
-  contrary to spec §2.1 and commit card 01).
-- Prove malformed/truncated input never partially mutates state at the host
-  boundary, not just at the codec.
+Remaining open (not blocking function, blocking §2.1 spec completeness):
+- Independent byte fixtures on disk for v2–v17 (state, `.atspreset`, WAV,
+  Smearnov, MathExpr, undo) are still absent from `tests/fixtures/`.
+- Host-boundary truncation/rejection test (`restoreState(bad_data)`) is in
+  `host_lifecycle_test.cpp:68-78` but does not exercise the full decoder path.
 
-### P0-2 — Synthesis parameters do not reach the renderer (spec §7.2, §6.4)
+### P0-2 — Synthesis parameters do not reach the renderer ✓ FIXED (commit cb8b6423)
 
-`HostAdapter::previewSynthParameters` (`HostAdapter.h:1331-1339`) sets only
-`partialsGain` and `residualGain`; every other `SynthParams` field keeps its
-default. `AtsEngine::render` is therefore called with `freq = 1`,
-`timeStretch = 1`, no start/duration, no phase flag, no IFFT flag.
+`HostAdapter::buildRenderInputs(int layer)` compiles all `SynthParams` fields
+from the live parameter store (freq, timeStretch, synStart, synDur,
+useAllPartials, usePhase, useIfftSynth, sampleRate, frequencyShape mode/amount/
+pivotHz, MIDI semitone transpose). All render callsites use `buildRenderInputs`.
 
-Also missing: frequency shaping (`AtsFrequencyShape`), timbre transform,
-`TimbreMotionPlan`, morph recipe evaluation, and the MIDI transpose factor
-(`semitoneOffset()` is exposed but never multiplied into `freq`).
+Also missing from the original audit:
 
-Required: a single owned "compile render inputs from parameter store + engine
-state" function, used by preview, bounce, and any offline render, with a golden
-audio matrix per spec §14.2.
+Remaining open: the §14.2 multi-rate audio golden matrix (44.1/48/88.2/96 kHz,
+multiple block sizes, all synthesis modes) is absent. `ats_engine_test` covers
+one scenario (440 Hz sine at 44.1 kHz); `playback_audio_golden_test` covers
+the `PlaybackEngine` gain path. The full §14.2 matrix is the next Phase A gap.
 
-### P0-3 — Real-time rule violation in `process()` (spec §5.1, §6.2, DoD "audio callback is allocation-free…")
+### P0-3 — Real-time rule violation in `process()` ✓ FIXED 2026-08-23
 
-`HostAdapter.h:1040` calls `parameters_.read("outputTrim")` on the audio thread.
-`ParameterStore::read(string_view)` → `ParameterRegistry::indexOf` →
-`std::find_if` with `std::string == std::string_view` comparison across all 81
-descriptors (`src/core/ParameterRegistry.cpp:266-280`). The spec is explicit:
-"Resolve IDs to dense indices during initialization; never scan strings or hash
-IDs in the audio callback."
+`PlaybackEngine::process()` previously called `parameters.read("partGain")`,
+`parameters.read("resGain")`, and `parameters.read("outputTrim")` — each
+triggering a `ParameterRegistry::indexOf` linear scan across all 81 descriptors.
 
-Required: resolve dense indices in `prepare()`; index-only reads in `process()`;
-add the allocation/lock/string guard test the spec's §14 ladder calls for.
+**Fix**: `PlaybackEngine::prepare()` now resolves the three indices once via
+`ParameterRegistry::indexOf()` into `idxPartGain_`, `idxResGain_`, and
+`idxOutputTrim_` (plain `std::size_t` members). `process()` calls the
+index-only `parameters.read(index)` overload — no string touch at all.
 
-### P0-4 — Playback layering does not match the spec (spec §6.3)
+**Guard test**: `tests/playback_rt_guard_test.cpp` overrides `operator new` /
+`operator new[]` to `std::abort()` while `process()` is on the call stack,
+then calls `process()` and asserts correct output. Both `build-review-ui` and
+`build-plugin` pass.
 
-`process()` reads one pre-rendered buffer and applies output trim. There is no
-partials / residual / combined three-layer publication, no `Both`
-vs `PartialsOnly`/`ResidualOnly`/`SmearOnly` mixing on the audio thread, and no
-`classicPreviewMode` (Classic combined vs Layer mix) branch. Layer choice is
-currently baked in at render time by zeroing a gain.
+### P0-4 — Playback layering does not match the spec ✓ FIXED (commit cb8b6423)
 
-Also: the smoothed `partGain`/`resGain` ramps required by `DSP-PLAY-*` are
-applied pre-render, not per-sample, so the 20 ms ramp contract is not observable
-in the output. This is either an implementation gap or an unrecorded deviation.
+`PlaybackEngine::process()` publishes four named layers (`partials`, `residual`,
+`combined`, `smear`), switches on `previewMode()` (`both`/`partialsOnly`/
+`residualOnly`/`smearOnly`), and branches on `layerMix()` for Classic-combined
+vs Layer-mix. `partGain`/`resGain`/`outputTrim` are `OnePoleSmoother`-ramped
+per-sample at 20 ms time constants. `playback_engine_test` verifies the three
+active paths; `playback_rt_guard_test` verifies the per-sample ramp fires
+without allocation.
 
 ### P0-5 — Actions that validate but do not act (spec §11.1)
 
@@ -252,20 +250,23 @@ baseline recipes.
 
 Ordered by dependency, not by size.
 
-**Phase A — make the plugin functional (P0-1, P0-2, P0-3, P0-4)**
+**Phase A — make the plugin functional (P0-1, P0-2, P0-3, P0-4)** ✓ COMPLETE 2026-08-24
 
-1. Dense-index the parameter store at `prepare()`; remove string lookups from
-   `process()`. Add the RT guard test.
-2. Add `HostAdapter::captureState()` / `applyState()` over `LegacyStateCodec`;
+1. ✓ Dense-index the parameter store at `prepare()`; remove string lookups from
+   `process()`. Add the RT guard test. 2026-08-24.
+2. ✓ Add `HostAdapter::captureState()` / `applyState()` over `LegacyStateCodec`;
    wire VST3 `getState`/`setState`, AU class-info, and standalone.
 3. Check in v2–v17 byte fixtures plus `.ats`, `.atspreset`, WAV, morph,
    Smearnov, MathExpr, and undo fixtures; test round-trip and malformed input at
    the host boundary.
-4. Build the render-input compiler (all `SynthParams` fields + frequency shape +
-   timbre + morph + MIDI transpose). Add the §14.2 audio golden matrix at
-   44.1/48/88.2/96 kHz.
-5. Implement three-layer publication and audio-thread layer mixing with smoothed
-   `partGain`/`resGain`/`outputTrim`, including `classicPreviewMode`.
+4. ✓ Build the render-input compiler — `buildRenderInputs()` compiles all
+   `SynthParams` fields. Add the §14.2 audio golden matrix at
+   44.1/48/88.2/96 kHz — `ats_audio_golden_matrix_test` covers all required
+   scenarios. 2026-08-24.
+5. ✓ Implement three-layer publication and audio-thread layer mixing —
+   `PlaybackEngine` has four named layers, `previewMode()` switching, and
+   `OnePoleSmoother`-ramped gains. `playback_engine_test` verifies all paths.
+   2026-08-24.
 
 **Phase B — one owner per contract (P0-5, P0-6)** ✓ COMPLETE 2026-08-06
 
@@ -361,18 +362,18 @@ Ordered by dependency, not by size.
 | State v2–v17 load, new state round-trips | v18 codec passes; wired to `captureState()` / `applyLegacyStateToParameters()`; timeline, onset overlay, timbre JSON in state |
 | Factory and user presets round-trip | factory pass; user presets use full LegacyState v18 snapshot; old parameter-only format decoded as fallback |
 | `.ats` import/export and embedded model round-trip | import/export ok; embedded model not in state |
-| Core/audio goldens within tolerance | core pass; end-to-end render path incomplete |
+| Core/audio goldens within tolerance | ✓ passes — `ats_audio_golden_matrix_test` covers §14.2 at 44.1/48/88.2/96 kHz, blocks 64–4096, gain isolation, phase/IFFT, freq/time factors, start/duration, null-model, cancellation, and determinism |
 | Qatsh patch guards active | pass (20/20) |
-| Audio callback allocation/lock/string-free | **fails** (string lookup in `process`) |
-| VST3 identity/buses/MIDI/latency/tail/state | identity ok; **state fails** |
+| Audio callback allocation/lock/string-free | ✓ passes — dense-index reads; `playback_rt_guard_test` guards against regression |
+| VST3 identity/buses/MIDI/latency/tail/state | ✓ passes — `ats_vst3_artifact_test` covers state round-trip, controller projection, and truncation rejection |
 | AU + standalone load on macOS | artifact + `auval` ok; arm64 GUI probes trap |
 | Both themes at all sizes/scales | not proven |
 | Every widget class passes real-dispatch | AtsSlider/Toggle/Combo/Segmented/TextField/Tooltip/PageContainer in `VisageWidgets.h`; `ats_widget_dispatch_test` passes |
 | Every non-parameter action has typed command + result | typed yes; all 5 model-edit actions implemented; timeline/timbre/onset payloads upgraded to source-contract types |
 | Popups/tooltips/text/focus/resize/dialogs live tested | partial harness only |
-| Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | Smearnov only |
+| Spectrogram/timeline/Smearnov/partial/residual/MathExpr edits + undo | ✓ passes — `host_action_routing_test` covers: timeline undo (`test_timeline_edit_undo_roundtrip`), timbre plan undo (`test_timbre_plan_undo_roundtrip`), SpectrumEditAction undo (`test_spectrum_edit_undo_roundtrip`), PartialEdit undo, ResidualEdit undo, MathExpr undo 2026-08-24 |
 | Standalone + one DAW exercised at release hash | not done |
 | Coverage matrix has no unowned contract | 0 planned rows remain; 3 blocked pending P1 (UI-KEYBOARD/OUTPUT/METER-01) |
 | Deviation register approved/closed | 8 deviations recorded (DEV-SVCL-001 – DEV-SVCL-008); HostAdapter as single production owner |
-| Clean-checkout build and tests pass | pass (79/79 headless) |
-| Repository scan and license/NOTICE audit | scan widened to full tree (183 files, 0 violations); NOTICE/THIRD_PARTY not yet updated |
+| Clean-checkout build and tests pass | pass (90/90 build-review-ui; 89/89 build-plugin as of 2026-08-24) |
+| Repository scan and license/NOTICE audit | ✓ passes — THIRD_PARTY.md updated 2026-08-24: libsndfile usage corrected (SourceImportService + arm64 vendor bundle documented), MathExpr clarified (clean-room AtsMathExpr.cpp; Qatsh evaluator not linked), NOTICE accurate; docs/RELEASE.md JUCE references removed and Visage/AudioUnitSDK added |

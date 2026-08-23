@@ -66,6 +66,9 @@ private:
     OnePoleSmoother partialGain_;
     OnePoleSmoother residualGain_;
     OnePoleSmoother outputTrim_;
+    std::size_t idxPartGain_ { ~std::size_t{0} };
+    std::size_t idxResGain_ { ~std::size_t{0} };
+    std::size_t idxOutputTrim_ { ~std::size_t{0} };
     std::atomic<PreviewMode> previewMode_ { PreviewMode::both };
     std::atomic<bool> layerMix_ { false };
     std::atomic<bool> prepared_ { false };

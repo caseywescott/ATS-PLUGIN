@@ -19,6 +19,9 @@ bool PlaybackEngine::prepare(const PlaybackConfig& config)
     partialGain_.reset(1.0f);
     residualGain_.reset(1.0f);
     outputTrim_.reset(1.0f);
+    idxPartGain_  = ParameterRegistry::indexOf("partGain");
+    idxResGain_   = ParameterRegistry::indexOf("resGain");
+    idxOutputTrim_ = ParameterRegistry::indexOf("outputTrim");
     midi_.reset();
     previewMode_.store(PreviewMode::both, std::memory_order_release);
     layerMix_.store(false, std::memory_order_release);
@@ -69,9 +72,9 @@ bool PlaybackEngine::process(AudioBufferView output,
         midi_.consume(event);
 
     output.clear();
-    partialGain_.setTarget(parameters.read("partGain"));
-    residualGain_.setTarget(parameters.read("resGain"));
-    outputTrim_.setTarget(parameters.read("outputTrim"));
+    partialGain_.setTarget(parameters.read(idxPartGain_));
+    residualGain_.setTarget(parameters.read(idxResGain_));
+    outputTrim_.setTarget(parameters.read(idxOutputTrim_));
 
     std::array<std::int32_t, kLayerCount> readSlots {};
     std::array<const OwnedAudioBuffer*, kLayerCount> sources {};
