@@ -20,6 +20,8 @@
 #include <array>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace ausdk
 {
@@ -27,8 +29,7 @@ struct AtsAudioUnitLookup
 {
     static AudioComponentMethod Lookup(SInt16 selector)
     {
-        const auto process = AUBaseProcessMultipleLookup::Lookup(selector);
-        return process != nullptr ? process : AUMIDILookup::Lookup(selector);
+        return AUMIDILookup::Lookup(selector);
     }
 };
 
@@ -40,6 +41,14 @@ class AtsAudioUnitFactory : public APFactory<AtsAudioUnitLookup, Implementor>
 
 namespace
 {
+
+// Process-local registry: AudioUnit handle → editor lifetime.
+// Both the AU instance and the view factory run in the same process (the XPC
+// host, or Logic directly when sandboxSafe=true on older macOS). A lookup is
+// safe against garbage XPC proxy values — a miss simply returns an empty endpoint.
+std::mutex g_auRegistryMutex;
+std::unordered_map<AudioUnit, std::weak_ptr<struct AuEditorLifetime>> g_auRegistry;
+
 class AuEditorActionTarget;
 
 struct AuEditorLifetime
@@ -54,6 +63,7 @@ public:
     virtual void handleEditorAction(const ats::ui::EditorAction& action) = 0;
     virtual void pumpEditorWork() = 0;
     [[nodiscard]] virtual ats::ui::TelemetrySnapshot editorTelemetry() const = 0;
+    [[nodiscard]] virtual ats::ui::EditorSnapshot editorSnapshot() const = 0;
     [[nodiscard]] virtual std::shared_ptr<AuEditorLifetime> editorLifetime() const = 0;
 };
 
@@ -77,6 +87,17 @@ public:
             {
                 target->pumpEditorWork();
                 return target->editorTelemetry();
+            }
+        return {};
+    }
+
+    ats::ui::EditorSnapshot pollSnapshot()
+    {
+        if (const auto lifetime = lifetime_.lock())
+            if (auto* target = lifetime->target.load(std::memory_order_acquire))
+            {
+                target->pumpEditorWork();
+                return target->editorSnapshot();
             }
         return {};
     }
@@ -133,7 +154,7 @@ AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
     auto* actionBridge = _actionBridge.get();
     _analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
         if (actionBridge != nullptr && _editor != nullptr)
-            _editor->setTelemetry(actionBridge->poll());
+            _editor->setEditorSnapshot(actionBridge->pollSnapshot());
     }];
     return self;
 }
@@ -194,14 +215,22 @@ class AtsAudioUnit final : public ausdk::AUBase, public AuEditorActionTarget
 {
 public:
     explicit AtsAudioUnit(AudioComponentInstance instance)
-        : ausdk::AUBase(instance, 0, 1)
+        : ausdk::AUBase(instance, 1, 1)
     {
         host_.initialize(ats::host::HostFormat::au);
         editorLifetime_->target.store(this, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(g_auRegistryMutex);
+            g_auRegistry[instance] = editorLifetime_;
+        }
     }
 
     ~AtsAudioUnit() override
     {
+        {
+            std::lock_guard<std::mutex> lock(g_auRegistryMutex);
+            g_auRegistry.erase(GetComponentInstance());
+        }
         editorLifetime_->target.store(nullptr, std::memory_order_release);
         host_.release();
     }
@@ -212,7 +241,8 @@ public:
     UInt32 SupportedNumChannels(const AUChannelInfo** outInfo) override
     {
         static constexpr AUChannelInfo supported[] = {
-            { 0, 2 }
+            { 2, 2 },
+            { 1, 2 },
         };
         if (outInfo != nullptr)
             *outInfo = supported;
@@ -351,16 +381,12 @@ public:
         return ausdk::AUBase::GetProperty(inID, inScope, inElement, outData);
     }
 
-    OSStatus ProcessMultipleBufferLists(AudioUnitRenderActionFlags&,
-                                        UInt32 inputFrames,
-                                        UInt32 inputCount,
-                                        const AudioBufferList**,
-                                        UInt32 outputCount,
-                                        AudioBufferList** outputs) override
+    OSStatus Render(AudioUnitRenderActionFlags&,
+                    const AudioTimeStamp&,
+                    UInt32 inputFrames) override
     {
-        if (inputCount != 0 || outputCount != 1 || outputs == nullptr || outputs[0] == nullptr)
-            return kAudio_ParamError;
-        ScheduledProcessContext context { this, outputs[0], false };
+        auto& output = Output(0).GetBufferList();
+        ScheduledProcessContext context { this, &output, false };
         auto& events = GetParamEventList();
         if (!events.empty())
         {
@@ -369,7 +395,7 @@ public:
             midiEventCount_ = 0;
             return result;
         }
-        const auto result = processOutput(*outputs[0], 0, inputFrames,
+        const auto result = processOutput(output, 0, inputFrames,
                                           { midiEvents_.data(),
                                             static_cast<std::uint32_t>(midiEventCount_) });
         midiEventCount_ = 0;
@@ -547,6 +573,9 @@ private:
     [[nodiscard]] ats::ui::TelemetrySnapshot editorTelemetry() const override
     { return host_.telemetry(); }
 
+    [[nodiscard]] ats::ui::EditorSnapshot editorSnapshot() const override
+    { return host_.editorSnapshot(); }
+
     [[nodiscard]] std::shared_ptr<AuEditorLifetime> editorLifetime() const override
     { return editorLifetime_; }
 
@@ -571,17 +600,31 @@ private:
 
 AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit)
 {
-    // AudioUnit is the SDK's plug-in-interface pointer. The implementation
-    // object is constructed in the documented storage that follows that
-    // interface, rather than at the interface address itself.
-    auto* instance = reinterpret_cast<ausdk::AudioComponentPlugInInstance*>(audioUnit);
-    auto* unit = instance != nullptr
-        ? reinterpret_cast<AtsAudioUnit*>(&instance->mInstanceStorage)
-        : nullptr;
-    if (unit == nullptr)
+    std::lock_guard<std::mutex> lock(g_auRegistryMutex);
+    const auto it = g_auRegistry.find(audioUnit);
+    if (it == g_auRegistry.end())
         return {};
-    return { static_cast<AuEditorActionTarget*>(unit)->editorLifetime() };
+    return { it->second.lock() };
 }
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AtsAudioUnitFactory, AtsAudioUnit)
+
+// Old-style Carbon Component Manager entry point required by OpenAComponent (Logic Pro / auval).
+// AudioComponentInstantiate works without this, but OpenAComponent does not find the plugin
+// unless this symbol is also exported. The entry delegates fully to the modern factory path.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+AUSDK_EXPORT
+extern "C" AudioComponentPlugInInterface* AtsAudioUnitEntry(
+    const AudioComponentDescription* inDesc);
+
+extern "C" AudioComponentPlugInInterface* AtsAudioUnitEntry(
+    const AudioComponentDescription* inDesc)
+{
+    return static_cast<AudioComponentPlugInInterface*>(
+        ausdk::AtsAudioUnitFactory<AtsAudioUnit>::Factory(inDesc));
+}
+
+#pragma clang diagnostic pop
