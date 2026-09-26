@@ -96,3 +96,23 @@ The golden test invokes `ats_offline` and checks tolerances (see `docs/DETERMINI
 - **macOS local build and Logic installation contract:**
   `docs/MACOS_BUILD_INSTALL_SPEC.md`.
 - **Unsigned zip helper (local):** after a Release build, run `./scripts/package_release_archives.sh` from the repo root; archives land in `dist/` (not used by CI).
+
+## Working on an exFAT volume
+
+The canonical checkout lives on an exFAT external drive, which has three
+quirks that affect git and incremental builds:
+
+- **File mode.** exFAT reports every file as `0755`, so run
+  `git config core.fileMode false` once per clone; otherwise every touched
+  file shows a phantom `100644 → 100755` diff.
+- **AppleDouble files.** macOS writes `._<name>` metadata beside files when it
+  stores extended attributes. They are ignored by `.gitignore`; remove them
+  with `scripts/clean_appledouble.sh` (idempotent, skips `.git`).
+- **Timestamps.** Restoring files out-of-band (copy, `git checkout` of an old
+  blob) can leave mtimes that CMake/Make treat as up to date. `touch` restored
+  sources before rebuilding so stale objects are not reused.
+
+The internal system volume can be too small for large builds. Point
+`TMPDIR` at the external drive (for example
+`export TMPDIR="/Volumes/Extreme SSD/tmp"`) if a build fails with misleading
+`lipo` or LLVM I/O errors.

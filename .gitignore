@@ -8,3 +8,17 @@ cmake-build*/
 # Upstream clones (keep local; CI clones qatsh). Use submodules later if desired.
 qatsh/
 atsa/
+
+# exFAT / macOS metadata
+._*
+__pycache__/
+.pytest_cache/
+
+# Local build trees and scratch
+build-*/
+Testing/
+.claude/
+ATS-Plugin-Vault/.obsidian/
+mcp/
+*.ats
+!tests/fixtures/**/*.ats
