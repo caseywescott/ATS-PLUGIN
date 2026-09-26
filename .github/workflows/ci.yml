@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, remove-juce]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,10 +13,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - name: linux-core
+            os: ubuntu-latest
             build_plugin: "OFF"
-          - os: macos-latest
+            ui_probe: "OFF"
+          - name: macos-wrappers
+            os: macos-latest
             build_plugin: "ON"
+            ui_probe: "OFF"
+          # The Visage editor + page/dispatch tests. Tests labelled `windowed`
+          # need an on-screen window and are run locally, not here.
+          - name: macos-ui-probe
+            os: macos-latest
+            build_plugin: "OFF"
+            ui_probe: "ON"
+    name: ${{ matrix.name }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +60,21 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libsndfile
 
+      # Pinned VST3 SDK / AudioUnitSDK / Visage checkouts. The key hashes the
+      # files that carry the pins, so a pin bump fetches fresh sources.
+      - name: Cache pinned FetchContent sources
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('CMakeLists.txt', 'cmake/ATSVst3Sdk.cmake', 'cmake/ATSAudioUnitSdk.cmake') }}
+
       - name: Configure and build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_PLUGIN=${{ matrix.build_plugin }}
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PLUGIN=${{ matrix.build_plugin }} \
+            -DATS_BUILD_VISAGE_UI_PROBE=${{ matrix.ui_probe }} \
+            -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
           cmake --build build --parallel 4
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -LE windowed

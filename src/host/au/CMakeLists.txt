@@ -110,3 +110,5 @@ target_link_libraries(ats_au_editor_view_probe PRIVATE
 add_dependencies(ats_au_editor_view_probe ats_resynth_au)
 add_test(NAME ats_au_editor_view_probe
   COMMAND ats_au_editor_view_probe "$<TARGET_FILE:ats_resynth_au>")
+# Opens the AU's Cocoa view in a real window; needs a window-server session.
+set_tests_properties(ats_au_editor_view_probe PROPERTIES LABELS windowed)

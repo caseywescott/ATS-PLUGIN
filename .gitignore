@@ -22,3 +22,4 @@ ATS-Plugin-Vault/.obsidian/
 mcp/
 *.ats
 !tests/fixtures/**/*.ats
+.deps/

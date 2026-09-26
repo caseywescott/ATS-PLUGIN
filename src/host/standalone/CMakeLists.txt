@@ -70,3 +70,6 @@ add_test(NAME ats_resynth_standalone_smoke
   COMMAND ats_resynth_standalone_smoke --smoke)
 add_test(NAME ats_resynth_standalone_close_smoke
   COMMAND ats_resynth_standalone_smoke --close-smoke)
+# Both smokes launch the standalone window; they need a window-server session.
+set_tests_properties(ats_resynth_standalone_smoke ats_resynth_standalone_close_smoke
+  PROPERTIES LABELS windowed)
