@@ -151,6 +151,9 @@ target_include_directories(spectrum_renderer_perf_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
 target_compile_features(spectrum_renderer_perf_test PRIVATE cxx_std_17)
 add_test(NAME spectrum_renderer_perf_test COMMAND spectrum_renderer_perf_test)
+# Wall-clock budget (25 ms median); meaningful on the reference machine, not on
+# shared CI VMs, which exclude the `perf` label.
+set_tests_properties(spectrum_renderer_perf_test PROPERTIES LABELS perf)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME spectrum_parity_manifest_test

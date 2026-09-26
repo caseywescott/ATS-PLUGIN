@@ -22,7 +22,8 @@ jobs:
             build_plugin: "ON"
             ui_probe: "OFF"
           # The Visage editor + page/dispatch tests. Tests labelled `windowed`
-          # need an on-screen window and are run locally, not here.
+          # (need an on-screen window) or `perf` (wall-clock budgets) run
+          # locally, not on shared runners.
           - name: macos-ui-probe
             os: macos-latest
             build_plugin: "OFF"
@@ -69,4 +70,4 @@ jobs:
           cmake --build build --parallel 4
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -LE windowed
+        run: ctest --test-dir build --output-on-failure -LE 'windowed|perf'
