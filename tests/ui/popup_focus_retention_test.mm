@@ -106,6 +106,11 @@ int main()
         editor->setSize(1280, 940);
         REQUIRE(editor->setParent((__bridge void*) host));
         editor->show();
+        // A loaded current source enables the spectrum mode rows.
+        ats::ui::EditorSnapshot snapshot;
+        snapshot.revision = 1;
+        snapshot.sourceAvailable[0] = true;
+        editor->setEditorSnapshot(snapshot);
         drainEvents(application);
 
         NSView* view = (__bridge NSView*) editor->nativeHandle();
@@ -136,11 +141,12 @@ int main()
             }
         };
 
-        // The spectrum view chip sits at the top-right of the SESSION well; this
-        // point is inside it at 1280x940. REQUIRE below turns layout drift into a
-        // loud failure rather than a vacuous pass.
-        const CGFloat chipX = 836.0;
-        const CGFloat chipY = 165.0;
+        // The spectrum view chip sits at the top-left of the SESSION well
+        // (SpectrumChromeLayout::viewMenuButton, editor x 311-493, y 153-175 at
+        // 1280x940); this point is its centre. REQUIRE below turns layout drift
+        // into a loud failure rather than a vacuous pass.
+        const CGFloat chipX = 402.0;
+        const CGFloat chipY = 164.0;
 
         send(NSEventTypeMouseMoved, chipX, chipY);
         send(NSEventTypeLeftMouseDown, chipX, chipY);
@@ -152,19 +158,43 @@ int main()
         send(NSEventTypeLeftMouseDragged, chipX + 1.0, chipY);
         runFor(application, 0.05);
         send(NSEventTypeLeftMouseUp, chipX + 1.0, chipY);
-        runFor(application, 0.15);
+        // Long enough for Visage's 80 ms fade to finish and the frame to
+        // remove itself if it lost focus; the fade only advances on rendered
+        // frames, so the window must be on screen (see the windowed label).
+        runFor(application, 0.6);
 
-        // The menu must still be there. Walk down the rows until one takes.
-        for (CGFloat rowY = 186.0; rowY <= 320.0 && state.spectrumModeSelections == 0; rowY += 6.0)
+        // The menu must still be there. Visage geometry (4 px selection padding,
+        // 22 px rows, 175 px minimum width) places the top-level list at editor
+        // (311, 179); its first row is the "Current" source submenu. Pressing a
+        // submenu row opens the mode list immediately at the list's right edge
+        // (x 486), row 0 at y 187. Each Visage list swallows its first mouse-up,
+        // so every submenu row is clicked twice. A menu that faded out on focus
+        // loss accepts none of this.
+        REQUIRE(state.popupDismissed == 0);
+        const CGFloat currentRowY = 194.0;
+        send(NSEventTypeMouseMoved, chipX, currentRowY);
+        drainEvents(application);
+        send(NSEventTypeLeftMouseDown, chipX, currentRowY);
+        send(NSEventTypeLeftMouseUp, chipX, currentRowY);
+        drainEvents(application);
+        const CGFloat modeX = 566.0;
+        for (int row = 0; row < 7 && state.spectrumModeSelections == 0; ++row)
         {
-            send(NSEventTypeMouseMoved, chipX, rowY);
+            const CGFloat rowY = 198.0 + 22.0 * row;
+            send(NSEventTypeMouseMoved, modeX, rowY);
             drainEvents(application);
-            send(NSEventTypeLeftMouseDown, chipX, rowY);
-            send(NSEventTypeLeftMouseUp, chipX, rowY);
-            drainEvents(application);
+            for (int click = 0; click < 2 && state.spectrumModeSelections == 0; ++click)
+            {
+                send(NSEventTypeLeftMouseDown, modeX, rowY);
+                send(NSEventTypeLeftMouseUp, modeX, rowY);
+                drainEvents(application);
+            }
         }
 
         REQUIRE(state.spectrumModeSelections == 1);
+        // The selection must have come through the live popup, which reports
+        // its own dismissal, not through a click that fell through to the well.
+        REQUIRE(state.popupDismissed == 1);
 
         editor.reset();
         std::cout << "popup_focus_retention_test passed\n";
