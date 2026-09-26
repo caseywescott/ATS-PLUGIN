@@ -1,31 +1,15 @@
-# UI-SPECTRUM-02 — View button and mode popup
+# UI-SPECTRUM-02 — View/source menu
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `SpectrogramPanel::showViewMenu()` + JUCE `PopupMenu::showMenuAsync`.
+`VisageEditor::showSpectrumModeMenu()` builds source-scoped submenus for
+Current, Source A, and Source B. Labels come from the live source slots;
+unavailable slots and residual views without residual data are disabled.
+`SpectrumInteractionModel::selectSourceMenuItem()` validates the capability
+query and returns `SetSpectralViewAction { source, mode }`.
 
-## Ownership
+The popup is owned by the Visage editor, emits through the normal editor action
+bridge, and preserves source/mode selection state across redraws.
 
-`SpectrumInteractionModel::menu(hasSource, hasResidual)` builds the 7-item list.
-`selectMenuItem(id, hasSource, hasResidual)` returns `SetSpectralViewAction`.
-The Visage `PopupMenu` runner in `VisageEditor.cpp` shows the popup on VIEW
-button click and emits the action via `emitAction()`.
-
-## Geometry (§10.4)
-
-| Element | x | y | w | h |
-|---|---|---|---|---|
-| VIEW button | 18 | 216 | 60 | 18 |
-| Popup (shown) | at button x | below button | 200 | 7×24 |
-
-## Actions
-
-| Gesture | Action emitted |
-|---|---|
-| Click VIEW | (shows popup) |
-| Select item n | `SetSpectralViewAction { source, mode }` |
-| Dismiss | (none) |
-
-Evidence: SP-MENU-01, SP-MENU-02, SP-MENU-03, SP-MENU-04.
-
-Deviation: live popup render and focus lifecycle require native harness.
+Evidence: `src/ui/VisageEditor.cpp`, `src/ui/SpectrumInteractionModel.h`,
+`tests/spectrum_dispatch_test.cpp`, `tests/host_session_behavior_test.cpp`.

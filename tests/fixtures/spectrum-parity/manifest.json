@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "oracleCommit": "65341d64c5317f465dd5cfc8f5a95981512516ad",
+  "oracleDescription": "legacy JUCE spectrum implementation",
+  "fixtures": [
+    {
+      "name": "synthetic-sparse-decay",
+      "path": "synthetic-sparse-decay.json",
+      "sha256": "c8ec062bd20aed01bfb89aec2353a4343f09e80262a3413c58c4defd0d5250dc"
+    }
+  ],
+  "states": [
+    { "source": "current", "mode": "combined", "viewport": "fit" },
+    { "source": "current", "mode": "isometricEnvelope", "viewport": "fit" },
+    { "source": "current", "mode": "isometricEnvelopeRdc", "viewport": "fit" }
+  ],
+  "artifacts": [
+    "model.spx",
+    "snapshot.spx",
+    "envelope.spx",
+    "render.spx",
+    "navigation.jsonl"
+  ],
+  "provenance": {
+    "captureScript": "scripts/capture_spectrum_reference.sh",
+    "candidateExporter": "tools/spectrum_candidate_export.cpp",
+    "comparator": "tests/spectrum_parity_compare.py"
+  }
+}

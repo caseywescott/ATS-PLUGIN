@@ -1,6 +1,9 @@
 # Commands cheat sheet
 
-Quick copy-paste commands for **ATS-PLUGIN** (static **atsa**, **ats_offline** CLI, **ATS Resynth** JUCE plugin). For background and paths, see [BUILDING.md](BUILDING.md).
+Quick copy-paste commands for **ATS-PLUGIN** (static **atsa**, **ats_offline**
+CLI, and the native JUCE-free **ATS Resynth** products). For the authoritative
+macOS Standalone and Logic workflow, see
+[`docs/MACOS_BUILD_INSTALL_SPEC.md`](docs/MACOS_BUILD_INSTALL_SPEC.md).
 
 All examples assume the repository root as the current directory.
 
@@ -70,28 +73,28 @@ cmake --build build --target ats_offline --parallel 8
 cmake --build build --target ats_roundtrip --parallel 8
 ```
 
-**JUCE plugin** (shared code + formats)
+**Native plug-in products** (shared code + formats)
 
 ```sh
-cmake --build build --target AtsResynth --parallel 8
+cmake --build build --target ats_resynth_vst3 ats_resynth_standalone ats_resynth_au --parallel 8
 ```
 
 **VST3 only**
 
 ```sh
-cmake --build build --target AtsResynth_VST3 --parallel 8
+cmake --build build --target ats_resynth_vst3 --parallel 8
 ```
 
 **Standalone app only**
 
 ```sh
-cmake --build build --target AtsResynth_Standalone --parallel 8
+cmake --build build --target ats_resynth_standalone --parallel 8
 ```
 
 **Audio Unit only** (macOS)
 
 ```sh
-cmake --build build --target AtsResynth_AU --parallel 8
+cmake --build build --target ats_resynth_au --parallel 8
 ```
 
 ---
@@ -153,13 +156,15 @@ ctest --test-dir build -R transient_smear --output-on-failure
 
 ## Plugin artefact locations (Release, typical)
 
-Paths can vary slightly by generator/OS; defaults look like:
+Current native paths are:
 
-- **VST3:** `build/src/plugin/AtsResynth_artefacts/Release/VST3/ATS Resynth.vst3`
-- **Standalone:** `build/src/plugin/AtsResynth_artefacts/Release/Standalone/ATS Resynth.app`
-- **AU (macOS):** `build/src/plugin/AtsResynth_artefacts/Release/AU/ATS Resynth.component`
+- **VST3:** `build/src/host/vst3/ATS Resynth.vst3`
+- **Standalone:** `build/src/host/standalone/ATS Resynth.app`
+- **AU (macOS):** `build/src/host/au/ATS Resynth.component`
 
-If `COPY_PLUGIN_AFTER_BUILD` is enabled in CMake, JUCE may also install into the user plug-in folders during build (see CMake/JUCE output).
+Do not treat compilation as installation. The required architecture, signing,
+atomic replacement, registrar, cache, and installed-artifact gates are defined
+in `docs/MACOS_BUILD_INSTALL_SPEC.md`.
 
 ---
 
@@ -189,4 +194,5 @@ cmake --build build-debug --parallel 8
 - [BUILDING.md](BUILDING.md) — prerequisites, behaviour, soft limits  
 - [docs/DETERMINISM.md](docs/DETERMINISM.md) — offline golden expectations  
 - [docs/RELEASE.md](docs/RELEASE.md) — signing, notarization, release notes  
+- [docs/MACOS_BUILD_INSTALL_SPEC.md](docs/MACOS_BUILD_INSTALL_SPEC.md) — native macOS build, Standalone, AU install, and Logic refresh
 - [docs/SMEARNOV_SPEC.md](docs/SMEARNOV_SPEC.md) — onset detection & attack-smearing (Session tab → Smearnov)  

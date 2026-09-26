@@ -456,19 +456,29 @@ void refreshAmplitudeMetadata(ATS_SOUND* sound)
 }
 } // namespace
 
+namespace
+{
+static constexpr double kCriticalBandEdges[ATSA_CRITICAL_BANDS + 1] = {
+    0.0, 100.0, 200.0, 300.0, 400.0, 510.0, 630.0, 770.0, 920.0,
+    1080.0, 1270.0, 1480.0, 1720.0, 2000.0, 2320.0, 2700.0, 3150.0,
+    3700.0, 4400.0, 5300.0, 6400.0, 7700.0, 9500.0, 12000.0, 15500.0,
+    20000.0
+};
+}
+
+double criticalBandEdgeHz(int edge)
+{
+    return kCriticalBandEdges[std::clamp(edge, 0, ATSA_CRITICAL_BANDS)];
+}
+
 double criticalBandCentreHz(int band)
 {
     // Zwicker & Fastl (1990) critical-band edges; matches ATSA_CRITICAL_BAND_EDGES.
-    static constexpr double edges[ATSA_CRITICAL_BANDS + 1] = {
-        0.0, 100.0, 200.0, 300.0, 400.0, 510.0, 630.0, 770.0, 920.0,
-        1080.0, 1270.0, 1480.0, 1720.0, 2000.0, 2320.0, 2700.0, 3150.0,
-        3700.0, 4400.0, 5300.0, 6400.0, 7700.0, 9500.0, 12000.0, 15500.0, 20000.0
-    };
     if (band < 0)
         band = 0;
     if (band >= ATSA_CRITICAL_BANDS)
         band = ATSA_CRITICAL_BANDS - 1;
-    return 0.5 * (edges[band] + edges[band + 1]);
+    return 0.5 * (criticalBandEdgeHz(band) + criticalBandEdgeHz(band + 1));
 }
 
 std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,

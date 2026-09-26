@@ -1,39 +1,19 @@
-# UI-SPECTRUM-03 — Zoom bar and canvas navigation
+# UI-SPECTRUM-03 — Viewport navigation and chrome
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `TraceZoomBar` JUCE component + `applyZoomAtScreenPoint`.
+`SpectrumInteractionModel` owns normalized time/frequency viewport state,
+fit, clamping, cursor-anchored planar zoom, pan, and scrollbar positioning.
+`SpectrumGeometry` is the single source for screen, content, plot, gutter,
+projection, and isometric inverse-projection geometry. The renderer receives
+the viewport on every draw, so zoom and pan affect both paint and hit-testing.
 
-## Ownership
+The Visage page routes the zoom bar, time/frequency scrollbars, wheel zoom,
+native macOS pinch magnify, and drag pan without emitting model edits. Wheel
+and pinch zoom preserve the planar pointer anchor and clamp both axes to 1x–32x
+even in isometric modes. `0` and Home fit the viewport; Escape clears selection
+and envelope editing.
 
-`SpectrumInteractionModel::zoom(factor, anchorT, anchorF)` and `pan(dT, dF)`
-and `fit()` own the viewport state (`timeStart`, `timeEnd`,
-`frequencyStart`, `frequencyEnd`).  Mouse wheel / pinch events on the canvas
-call `zoom()`; middle-drag calls `pan()`; `0` key calls `fit()`.
-
-## Geometry (§10.4)
-
-| Element | x | y | w | h | notes |
-|---|---|---|---|---|---|
-| Zoom bar track | 24 | 440 | 608 | 6 | time axis only |
-| Zoom thumb (left) | 24 + timeStart*608 | 438 | 4 | 10 | draggable |
-| Zoom thumb (right) | 24 + timeEnd*608 - 4 | 438 | 4 | 10 | draggable |
-
-Dragging a thumb updates `timeStart`/`timeEnd`; dragging the track interior
-pans.  The frequency axis zoom is driven by pinch gesture only.
-
-## Actions
-
-| Gesture | Action emitted |
-|---|---|
-| Mouse wheel on canvas | (navigation, no action) |
-| Pinch on canvas | (navigation, no action) |
-| Zoom thumb drag | (navigation, no action) |
-| `0` key | (fit, no action) |
-
-Navigation state changes trigger `SpectrumViewModel::invalidateCache()` →
-redraw.
-
-Evidence: SP-NAV-01, SP-NAV-02, `spectrum_interaction_model_test`.
-
-Deviation: live mouse-wheel scaling measured in native harness only.
+Evidence: `src/ui/SpectrumGeometry.h`, `src/ui/SpectrumInteractionModel.h`,
+`src/ui/SpectrumChrome.h`, `tests/spectrum_geometry_test.cpp`,
+`tests/spectrum_interaction_model_test.cpp`.

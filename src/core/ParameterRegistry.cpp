@@ -33,14 +33,40 @@ constexpr std::array<std::string_view, 4> kAnalysisType { "1 amp+freq", "2 +phas
 constexpr std::array<std::string_view, 4> kWindow { "Blackman", "Blackman-Harris", "Hanning", "Von Hann" };
 
 constexpr D f(std::string_view id, std::string_view name, float lo, float hi, float def, float interval = 0.0001f, float skew = 1.0f)
-{ return { id, name, ParameterType::floatValue, lo, hi, def, interval, skew }; }
+{
+    D descriptor;
+    descriptor.id = id; descriptor.name = name; descriptor.type = ParameterType::floatValue;
+    descriptor.minimum = lo; descriptor.maximum = hi; descriptor.defaultValue = def;
+    descriptor.interval = interval; descriptor.skew = skew;
+    return descriptor;
+}
 constexpr D i(std::string_view id, std::string_view name, float lo, float hi, float def)
-{ return { id, name, ParameterType::integer, lo, hi, def, 1.0f, 1.0f }; }
+{
+    D descriptor;
+    descriptor.id = id; descriptor.name = name; descriptor.type = ParameterType::integer;
+    descriptor.minimum = lo; descriptor.maximum = hi; descriptor.defaultValue = def;
+    descriptor.interval = 1.0f; descriptor.skew = 1.0f;
+    return descriptor;
+}
 constexpr D b(std::string_view id, std::string_view name, bool def)
-{ return { id, name, ParameterType::boolean, 0.0f, 1.0f, def ? 1.0f : 0.0f, 1.0f, 1.0f }; }
+{
+    D descriptor;
+    descriptor.id = id; descriptor.name = name; descriptor.type = ParameterType::boolean;
+    descriptor.minimum = 0.0f; descriptor.maximum = 1.0f; descriptor.defaultValue = def ? 1.0f : 0.0f;
+    descriptor.interval = 1.0f; descriptor.skew = 1.0f;
+    return descriptor;
+}
 template <std::size_t N>
 constexpr D c(std::string_view id, std::string_view name, const std::array<std::string_view, N>& values, std::uint16_t def)
-{ return { id, name, ParameterType::choice, 0.0f, static_cast<float>(N - 1), static_cast<float>(def), 1.0f, 1.0f, values.data(), static_cast<std::uint16_t>(N) }; }
+{
+    D descriptor;
+    descriptor.id = id; descriptor.name = name; descriptor.type = ParameterType::choice;
+    descriptor.minimum = 0.0f; descriptor.maximum = static_cast<float>(N - 1);
+    descriptor.defaultValue = static_cast<float>(def); descriptor.interval = 1.0f;
+    descriptor.skew = 1.0f; descriptor.choices = values.data();
+    descriptor.choiceCount = static_cast<std::uint16_t>(N);
+    return descriptor;
+}
 
 std::vector<D> build()
 {

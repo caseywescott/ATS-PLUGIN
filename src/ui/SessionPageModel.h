@@ -14,7 +14,7 @@ namespace ats::ui
 // Framework-free state for the Session page.  It is deliberately small and
 // descriptive: the backend owns widgets, while this model owns enablement,
 // selection, and the action payloads those widgets produce.
-enum class SessionSource : std::uint8_t { current, sourceA, sourceB };
+enum class SessionSource : std::uint8_t { sourceA, sourceB, morphTimeline, current };
 enum class SessionLayer : std::uint8_t { both, partials, residual, smear };
 enum class MorphLane : std::uint8_t { morph, hybrid, envelope };
 enum class MorphPolicy : std::uint8_t { hold, fade, mergeToResidual, discard };
@@ -136,6 +136,8 @@ public:
         return true;
     }
 
+    void setSelectedLane(MorphLane lane) noexcept { state_.morph.selectedLane = lane; }
+
     bool setSelectedBand(std::size_t band) noexcept
     {
         if (band >= state_.morph.bandCount)
@@ -249,7 +251,9 @@ public:
 
     static constexpr int sourceIndex(SessionSource source) noexcept
     {
-        return source == SessionSource::sourceA ? 0 : source == SessionSource::sourceB ? 1 : 0;
+        return source == SessionSource::sourceA ? 0
+             : source == SessionSource::sourceB ? 1
+             : source == SessionSource::morphTimeline ? 2 : 3;
     }
 
     static constexpr int layerIndex(SessionLayer layer) noexcept

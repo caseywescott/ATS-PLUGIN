@@ -2,6 +2,7 @@
 
 #include "SpectralTraceBuilder.h"
 
+#include <cmath>
 #include <cstdint>
 #include <utility>
 
@@ -50,6 +51,15 @@ public:
         mix(value, static_cast<std::uint64_t>(snapshot_.source));
         mix(value, static_cast<std::uint64_t>(snapshot_.mode));
         mix(value, snapshot_.frameCount);
+        mix(value, snapshot_.partials.size());
+        mix(value, snapshot_.residualBands.size());
+        mix(value, snapshot_.onsets.size());
+        mix(value, snapshot_.smearnovDetectionCurve.size());
+        mix(value, snapshot_.smearnovThresholdCurve.size());
+        mix(value, static_cast<std::uint64_t>(snapshot_.frequencyShapeMode));
+        mix(value, static_cast<std::uint64_t>(std::llround(snapshot_.frequencyShapeAmount * 100000.0)));
+        mix(value, static_cast<std::uint64_t>(std::llround(snapshot_.frequencyShapePivotHz * 100000.0)));
+        mix(value, static_cast<std::uint64_t>(std::llround(snapshot_.resolvedFrequencyShapePivotHz * 100000.0)));
         mix(value, cacheEpoch_);
         return value == 0 ? 1 : value;
     }

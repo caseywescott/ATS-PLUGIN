@@ -21,7 +21,7 @@
       <key>type</key>
       <string>aumf</string>
       <key>version</key>
-      <integer>65536</integer>
+      <integer>@ATS_AU_VERSION_PACKED@</integer>
     </dict>
   </array>
   <key>CFBundleDevelopmentRegion</key>

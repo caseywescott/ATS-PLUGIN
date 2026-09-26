@@ -843,9 +843,15 @@ public:
 
     Steinberg::tresult PLUGIN_API checkSizeConstraint(Steinberg::ViewRect* rect) override
     {
-        return rect != nullptr && rect->getWidth() > 0 && rect->getHeight() > 0
-                   ? Steinberg::kResultTrue
-                   : Steinberg::kResultFalse;
+        if (rect == nullptr)
+            return Steinberg::kResultFalse;
+        const auto constrained = editor_->constrainSize({
+            static_cast<std::uint32_t>(std::max(0, rect->getWidth())),
+            static_cast<std::uint32_t>(std::max(0, rect->getHeight()))
+        });
+        rect->right  = rect->left + static_cast<Steinberg::int32>(constrained.width);
+        rect->bottom = rect->top  + static_cast<Steinberg::int32>(constrained.height);
+        return Steinberg::kResultTrue;
     }
 
 private:
@@ -986,6 +992,18 @@ public:
         if (const auto* onsets = std::get_if<ats::ui::EditSmearnovOnsetsAction>(&action))
         {
             (void) sendFloatValues(kSessionOnsetsMessage, onsets->normalizedOnsets);
+            return;
+        }
+        if (const auto* handles = std::get_if<ats::ui::EditSmearnovOnsetHandlesAction>(&action))
+        {
+            std::vector<float> markers;
+            markers.reserve(handles->onsets.size());
+            for (const auto& onset : handles->onsets)
+                markers.push_back(onset.norm);
+            // The existing controller message is marker-only; the in-process
+            // host path preserves the edge handles, while older VST3 peers
+            // continue to receive the compatible marker projection.
+            (void) sendFloatValues(kSessionOnsetsMessage, markers);
             return;
         }
         if (const auto* timbre = std::get_if<ats::ui::SetTimbreMotionPlanAction>(&action))

@@ -1,5 +1,7 @@
 #include "AtsEngine.h"
 
+#include "../core/AtsFrequencyShape.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -83,6 +85,28 @@ JobResult<AnalysisOutput> AtsEngine::analyze(JobGeneration generation,
     if (rawSound == nullptr)
         return failedAnalysis(generation, "analysis_failed", "ATSA tracker returned no model");
 
+    // Some legal-but-extreme host automation combinations can leave the
+    // legacy tracker time row non-finite or non-increasing. The former JUCE
+    // host effectively avoided those combinations by not forwarding all
+    // analysis controls. Keep the controls wired, but repair only an invalid
+    // time row from ATSA's authoritative frame-size/sample-rate metadata.
+    if (rawSound->time != nullptr && rawSound->time[0] != nullptr &&
+        rawSound->frames > 0 && rawSound->srate > 0 && rawSound->frame_size > 0)
+    {
+        bool validTimes = true;
+        for (int frame = 0; frame < rawSound->frames; ++frame)
+            if (!std::isfinite(rawSound->time[0][frame]) ||
+                (frame > 0 && rawSound->time[0][frame] <= rawSound->time[0][frame - 1]))
+            {
+                validTimes = false;
+                break;
+            }
+        if (!validTimes)
+            for (int frame = 0; frame < rawSound->frames; ++frame)
+                rawSound->time[0][frame] = static_cast<double>(frame * rawSound->frame_size) /
+                                           static_cast<double>(rawSound->srate);
+    }
+
     output.sound.reset(rawSound);
     JobResult<AnalysisOutput> result;
     result.generation = generation;
@@ -113,13 +137,26 @@ JobResult<RenderStats> AtsEngine::render(JobGeneration generation,
     }
 
     destination.clear();
+    AtsSoundPtr shapedSound;
+    const ATS_SOUND* renderSound = sound;
+    if (isFrequencyShapeActive(resolveFrequencyShapeSettingsForSound(sound,
+                                                                     parameters.frequencyShape)))
+    {
+        if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(sound)))
+        {
+            shapedSound.reset(copy);
+            applyFrequencyShapeToSound(shapedSound.get(), parameters.frequencyShape);
+            renderSound = shapedSound.get();
+        }
+    }
+
     SPARAMS synthesis {};
-    parameters.toSparams(synthesis, sound->dur);
+    parameters.toSparams(synthesis, renderSound->dur);
     CURVE timeEnvelope {};
     curve_init(&timeEnvelope);
     double* raw = nullptr;
     int rawFrames = 0;
-    do_synthesis(const_cast<ATS_SOUND*>(sound), &synthesis, &timeEnvelope, nullptr, &raw, &rawFrames);
+    do_synthesis(const_cast<ATS_SOUND*>(renderSound), &synthesis, &timeEnvelope, nullptr, &raw, &rawFrames);
     curve_free(&timeEnvelope);
 
     if (raw == nullptr || rawFrames <= 0)

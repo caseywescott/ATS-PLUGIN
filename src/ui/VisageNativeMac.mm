@@ -2,6 +2,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <algorithm>
 #include <string>
 
 namespace ats::ui::detail
@@ -11,6 +12,11 @@ namespace
 {
 NativeFileDialogTestOverride testOverride = nullptr;
 void* testOverrideContext = nullptr;
+
+struct MagnifyMonitor
+{
+    id token = nil;
+};
 }
 
 void setNativeViewHidden(void* nativeHandle, bool hidden)
@@ -31,6 +37,43 @@ void setNativeViewFrame(void* nativeHandle, float width, float height)
     NSView* view = (__bridge NSView*)nativeHandle;
     if (view != nil && width > 0.0f && height > 0.0f)
         [view setFrame:NSMakeRect(0.0, 0.0, width, height)];
+}
+
+void* installNativeMagnifyMonitor(void* nativeHandle, void* context,
+                                  NativeMagnifyCallback callback,
+                                  float logicalWidth, float logicalHeight)
+{
+    NSView* view = (__bridge NSView*)nativeHandle;
+    if (view == nil || context == nullptr || callback == nullptr
+        || logicalWidth <= 0.0f || logicalHeight <= 0.0f)
+        return nullptr;
+
+    auto* monitor = new MagnifyMonitor;
+    monitor->token = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMagnify
+                                                              handler:^NSEvent*(NSEvent* event) {
+        if (event.window == nil || view.window == nil || event.window != view.window)
+            return event;
+
+        const auto location = [view convertPoint:event.locationInWindow fromView:nil];
+        const auto viewWidth = std::max<CGFloat>(1.0, view.bounds.size.width);
+        const auto viewHeight = std::max<CGFloat>(1.0, view.bounds.size.height);
+        const auto x = static_cast<float>(location.x / viewWidth * logicalWidth);
+        const auto y = static_cast<float>((viewHeight - location.y) / viewHeight * logicalHeight);
+        const auto scaleFactor = static_cast<float>(1.0 + event.magnification);
+        callback(context, x, y, scaleFactor);
+        return event;
+    }];
+    return monitor;
+}
+
+void removeNativeMagnifyMonitor(void* opaqueMonitor)
+{
+    auto* monitor = static_cast<MagnifyMonitor*>(opaqueMonitor);
+    if (monitor == nullptr)
+        return;
+    if (monitor->token != nil)
+        [NSEvent removeMonitor:monitor->token];
+    delete monitor;
 }
 
 NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& request)

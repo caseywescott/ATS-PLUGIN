@@ -15,7 +15,47 @@ set_target_properties(ats_resynth_standalone PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
   MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
   MACOSX_BUNDLE_INFO_PLIST
-    "${CMAKE_CURRENT_SOURCE_DIR}/ATSResynthStandaloneInfo.plist.in")
+    "${CMAKE_CURRENT_SOURCE_DIR}/ATSResynthStandaloneInfo.plist.in"
+  INSTALL_RPATH "@loader_path/../Frameworks"
+  BUILD_WITH_INSTALL_RPATH TRUE)
+
+set(ATS_CODESIGN_IDENTITY "-" CACHE STRING
+  "codesign identity for ATS macOS bundles (use - for ad-hoc)")
+set(_standalone_bundle_dir "$<TARGET_BUNDLE_DIR:ats_resynth_standalone>")
+set(_standalone_sndfile_src
+  "${SNDFILE_LIBRARY}")
+set(_standalone_sndfile_dst
+  "${_standalone_bundle_dir}/Contents/Frameworks/libsndfile.1.dylib")
+
+add_custom_command(TARGET ats_resynth_standalone POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+    "${_standalone_bundle_dir}/Contents/Frameworks"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${_standalone_sndfile_src}" "${_standalone_sndfile_dst}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+    "${_standalone_bundle_dir}/Contents/._Info.plist"
+    "${_standalone_bundle_dir}/Contents/._Frameworks"
+    "${_standalone_bundle_dir}/Contents/.__CodeSignature"
+    "${_standalone_bundle_dir}/Contents/MacOS/._ATS Resynth"
+    "${_standalone_bundle_dir}/Contents/Frameworks/._libsndfile.1.dylib"
+  COMMAND codesign --force --sign "${ATS_CODESIGN_IDENTITY}"
+    "${_standalone_sndfile_dst}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+    "${_standalone_bundle_dir}/Contents/._Frameworks"
+    "${_standalone_bundle_dir}/Contents/.__CodeSignature"
+    "${_standalone_bundle_dir}/Contents/Frameworks/._libsndfile.1.dylib"
+  COMMAND codesign --force --sign "${ATS_CODESIGN_IDENTITY}"
+    "${_standalone_bundle_dir}/Contents/MacOS/ATS Resynth"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+    "${_standalone_bundle_dir}/Contents/._Info.plist"
+    "${_standalone_bundle_dir}/Contents/._Frameworks"
+    "${_standalone_bundle_dir}/Contents/.__CodeSignature"
+    "${_standalone_bundle_dir}/Contents/MacOS/._ATS Resynth"
+    "${_standalone_bundle_dir}/Contents/Frameworks/._libsndfile.1.dylib"
+  COMMAND codesign --force --sign "${ATS_CODESIGN_IDENTITY}"
+    "${_standalone_bundle_dir}"
+  COMMENT "Embedding dependencies and signing ATS Resynth.app"
+  VERBATIM)
 
 add_executable(ats_resynth_standalone_smoke AtsStandaloneMain.mm)
 target_compile_features(ats_resynth_standalone_smoke PRIVATE cxx_std_17)
@@ -28,3 +68,5 @@ target_link_libraries(ats_resynth_standalone_smoke PRIVATE
 enable_testing()
 add_test(NAME ats_resynth_standalone_smoke
   COMMAND ats_resynth_standalone_smoke --smoke)
+add_test(NAME ats_resynth_standalone_close_smoke
+  COMMAND ats_resynth_standalone_smoke --close-smoke)

@@ -70,8 +70,8 @@ ats::JobResult<ImportedSource> SourceImportService::import(
 {
     if (cancellation.isCancelled())
         return cancelled(generation);
-    if (request.slot < 0 || request.slot > 1)
-        return failure(generation, "invalid_slot", "source import slot must be A or B");
+    if (request.slot < 0 || request.slot > 1 && request.slot != 3)
+        return failure(generation, "invalid_slot", "source import slot must be A, B, or current");
     if (request.path.empty())
         return failure(generation, "invalid_path", "source import path is empty");
 

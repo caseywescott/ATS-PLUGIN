@@ -97,6 +97,7 @@ struct HarnessState
     bool typedParameterEnd = false;
     int typedImportWavActions = 0;
     int typedImportAtsActions = 0;
+    int typedAnalyzeActions = 0;
     int fileDrops = 0;
     int sourceDropCounts[2] {};
     int lastDropSlot = -1;
@@ -220,6 +221,13 @@ void typedAction(void* context, const ats::ui::EditorAction* action)
             REQUIRE(!error);
             ++state.decodedSourceDrops;
         }
+        return;
+    }
+    if (const auto* analyze = std::get_if<ats::ui::AnalyzeMorphSourceAction>(action))
+    {
+        REQUIRE(analyze->slot >= 0 && analyze->slot <= 1);
+        REQUIRE(analyze->slot == state.lastDropSlot);
+        ++state.typedAnalyzeActions;
         return;
     }
     REQUIRE(std::holds_alternative<ats::ui::ImportAtsAction>(*action));
@@ -360,6 +368,7 @@ int main()
         REQUIRE(state.sourceDropCounts[0] > 0 && foundSourceAPoint);
         REQUIRE(state.sourceDropCounts[1] > 0 && foundSourceBPoint);
         REQUIRE(state.typedImportWavActions == state.fileDrops);
+        REQUIRE(state.typedAnalyzeActions == state.fileDrops);
         REQUIRE(state.decodedSourceDrops == 2);
         REQUIRE(host.source(0) != nullptr && host.source(0)->sampleRate == 48000 &&
                 host.source(0)->monoSamples.size() == 4);
@@ -373,19 +382,19 @@ int main()
         REQUIRE(state.typedImportAtsActions == 1);
 
         NSEvent* mouse = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
-                                            location:windowPointForLogical(NSMakePoint(600.0, 120.0))
+                                            location:windowPointForLogical(NSMakePoint(8.0, 300.0))
                                        modifierFlags:0 timestamp:0.0
                                         windowNumber:[hostWindow windowNumber]
                                              context:nil eventNumber:1 clickCount:1 pressure:1.0];
         [embeddedView mouseDown:mouse];
         NSEvent* mouseUp = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
-                                              location:windowPointForLogical(NSMakePoint(600.0, 120.0))
+                                              location:windowPointForLogical(NSMakePoint(8.0, 300.0))
                                          modifierFlags:0 timestamp:0.0
                                           windowNumber:[hostWindow windowNumber]
                                                context:nil eventNumber:1 clickCount:1 pressure:0.0];
         [embeddedView mouseUp:mouseUp];
         NSEvent* key = [NSEvent keyEventWithType:NSEventTypeKeyDown
-                                        location:windowPointForLogical(NSMakePoint(600.0, 120.0))
+                                        location:windowPointForLogical(NSMakePoint(8.0, 300.0))
                                    modifierFlags:0 timestamp:0.0
                                     windowNumber:[hostWindow windowNumber]
                                          context:nil characters:@"x"
@@ -412,8 +421,11 @@ int main()
                 [embeddedView mouseDown:event];
         };
 
-        const CGFloat pageX[] { 220.0, 240.0, 260.0 };
-        const CGFloat pageY[] { 74.0, 90.0 };
+        // The page strip is centred in the body and capped at 640 (§10.3), so at
+        // this editor size it runs from editor x 30 to 670 at y 78..108, split
+        // into five 128px tabs. ANALYSIS is tab 1: editor x 158..286.
+        const CGFloat pageX[] { 210.0, 240.0, 270.0 };
+        const CGFloat pageY[] { 112.0, 120.0 };
         for (const auto x : pageX)
         {
             for (const auto y : pageY)
@@ -428,8 +440,12 @@ int main()
         }
         REQUIRE(state.lastPage == 1);
 
-        const CGFloat parameterX[] { 220.0, 300.0, 360.0 };
-        const CGFloat parameterY[] { 240.0, 260.0, 280.0 };
+        // analysisLowestFreq is control 3, which §10.5 puts on the left half of
+        // the low+high freq pair in the left column. At this editor size that
+        // resolves to editor-logical (30, 299, 131, 28). These are window
+        // points, so the logical editor point scaled by the 1.25 host scale.
+        const CGFloat parameterX[] { 60.0, 100.0, 140.0 };
+        const CGFloat parameterY[] { 385.0, 391.0, 397.0 };
         for (const auto x : parameterX)
         {
             for (const auto y : parameterY)
@@ -479,10 +495,13 @@ int main()
             drainEvents(application);
         };
 
-        // PopupMenuFrame places the first option at x=40 and y=44 when the
-        // deterministic probe popup is shown at {40, 40}. Retry a tight band
-        // around that row while allowing the native animation/timer to settle.
-        const CGFloat popupRowCandidates[] { 48.0, 52.0, 56.0, 60.0, 64.0 };
+        // popup.show(this, {40, 40}) places the list at Visage-logical (40, 40).
+        // Option 0 starts at Visage-logical y = 40 + SelectionPadding(4) = 44.
+        // windowPointForLogical takes editor-logical coords, which are Visage-
+        // logical × scale (1.25), so the first option row is at editor-logical
+        // y = 44 × 1.25 = 55. Candidates below 55 fall above the popup list
+        // and cause it to lose focus without incrementing popupDismissed.
+        const CGFloat popupRowCandidates[] { 56.0, 60.0, 64.0, 68.0, 72.0 };
         for (const auto logicalY : popupRowCandidates)
         {
             if (state.popupSelections != 0)

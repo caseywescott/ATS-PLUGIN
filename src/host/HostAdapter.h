@@ -14,6 +14,7 @@
 #include "../dsp/MorphTrajectoryRenderer.h"
 #include "../engine/MorphTimelineService.h"
 #include "../engine/ResidualEditService.h"
+#include "../engine/PartialEditService.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
 #include "../state/FactoryPresetState.h"
@@ -30,6 +31,7 @@
 #include <cmath>
 #include <cstddef>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <future>
 #include <fstream>
@@ -277,6 +279,8 @@ public:
                 return;
             snapshot.sourceAvailable[index] = true;
             snapshot.sourceNames[index] = source->name;
+            snapshot.sourceResidualAvailable[index] = source->sound
+                && source->sound.get()->band_energy != nullptr;
             if (source->sound)
             {
                 snapshot.sourceDurations[index] = static_cast<float>(source->sound.get()->dur);
@@ -297,27 +301,94 @@ public:
             ? (currentSource_ ? &*currentSource_ : nullptr)
             : (spectralViewSource_ <= 2 && sources_[static_cast<std::size_t>(spectralViewSource_ - 1)]
                    ? &*sources_[static_cast<std::size_t>(spectralViewSource_ - 1)] : nullptr);
-        if (spectrumSource && spectrumSource->sound)
-        {
-            const auto* sound = spectrumSource->sound.get();
+        const auto publishFrequencyShape = [this](ui::SpectralTraceInput& input,
+                                                  const ATS_SOUND* sound) {
+            FrequencyShapeSettings settings;
+            settings.mode = static_cast<FrequencyShapeMode>(std::clamp(
+                static_cast<int>(std::lround(parameters_.read("freqShapeMode"))), 0, 3));
+            settings.amount = static_cast<double>(parameters_.read("freqShapeAmount"));
+            settings.pivotHz = static_cast<double>(parameters_.read("freqShapePivotHz"));
+            const auto resolved = resolveFrequencyShapeSettingsForSound(sound, settings);
+            input.frequencyShapeMode = static_cast<ui::FrequencyShapeMode>(
+                static_cast<int>(settings.mode));
+            input.frequencyShapeAmount = settings.amount;
+            input.frequencyShapePivotHz = settings.pivotHz;
+            input.resolvedFrequencyShapePivotHz = resolved.resolvedPivotHz;
+            input.displayShapeRevision = frequencyShapeRevision();
+        };
+        const auto publishDisplayReferences = [this](ui::SpectralTraceInput& input,
+                                                       const ATS_SOUND* sound,
+                                                       int sourceId) {
+            const auto index = static_cast<std::size_t>(std::clamp(sourceId, 0, 2));
+            auto& ampReference = spectrumAmpDisplayReferences_[index];
+            auto& residualReference = spectrumResidualDisplayReferences_[index];
+            if (!(ampReference > 0.0) || !std::isfinite(ampReference))
+            {
+                ampReference = 0.0;
+                if (sound != nullptr && sound->amp != nullptr)
+                    for (int partial = 0; partial < sound->partials; ++partial)
+                        if (sound->amp[partial] != nullptr)
+                            for (int frame = 0; frame < sound->frames; ++frame)
+                                ampReference = std::max(ampReference,
+                                                         sound->amp[partial][frame]);
+            }
+            if (!(residualReference > 0.0) || !std::isfinite(residualReference))
+            {
+                residualReference = 0.0;
+                if (sound != nullptr && sound->band_energy != nullptr)
+                    for (int band = 0; band < ATSA_CRITICAL_BANDS; ++band)
+                        if (sound->band_energy[band] != nullptr)
+                            for (int frame = 0; frame < sound->frames; ++frame)
+                                residualReference = std::max(residualReference,
+                                                              sound->band_energy[band][frame]);
+            }
+            input.displayAmpPeak = ampReference;
+            input.displayResidualPeak = residualReference;
+        };
+        const auto buildSpectrum = [&](const engine::ImportedSource* source, int sourceId,
+                                       bool preserveDisplayReference = true)
+            -> std::optional<ui::SpectralTraceSnapshot> {
+            if (source == nullptr || !source->sound)
+                return std::nullopt;
+            {
+            const auto* sound = source->sound.get();
             ui::SpectralTraceInput input;
-            input.source = static_cast<ui::SpectralTraceSource>(std::clamp(spectralViewSource_, 0, 2));
-            input.sourceRevision = spectralViewSource_ == 0
-                ? editorSnapshotRevision_.load(std::memory_order_relaxed)
-                : sourceRevisions_[static_cast<std::size_t>(spectralViewSource_ - 1)];
+            input.source = static_cast<ui::SpectralTraceSource>(std::clamp(sourceId, 0, 2));
+            input.sourceRevision = sourceId == 0
+                ? currentSourceRevision_
+                : sourceRevisions_[static_cast<std::size_t>(sourceId - 1)];
             input.durationSeconds = sound->dur;
+            input.partialCount = static_cast<std::size_t>(std::max(0, sound->partials));
+            input.frameCount = static_cast<std::size_t>(std::max(0, sound->frames));
+            input.nyquistHz = sound->srate > 0.0 ? sound->srate * 0.5 : 22050.0;
+            publishFrequencyShape(input, sound);
+            if (preserveDisplayReference)
+                publishDisplayReferences(input, sound, sourceId);
+            input.smearnovDetectionCurve = smearnovDetectionCurve_;
+            input.smearnovThresholdCurve = smearnovThresholdCurve_;
+            if (!onsetHandleOverlay_.empty())
+                for (const auto& onset : onsetHandleOverlay_)
+                    input.onsets.push_back({ onset.norm, onset.strength,
+                                             onset.preNorm, onset.peakNorm });
+            else
+                for (const auto onset : onsetOverlay_)
+                    input.onsets.push_back({ onset, 0.0, onset, onset });
             input.partials.reserve(static_cast<std::size_t>(std::max(0, sound->partials)));
+            const auto shapeRanks = buildFrequencyShapeRanks(sound);
             for (int partial = 0; partial < sound->partials; ++partial)
             {
                 ui::SpectralPartialInput trace;
                 trace.partialIndex = partial;
+                trace.frequencyShapeRank = partial < static_cast<int>(shapeRanks.size())
+                    ? shapeRanks[static_cast<std::size_t>(partial)] : 0;
                 trace.frames.reserve(static_cast<std::size_t>(std::max(0, sound->frames)));
                 for (int frame = 0; frame < sound->frames; ++frame)
                 {
-                    const auto amplitude = sound->amp ? sound->amp[partial][frame] : 0.0;
-                    const auto frequency = sound->frq ? sound->frq[partial][frame] : 0.0;
+                    const auto amplitude = sound->amp != nullptr && sound->amp[partial] != nullptr
+                        ? sound->amp[partial][frame] : 0.0;
+                    const auto frequency = sound->frq != nullptr && sound->frq[partial] != nullptr
+                        ? sound->frq[partial][frame] : 0.0;
                     trace.frames.push_back({ frequency, amplitude });
-                    input.displayAmpPeak = std::max(input.displayAmpPeak, amplitude);
                 }
                 input.partials.push_back(std::move(trace));
             }
@@ -329,14 +400,33 @@ public:
                     residual.energy.reserve(static_cast<std::size_t>(std::max(0, sound->frames)));
                     for (int frame = 0; frame < sound->frames; ++frame)
                     {
-                        const auto energy = sound->band_energy[band][frame];
+                        const auto energy = sound->band_energy[band] != nullptr
+                            ? sound->band_energy[band][frame] : 0.0;
                         residual.energy.push_back(energy);
-                        input.displayResidualPeak = std::max(input.displayResidualPeak, energy);
                     }
+                    residual.lowHz = ats::criticalBandEdgeHz(band);
+                    residual.highHz = ats::criticalBandEdgeHz(band + 1);
                     input.residualBands.push_back(std::move(residual));
                 }
-            snapshot.spectrum = ui::SpectralTraceBuilder::build(
-                input, static_cast<ui::SpectralTraceMode>(std::clamp(spectralViewMode_, 0, 6)));
+            return ui::SpectralTraceBuilder::build(
+                input, ui::SpectralTraceMode::combined);
+            }
+        };
+        if (spectrumSource && spectrumSource->sound)
+        {
+            snapshot.spectrum = buildSpectrum(spectrumSource, spectralViewSource_);
+            const auto overlaySource = spectralViewSource_ == 0 && sources_[0]
+                ? &*sources_[0]
+                : spectralViewSource_ == 1 && sources_[1]
+                    ? &*sources_[1]
+                    : spectralViewSource_ == 2 && sources_[0]
+                        ? &*sources_[0] : nullptr;
+            const auto overlaySourceId = spectralViewSource_ == 0 ? 1
+                : spectralViewSource_ == 1 ? 2 : 1;
+            // JUCE's complementary envelope surface is normalized from its
+            // own source peak, rather than inheriting the visible source's
+            // latched ruler.
+            snapshot.spectrumOverlay = buildSpectrum(overlaySource, overlaySourceId, false);
         }
         return snapshot;
     }
@@ -416,11 +506,18 @@ public:
             return false;
         }
         if (slot == 3)
+        {
             currentSource_ = std::move(imported.value);
+            ++currentSourceRevision_;
+            spectrumAmpDisplayReferences_[0] = 0.0;
+            spectrumResidualDisplayReferences_[0] = 0.0;
+        }
         else
         {
             sources_[static_cast<std::size_t>(slot)] = std::move(imported.value);
             ++sourceRevisions_[static_cast<std::size_t>(slot)];
+            spectrumAmpDisplayReferences_[static_cast<std::size_t>(slot + 1)] = 0.0;
+            spectrumResidualDisplayReferences_[static_cast<std::size_t>(slot + 1)] = 0.0;
         }
         auto snapshot = telemetry();
         snapshot.hasSourceA = sources_[0].has_value();
@@ -477,6 +574,8 @@ public:
         }
         source.sound = std::move(analysed.value.sound);
         source.residual = std::move(analysed.value.residual);
+        if (slot == 3)
+            ++currentSourceRevision_;
         if (state_ != HostState::prepared)
             return true;
 
@@ -537,7 +636,7 @@ public:
         analysisCancellation_.cancel();
         analysisCancellation_ = CancellationSource {};
         analysisSlot_ = slot;
-        analysisSourceRevision_ = slot == 3 ? editorSnapshotRevision_.load(std::memory_order_relaxed)
+        analysisSourceRevision_ = slot == 3 ? currentSourceRevision_
                                             : sourceRevisions_[static_cast<std::size_t>(slot)];
         analysisProgress_.store(0.0f, std::memory_order_release);
         const auto generation = sourceGenerations_.next();
@@ -606,7 +705,8 @@ public:
                sources_[static_cast<std::size_t>(analysisSlot_)]
                    ? &*sources_[static_cast<std::size_t>(analysisSlot_)] : nullptr);
         if (analysedSource == nullptr ||
-            (analysisSlot_ != 3 && sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_))
+            (analysisSlot_ == 3 ? currentSourceRevision_ != analysisSourceRevision_
+                                 : sourceRevisions_[static_cast<std::size_t>(analysisSlot_)] != analysisSourceRevision_))
         {
             error = { "stale_analysis", "source changed while analysis was running" };
             auto snapshot = telemetry();
@@ -620,20 +720,15 @@ public:
         auto& source = *const_cast<engine::ImportedSource*>(analysedSource);
         source.sound = std::move(analysed.value.sound);
         source.residual = std::move(analysed.value.residual);
+        if (analysisSlot_ == 3)
+            ++currentSourceRevision_;
+        const auto displayReferenceIndex = analysisSlot_ == 3 ? 0 : analysisSlot_ + 1;
+        spectrumAmpDisplayReferences_[static_cast<std::size_t>(displayReferenceIndex)] = 0.0;
+        spectrumResidualDisplayReferences_[static_cast<std::size_t>(displayReferenceIndex)] = 0.0;
         if (state_ == HostState::prepared)
         {
-            const auto playbackSlot = playback_.tryAcquireWriteSlot();
-            const auto rendered = playbackSlot == PlaybackBufferPool::kNoBuffer
-                ? JobResult<RenderStats> {}
-                : AtsEngine::render(analysed.generation, analysisCancellation_.token(), source.sound.get(), {},
-                                    playback_.writeView(playbackSlot));
-            if (playbackSlot == PlaybackBufferPool::kNoBuffer ||
-                rendered.status != JobResult<RenderStats>::Status::success ||
-                !playback_.publish(playbackSlot, analysed.generation))
-            {
-                error = rendered.error ? rendered.error
-                                       : Error { "playback_publish_failed", "could not publish analysed playback" };
-            }
+            const int previewSlot = analysisSlot_ == 3 ? 0 : analysisSlot_;
+            (void) renderSourceForPreview(previewSlot, error);
         }
         auto snapshot = telemetry();
         snapshot.analysisRunning = false;
@@ -651,6 +746,11 @@ public:
         snapshot.status = error ? "analysis render failed" : "analysis complete";
         snapshot.error = error.text;
         telemetry_.publish(std::move(snapshot));
+        // Auto-switch the spectrum view to the freshly analysed source when the
+        // view is still pointing at currentSource_ (slot 0), which no normal UI
+        // workflow ever populates, so the spectrum would otherwise stay blank.
+        if (!error && analysisSlot_ >= 0 && analysisSlot_ <= 1 && spectralViewSource_ == 0)
+            spectralViewSource_ = analysisSlot_ + 1;
         return true;
     }
 
@@ -692,12 +792,7 @@ public:
         }
         if (std::holds_alternative<ui::AnalyzeCurrentAction>(action))
         {
-            if (!currentSource_)
-            {
-                error = { "missing_current_source", "select an imported current source before analysis" };
-                return true;
-            }
-            (void) queueAnalysisSource(3, error);
+            (void) queueAnalysisSource(0, error);
             return true;
         }
         if (std::holds_alternative<ui::CancelJobsAction>(action))
@@ -726,7 +821,6 @@ public:
             }
             previewSource_.store(preview->source, std::memory_order_release);
             previewLayer_.store(preview->layer, std::memory_order_release);
-            explicitPreview_.store(true, std::memory_order_release);
             if (!preview->start)
             {
                 previewPlaying_.store(false, std::memory_order_release);
@@ -748,7 +842,6 @@ public:
         }
         if (std::holds_alternative<ui::StopPreviewAction>(action))
         {
-            explicitPreview_.store(true, std::memory_order_release);
             previewPlaying_.store(false, std::memory_order_release);
             return true;
         }
@@ -837,8 +930,23 @@ public:
             }
             const auto before = captureState();
             onsetOverlay_ = onsets->normalizedOnsets;
+            onsetHandleOverlay_.clear();
+            for (const auto onset : onsetOverlay_)
+                onsetHandleOverlay_.push_back({ onset, onset, onset, 0.0f });
             ++onsetRevision_;
             recordMutation("Smearnov onsets", before);
+            return true;
+        }
+        if (const auto* handles = std::get_if<ui::EditSmearnovOnsetHandlesAction>(&action))
+        {
+            const auto before = captureState();
+            onsetHandleOverlay_ = handles->onsets;
+            onsetOverlay_.clear();
+            onsetOverlay_.reserve(onsetHandleOverlay_.size());
+            for (const auto& onset : onsetHandleOverlay_)
+                onsetOverlay_.push_back(onset.norm);
+            ++onsetRevision_;
+            recordMutation("Smearnov onset handles", before);
             return true;
         }
         if (std::holds_alternative<ui::DetectSmearnovAction>(action))
@@ -868,6 +976,7 @@ public:
     [[nodiscard]] UndoHistory& history() noexcept { return history_; }
     [[nodiscard]] int spectralViewSource() const noexcept { return spectralViewSource_; }
     [[nodiscard]] int spectralViewMode() const noexcept { return spectralViewMode_; }
+    [[nodiscard]] double lastResidualReadDb() const noexcept { return lastResidualReadDb_; }
 
     // Unified dispatch entry point for all EditorAction types. Delegates to
     // applySessionAction / applyAnalysisAction, then handles the remaining
@@ -923,6 +1032,8 @@ public:
         }
         if (const auto* spectral = std::get_if<ui::SetSpectralViewAction>(&action))
         {
+            if (spectralViewMode_ != spectral->mode)
+                resetSpectrumDisplayReferenceForSourceId(spectral->source);
             spectralViewSource_ = spectral->source;
             spectralViewMode_ = spectral->mode;
             return true;
@@ -1098,6 +1209,97 @@ public:
         }
         if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
         {
+            using Cmd = ui::SpectrumEditCommand;
+            const auto partialCommand = spectrum->command == Cmd::mutePartials
+                || spectrum->command == Cmd::scalePartials
+                || spectrum->command == Cmd::drawPartialFrequency
+                || spectrum->command == Cmd::gainPartialEnvelope
+                || spectrum->command == Cmd::smoothPartialEnvelope
+                || spectrum->command == Cmd::tiltPartialEnvelope
+                || spectrum->command == Cmd::soloPartials
+                || spectrum->command == Cmd::freezePartial
+                || spectrum->command == Cmd::deletePartials
+                || spectrum->command == Cmd::prunePartials;
+            if (partialCommand)
+            {
+                const auto slot = previewSource_.load(std::memory_order_acquire);
+                auto* target = editableSource(slot);
+                if (target == nullptr || !target->sound || target->sound.get()->amp == nullptr
+                    || target->sound.get()->partials <= 0 || target->sound.get()->frames <= 0)
+                { error = { "no_model", "analyse a source before editing partials" }; return true; }
+                const auto* sound = target->sound.get();
+                PartialMatrix matrix(sound->partials, sound->frames);
+                for (int p = 0; p < sound->partials; ++p)
+                    for (int f = 0; f < sound->frames; ++f)
+                    {
+                        auto& cell = matrix.at(p, f);
+                        cell.amplitude = sound->amp[p] ? sound->amp[p][f] : 0.0;
+                        cell.frequencyHz = sound->frq && sound->frq[p] ? sound->frq[p][f] : 1.0;
+                    }
+                PartialEditService service;
+                PartialSelection selection;
+                selection.partials = spectrum->bands;
+                const auto first = std::clamp<int>(spectrum->firstFrame, 0, sound->frames - 1);
+                const auto last = std::clamp<int>(spectrum->lastFrame, first, sound->frames - 1);
+                for (int f = first; f <= last; ++f) selection.frames.push_back(f);
+                service.setSelectionForHost(std::move(selection));
+                PartialEditCommand edit;
+                edit.value = spectrum->value;
+                edit.firstFrame = first; edit.lastFrame = last; edit.frame = first;
+                switch (spectrum->command)
+                {
+                case Cmd::mutePartials:
+                case Cmd::deletePartials: edit.kind = PartialEditKind::mute; break;
+                case Cmd::scalePartials: edit.kind = PartialEditKind::scaleSelection; break;
+                case Cmd::drawPartialFrequency:
+                    edit.kind = PartialEditKind::drawFrequency;
+                    edit.points = { { static_cast<double>(first), spectrum->value },
+                                    { static_cast<double>(last), spectrum->value } };
+                    if (!spectrum->points.empty())
+                    {
+                        edit.points.clear();
+                        for (const auto& point : spectrum->points)
+                            edit.points.push_back({ static_cast<double>(point.first),
+                                                    static_cast<double>(point.second) });
+                    }
+                    break;
+                case Cmd::gainPartialEnvelope: edit.kind = PartialEditKind::gainBox; break;
+                case Cmd::smoothPartialEnvelope: edit.kind = PartialEditKind::smoothEnvelope; break;
+                case Cmd::tiltPartialEnvelope: edit.kind = PartialEditKind::tiltEnvelope; break;
+                case Cmd::soloPartials: edit.kind = PartialEditKind::solo; break;
+                case Cmd::freezePartial: edit.kind = PartialEditKind::freeze; break;
+                case Cmd::prunePartials:
+                    error = { "invalid_spectrum_edit", "prune is a selection-only UI operation" };
+                    return true;
+                default: break;
+                }
+                if (spectrum->command == Cmd::gainPartialEnvelope)
+                {
+                    if (!spectrum->bands.empty())
+                    {
+                        edit.firstPartial = *std::min_element(spectrum->bands.begin(), spectrum->bands.end());
+                        edit.lastPartial = *std::max_element(spectrum->bands.begin(), spectrum->bands.end());
+                    }
+                }
+                const auto before = captureState();
+                const auto result = service.apply(matrix, edit);
+                if (!result.accepted) { error = { "spectrum_edit_failed", result.error }; return true; }
+                if (result.changed)
+                {
+                    for (int p = 0; p < sound->partials; ++p)
+                        for (int f = 0; f < sound->frames; ++f)
+                        {
+                            if (sound->amp[p]) sound->amp[p][f] = matrix.at(p, f).amplitude;
+                            if (sound->frq && sound->frq[p]) sound->frq[p][f] = matrix.at(p, f).frequencyHz;
+                        }
+                    if (spectrum->command == Cmd::mutePartials
+                        || spectrum->command == Cmd::deletePartials)
+                        resetSpectrumDisplayReference(slot);
+                    noteSourceMutation(slot);
+                    recordMutation("Partial spectrum edit", before);
+                }
+                return true;
+            }
             if (spectrum->bands.empty() || spectrum->firstFrame < 0 ||
                 spectrum->lastFrame < spectrum->firstFrame || !std::isfinite(spectrum->value))
             {
@@ -1131,7 +1333,6 @@ public:
                 matrix.bands.push_back(std::move(band));
             }
 
-            using Cmd = ui::SpectrumEditCommand;
             using Op  = engine::ResidualEditOperation;
             Op operation = Op::smooth;
             switch (spectrum->command)
@@ -1142,14 +1343,37 @@ public:
             case Cmd::smoothResidual: operation = Op::smooth;       break;
             case Cmd::tiltResidual:   operation = Op::tilt;         break;
             case Cmd::redistResidual: operation = Op::redistribute; break;
+            case Cmd::muteResidual:   operation = Op::mute;        break;
+            case Cmd::scaleResidual:  operation = Op::scale;       break;
+            case Cmd::drawResidual:   operation = Op::drawDb;      break;
+            case Cmd::readResidual:
+                if (spectrum->bands.size() != 1)
+                {
+                    error = { "invalid_spectrum_edit", "read requires exactly one residual band" };
+                    return true;
+                }
+                lastResidualReadDb_ = engine::ResidualEditService::readBandEnergyDb(
+                    matrix, spectrum->bands.front(), spectrum->firstFrame);
+                return true;
+            default: break;
             }
 
             engine::ResidualSelection selection { spectrum->bands, spectrum->firstFrame, spectrum->lastFrame };
             selectionFirstFrame_ = spectrum->firstFrame;
             selectionLastFrame_ = spectrum->lastFrame;
             engine::ResidualEditParameters params;
+            params.scale = std::isfinite(spectrum->value) ? std::max(0.0f, spectrum->value) : 1.0;
             params.smoothRadiusFrames = std::max(1, static_cast<int>(std::round(spectrum->value)));
             params.tiltDbPerBandStep  = static_cast<double>(spectrum->value);
+            if (operation == Op::drawDb)
+            {
+                if (!spectrum->points.empty())
+                    for (const auto& point : spectrum->points)
+                        params.drawDb.emplace_back(point.first, static_cast<double>(point.second));
+                else
+                    for (int frame = spectrum->firstFrame; frame <= spectrum->lastFrame; ++frame)
+                        params.drawDb.emplace_back(frame, static_cast<double>(spectrum->value));
+            }
 
             const auto editResult = engine::ResidualEditService::apply(
                 matrix, operation, selection, params, &residualClipboard_);
@@ -1167,6 +1391,8 @@ public:
                          f < static_cast<std::size_t>(sound->frames); ++f)
                         sound->band_energy[band.bandIndex][static_cast<int>(f)] = band.energy[f];
                 }
+                if (spectrum->command == Cmd::muteResidual)
+                    resetSpectrumDisplayReference(slot);
                 noteSourceMutation(slot);
                 if (state_ == HostState::prepared)
                     (void) renderSourceForPreview(slot, error);
@@ -1502,12 +1728,14 @@ public:
         cancelAnalysis();
         cancelSmearnov();
         sources_ = {};
+        spectrumAmpDisplayReferences_.fill(0.0);
+        spectrumResidualDisplayReferences_.fill(0.0);
         currentSource_.reset();
+        currentSourceRevision_ = 0;
         editorSnapshotRevision_.store(0, std::memory_order_relaxed);
         previewSource_.store(0, std::memory_order_release);
         previewLayer_.store(0, std::memory_order_release);
         previewPlaying_.store(false, std::memory_order_release);
-        explicitPreview_.store(false, std::memory_order_release);
         normalizedPlayhead_.store(0.0f, std::memory_order_release);
         previewFrame_.store(0, std::memory_order_release);
         previewLengthFrames_.store(0, std::memory_order_release);
@@ -1518,6 +1746,9 @@ public:
         timbrePlan_.clear();
         timbrePlanJson_.clear();
         onsetOverlay_.clear();
+        onsetHandleOverlay_.clear();
+        smearnovDetectionCurve_.clear();
+        smearnovThresholdCurve_.clear();
         variations_ = {};
         morphRecipeJson_.clear();
         variationStored_ = {};
@@ -1563,7 +1794,6 @@ public:
         cancelAnalysis();
         cancelSmearnov();
         previewPlaying_.store(false, std::memory_order_release);
-        explicitPreview_.store(false, std::memory_order_release);
         previewLengthFrames_.store(0, std::memory_order_release);
         detachEditor();
         state_ = HostState::released;
@@ -1693,8 +1923,7 @@ public:
         for (const auto& event : midiEvents)
             midi_.consume(event);
 
-        if (explicitPreview_.load(std::memory_order_acquire) &&
-            !previewPlaying_.load(std::memory_order_acquire))
+        if (!previewPlaying_.load(std::memory_order_acquire))
         {
             output.clear();
             return true;
@@ -1744,26 +1973,12 @@ public:
             }
         }
 
-        // Analysis completion initially publishes the classic combined
-        // render. Until an explicit preview has produced matching split-layer
-        // buffers, do not let an automated Both-mode selector route playback
-        // into stale/empty partial and residual pools.
-        if (!explicitPreview_.load(std::memory_order_relaxed) && combinedBuf != nullptr &&
-            playback_.generation(combinedSlot).value >
-                std::max(playbackPartials_.generation(partialsSlot).value,
-                         playbackResidual_.generation(residualSlot).value))
-        {
-            primary = combinedBuf;
-            second = nullptr;
-            layerMix = false;
-        }
-
         const auto* lengthRef = primary ? primary : second;
         if (lengthRef != nullptr)
         {
             const auto sourceFrames   = lengthRef->frameCount();
             const auto timelineFrames = previewLengthFrames_.load(std::memory_order_relaxed);
-            const auto timelineStart  = explicitPreview_.load(std::memory_order_relaxed) && timelineFrames > 0
+            const auto timelineStart  = timelineFrames > 0
                 ? previewFrame_.load(std::memory_order_relaxed) % timelineFrames : 0u;
             const auto frames   = std::min(output.frameCount, sourceFrames);
             const auto channels = std::min(output.channelCount,
@@ -1798,7 +2013,7 @@ public:
                 }
             }
 
-            if (explicitPreview_.load(std::memory_order_relaxed) && sourceFrames > 0)
+            if (sourceFrames > 0)
             {
                 const auto nextFrame = timelineFrames == 0
                     ? 0u : (timelineStart + frames) % timelineFrames;
@@ -1869,6 +2084,8 @@ private:
         int slot = -1;
         std::uint64_t sourceRevision = 0;
         std::vector<AtsOnset> onsets;
+        std::vector<double> detectionCurve;
+        std::vector<double> thresholdCurve;
         AtsSoundPtr transformed;
         Error error;
     };
@@ -1898,6 +2115,29 @@ private:
         residualOnlyIndex_     = ParameterRegistry::indexOf("residualOnly");
         useIfftSynthIndex_     = ParameterRegistry::indexOf("useIfftSynth");
         classicPreviewModeIndex_ = ParameterRegistry::indexOf("classicPreviewMode");
+    }
+
+    [[nodiscard]] std::uint64_t frequencyShapeRevision() const noexcept
+    {
+        // Keep this revision stable across editorSnapshot() publications. It
+        // changes only when a parameter that affects displayed frequencies
+        // changes, so mode switches and repaint cadence cannot invalidate the
+        // snapshot cache.
+        std::uint64_t hash = 1469598103934665603ull;
+        const auto mix = [&hash](float value) {
+            std::uint32_t bits = 0;
+            static_assert(sizeof(bits) == sizeof(value));
+            std::memcpy(&bits, &value, sizeof(bits));
+            for (int shift = 0; shift < 32; shift += 8)
+            {
+                hash ^= static_cast<std::uint8_t>((bits >> shift) & 0xffu);
+                hash *= 1099511628211ull;
+            }
+        };
+        mix(parameters_.read("freqShapeMode"));
+        mix(parameters_.read("freqShapeAmount"));
+        mix(parameters_.read("freqShapePivotHz"));
+        return hash;
     }
 
     // Decode the complete chunk before replacing either the live parameters or
@@ -1953,11 +2193,17 @@ private:
         typedTimeline_.clear();
         timbrePlanJson_ = ls.timbreJson;
         onsetOverlay_ = ls.smearnovOnsets;
+        onsetHandleOverlay_.clear();
+        for (const auto onset : onsetOverlay_)
+            onsetHandleOverlay_.push_back({ onset, onset, onset, 0.0f });
 
         if (!ls.atsModel.empty())
             currentSource_ = deserializeAtsSoundForState(ls.atsModel, 3);
         else
             currentSource_.reset();
+        ++currentSourceRevision_;
+        spectrumAmpDisplayReferences_[0] = 0.0;
+        spectrumResidualDisplayReferences_[0] = 0.0;
         for (std::size_t slot = 0; slot < sources_.size(); ++slot)
         {
             if (ls.morphSoundData[slot].empty())
@@ -1966,6 +2212,8 @@ private:
                 sources_[slot] = deserializeAtsSoundForState(
                     ls.morphSoundData[slot], static_cast<int>(slot), ls.morphSourcePaths[slot]);
             ++sourceRevisions_[slot];
+            spectrumAmpDisplayReferences_[slot + 1] = 0.0;
+            spectrumResidualDisplayReferences_[slot + 1] = 0.0;
         }
         morphRecipeJson_ = ls.morphRecipe;
         if (!morphRecipeJson_.empty())
@@ -2163,7 +2411,10 @@ private:
                         promise->set_value(std::move(result));
                         return;
                     }
-                    auto onsets = detectOnsets(snapshot.get(), detect);
+                    SmearnovDetectionFunctions functions;
+                    auto onsets = detectOnsets(snapshot.get(), detect, &functions);
+                    result.detectionCurve = std::move(functions.combined);
+                    result.thresholdCurve = std::move(functions.threshold);
                     if (!requested.empty())
                     {
                         const auto detected = onsets;
@@ -2249,8 +2500,19 @@ private:
         const auto frameCount = std::max(1, sources_[static_cast<std::size_t>(result.slot)]->sound.get()->frames - 1);
         onsetOverlay_.clear();
         onsetOverlay_.reserve(result.onsets.size());
+        onsetHandleOverlay_.clear();
+        onsetHandleOverlay_.reserve(result.onsets.size());
         for (const auto& onset : result.onsets)
+        {
             onsetOverlay_.push_back(std::clamp(static_cast<float>(onset.frame) / frameCount, 0.0f, 1.0f));
+            onsetHandleOverlay_.push_back({
+                std::clamp(static_cast<float>(onset.frame) / frameCount, 0.0f, 1.0f),
+                std::clamp(static_cast<float>(onset.preFrame) / frameCount, 0.0f, 1.0f),
+                std::clamp(static_cast<float>(onset.peakFrame) / frameCount, 0.0f, 1.0f),
+                std::max(0.0f, static_cast<float>(onset.strength)) });
+        }
+        smearnovDetectionCurve_ = std::move(result.detectionCurve);
+        smearnovThresholdCurve_ = std::move(result.thresholdCurve);
         ++onsetRevision_;
         if (result.apply)
         {
@@ -2721,13 +2983,29 @@ private:
         return identity ? editableSource(*identity) : nullptr;
     }
 
-    // Only the two import slots carry a revision counter. The Current model's
-    // spectral trace is keyed on the editor snapshot revision instead, so an
-    // edit to it is picked up by the next publication.
     void noteSourceMutation(int slot) noexcept
     {
-        if (slot == 0 || slot == 1)
+        if (slot == 3)
+            ++currentSourceRevision_;
+        else if (slot == 0 || slot == 1)
             ++sourceRevisions_[static_cast<std::size_t>(slot)];
+    }
+
+    void resetSpectrumDisplayReference(int slot) noexcept
+    {
+        const auto index = slot == 3 ? 0 : slot + 1;
+        if (index >= 0 && index < static_cast<int>(spectrumAmpDisplayReferences_.size()))
+        {
+            spectrumAmpDisplayReferences_[static_cast<std::size_t>(index)] = 0.0;
+            spectrumResidualDisplayReferences_[static_cast<std::size_t>(index)] = 0.0;
+        }
+    }
+
+    void resetSpectrumDisplayReferenceForSourceId(int sourceId) noexcept
+    {
+        const auto index = std::clamp(sourceId, 0, 2);
+        spectrumAmpDisplayReferences_[static_cast<std::size_t>(index)] = 0.0;
+        spectrumResidualDisplayReferences_[static_cast<std::size_t>(index)] = 0.0;
     }
 
     bool renderSourceForPreview(int slot, Error& error)
@@ -2893,10 +3171,16 @@ private:
     int spectralViewSource_ = 0;
     int spectralViewMode_ = 0;
     std::array<std::optional<engine::ImportedSource>, 2> sources_;
+    // Display references are intentionally separate from the mutable ATS
+    // values. Scaling/gain edits therefore keep the same visual ruler until a
+    // destructive mute/delete operation explicitly re-baselines it.
+    mutable std::array<double, 3> spectrumAmpDisplayReferences_ {};
+    mutable std::array<double, 3> spectrumResidualDisplayReferences_ {};
     // Current analysis is a distinct role from morph Source A/B. The legacy
     // integer slots remain at the file/action boundary for compatibility, but
     // this storage prevents Analyze Current from overwriting Source A.
     std::optional<engine::ImportedSource> currentSource_;
+    std::uint64_t currentSourceRevision_ = 0;
     mutable std::atomic<std::uint64_t> editorSnapshotRevision_ { 0 };
     GenerationSource sourceGenerations_;
     CancellationSource sourceCancellation_;
@@ -2915,6 +3199,7 @@ private:
     std::array<std::uint64_t, 2> sourceRevisions_ {};
     HostStateChunk stateChunk_;
     engine::ResidualClipboard residualClipboard_;
+    double lastResidualReadDb_ = engine::ResidualEditService::kDbFloor;
     PlaybackBufferPool playback_;
     PlaybackBufferPool playbackPartials_;
     PlaybackBufferPool playbackResidual_;
@@ -2932,7 +3217,6 @@ private:
     std::atomic<int> previewSource_ { 0 };
     std::atomic<int> previewLayer_ { 0 };
     std::atomic<bool> previewPlaying_ { false };
-    std::atomic<bool> explicitPreview_ { false };
     std::atomic<float> normalizedPlayhead_ { 0.0f };
     std::atomic<bool> liveSmearEnabled_ { false };
     std::atomic<std::uint64_t> previewFrame_ { 0 };
@@ -2944,6 +3228,9 @@ private:
     std::string timbrePlanJson_;
     dsp::MorphEnvelopeCache morphEnvelopeCache_;
     std::vector<float> onsetOverlay_;
+    std::vector<ui::SpectralOnset> onsetHandleOverlay_;
+    std::vector<double> smearnovDetectionCurve_;
+    std::vector<double> smearnovThresholdCurve_;
     int selectionFirstFrame_ = -1;
     int selectionLastFrame_ = -1;
     std::array<std::vector<float>, 3> variations_;

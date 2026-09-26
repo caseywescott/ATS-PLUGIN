@@ -18,10 +18,11 @@ int main()
         SavePresetAction { { "a.atspreset" } }, LoadPresetAction { { "a.atspreset" } }, NoteAction { true, 60, 100 },
         HistoryAction { false }, PartialEditAction { 1, 2, true }, ResidualEditAction { 1, 2, 0.5f },
         SpectrumEditAction { SpectrumEditCommand::copyResidual, { 1, 2 }, 0, 4, 0.0f },
+        EditSmearnovOnsetHandlesAction { { { 0.5f, 0.4f, 0.6f, 1.0f } } },
         ApplyMathAction { "amp *= 0.5;" }, DetectSmearnovAction {}, ApplySmearnovAction {},
         EditSmearnovOnsetsAction { { 0.2f, 0.8f } }, SetTimbreMotionPlanAction { { 0.0f, 1.0f } }
     };
-    assert(actions.size() == 29);
+    assert(actions.size() == 30);
     for (const auto& action : actions)
     {
         const auto contract = actionContract(action);
@@ -36,6 +37,15 @@ int main()
     assert(!validateAction(EditorAction { MorphVariationAction { 3, true } }).valid);
     assert(!validateAction(EditorAction { ApplyMathAction { {} } }).valid);
     assert(!validateAction(EditorAction { EditSmearnovOnsetsAction { { -0.1f } } }).valid);
+    assert(!validateAction(EditorAction { EditSmearnovOnsetHandlesAction {
+        { { 0.5f, 0.6f, 0.7f, 1.0f } }
+    } }).valid);
+    assert(validateAction(EditorAction { SpectrumEditAction {
+        SpectrumEditCommand::drawResidual, { 1 }, 2, 4, -18.0f, { { 2, -24.0f }, { 4, -12.0f } }
+    } }).valid);
+    assert(!validateAction(EditorAction { SpectrumEditAction {
+        SpectrumEditCommand::drawResidual, { 1 }, 2, 4, 0.0f, { { -1, -12.0f } }
+    } }).valid);
     assert(actionContract(EditorAction { ApplyMathAction { "x" } }).owner == ActionThreadDomain::worker);
     assert(actionContract(EditorAction { NoteAction { true, 60, 100 } }).owner == ActionThreadDomain::audioRt);
     assert(actionContract(EditorAction { SetParameterAction { "x", 0.5f, true, false } }).undo == ActionUndoPolicy::gesture);

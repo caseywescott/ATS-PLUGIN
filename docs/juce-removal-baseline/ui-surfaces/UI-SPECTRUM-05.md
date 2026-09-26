@@ -1,26 +1,17 @@
-# UI-SPECTRUM-05 — Residual band selection and editing
+# UI-SPECTRUM-05 — Residual selection and editing
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `SpectrogramPanel::mouseDown/mouseDoubleClick` for residual-mode
-interaction and `applyResidualDbFromEditor` / `commitEnvelopeDraw`.
+Residual mode maps real band geometry and frame coordinates from the snapshot.
+Clicks select a band, Shift/Cmd toggles bands, and a lasso selects a band/frame
+rectangle. Toolbar and keyboard actions route mute, scale, draw, smooth, tilt,
+copy, paste, swap, redistribution, and residual dB readback through
+`ResidualEditService`.
 
-## Ownership
+Double-clicking a residual cell emits `readResidual`; Delete/Backspace emits
+`muteResidual`. Selection ranges are preserved in the action payload and model
+mutations remain one undo transaction.
 
-`SpectrumInteractionModel::selectResidualRange(bands, firstFrame, lastFrame)`
-sets the selection.  `ResidualEditAction` carries committed edits.
-
-## Gestures
-
-| Gesture | Model method | Action emitted |
-|---|---|---|
-| Left-click band cell | `selectBand(index)` | (editor-local) |
-| Left-drag rect select | `selectResidualRange(bands, f0, f1)` | (editor-local) |
-| Double-click cell | enter inline edit | `ResidualEditAction { band, frame, value }` |
-| `Delete` key on selection | — | `SpectrumEditAction { resetResidual, bands }` |
-| Copy/paste band | `runCopyBand` / `runPasteBand` | `SpectrumEditAction { copy/paste, band }` |
-| Redistribute bands | `runRedistBands` | `SpectrumEditAction { redist, bands }` |
-
-Evidence: SP-RES-01, SP-RES-02, SP-RES-03.
-
-Deviation: inline dB text editor requires native focus dispatch harness.
+Evidence: `src/ui/VisageEditor.cpp`, `src/engine/ResidualEditService.h`,
+`src/host/HostAdapter.h`, `tests/residual_edit_service_test.cpp`,
+`tests/host_action_routing_test.cpp`, `tests/spectrum_dispatch_test.cpp`.

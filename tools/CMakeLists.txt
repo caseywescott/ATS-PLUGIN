@@ -4,6 +4,12 @@ target_link_libraries(ats_offline PRIVATE atsa)
 add_executable(ats_roundtrip ats_roundtrip.c)
 target_link_libraries(ats_roundtrip PRIVATE atsa)
 
+add_executable(spectrum_candidate_export spectrum_candidate_export.cpp)
+target_include_directories(spectrum_candidate_export PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_candidate_export PRIVATE cxx_std_17)
+
 add_executable(ats_transient_demo ats_transient_demo.cpp
   ../src/core/AtsTransientLayer.cpp
   ../src/core/AtsTransientSmear.cpp)

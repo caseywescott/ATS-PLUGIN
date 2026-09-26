@@ -121,6 +121,85 @@ struct AuEditorEndpoint
 AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
 }
 
+// ---------------------------------------------------------------------------
+// Bottom-right resize grip — 15×15 px, drawn as three diagonal hash lines.
+// Drag events update the host view frame and ask Logic to resize its window.
+// ---------------------------------------------------------------------------
+
+static constexpr CGFloat kGripSize = 15.0;
+
+@interface AtsResizeGripView : NSView
+@property (nonatomic, assign) NSView* hostView;
+@end
+
+@implementation AtsResizeGripView {
+    NSPoint _dragStart;
+    NSSize  _sizeAtDragStart;
+}
+
+- (instancetype)initWithHostView:(NSView*)hostView
+{
+    const CGFloat x = hostView.frame.size.width  - kGripSize;
+    const CGFloat y = 0.0;
+    self = [super initWithFrame:NSMakeRect(x, y, kGripSize, kGripSize)];
+    if (self == nil) return nil;
+    _hostView = hostView;
+    self.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    return self;
+}
+
+- (BOOL)isOpaque { return NO; }
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSColor* gripColor = [NSColor colorWithWhite:1.0 alpha:0.35];
+    [gripColor setStroke];
+    NSBezierPath* path = [NSBezierPath bezierPath];
+    path.lineWidth = 1.0;
+    for (int i = 1; i <= 3; ++i) {
+        const CGFloat offset = i * 4.0;
+        [path moveToPoint:NSMakePoint(kGripSize, kGripSize - offset)];
+        [path lineToPoint:NSMakePoint(kGripSize - offset, kGripSize)];
+    }
+    [path stroke];
+}
+
+- (void)mouseDown:(NSEvent*)event
+{
+    _dragStart       = [NSEvent mouseLocation];
+    _sizeAtDragStart = _hostView.frame.size;
+}
+
+- (void)mouseDragged:(NSEvent*)event
+{
+    NSView* host = _hostView;
+    if (host == nil) return;
+
+    const NSPoint current = [NSEvent mouseLocation];
+    const CGFloat dx = current.x - _dragStart.x;
+    const CGFloat dy = _dragStart.y - current.y; // screen Y inverted vs view Y
+
+    const ats::ui::EditorSizeLimits lim{};
+    const auto newW = static_cast<std::uint32_t>(
+        std::clamp(_sizeAtDragStart.width  + dx,
+                   static_cast<CGFloat>(lim.minWidth),
+                   static_cast<CGFloat>(lim.maxWidth)));
+    const auto newH = static_cast<std::uint32_t>(
+        std::clamp(_sizeAtDragStart.height + dy,
+                   static_cast<CGFloat>(lim.minHeight),
+                   static_cast<CGFloat>(lim.maxHeight)));
+
+    const NSSize newSize = NSMakeSize(newW, newH);
+    [host setFrameSize:newSize];
+    if (NSWindow* win = host.window)
+        [win setContentSize:newSize];
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+
 @interface AtsAuHostedEditorView : NSView
 @end
 
@@ -128,6 +207,7 @@ AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
     std::unique_ptr<ats::ui::VisageEditor> _editor;
     std::shared_ptr<AuEditorActionBridge> _actionBridge;
     NSTimer* _analysisTimer;
+    AtsResizeGripView* _gripView;
 }
 
 - (instancetype)initWithPreferredSize:(NSSize)size endpoint:(AuEditorEndpoint)endpoint
@@ -151,6 +231,16 @@ AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
         return nil;
     }
     _editor->show();
+
+    // MTKView has no autoresizingMask by default; drawable stays fixed when Logic resizes the window.
+    if (void* handle = _editor->nativeHandle()) {
+        NSView* visageView = (__bridge NSView*)handle;
+        visageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
+
+    _gripView = [[AtsResizeGripView alloc] initWithHostView:self];
+    [self addSubview:_gripView];
+
     auto* actionBridge = _actionBridge.get();
     _analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
         if (actionBridge != nullptr && _editor != nullptr)
@@ -165,6 +255,8 @@ AuEditorEndpoint editorEndpointForAudioUnit(AudioUnit audioUnit);
     if (_editor != nullptr && newSize.width > 0.0 && newSize.height > 0.0)
         _editor->setSize(static_cast<std::uint32_t>(newSize.width),
                          static_cast<std::uint32_t>(newSize.height));
+    if (_gripView != nil)
+        [_gripView setFrameOrigin:NSMakePoint(newSize.width - kGripSize, 0.0)];
 }
 
 - (BOOL)acceptsFirstResponder
@@ -247,6 +339,23 @@ public:
         if (outInfo != nullptr)
             *outInfo = supported;
         return static_cast<UInt32>(std::size(supported));
+    }
+
+    // Reject formats before they are committed so the unit never enters an
+    // inconsistent channel state. Without this, StreamFormatWritable=true lets
+    // auval/Logic set arbitrary channel counts, leaving 3in/1out which fails
+    // Logic's plugin scan and keeps the plugin out of the menu.
+    bool ValidFormat(AudioUnitScope scope, AudioUnitElement element,
+                     const AudioStreamBasicDescription& format) override
+    {
+        if (!ausdk::AUBase::ValidFormat(scope, element, format))
+            return false;
+        const auto ch = static_cast<SInt16>(format.mChannelsPerFrame);
+        if (scope == kAudioUnitScope_Input && element == 0)
+            return ch == 1 || ch == 2;
+        if (scope == kAudioUnitScope_Output && element == 0)
+            return ch == 2;
+        return true;
     }
 
     OSStatus Initialize() override

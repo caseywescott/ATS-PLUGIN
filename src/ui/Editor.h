@@ -39,6 +39,22 @@ struct EditorEventSink
     void (*dialogError)(void* context, int kind, const char* code, const char* text) = nullptr;
 };
 
+struct EditorSizeLimits
+{
+    std::uint32_t minWidth    = 1100;
+    std::uint32_t minHeight   =  860;
+    std::uint32_t maxWidth    = 1900;
+    std::uint32_t maxHeight   = 1400;
+    std::uint32_t defaultWidth  = 1280;
+    std::uint32_t defaultHeight =  940;
+};
+
+struct EditorSize
+{
+    std::uint32_t width  = 0;
+    std::uint32_t height = 0;
+};
+
 class IEditor
 {
 public:
@@ -54,6 +70,9 @@ public:
     virtual void hide() = 0;
     virtual bool isShowing() const = 0;
     virtual void* nativeHandle() const = 0;
+
+    virtual EditorSizeLimits sizeLimits() const = 0;
+    virtual EditorSize constrainSize(EditorSize requested) const = 0;
 };
 
 } // namespace ats::ui

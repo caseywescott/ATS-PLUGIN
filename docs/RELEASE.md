@@ -1,5 +1,11 @@
 # Release, signing, and packaging (Phase 5)
 
+For current native targets, architecture separation, AU version packing,
+Standalone verification, atomic AU installation, and Logic registrar refresh,
+see [`MACOS_BUILD_INSTALL_SPEC.md`](MACOS_BUILD_INSTALL_SPEC.md). That
+specification supersedes JUCE-era target names and artifact paths below for the
+current JUCE-free build.
+
 Checklist and templates for shipping **ATS Resynth** binaries. **This is not legal advice.** Verify Apple, Microsoft, and Steinberg obligations for your distribution model. JUCE has been removed from this project; see `THIRD_PARTY.md` for current dependency inventory.
 
 ## License pointers for release notes
@@ -59,11 +65,11 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_PLUGIN=ON
 cmake --build build --config Release
 ```
 
-Collect artefacts, for example:
+Collect the native artifacts:
 
-- `build/src/plugin/AtsResynth_artefacts/Release/VST3/ATS Resynth.vst3`
-- `build/src/plugin/AtsResynth_artefacts/Release/AU/ATS Resynth.component` (macOS only)
-- `build/src/plugin/AtsResynth_artefacts/Release/Standalone/ATS Resynth.app`
+- `build/src/host/vst3/ATS Resynth.vst3`
+- `build/src/host/au/ATS Resynth.component` (macOS only)
+- `build/src/host/standalone/ATS Resynth.app`
 
 ### 2. Sign each bundle deeply
 

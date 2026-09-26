@@ -1,0 +1,10 @@
+{
+  "name": "synthetic-sparse-decay",
+  "frameCount": 17,
+  "partialCount": 5,
+  "properties": [
+    "one-sided active envelope segments",
+    "fewer than eleven RDC points in sparse slices",
+    "silent residual tail columns"
+  ]
+}

@@ -96,6 +96,11 @@ struct PartialModifiers
 
 enum class PartialEditKind : std::uint8_t
 {
+    mute,
+    smoothEnvelope,
+    tiltEnvelope,
+    solo,
+    freeze,
     select,
     box,
     lasso,
@@ -164,6 +169,12 @@ public:
     [[nodiscard]] bool canUndo() const noexcept { return !undo_.empty(); }
     [[nodiscard]] bool canRedo() const noexcept { return !redo_.empty(); }
 
+    void setSelectionForHost(PartialSelection selection)
+    {
+        selection_ = std::move(selection);
+        normalize(selection_);
+    }
+
     PartialEditResult apply(PartialMatrix& matrix, const PartialEditCommand& command)
     {
         PartialEditResult result;
@@ -182,6 +193,21 @@ public:
         bool modelChanged = false;
         switch (command.kind)
         {
+            case PartialEditKind::mute:
+                modelChanged = mute(candidate, result);
+                break;
+            case PartialEditKind::smoothEnvelope:
+                modelChanged = smoothEnvelope(candidate, command, result);
+                break;
+            case PartialEditKind::tiltEnvelope:
+                modelChanged = tiltEnvelope(candidate, command, result);
+                break;
+            case PartialEditKind::solo:
+                modelChanged = solo(candidate, result);
+                break;
+            case PartialEditKind::freeze:
+                modelChanged = freeze(candidate, command, result);
+                break;
             case PartialEditKind::select:
                 selectCell(matrix, command, result);
                 break;
@@ -421,6 +447,95 @@ private:
             cell.amplitude = next;
             return true;
         });
+    }
+
+    bool mute(PartialMatrix& matrix, PartialEditResult& result) const
+    {
+        if (selection_.partials.empty()) { result.error = "No partials are selected."; return false; }
+        bool changed = false;
+        for (const auto p : selection_.partials)
+            if (p >= 0 && p < matrix.partialCount)
+                for (int f = 0; f < matrix.frameCount; ++f)
+                {
+                    auto& cell = matrix.at(p, f);
+                    changed = cell.amplitude != 0.0 || changed;
+                    cell.amplitude = 0.0;
+                }
+        return changed;
+    }
+
+    bool smoothEnvelope(PartialMatrix& matrix, const PartialEditCommand& command,
+                        PartialEditResult& result) const
+    {
+        if (selection_.partials.empty()) { result.error = "No partials are selected."; return false; }
+        const auto first = std::max(0, command.firstFrame < 0 ? 0 : command.firstFrame);
+        const auto last = std::min(matrix.frameCount - 1,
+                                   command.lastFrame < 0 ? matrix.frameCount - 1 : command.lastFrame);
+        if (first > last) { result.error = "Envelope range is empty."; return false; }
+        bool changed = false;
+        for (const auto p : selection_.partials)
+        {
+            if (p < 0 || p >= matrix.partialCount) continue;
+            const auto source = matrix;
+            for (int f = first; f <= last; ++f)
+            {
+                const auto lo = std::max(first, f - 1), hi = std::min(last, f + 1);
+                double sum = 0.0;
+                for (int i = lo; i <= hi; ++i) sum += source.at(p, i).amplitude;
+                const auto next = sum / static_cast<double>(hi - lo + 1);
+                changed = matrix.at(p, f).amplitude != next || changed;
+                matrix.at(p, f).amplitude = next;
+            }
+        }
+        return changed;
+    }
+
+    bool tiltEnvelope(PartialMatrix& matrix, const PartialEditCommand& command,
+                      PartialEditResult& result) const
+    {
+        if (!std::isfinite(command.value)) { result.error = "Tilt must be finite."; return false; }
+        if (selection_.partials.empty()) { result.error = "No partials are selected."; return false; }
+        const auto first = std::max(0, command.firstFrame < 0 ? 0 : command.firstFrame);
+        const auto last = std::min(matrix.frameCount - 1, command.lastFrame < 0 ? matrix.frameCount - 1 : command.lastFrame);
+        bool changed = false;
+        for (const auto p : selection_.partials)
+            for (int f = first; f <= last; ++f)
+            {
+                const auto position = last == first ? 0.0 : static_cast<double>(f - first) / (last - first);
+                const auto gain = std::pow(10.0, command.value * (position - 0.5) / 20.0);
+                auto& cell = matrix.at(p, f);
+                const auto next = std::max(0.0, cell.amplitude * gain);
+                changed = cell.amplitude != next || changed;
+                cell.amplitude = next;
+            }
+        return changed;
+    }
+
+    bool solo(PartialMatrix& matrix, PartialEditResult& result) const
+    {
+        if (selection_.partials.empty()) { result.error = "No partials are selected."; return false; }
+        bool changed = false;
+        for (int p = 0; p < matrix.partialCount; ++p)
+            if (std::find(selection_.partials.begin(), selection_.partials.end(), p) == selection_.partials.end())
+                for (int f = 0; f < matrix.frameCount; ++f)
+                { changed = matrix.at(p, f).amplitude != 0.0 || changed; matrix.at(p, f).amplitude = 0.0; }
+        return changed;
+    }
+
+    bool freeze(PartialMatrix& matrix, const PartialEditCommand& command,
+                PartialEditResult& result) const
+    {
+        if (selection_.partials.empty() || command.frame < 0 || command.frame >= matrix.frameCount)
+        { result.error = "Freeze requires selected partials and a valid frame."; return false; }
+        bool changed = false;
+        for (const auto p : selection_.partials)
+            if (p >= 0 && p < matrix.partialCount)
+            {
+                const auto cell = matrix.at(p, command.frame);
+                for (int f = 0; f < matrix.frameCount; ++f)
+                { changed = matrix.at(p, f) != cell || changed; matrix.at(p, f) = cell; }
+            }
+        return changed;
     }
 
     double dbAt(const PartialEditCommand& command, int frame) const

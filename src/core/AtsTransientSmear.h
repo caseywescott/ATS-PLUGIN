@@ -79,6 +79,9 @@ struct SmearnovDetectionFunctions
 /** Centre frequency (Hz) of Bark critical band `band` (0-based). */
 [[nodiscard]] double criticalBandCentreHz(int band);
 
+/** Lower/upper edge (Hz) of Bark critical band `band` (0-based). */
+[[nodiscard]] double criticalBandEdgeHz(int edge);
+
 /** Detects onsets directly from the ATS model's partials + residual.
  *  `functionsOut` (optional) receives the combined detection curve and threshold. */
 [[nodiscard]] std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,

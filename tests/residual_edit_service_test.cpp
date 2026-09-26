@@ -41,5 +41,9 @@ int main()
     result = ats::engine::ResidualEditService::apply(
         matrix, ats::engine::ResidualEditOperation::swap, { { 1, 2 }, 0, 3 }, {}, nullptr);
     assert(result.success);
+    const auto readDb = ats::engine::ResidualEditService::readBandEnergyDb(matrix, 1, 1);
+    assert(std::isfinite(readDb));
+    assert(ats::engine::ResidualEditService::readBandEnergyDb(matrix, 99, 1)
+           == ats::engine::ResidualEditService::kDbFloor);
     return 0;
 }

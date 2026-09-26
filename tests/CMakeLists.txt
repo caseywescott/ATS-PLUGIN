@@ -145,6 +145,46 @@ target_include_directories(spectrum_renderer_test PRIVATE
 target_compile_features(spectrum_renderer_test PRIVATE cxx_std_17)
 add_test(NAME spectrum_renderer_test COMMAND spectrum_renderer_test)
 
+add_executable(spectrum_renderer_perf_test spectrum_renderer_perf_test.cpp)
+target_include_directories(spectrum_renderer_perf_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_renderer_perf_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_renderer_perf_test COMMAND spectrum_renderer_perf_test)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME spectrum_parity_manifest_test
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/spectrum_parity_compare.py
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/spectrum-parity/manifest.json)
+
+add_executable(spectrum_geometry_test spectrum_geometry_test.cpp)
+target_include_directories(spectrum_geometry_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_geometry_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_geometry_test COMMAND spectrum_geometry_test)
+
+add_executable(spectrum_path_builder_test spectrum_path_builder_test.cpp)
+target_include_directories(spectrum_path_builder_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_path_builder_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_path_builder_test COMMAND spectrum_path_builder_test)
+
+add_executable(spectrum_rdc_test spectrum_rdc_test.cpp)
+target_include_directories(spectrum_rdc_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_rdc_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_rdc_test COMMAND spectrum_rdc_test)
+
+add_executable(spectrum_chrome_test spectrum_chrome_test.cpp)
+target_include_directories(spectrum_chrome_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(spectrum_chrome_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_chrome_test COMMAND spectrum_chrome_test)
+
 add_executable(dsp_service_contract_test dsp_service_contract_test.cpp)
 target_include_directories(dsp_service_contract_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"

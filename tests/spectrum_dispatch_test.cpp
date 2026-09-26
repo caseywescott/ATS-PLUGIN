@@ -115,6 +115,26 @@ static void test_menu_dispatch()
     const auto fromB = model.selectMenuItem(0, true, true);
     assert(fromB.source == 2);
     assert(fromB.mode == static_cast<int>(SpectralTraceMode::combined));
+
+    SpectrumCapabilities capabilities;
+    capabilities.hasCurrentSource = true;
+    capabilities.hasSourceA = true;
+    capabilities.hasSourceB = false;
+    capabilities.hasResidual = true;
+    capabilities.residualAvailable = { true, false, false };
+    const auto sourceAResidual = model.selectSourceMenuItem(
+        1, static_cast<int>(SpectralTraceMode::residual), capabilities);
+    assert(sourceAResidual.mode == -1);
+    capabilities.residualAvailable = { true, true, false };
+    const auto sourceAResidualAvailable = model.selectSourceMenuItem(
+        1, static_cast<int>(SpectralTraceMode::residual), capabilities);
+    assert(sourceAResidualAvailable.source == 1
+           && sourceAResidualAvailable.mode == static_cast<int>(SpectralTraceMode::residual));
+    const auto missingSource = model.selectSourceMenuItem(2, 0, capabilities);
+    assert(missingSource.mode == -1);
+    const auto encodedSourceA = model.selectMenuItem(201, true, true);
+    assert(encodedSourceA.source == 1
+           && encodedSourceA.mode == static_cast<int>(SpectralTraceMode::combined));
 }
 
 // SP-NAV-01: zoom and pan update navigation state with clamping
@@ -280,26 +300,31 @@ static void test_handle_key()
     assert(model.navigation().selectedBand    == -1);
     assert(model.navigation().selectedBands.empty());
 
-    // delete with partial selected dispatches PartialEditAction
+    // delete with partial selected dispatches a typed multi-selection spectrum edit
     model.selectPartial(7);
     auto delPartial = model.handleKey(SpectrumInteractionModel::kKeyDelete, false, false);
     assert(delPartial.has_value());
-    assert(std::holds_alternative<PartialEditAction>(*delPartial));
-    const auto& pe = std::get<PartialEditAction>(*delPartial);
-    assert(pe.partial == 7 && !pe.apply);
+    assert(std::holds_alternative<SpectrumEditAction>(*delPartial));
+    const auto& pe = std::get<SpectrumEditAction>(*delPartial);
+    assert(pe.command == SpectrumEditCommand::deletePartials);
+    assert(pe.bands.size() == 1 && pe.bands.front() == 7);
+    assert(pe.firstFrame == 0 && pe.lastFrame == 0);
 
-    // delete with no partial but band selected dispatches ResidualEditAction
+    // residual delete uses the residual spectrum command and selected range
     model.selectPartial(-1);
+    model.setMode(SpectralTraceMode::residual);
     model.selectBand(4);
     auto delBand = model.handleKey(SpectrumInteractionModel::kKeyDelete, false, false);
     assert(delBand.has_value());
-    assert(std::holds_alternative<ResidualEditAction>(*delBand));
-    const auto& re = std::get<ResidualEditAction>(*delBand);
-    assert(re.band == 4 && re.value == 0.0f);
+    assert(std::holds_alternative<SpectrumEditAction>(*delBand));
+    const auto& re = std::get<SpectrumEditAction>(*delBand);
+    assert(re.command == SpectrumEditCommand::muteResidual);
+    assert(re.bands.size() == 1 && re.bands.front() == 4);
 
     // delete with nothing selected returns nullopt
     model.selectPartial(-1);
     model.selectBand(-1);
+    model.setMode(SpectralTraceMode::partials);
     auto delNone = model.handleKey(SpectrumInteractionModel::kKeyDelete, false, false);
     assert(!delNone.has_value());
 
@@ -307,7 +332,8 @@ static void test_handle_key()
     model.selectPartial(3);
     auto backspace = model.handleKey(SpectrumInteractionModel::kKeyBackspace, false, false);
     assert(backspace.has_value());
-    assert(std::holds_alternative<PartialEditAction>(*backspace));
+    assert(std::holds_alternative<SpectrumEditAction>(*backspace));
+    assert(std::get<SpectrumEditAction>(*backspace).command == SpectrumEditCommand::deletePartials);
 
     // unknown key returns nullopt
     auto unknown = model.handleKey(65 /* 'A' */, false, false);
@@ -342,8 +368,10 @@ static void test_extended_keyboard_dispatch()
     model.setAvailableBands({ 3, 4, 5 });
     assert(!model.handleKey('a', false, true).has_value());
     assert(model.navigation().selectedPartials.size() == 3);
+    // 'h' is intentionally not a JUCE spectrum shortcut; harmonic-class
+    // selection was a fabricated Visage behavior and must not return here.
     assert(!model.handleKey('h', false, false).has_value());
-    assert(model.navigation().selectedPartials.size() == 2);
+    assert(model.navigation().selectedPartials.size() == 3);
     model.setEnvelopeRange(0.8f, 0.2f, 1.2f, -0.2f);
     assert(model.navigation().envelopeEditing);
     assert(model.navigation().envelopeTimeStart == 0.2f);

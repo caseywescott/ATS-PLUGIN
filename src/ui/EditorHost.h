@@ -1,11 +1,14 @@
 #pragma once
 
 #include "AtsPrimitives.h"
+#include "SpectralTraceBuilder.h"
 
 #include <cstdint>
 #include <array>
 #include <string>
 #include <mutex>
+#include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -25,7 +28,20 @@ struct StopPreviewAction {};
 struct SeekPreviewAction { float normalizedTime = 0.0f; };
 struct SetPreviewSmearAction { bool enabled = false; };
 struct MorphVariationAction { int slot = 0; bool store = true; };
-struct SetMorphTimelineAction { std::vector<float> normalizedPoints; };
+struct MorphTimelineActionPoint
+{
+    float timeNorm = 0.0f;
+    float amount = 0.0f;
+    std::uint8_t kind = 0;  // 0=morph, 1=hybrid, 2=envelope morph
+    std::uint8_t curve = 0; // MorphCurveShape ordinal
+};
+struct SetMorphTimelineAction
+{
+    // Backward-compatible simple curve: values are placed at evenly spaced times.
+    std::vector<float> normalizedPoints;
+    // Full former-host contract. When populated this takes precedence over normalizedPoints.
+    std::vector<MorphTimelineActionPoint> points;
+};
 struct BounceMorphTimelineAction { ats::Path path; int layer = 0; };
 struct SetSpectralViewAction { int source = 0; int mode = 0; };
 struct ApplyFactoryPresetAction { std::int32_t index = -1; };
@@ -51,7 +67,21 @@ enum class SpectrumEditCommand : std::uint8_t
     swapResidual,
     smoothResidual,
     tiltResidual,
-    redistResidual
+    redistResidual,
+    mutePartials,
+    scalePartials,
+    drawPartialFrequency,
+    gainPartialEnvelope,
+    smoothPartialEnvelope,
+    tiltPartialEnvelope,
+    soloPartials,
+    freezePartial,
+    deletePartials,
+    prunePartials,
+    muteResidual,
+    scaleResidual,
+    drawResidual,
+    readResidual
 };
 struct SpectrumEditAction
 {
@@ -60,12 +90,19 @@ struct SpectrumEditAction
     std::int32_t firstFrame = 0;
     std::int32_t lastFrame = 0;
     float value = 0.0f;
+    std::vector<std::pair<std::int32_t, float>> points;
 };
 struct ApplyMathAction { std::string script; };
 struct DetectSmearnovAction {};
 struct ApplySmearnovAction {};
 struct EditSmearnovOnsetsAction { std::vector<float> normalizedOnsets; };
-struct SetTimbreMotionPlanAction { std::vector<float> normalizedPlan; };
+struct EditSmearnovOnsetHandlesAction { std::vector<SpectralOnset> onsets; };
+struct SetTimbreMotionPlanAction
+{
+    std::vector<float> normalizedPlan;
+    // Full TimbreMotionPlan JSON. The simple curve remains supported for the compact editor.
+    std::string serializedPlan;
+};
 
 using EditorAction = std::variant<SetParameterAction,
                                   ImportWavAction,
@@ -95,6 +132,7 @@ using EditorAction = std::variant<SetParameterAction,
                                   DetectSmearnovAction,
                                   ApplySmearnovAction,
                                   EditSmearnovOnsetsAction,
+                                  EditSmearnovOnsetHandlesAction,
                                   SetTimbreMotionPlanAction>;
 
 enum class ActionStatus : std::uint8_t { success, failed, cancelled, stale };
@@ -135,6 +173,33 @@ struct TelemetrySnapshot
     std::uint64_t shapeRevision = 0;
     std::string status;
     std::string error;
+};
+
+// Immutable UI publication assembled by the host on its UI/worker side. The
+// native backends forward this value without translating product semantics;
+// the editor only projects it into widgets. Values are stored in registry
+// dense-index order so the snapshot remains stable even when display labels
+// change.
+struct EditorSnapshot
+{
+    static constexpr std::size_t kParameterCount = 81;
+
+    std::uint64_t revision = 0;
+    std::array<float, kParameterCount> parameters {};
+    TelemetrySnapshot telemetry {};
+    std::array<std::string, 3> sourceNames {};
+    std::array<float, 3> sourceDurations {};
+    std::array<int, 3> sourcePartialCounts {};
+    std::array<bool, 3> sourceAvailable {};
+    std::array<bool, 3> sourceResidualAvailable {};
+    std::vector<float> timeline { 0.0f, 1.0f };
+    std::vector<float> timbrePlan;
+    std::vector<float> onsets;
+    std::string presetName;
+    std::string undoLabel;
+    std::string redoLabel;
+    std::optional<SpectralTraceSnapshot> spectrum;
+    std::optional<SpectralTraceSnapshot> spectrumOverlay;
 };
 
 class ActionSink

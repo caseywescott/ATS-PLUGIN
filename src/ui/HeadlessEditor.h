@@ -48,6 +48,15 @@ public:
     void hide() override { showing_ = false; }
     bool isShowing() const override { return showing_; }
     void* nativeHandle() const override { return nullptr; }
+    EditorSizeLimits sizeLimits() const override { return {}; }
+    EditorSize constrainSize(EditorSize requested) const override
+    {
+        const auto lim = sizeLimits();
+        return {
+            std::clamp(requested.width,  lim.minWidth,  lim.maxWidth),
+            std::clamp(requested.height, lim.minHeight, lim.maxHeight)
+        };
+    }
 
     [[nodiscard]] double scale() const noexcept { return scale_; }
     [[nodiscard]] void* parent() const noexcept { return parent_; }

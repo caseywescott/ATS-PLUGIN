@@ -1,6 +1,9 @@
 #pragma once
 
 #include "ParameterBinding.h"
+#include "ThemeCanvas.h"
+#include "ThemeLayout.h"
+#include "ThemeMetrics.h"
 #include "ThemeTokens.h"
 #include "../core/ParameterRegistry.h"
 
@@ -17,6 +20,18 @@
 namespace ats::ui
 {
 
+// MouseEvent::relativePosition() is the pointer *delta* since the last move,
+// not a point in the frame. MouseEvent::position is frame-local but stays
+// relative to the frame the event was dispatched to as it propagates up to the
+// ancestors, so a parent reading it gets its child's coordinates. Only the
+// window position is unambiguous, so every handler derives its own local point
+// from it.
+[[nodiscard]] inline visage::Point localPoint(const visage::Frame& frame,
+                                              const visage::MouseEvent& event)
+{
+    return event.windowPosition() - frame.positionInWindow();
+}
+
 // Horizontal fill-bar slider for continuous and integer parameters.
 // Drag maps x position to the normalized [0,1] parameter range.
 class AtsSlider final : public visage::Frame
@@ -28,13 +43,13 @@ public:
         : binding_(binding), theme_(std::move(theme))
     {
         onMouseDown() += [this](const visage::MouseEvent& event) {
-            handleDragBegin(normAt(event.relativePosition().x));
+            handleDragBegin(normAt(localPoint(*this, event).x));
         };
         onMouseDrag() += [this](const visage::MouseEvent& event) {
-            handleDragMove(normAt(event.relativePosition().x));
+            handleDragMove(normAt(localPoint(*this, event).x));
         };
         onMouseUp() += [this](const visage::MouseEvent& event) {
-            handleDragEnd(normAt(event.relativePosition().x));
+            handleDragEnd(normAt(localPoint(*this, event).x));
         };
     }
 
@@ -69,25 +84,52 @@ public:
         const auto* descriptor = ats::ParameterRegistry::find(binding_.id());
         const float norm = dragging_ ? dragNorm_
             : (descriptor ? descriptor->normalize(binding_.value()) : 0.0f);
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
-        canvas.setColor(tokens.surface.argb);
-        canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
-        if (norm > 0.0f)
+
+        const float trackW = trackWidth();
+        const float trackY = std::round((height() - kTrackHeight) * 0.5f);
+        const UiRect track { kThumbRadius, trackY, trackW, kTrackHeight };
+        paintWell(canvas, tokens, track, ThemeRadius::sliderTrack);
+
+        const float fillW = trackW * std::clamp(norm, 0.0f, 1.0f);
+        if (fillW > 1.0f)
         {
-            canvas.setColor(tokens.accent.argb);
-            canvas.roundedRectangle(0.0f, 0.0f, width() * norm, height(), 4.0f);
+            const UiRect fill { track.x, track.y, fillW, kTrackHeight };
+            paintThemeOps(canvas, ThemeRecipes::accentHalo(tokens, fill, ThemeRadius::sliderTrack,
+                                                           0.25f, 0.0f, 2.0f));
+            canvas.setBrush(visage::Brush::horizontal(visage::Color(tokens.accentDim.argb),
+                                                      visage::Color(tokens.accent.argb)));
+            canvas.roundedRectangle(fill.x, fill.y, fill.width, fill.height,
+                                    ThemeRadius::sliderTrack);
         }
-        canvas.setColor(tokens.background.argb);
+
+        paintThemeOps(canvas, ThemeRecipes::sliderThumb(tokens, track.x + fillW,
+                                                        track.y + kTrackHeight * 0.5f,
+                                                        kThumbRadius));
+
         if (descriptor)
         {
-            const auto label = descriptor->text(binding_.value());
-            canvas.text(label.c_str(), font, visage::Font::kCenter,
-                        4.0f, 3.0f, width() - 8.0f, height() - 6.0f);
+            const visage::Font mono(ThemeFont::monoValue, visage::fonts::DroidSansMono_ttf);
+            canvas.setColor(tokens.textPrimary.argb);
+            canvas.text(descriptor->text(binding_.value()).c_str(), mono, visage::Font::kRight,
+                        width() - valueBoxWidth(), 0.0f, valueBoxWidth(), height());
         }
     }
 
 private:
-    float normAt(float x) const { return width() > 0.0f ? x / width() : 0.0f; }
+    // Spec 7.1: a fixed 52px right-hand value box, mono and right-justified so
+    // numbers share a straight right edge down a column.
+    static constexpr float kValueBoxWidth = 52.0f;
+    static constexpr float kTrackHeight = 6.0f;
+    static constexpr float kThumbRadius = 7.0f;
+
+    float valueBoxWidth() const { return std::min(kValueBoxWidth, width() * 0.4f); }
+    float trackWidth() const
+    {
+        return std::max(1.0f, width() - valueBoxWidth() - 2.0f * kThumbRadius);
+    }
+
+    // Drag maps over the track, not the whole frame, or the thumb lags the cursor.
+    float normAt(float x) const { return (x - kThumbRadius) / trackWidth(); }
 
     float denorm(float normalized) const
     {
@@ -112,6 +154,8 @@ public:
         : binding_(binding), label_(std::move(label)), theme_(std::move(theme))
     {
         onMouseDown() += [this](const visage::MouseEvent&) { handleClick(); };
+        onMouseEnter() += [this](const visage::MouseEvent&) { hovered_ = true; redraw(); };
+        onMouseExit() += [this](const visage::MouseEvent&) { hovered_ = false; redraw(); };
     }
 
     void handleClick()
@@ -125,18 +169,27 @@ public:
     {
         const auto tokens = theme_();
         const bool active = binding_.value() >= 0.5f;
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
-        canvas.setColor(active ? tokens.accent.argb : tokens.surface.argb);
-        canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
-        canvas.setColor(active ? tokens.background.argb : tokens.text.argb);
-        canvas.text(label_.c_str(), font, visage::Font::kCenter,
-                    4.0f, 3.0f, width() - 8.0f, height() - 6.0f);
+
+        // Spec 7.3 inline layout: label left, pill hard right at 42x21 max.
+        const float pillH = std::min(kPillHeight, height());
+        const float pillW = std::min(kPillWidth, width());
+        const UiRect pill { width() - pillW, std::round((height() - pillH) * 0.5f), pillW, pillH };
+        paintThemeOps(canvas, ThemeRecipes::togglePill(tokens, pill, active, hovered_));
+
+        const visage::Font font(ThemeFont::controlLabel, visage::fonts::Lato_Regular_ttf);
+        canvas.setColor(tokens.textSecondary.argb);
+        canvas.text(label_.c_str(), font, visage::Font::kLeft, 0.0f, 0.0f,
+                    std::max(0.0f, pill.x - 6.0f), height());
     }
 
 private:
+    static constexpr float kPillWidth = 42.0f;
+    static constexpr float kPillHeight = 21.0f;
+
     ParameterBinding& binding_;
     std::string label_;
     ThemeGetter theme_;
+    bool hovered_ = false;
 };
 
 
@@ -162,7 +215,7 @@ public:
                 popup.addOption(static_cast<int>(i), label);
             }
             popup.onSelection() += [this](int choiceId) { handleSelect(choiceId); };
-            popup.show(this, { event.relativePosition().x, height() });
+            popup.show(this, { localPoint(*this, event).x, height() });
         };
     }
 
@@ -176,16 +229,23 @@ public:
     {
         const auto tokens = theme_();
         const auto* descriptor = ats::ParameterRegistry::find(binding_.id());
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
-        canvas.setColor(tokens.surface.argb);
-        canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
-        canvas.setColor(tokens.text.argb);
+
+        paintWell(canvas, tokens, reducedRect({ 0.0f, 0.0f, width(), height() }, 0.5f),
+                  ThemeRadius::control);
+
+        const visage::Font font(ThemeFont::listComboPopup, visage::fonts::Lato_Regular_ttf);
+        canvas.setColor(tokens.textPrimary.argb);
         const auto label = descriptor ? descriptor->text(binding_.value()) : std::string();
         canvas.text(label.c_str(), font, visage::Font::kLeft,
-                    6.0f, 3.0f, width() - 18.0f, height() - 6.0f);
-        // Dropdown indicator triangle area
-        canvas.setColor(tokens.secondaryText.argb);
-        canvas.rectangle(width() - 14.0f, height() * 0.5f - 2.0f, 8.0f, 4.0f);
+                    8.0f, 1.0f, std::max(0.0f, width() - 30.0f), height() - 2.0f);
+
+        // Spec 7.6: a stroked chevron, not a filled triangle -- 4px arms meeting
+        // 2.5px below the arm ends, centered 13px in from the right edge.
+        const float cx = width() - 13.0f;
+        const float cy = height() * 0.5f;
+        canvas.setColor(tokens.accent.argb);
+        canvas.segment(cx - 4.0f, cy - 1.25f, cx, cy + 1.25f, 1.6f, true);
+        canvas.segment(cx, cy + 1.25f, cx + 4.0f, cy - 1.25f, 1.6f, true);
     }
 
 private:
@@ -205,17 +265,34 @@ public:
         : binding_(binding), labels_(std::move(labels)), theme_(std::move(theme))
     {
         onMouseDown() += [this](const visage::MouseEvent& event) {
-            handleClick(event.relativePosition().x);
+            handleClick(localPoint(*this, event).x);
         };
+        onMouseMove() += [this](const visage::MouseEvent& event) {
+            handleHover(localPoint(*this, event).x);
+        };
+        onMouseExit() += [this](const visage::MouseEvent&) { hovered_ = -1; redraw(); };
+    }
+
+    [[nodiscard]] int segmentAt(float x) const
+    {
+        if (labels_.empty() || width() <= 0.0f) return -1;
+        const float segW = width() / static_cast<float>(labels_.size());
+        return std::clamp(static_cast<int>(x / segW), 0, static_cast<int>(labels_.size()) - 1);
     }
 
     void handleClick(float x)
     {
-        if (labels_.empty() || width() <= 0.0f) return;
-        const float segW = width() / static_cast<float>(labels_.size());
-        const auto index = static_cast<int>(x / segW);
-        const int clamped = std::clamp(index, 0, static_cast<int>(labels_.size()) - 1);
-        binding_.setValue(static_cast<float>(clamped));
+        const int index = segmentAt(x);
+        if (index < 0) return;
+        binding_.setValue(static_cast<float>(index));
+        redraw();
+    }
+
+    void handleHover(float x)
+    {
+        const int index = segmentAt(x);
+        if (index == hovered_) return;
+        hovered_ = index;
         redraw();
     }
 
@@ -223,18 +300,23 @@ public:
     {
         if (labels_.empty()) return;
         const auto tokens = theme_();
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
+        const float trackRadius = ThemeRadius::segmentedTrack(height());
+        paintWell(canvas, tokens, { 0.0f, 0.0f, width(), height() }, trackRadius);
+
+        const visage::Font font(ThemeFont::segment(static_cast<int>(labels_.size())),
+                                visage::fonts::Lato_Regular_ttf);
         const float segW = width() / static_cast<float>(labels_.size());
         const int selected = static_cast<int>(std::round(binding_.value()));
         for (std::size_t i = 0; i < labels_.size(); ++i)
         {
-            const float x = static_cast<float>(i) * segW;
+            const UiRect seg { static_cast<float>(i) * segW, 0.0f, segW, height() };
             const bool active = static_cast<int>(i) == selected;
-            canvas.setColor(active ? tokens.accent.argb : tokens.surface.argb);
-            canvas.roundedRectangle(x + 1.0f, 0.0f, segW - 2.0f, height(), 4.0f);
-            canvas.setColor(active ? tokens.background.argb : tokens.text.argb);
+            const bool hovered = static_cast<int>(i) == hovered_;
+            paintThemeOps(canvas, ThemeRecipes::segmentedSegment(tokens, seg, trackRadius, active,
+                                                                 hovered));
+            canvas.setColor(ThemeRecipes::segmentedText(tokens, active, hovered).argb);
             canvas.text(labels_[i].c_str(), font, visage::Font::kCenter,
-                        x + 1.0f, 3.0f, segW - 2.0f, height() - 6.0f);
+                        seg.x, seg.y, seg.width, seg.height);
         }
     }
 
@@ -242,6 +324,7 @@ private:
     ParameterBinding& binding_;
     std::vector<std::string> labels_;
     ThemeGetter theme_;
+    int hovered_ = -1;
 };
 
 
@@ -322,18 +405,20 @@ public:
     void draw(visage::Canvas& canvas) override
     {
         const auto tokens = theme_();
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
-        canvas.setColor(tokens.surface.argb);
-        canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
+        const auto body = reducedRect({ 0.0f, 0.0f, width(), height() }, 0.5f);
+        paintWell(canvas, tokens, body, ThemeRadius::control);
         if (focused_)
         {
+            // Outline only. Filling with accent would hide the text underneath.
             canvas.setColor(tokens.accent.argb);
-            canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
+            canvas.roundedRectangleBorder(body.x, body.y, body.width, body.height,
+                                          ThemeRadius::control, 1.2f);
         }
-        canvas.setColor(tokens.text.argb);
+        const visage::Font font(ThemeFont::listComboPopup, visage::fonts::Lato_Regular_ttf);
+        canvas.setColor(tokens.textPrimary.argb);
         const auto display = text_ + (focused_ ? "|" : "");
         canvas.text(display.c_str(), font, visage::Font::kLeft,
-                    6.0f, 3.0f, width() - 8.0f, height() - 6.0f);
+                    8.0f, 1.0f, std::max(0.0f, width() - 16.0f), height() - 2.0f);
     }
 
 private:
@@ -373,12 +458,11 @@ public:
     void draw(visage::Canvas& canvas) override
     {
         const auto tokens = theme_();
-        const visage::Font font(9.0f, visage::fonts::Lato_Regular_ttf);
-        canvas.setColor(tokens.panel.argb);
-        canvas.roundedRectangle(0.0f, 0.0f, width(), height(), 4.0f);
-        canvas.setColor(tokens.text.argb);
-        canvas.text(text_.c_str(), font, visage::Font::kCenter,
-                    4.0f, 4.0f, width() - 8.0f, height() - 8.0f);
+        paintThemeOps(canvas, ThemeRecipes::tooltip(tokens, { 0.0f, 0.0f, width(), height() }));
+        const visage::Font font(ThemeFont::button, visage::fonts::Lato_Regular_ttf);
+        canvas.setColor(tokens.textPrimary.argb);
+        canvas.text(text_.c_str(), font, visage::Font::kLeft,
+                    8.0f, 4.0f, width() - 16.0f, height() - 8.0f);
     }
 
 private:
@@ -394,16 +478,15 @@ private:
 };
 
 
-// Tab bar + page container. Child frames are added via addPage(); only the
-// selected page is visible at a time. The tab bar is drawn at the top of
-// this frame; pages are positioned below it.
+// Page strip + page container, spec 10.3. This frame is given the body rect;
+// the strip is centred within it and every page fills the area below.
 class AtsPageContainer final : public visage::Frame
 {
 public:
     using ThemeGetter = std::function<ThemeTokens()>;
     using PageChange = std::function<void(std::size_t)>;
 
-    static constexpr float kTabHeight = 28.0f;
+    static constexpr float kTabHeight = ThemeLayout::kPageStripHeight;
 
     AtsPageContainer(std::vector<std::string> labels, ThemeGetter theme,
                      PageChange onPageChange = {})
@@ -412,19 +495,44 @@ public:
         , onPageChange_(std::move(onPageChange))
     {
         onMouseDown() += [this](const visage::MouseEvent& event) {
-            const auto& p = event.relativePosition();
+            const auto& p = localPoint(*this, event);
             if (p.y < kTabHeight)
                 handlePageClick(p.x);
         };
+        onMouseMove() += [this](const visage::MouseEvent& event) {
+            const auto& p = localPoint(*this, event);
+            setHoveredTab(p.y < kTabHeight ? tabAt(p.x) : -1);
+        };
+        onMouseExit() += [this](const visage::MouseEvent&) { setHoveredTab(-1); };
+    }
+
+    [[nodiscard]] UiRect stripBounds() const
+    {
+        return ThemeLayout::pageStrip({ 0.0f, 0.0f, width(), height() });
+    }
+
+    [[nodiscard]] int tabAt(float x) const
+    {
+        const auto strip = stripBounds();
+        if (labels_.empty() || strip.width <= 0.0f) return -1;
+        if (x < strip.x || x >= strip.x + strip.width) return -1;
+        const float tabW = strip.width / static_cast<float>(labels_.size());
+        return std::clamp(static_cast<int>((x - strip.x) / tabW), 0,
+                          static_cast<int>(labels_.size()) - 1);
     }
 
     void handlePageClick(float x)
     {
-        if (labels_.empty() || width() <= 0.0f) return;
-        const float tabW = width() / static_cast<float>(labels_.size());
-        const auto index = static_cast<std::size_t>(std::clamp(
-            static_cast<int>(x / tabW), 0, static_cast<int>(labels_.size()) - 1));
-        selectPage(index);
+        const int index = tabAt(x);
+        if (index >= 0)
+            selectPage(static_cast<std::size_t>(index));
+    }
+
+    void setHoveredTab(int index)
+    {
+        if (index == hoveredTab_) return;
+        hoveredTab_ = index;
+        redraw();
     }
 
     void selectPage(std::size_t index)
@@ -440,38 +548,70 @@ public:
     void addPage(std::unique_ptr<visage::Frame> page)
     {
         const bool visible = pages_.size() == currentPage_;
-        page->setBounds(0.0f, kTabHeight, width(), height() - kTabHeight);
         page->setVisible(visible);
         pages_.push_back(page.get());
         addChild(std::move(page));
+        layoutPages();
     }
 
+    // Pages are normally added before the container itself has been sized, so
+    // without this they keep the zero-width bounds they were given and never
+    // draw anything.
+    void resized() override { layoutPages(); }
+
     [[nodiscard]] std::size_t currentPage() const noexcept { return currentPage_; }
+
+    template <typename Page>
+    [[nodiscard]] Page* pageAt(std::size_t index) const noexcept
+    {
+        if (index >= pages_.size()) return nullptr;
+        return dynamic_cast<Page*>(pages_[index]);
+    }
 
     void draw(visage::Canvas& canvas) override
     {
         if (labels_.empty()) return;
         const auto tokens = theme_();
-        const visage::Font font(10.0f, visage::fonts::Lato_Regular_ttf);
-        const float tabW = width() / static_cast<float>(labels_.size());
+
+        // The style reference has no tab bar; a one-of-N row is a segmented
+        // selector (7.4), so the tab bar is drawn as one rather than inventing
+        // a shape the rest of the theme does not use.
+        const auto strip = stripBounds();
+        const float trackRadius = ThemeRadius::segmentedTrack(strip.height);
+        paintWell(canvas, tokens, strip, trackRadius);
+
+        const visage::Font font(ThemeFont::segment(static_cast<int>(labels_.size())),
+                                visage::fonts::Lato_Regular_ttf);
+        const float tabW = strip.width / static_cast<float>(labels_.size());
         for (std::size_t i = 0; i < labels_.size(); ++i)
         {
-            const float x = static_cast<float>(i) * tabW;
+            const UiRect tab { strip.x + static_cast<float>(i) * tabW, strip.y, tabW,
+                               strip.height };
             const bool active = i == currentPage_;
-            canvas.setColor(active ? tokens.accent.argb : tokens.panel.argb);
-            canvas.roundedRectangle(x + 1.0f, 1.0f, tabW - 2.0f, kTabHeight - 2.0f, 4.0f);
-            canvas.setColor(active ? tokens.background.argb : tokens.text.argb);
+            const bool hovered = static_cast<int>(i) == hoveredTab_;
+            paintThemeOps(canvas, ThemeRecipes::segmentedSegment(tokens, tab, trackRadius, active,
+                                                                 hovered));
+            canvas.setColor(ThemeRecipes::segmentedText(tokens, active, hovered).argb);
             canvas.text(labels_[i].c_str(), font, visage::Font::kCenter,
-                        x + 1.0f, 5.0f, tabW - 2.0f, kTabHeight - 10.0f);
+                        tab.x, tab.y, tab.width, tab.height);
         }
     }
 
 private:
+    void layoutPages()
+    {
+        const auto area = ThemeLayout::pageArea({ 0.0f, 0.0f, width(), height() });
+        for (auto* page : pages_)
+            if (page != nullptr)
+                page->setBounds(area.x, area.y, area.width, area.height);
+    }
+
     std::vector<std::string> labels_;
     ThemeGetter theme_;
     PageChange onPageChange_;
     std::vector<visage::Frame*> pages_;
     std::size_t currentPage_ = 0;
+    int hoveredTab_ = -1;
 };
 
 } // namespace ats::ui

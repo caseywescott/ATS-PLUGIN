@@ -174,16 +174,21 @@ int main(int argc, char** argv)
             else
                 [embeddedView mouseDown:event];
         };
+        // The §10.3 page strip is centred in the body and capped at 640, so at
+        // this 720x480 logical size it runs from editor x 40 to 680 at y 78..108
+        // in five 128px tabs. ANALYSIS is tab 1: editor x 168..296.
         const CGFloat pageX[] { 220.0, 240.0, 260.0 };
-        const CGFloat pageY[] { 74.0, 90.0 };
+        const CGFloat pageY[] { 90.0, 96.0 };
         for (const auto x : pageX)
             for (const auto y : pageY)
             {
                 sendEmbeddedMouse(NSEventTypeLeftMouseDown, NSMakePoint(x, y), 8);
                 sendEmbeddedMouse(NSEventTypeLeftMouseUp, NSMakePoint(x, y), 8);
             }
-        const CGFloat parameterX[] { 160.0, 220.0, 300.0 };
-        const CGFloat parameterY[] { 200.0, 208.0, 216.0 };
+        // analysisLowestFrequency is control 3, which §10.5 puts on the left half
+        // of the low+high freq pair in the left column: editor (30, 299, 131, 28).
+        const CGFloat parameterX[] { 40.0, 60.0, 80.0 };
+        const CGFloat parameterY[] { 305.0, 313.0, 321.0 };
         for (const auto x : parameterX)
         {
             for (const auto y : parameterY)

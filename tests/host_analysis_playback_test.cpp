@@ -32,11 +32,26 @@ int main()
     assert(host.prepare({ 48000.0, 512, 2, 0 }));
     ats::Error error;
     assert(host.importSource({ path.u8string() }, 0, ats::engine::SourceImportKind::audio, error));
+    assert(host.parameters().write("analysisLowestFreq", 100.0f));
+    assert(host.parameters().write("analysisHighestFreq", 1000.0f));
     assert(host.analyzeSource(0, error));
     assert(host.source(0) != nullptr && host.source(0)->sound);
+    const auto* sound = host.source(0)->sound.get();
+    for (int partial = 0; partial < sound->partials; ++partial)
+        for (int frame = 0; frame < sound->frames; ++frame)
+            if (sound->amp[partial][frame] > 0.0)
+                assert(sound->frq[partial][frame] >= 100.0 && sound->frq[partial][frame] <= 1000.0);
     float left[512] {}, right[512] {}; float* channels[] { left, right };
     assert(host.process({ channels, 2, 512 }, {}));
     bool audible = false;
+    for (const auto sample : left) audible = audible || std::abs(sample) > 1.0e-6f;
+    assert(!audible);
+
+    assert(host.applySessionAction(ats::ui::PreviewAction { 0, 0, true }, error));
+    std::fill(std::begin(left), std::end(left), 0.0f);
+    std::fill(std::begin(right), std::end(right), 0.0f);
+    assert(host.process({ channels, 2, 512 }, {}));
+    audible = false;
     for (const auto sample : left) audible = audible || std::abs(sample) > 1.0e-6f;
     assert(audible);
     std::error_code ignored; std::filesystem::remove(path, ignored);

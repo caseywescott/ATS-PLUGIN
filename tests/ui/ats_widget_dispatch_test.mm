@@ -8,6 +8,7 @@
 // deterministic and independent of coordinate scaling.
 
 #include "../../src/ui/VisageWidgets.h"
+#include "../../src/ui/AtsEditorPages.h"
 #include "../../src/ui/ParameterBinding.h"
 #include "../../src/core/ParameterRegistry.h"
 
@@ -262,6 +263,43 @@ void testPageContainer()
     REQUIRE(container.currentPage() == 0);
 }
 
+void testMountedPageSnapshotProjection()
+{
+    std::vector<ats::ui::EditorAction> actions;
+    const auto emit = [&actions](const ats::ui::EditorAction& action) { actions.push_back(action); };
+    ats::ui::AnalysisPageModel analysisModel;
+    ats::ui::AtsAnalysisPage analysis(analysisModel, emit, defaultTheme);
+    ats::ui::AtsSynthesisPage synthesis(emit, defaultTheme);
+    ats::ui::SessionPageModel sessionModel;
+    ats::ui::AtsSessionPage session(sessionModel, emit, defaultTheme);
+
+    // These are the three mounted parameter surfaces: 18 + 12 + 51 = 81.
+    const auto analysisIds = ats::ui::AnalysisPageModel::controlIds();
+    for (std::size_t i = 0; i < analysisIds.size(); ++i)
+    {
+        const float value = static_cast<float>(i) + 0.25f;
+        analysis.setControlValue(analysisIds[i], value);
+        REQUIRE(std::abs(analysis.controlValue(analysisIds[i]) -
+                         ats::ParameterRegistry::find(analysisIds[i])->snap(value)) < 0.001f);
+    }
+    for (std::size_t i = 0; i < ats::ui::AtsSynthesisPage::kControlIds.size(); ++i)
+    {
+        const auto id = ats::ui::AtsSynthesisPage::kControlIds[i];
+        const float value = static_cast<float>(i) + 0.5f;
+        synthesis.setControlValue(id, value);
+        REQUIRE(std::abs(synthesis.controlValue(id) -
+                         ats::ParameterRegistry::find(id)->snap(value)) < 0.001f);
+    }
+    for (std::size_t i = 0; i < ats::ui::AtsSessionPage::kControlIds.size(); ++i)
+    {
+        const auto id = ats::ui::AtsSessionPage::kControlIds[i];
+        const float value = static_cast<float>(i) + 0.75f;
+        session.setControlValue(id, value);
+        REQUIRE(std::abs(session.controlValue(id) -
+                         ats::ParameterRegistry::find(id)->snap(value)) < 0.001f);
+    }
+}
+
 } // namespace
 
 int main()
@@ -281,6 +319,7 @@ int main()
         testTextField();
         testTooltip();
         testPageContainer();
+        testMountedPageSnapshotProjection();
 
         std::printf("ats_widget_dispatch_test: all checks passed\n");
     }

@@ -1856,6 +1856,65 @@
       "last_reviewed": "2026-07-28"
     },
     {
+      "trace_id": "DSP-SPECTRUM-001",
+      "family": "ui.spectrum-parity",
+      "legacy_surface": "SpectrogramPanel / SpectrumRender visual surface",
+      "legacy_owner": [
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h"
+      ],
+      "replacement_owner": "SpectrumGeometry, SpectrumChromeLayout, SpectrumRenderer, and VisageEditor",
+      "replacement_api": "SpectrumRenderer emits backend-neutral geometry and chrome commands; VisageEditor paints the shared screen-local chrome and paths from SpectrumChromeLayout.",
+      "algorithm_or_dsp": "Seven-mode spectral rendering, viewport anchoring/culling, gradient paths, isometric projection, envelope/RDC surfaces, residual/partial toolbars, zoom/scroll chrome, and deterministic dust.",
+      "data_flow": "HostAdapter immutable trace snapshot -> SpectrumViewModel/InteractionModel -> SpectrumRenderer commands -> Visage canvas.",
+      "thread_domain": "any_non_rt",
+      "invariants": [
+        "Header and screen reservations remain mode-specific and chrome never depends on renderer-local coordinates.",
+        "Viewport zoom keeps its anchor point, paths are single post-decimation strokes, and all emitted geometry is finite.",
+        "The JUCE dust seed/call order and all 19 parity-trap decisions are documented and regression-tested."
+      ],
+      "state_format_impact": "none",
+      "source_refs": [
+        "src/plugin/SpectrogramPanel.cpp",
+        "src/plugin/SpectrumRender.h",
+        "docs/spectrum-view-parity-spec.md"
+      ],
+      "replacement_refs": [
+        "src/ui/SpectrumGeometry.h",
+        "src/ui/SpectrumChrome.h",
+        "src/ui/SpectrumRenderer.h",
+        "src/ui/SpectrumPathBuilder.h",
+        "src/ui/VisageEditor.cpp",
+        "tests/spectrum_chrome_test.cpp",
+        "tests/spectrum_renderer_test.cpp",
+        "docs/spectrum-view-parity-decisions.md"
+      ],
+      "tests": [
+        {
+          "path": "tests/spectrum_chrome_test.cpp",
+          "state": "existing",
+          "proves": "Header anchoring, row-one controls, exact toolbar widths, sliders/editors, zoom gap, and mode-specific chrome."
+        },
+        {
+          "path": "tests/spectrum_renderer_test.cpp",
+          "state": "existing",
+          "proves": "Positive zoom-centre projection, offscreen culling, draw ordering, deterministic modes, and renderer chrome."
+        }
+      ],
+      "fixtures_or_goldens": [
+        "docs/spectrum-view-parity-verification.md"
+      ],
+      "evidence": [
+        "cmake --build build-review-ui --target spectrum_chrome_test spectrum_renderer_test -j2",
+        "ctest --test-dir build-review-ui --output-on-failure -R 'spectrum_(chrome|renderer)_test'",
+        "python3 tests/architecture/traceability_manifest_check.py"
+      ],
+      "status": "implemented",
+      "deviation_id": null,
+      "blocked_by": [],
+      "last_reviewed": "2026-08-27"
+    },
+    {
       "trace_id": "DSP-VIS-001",
       "family": "dsp.spectral-trace",
       "legacy_surface": "PluginProcessor::buildSpectralTraceSnapshot and SpectrogramPanel display preparation",
@@ -1865,14 +1924,15 @@
         "src/plugin/SpectrumRender.h"
       ],
       "replacement_owner": "SpectralTraceBuilder and SpectrumViewModel",
-      "replacement_api": "SpectralTraceBuilder::build(snapshot, source, mode, displayShape, limits) returns immutable traces/columns/readouts with source and revision metadata.",
-      "algorithm_or_dsp": "Trace selection, inactive-run handling, amplitude reference, point/column caps, smoothing/decimation, and display-shape preparation.",
+      "replacement_api": "HostAdapter::editorSnapshot publishes an immutable SpectralTraceSnapshot through SpectralTraceBuilder::build(input, mode); SpectrumViewModel keys the cached view by source, mode, shape, and source revision.",
+      "algorithm_or_dsp": "Trace selection, inactive-run handling, preserved/non-preserved display references, point/column caps, smoothing/decimation, log-frequency bounds, frequency shaping, envelope slices, RDC preparation, and Smearnov curves.",
       "data_flow": "Immutable ATS model/morph snapshot -> bounded trace snapshot -> cached renderer and live overlay.",
       "thread_domain": "any_non_rt",
       "invariants": [
         "Source/mode selection and source-dependent enablement are deterministic.",
         "Max visible partials, point caps, residual columns, finite values, and empty/sparse behavior are preserved.",
-        "Snapshot revision and cache invalidation are published before drawing; playhead movement does not rebuild static trace data."
+        "Snapshot revision and cache invalidation are published before drawing; playhead movement does not rebuild static trace data.",
+        "Preserved scale/gain edits keep the display reference; mute/delete explicitly re-baseline it."
       ],
       "state_format_impact": "none",
       "source_refs": [
@@ -1884,18 +1944,28 @@
       "replacement_refs": [
         "src/ui/SpectralTraceBuilder.h::SpectralTraceBuilder",
         "src/ui/SpectrumViewModel.h::SpectrumViewModel",
-        "tests/spectrum_trace_snapshot_test.cpp"
+        "src/ui/SpectrumGeometry.h::SpectrumGeometry",
+        "src/ui/SpectrumPathBuilder.h",
+        "src/ui/SpectrumRenderer.h::SpectrumRenderer",
+        "src/ui/SpectrumInteractionModel.h::SpectrumInteractionModel",
+        "tests/spectrum_trace_snapshot_test.cpp",
+        "tests/spectrum_renderer_test.cpp",
+        "tests/spectrum_geometry_test.cpp",
+        "tests/spectrum_path_builder_test.cpp",
+        "tests/spectrum_rdc_test.cpp",
+        "tests/spectrum_dispatch_test.cpp",
+        "tests/host_session_behavior_test.cpp"
       ],
       "tests": [
         {
           "path": "tests/spectrum_trace_snapshot_test.cpp",
           "state": "existing",
-          "proves": "Source/mode selection, finite filtering, caps, normalization, revisions, sparse data, and deterministic replay."
+          "proves": "Source/mode selection, finite filtering, caps, normalization, frequency shaping, preserved references, revisions, sparse data, and deterministic replay."
         },
         {
-          "path": "tests/spectrum_trace_snapshot_test.cpp",
+          "path": "tests/spectrum_renderer_test.cpp",
           "state": "existing",
-          "proves": "All sources/modes, caps, transforms, revisions, sparse/empty states, and deterministic replay."
+          "proves": "Viewport projection/culling, draw ordering, glow thresholds, chrome commands, and all seven rendering modes."
         }
       ],
       "fixtures_or_goldens": [
@@ -1903,12 +1973,13 @@
         "required: source/mode snapshot hash report"
       ],
       "evidence": [
-        "cmake --build build-review --target spectrum_trace_snapshot_test -j2 && ctest --test-dir build-review --output-on-failure -R spectrum_trace_snapshot_test"
+        "cmake --build build-review-ui --target spectrum_trace_snapshot_test spectrum_renderer_test spectrum_geometry_test spectrum_path_builder_test spectrum_rdc_test spectrum_dispatch_test -j2 && ctest --test-dir build-review-ui --output-on-failure -R 'spectrum_(trace_snapshot|renderer|geometry|path_builder|rdc|dispatch)_test'",
+        "cmake --build build-plugin --target host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R host_session_behavior_test"
       ],
       "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-27"
     },
     {
       "trace_id": "DSP-EDIT-002",
@@ -1919,15 +1990,16 @@
         "src/plugin/SpectrogramPanel.cpp::runSmoothResidual/runResidualTilt/runCopyBand/runPasteBand/runSwapBands/runRedistBands",
         "src/plugin/PluginProcessor.cpp"
       ],
-      "replacement_owner": "ResidualEditService and UndoService",
-      "replacement_api": "ResidualEditService::apply(operation, selection, clipboard, parameters) returns an atomic model edit/result with validation, energy metrics, and invalidation revisions.",
-      "algorithm_or_dsp": "Residual mute, scale, draw/interpolation, smooth, tilt, copy, paste, swap, and redistribution over selected band/frame ranges.",
+      "replacement_owner": "HostAdapter, ResidualEditService, PartialEditService, and UndoHistory",
+      "replacement_api": "SpectrumEditAction is validated at the host boundary and routed atomically to ResidualEditService or PartialEditService, with one undo transaction and preview invalidation.",
+      "algorithm_or_dsp": "Residual mute, scale, draw/interpolation, smooth, tilt, copy, paste, swap, redistribution, readback, plus partial mute, scale, frequency draw, gain box, smooth/tilt envelope, solo, freeze, and prune selection.",
       "data_flow": "UI-local selection/clipboard -> typed residual edit command -> immutable model transaction -> preview/cache/telemetry revisions.",
       "thread_domain": "any_non_rt",
       "invariants": [
         "Band/frame coordinate mapping and modifier selection semantics are preserved.",
         "Draw interpolation, dB validation, smooth/tilt units, clipboard shape, and swap cardinality match the source.",
-        "Redistribution preserves total selected-frame energy; all writes remain finite and one user action has one undo transaction."
+        "Redistribution preserves total selected-frame energy; all writes remain finite and one user action has one undo transaction.",
+        "Mute/delete use a non-preserving display rebuild; all other edits preserve the display reference."
       ],
       "state_format_impact": "internal",
       "source_refs": [
@@ -1937,7 +2009,14 @@
       ],
       "replacement_refs": [
         "src/engine/ResidualEditService.h::ResidualEditService",
-        "tests/residual_edit_service_test.cpp"
+        "src/engine/PartialEditService.h::PartialEditService",
+        "src/host/HostAdapter.h::HostAdapter",
+        "src/ui/EditorHost.h::SpectrumEditCommand",
+        "tests/residual_edit_service_test.cpp",
+        "tests/partial_edit_transaction_test.cpp",
+        "tests/host_action_routing_test.cpp",
+        "tests/host_session_behavior_test.cpp",
+        "tests/spectrum_dispatch_test.cpp"
       ],
       "tests": [
         {
@@ -1956,12 +2035,13 @@
         "required: clipboard and energy-preservation report"
       ],
       "evidence": [
-        "cmake --build build-review --target residual_edit_service_test -j2 && ctest --test-dir build-review --output-on-failure -R residual_edit_service_test"
+        "cmake --build build-review-ui --target residual_edit_service_test partial_edit_transaction_test spectrum_dispatch_test -j2 && ctest --test-dir build-review-ui --output-on-failure -R 'residual_edit_service_test|partial_edit_transaction_test|spectrum_dispatch_test'",
+        "cmake --build build-plugin --target host_action_routing_test host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R 'host_action_routing_test|host_session_behavior_test'"
       ],
       "status": "implemented",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-08-27"
     },
     {
       "trace_id": "DSP-MORPH-006",

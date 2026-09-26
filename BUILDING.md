@@ -35,6 +35,12 @@ Analysis and synthesis are **CPU-heavy**; the CLI runs on the calling thread (no
 
 ## Native plugin artifacts
 
+The canonical macOS build, Standalone, versioning, installation, and Logic
+refresh workflow is defined in
+[`docs/MACOS_BUILD_INSTALL_SPEC.md`](docs/MACOS_BUILD_INSTALL_SPEC.md). Follow
+that specification for installable artifacts; a successful compile alone does
+not prove that Apple's registrar accepts the installed Audio Unit.
+
 - **Option:** `-DBUILD_PLUGIN=ON` (default) selects the JUCE-free native graph:
   pinned Visage UI, Steinberg VST3, macOS AUv2, and standalone targets. Use
   `-DBUILD_PLUGIN=OFF` for the core/tool-only graph or focused native options.
@@ -87,4 +93,6 @@ The golden test invokes `ats_offline` and checks tolerances (see `docs/DETERMINI
 
 - **Performance budgets and limitations:** `docs/PERFORMANCE.md` (reference hardware assumptions, model size / memory guidance, live-analysis stance, resynth expectations).
 - **Signing, notarization, packaging, release notes:** `docs/RELEASE.md`.
+- **macOS local build and Logic installation contract:**
+  `docs/MACOS_BUILD_INSTALL_SPEC.md`.
 - **Unsigned zip helper (local):** after a Release build, run `./scripts/package_release_archives.sh` from the repo root; archives land in `dist/` (not used by CI).

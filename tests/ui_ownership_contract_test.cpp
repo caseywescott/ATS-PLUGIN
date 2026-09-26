@@ -7,8 +7,8 @@ int main()
 {
     const auto ember = ats::ui::ThemeTokens::forTheme(ats::ui::ThemeId::ember);
     const auto porcelain = ats::ui::ThemeTokens::forTheme(ats::ui::ThemeId::porcelain);
-    assert(ember.spectrumCanvas == porcelain.spectrumCanvas);
-    assert(ember.background != porcelain.background);
+    assert(ember.well != porcelain.well);
+    assert(ember.window != porcelain.window);
     assert(ember.accent.argb != 0 && porcelain.accent.argb != 0);
 
     ats::ui::PopupManager popups;

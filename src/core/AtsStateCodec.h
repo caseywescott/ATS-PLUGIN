@@ -10,7 +10,7 @@ namespace ats
 struct StateHeader
 {
     static constexpr std::uint32_t kMagic = 0x41545350u; // ATSP
-    static constexpr std::uint32_t kCurrentVersion = 17;
+    static constexpr std::uint32_t kCurrentVersion = 18;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     std::uint32_t version = kCurrentVersion;

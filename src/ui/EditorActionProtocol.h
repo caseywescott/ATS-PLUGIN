@@ -61,6 +61,7 @@ template <typename T>
     if constexpr (std::is_same_v<T, DetectSmearnovAction>) return { "DetectSmearnov", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, ApplySmearnovAction>) return { "ApplySmearnov", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, EditSmearnovOnsetsAction>) return { "EditSmearnovOnsets", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
+    if constexpr (std::is_same_v<T, EditSmearnovOnsetHandlesAction>) return { "EditSmearnovOnsetHandles", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, SetTimbreMotionPlanAction>) return { "SetTimbreMotionPlan", ActionThreadDomain::worker, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
     return { "UnknownAction", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::none };
 }
@@ -117,9 +118,15 @@ template <typename T>
     }
     else if constexpr (std::is_same_v<T, SetMorphTimelineAction>)
     {
-        if (action.normalizedPoints.size() > 32) return { false, "timeline_too_large", "timeline is limited to 32 points" };
+        if (action.normalizedPoints.size() > 32 || action.points.size() > 32)
+            return { false, "timeline_too_large", "timeline is limited to 32 points" };
         for (const auto point : action.normalizedPoints)
             if (!std::isfinite(point)) return { false, "invalid_timeline", "timeline points must be finite" };
+        for (const auto& point : action.points)
+            if (!std::isfinite(point.timeNorm) || !std::isfinite(point.amount) || point.timeNorm < 0.0f ||
+                point.timeNorm > 1.0f || point.amount < 0.0f || point.amount > 1.0f ||
+                point.kind > 2 || point.curve > 3)
+                return { false, "invalid_timeline", "typed timeline points are invalid" };
     }
     else if constexpr (std::is_same_v<T, SetSpectralViewAction>)
     {
@@ -147,8 +154,13 @@ template <typename T>
             return { false, "invalid_spectrum_edit", "spectrum edit requires bands and an ordered frame range" };
         if (action.bands.size() > 220)
             return { false, "too_many_spectrum_bands", "spectrum edit exceeds the residual band limit" };
+        if (action.points.size() > 4096)
+            return { false, "too_many_spectrum_points", "spectrum edit exceeds the point limit" };
         for (const auto band : action.bands)
             if (band < 0) return { false, "invalid_spectrum_band", "spectrum band must be non-negative" };
+        for (const auto& point : action.points)
+            if (point.first < 0 || !std::isfinite(point.second))
+                return { false, "invalid_spectrum_point", "spectrum edit points must be finite and non-negative" };
         if (!std::isfinite(action.value))
             return { false, "invalid_spectrum_value", "spectrum edit value must be finite" };
     }
@@ -166,11 +178,30 @@ template <typename T>
             if (!std::isfinite(onset) || onset < 0.0f || onset > 1.0f)
                 return { false, "invalid_onset", "onsets must be normalized" };
     }
+    else if constexpr (std::is_same_v<T, EditSmearnovOnsetHandlesAction>)
+    {
+        if (action.onsets.size() > 4096)
+            return { false, "too_many_onsets", "onset count exceeds the bounded contract" };
+        float previous = -1.0f;
+        for (const auto& onset : action.onsets)
+        {
+            if (!std::isfinite(onset.norm) || !std::isfinite(onset.preNorm)
+                || !std::isfinite(onset.peakNorm) || !std::isfinite(onset.strength)
+                || onset.norm < 0.0f || onset.norm > 1.0f
+                || onset.preNorm < 0.0f || onset.preNorm > onset.norm
+                || onset.peakNorm < onset.norm || onset.peakNorm > 1.0f
+                || onset.strength < 0.0f || onset.norm <= previous)
+                return { false, "invalid_onset_handles", "onset handles must be ordered and bounded" };
+            previous = onset.norm;
+        }
+    }
     else if constexpr (std::is_same_v<T, SetTimbreMotionPlanAction>)
     {
         if (action.normalizedPlan.size() > 4096) return { false, "plan_too_large", "timbre plan exceeds the bounded contract" };
         for (const auto value : action.normalizedPlan)
             if (!std::isfinite(value)) return { false, "invalid_timbre_plan", "timbre plan values must be finite" };
+        if (action.serializedPlan.size() > 1024 * 1024)
+            return { false, "plan_too_large", "serialized timbre plan exceeds one megabyte" };
     }
     return {};
 }

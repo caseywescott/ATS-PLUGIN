@@ -78,13 +78,16 @@ int main(int argc, char** argv)
     require(getPropertyInfo(plugin, kAudioUnitProperty_SupportedNumChannels,
                             kAudioUnitScope_Global, 0, &channelInfoSize, nullptr) == noErr,
             "supported-channel property info");
-    require(channelInfoSize == sizeof(AUChannelInfo), "zero-input stereo capability size");
-    AUChannelInfo channelInfo {};
+    require(channelInfoSize == 2u * sizeof(AUChannelInfo),
+            "music-effect channel capability size");
+    std::array<AUChannelInfo, 2> channelInfo {};
     require(getProperty(plugin, kAudioUnitProperty_SupportedNumChannels,
-                        kAudioUnitScope_Global, 0, &channelInfo, &channelInfoSize) == noErr,
+                        kAudioUnitScope_Global, 0, channelInfo.data(), &channelInfoSize) == noErr,
             "supported-channel property");
-    require(channelInfo.inChannels == 0 && channelInfo.outChannels == 2,
-            "zero-input stereo capability");
+    require(channelInfo[0].inChannels == 2 && channelInfo[0].outChannels == 2,
+            "stereo music-effect capability");
+    require(channelInfo[1].inChannels == 1 && channelInfo[1].outChannels == 2,
+            "mono-to-stereo music-effect capability");
 
     auto setParameter = reinterpret_cast<SetParameterFn>(
         plugin->Lookup(kAudioUnitSetParameterSelect));
@@ -193,17 +196,13 @@ int main(int argc, char** argv)
     output.list.mNumberBuffers = 2;
     output.list.mBuffers[0] = { 1, static_cast<UInt32>(left.size() * sizeof(float)), left.data() };
     output.second = { 1, static_cast<UInt32>(right.size() * sizeof(float)), right.data() };
-    auto process = reinterpret_cast<AudioUnitProcessMultipleProc>(
-        plugin->Lookup(kAudioUnitProcessMultipleSelect));
-    AudioBufferList* outputs[] = { &output.list };
+    auto render = reinterpret_cast<AudioUnitRenderProc>(
+        plugin->Lookup(kAudioUnitRenderSelect));
     AudioTimeStamp timestamp {};
-    // A direct factory instance has no component-manager bus metadata for
-    // AUBase's redundant render-argument check. The selector still enters
-    // the real ProcessMultipleBufferLists override below.
-    AudioUnitRenderActionFlags processFlags = kAudioUnitRenderAction_DoNotCheckRenderArgs;
-    require(process != nullptr, "stereo process selector lookup");
-    const auto processStatus = process(plugin, &processFlags, &timestamp, frames, 0, nullptr, 1, outputs);
-    require(processStatus == noErr, "stereo process selector status");
+    AudioUnitRenderActionFlags renderFlags = 0;
+    require(render != nullptr, "stereo render selector lookup");
+    const auto renderStatus = render(plugin, &renderFlags, &timestamp, 0, frames, &output.list);
+    require(renderStatus == noErr, "stereo render selector status");
     for (const auto sample : left)
         require(sample == 0.0f, "silent left output without playback");
     for (const auto sample : right)
@@ -232,8 +231,8 @@ int main(int argc, char** argv)
         left.fill(1.0f);
         right.fill(1.0f);
         timestamp.mSampleTime = static_cast<Float64>((block + 1) * frames);
-        require(process(plugin, &processFlags, &timestamp, frames, 0, nullptr, 1, outputs) == noErr,
-                "repeated stereo process selector status");
+        require(render(plugin, &renderFlags, &timestamp, 0, frames, &output.list) == noErr,
+                "repeated stereo render selector status");
         for (const auto sample : left)
             require(sample == 0.0f, "repeated silent left output");
         for (const auto sample : right)

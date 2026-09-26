@@ -320,7 +320,7 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
         if (!readString(reader, state.timbreJson)) return std::nullopt;
         if (!readFloatVec(reader, state.smearnovOnsets, 4096)) return std::nullopt;
     }
-    if (!validState(state)) return std::nullopt;
+    if (!validState(state) || reader.remaining() != 0) return std::nullopt;
     return state;
 }
 

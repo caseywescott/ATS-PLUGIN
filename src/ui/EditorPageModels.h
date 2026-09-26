@@ -84,8 +84,6 @@ private:
     bool applied_ = false;
 };
 
-enum class FrequencyShapeMode : std::uint8_t { linear, stretch, compress, harmonic };
-
 struct SynthesisPageState
 {
     bool hasSource = false;

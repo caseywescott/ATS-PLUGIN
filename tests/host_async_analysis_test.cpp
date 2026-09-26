@@ -85,6 +85,15 @@ int main()
     bool audible = false;
     for (const auto sample : left)
         audible = audible || std::abs(sample) > 1.0e-6f;
+    assert(!audible);
+
+    assert(host.applySessionAction(ats::ui::PreviewAction { 0, 0, true }, error));
+    std::fill(std::begin(left), std::end(left), 0.0f);
+    std::fill(std::begin(right), std::end(right), 0.0f);
+    assert(host.process({ channels, 2, 512 }, {}));
+    audible = false;
+    for (const auto sample : left)
+        audible = audible || std::abs(sample) > 1.0e-6f;
     assert(audible);
 
     assert(host.queueAnalysisSource(0, error));

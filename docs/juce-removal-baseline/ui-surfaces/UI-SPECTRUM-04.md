@@ -1,28 +1,17 @@
-# UI-SPECTRUM-04 — Partial selection and run gestures
+# UI-SPECTRUM-04 — Partial selection and editing gestures
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `SpectrogramPanel::mouseDown/mouseDrag/mouseUp/keyPressed` for
-partial-mode interaction.
+Partial hit-testing iterates active projected trace segments and uses the
+nearest screen-space distance. A plain click selects; Shift/Cmd toggles; a
+drag from empty plot space starts a lasso, with modifier-aware additive
+selection. Dragging an already-selected trace scales the selection and emits
+one committed `SpectrumEditAction` on release.
 
-## Ownership
+Delete/Backspace emits `deletePartials`. The partial toolbar routes frequency
+drawing, Solo, Freeze, Prune, and envelope tilt. Prune only changes selection;
+it does not mutate the ATS model.
 
-`SpectrumInteractionModel::selectPartial(index)` sets `selectedPartial`.
-`PartialEditAction` carries the committed edit (amplitude + frequency).
-Run actions (`runPartialMute`, `runPartialDelete`, `runPartialSolo`) are
-emitted as `SpectrumEditAction` variants by `SpectrumInteractionModel`.
-
-## Gestures
-
-| Gesture | Model method | Action emitted |
-|---|---|---|
-| Left-click partial trace | `selectPartial(index)` | (editor-local) |
-| Double-click partial | `selectPartial(index)` + focus | (editor-local) |
-| Drag selected partial (amp) | (draft update) | (none during drag) |
-| Release drag | (commit) | `PartialEditAction { partial, frame, amp, freq }` |
-| `Delete`/`Backspace` key on selection | `runPartialDelete` | `SpectrumEditAction { delete, partials }` |
-| `h` key | `runPartialMute` | `SpectrumEditAction { mute, partials }` |
-
-Evidence: SP-PART-01, SP-PART-02, `spectrum_interaction_model_test`.
-
-Deviation: live hit-test coordinates (partial hit radius) tuned in native harness.
+Evidence: `src/ui/VisageEditor.cpp`, `src/ui/SpectrumInteractionModel.h`,
+`src/engine/PartialEditService.h`, `tests/spectrum_interaction_model_test.cpp`,
+`tests/spectrum_dispatch_test.cpp`.

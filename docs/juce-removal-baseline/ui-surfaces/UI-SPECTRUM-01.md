@@ -1,35 +1,18 @@
-# UI-SPECTRUM-01 — Spectrogram canvas: draw-command pipeline
+# UI-SPECTRUM-01 — Spectral trace rendering pipeline
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `SpectrogramPanel::paint()` (JUCE Graphics pipeline).  The spectrum
-canvas is a sub-region of `ProbeFrame` drawn by `SpectrumRenderer::render()`
-which returns a `std::vector<SpectrumDrawCommand>` for Visage to paint.
+`SpectralTraceBuilder` converts bounded ATS model data into an immutable,
+source/mode-tagged `SpectralTraceSnapshot`. `SpectrumRenderer` consumes that
+snapshot and emits Visage-native draw commands. `SpectrumPathBuilder` owns the
+binomial smoothing, pixel-aware decimation, Catmull-Rom path, gradient stops,
+endpoint taper, and optional glow pass.
 
-## Ownership
+Rendering includes the fixed JUCE dark canvas, deterministic dust, planar and
+isometric grids, residual ridges, partial traces, envelope waterfall/RDC views,
+onset overlays, playhead, axes, gutters, legend, selection overlay, and empty
+state. All traces are viewport-projected and bounded before drawing.
 
-`SpectrumRenderer` (pure static) + `SpectrumViewModel` (accept/revision) +
-`SpectralTraceBuilder` (input → snapshot) form the complete pipeline.
-
-## Geometry (§10.4)
-
-| Canvas | x | y | w | h |
-|---|---|---|---|---|
-| Spectrum area | 18 | 244 | 620 | 214 |
-| Inner canvas | 24 | 250 | 608 | 184 |
-
-## Draw order
-
-1. `background` — canvas fill
-2. `axis` + `grid` + `axisTick` — border and grid lines
-3. `residualBand` (combined/residual modes) — energy backdrop
-4. `partialTrace` + `selectedPartial` + `ridgeline` + `glowHalo` + `dustPoint`
-5. `isometricTile` (isometric modes)
-6. `envelopeTrace`
-7. `onsetMarker`
-8. `playhead`
-9. `axisLabel` + `legend`
-
-Evidence: SP-DRAW-01, SP-DRAW-02, SP-DRAW-03, `spectrum_renderer_test` (all 7 modes).
-
-Deviation: GPU raster verified live; pixel-level colour in native harness only.
+Evidence: `src/ui/SpectralTraceBuilder.h`, `src/ui/SpectrumRenderer.h`,
+`src/ui/SpectrumPathBuilder.h`, `tests/spectrum_renderer_test.cpp`,
+`tests/spectrum_path_builder_test.cpp`, `tests/spectrum_trace_snapshot_test.cpp`.

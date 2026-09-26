@@ -1,41 +1,60 @@
-# UI-FILE-01 — source import execution
+# UI-FILE-01 — File dialog service: accept / cancel / error coverage
 
-Status: implemented (host-neutral execution); native drag-to-decoder evidence remains planned.
+Status: implemented
+
+Replaces `juce::FileChooser` callbacks in `SessionTabPanel.cpp` and
+`AnalysisTabPanel.cpp` for all five file-chooser operations.
+
+## Ownership
+
+`FileDialogModel::resolve(kind, result, slot)` (in `src/ui/FileDialogModel.h`)
+is the single adapter between the platform-owned `NativeFileDialogResult` and
+the typed `EditorAction`. The platform dialog (`detail::runNativeFileDialog`) is
+declared in `NativeFileDialog.h` and is out-of-scope for headless tests.
+
+## Outcome mapping
+
+| `result.accepted` | `result.path` | `resolve()` return |
+|---|---|---|
+| `false` | any | `nullopt` (cancelled) |
+| `true` | empty | `nullopt` (dialog init failure) |
+| `true` | non-empty | typed `EditorAction` |
+
+## Kind mapping
+
+| `NativeFileDialogKind` | Action produced | slot used? |
+|---|---|---|
+| `importWav` | `ImportWavAction{path, slot}` | yes (0=A, 1=B) |
+| `importAts` | `ImportAtsAction{path, slot}` | yes |
+| `exportAts` | `ExportAtsAction{path, slot}` | yes (as `source`) |
+| `savePreset` | `SavePresetAction{path}` | no |
+| `loadPreset` | `LoadPresetAction{path}` | no |
+
+## Source import execution
 
 `SourceImportService` is the JUCE-free import boundary used by `PluginModel`
 and `HostAdapter`. It performs a cancellable `FileService` preflight, then:
 
-- decodes `.wav`, `.wave`, `.aif`, and `.aiff` with libsndfile and downmixes
-  every channel to mono analysis samples;
+- decodes `.wav`/`.wave`/`.aif`/`.aiff` with libsndfile and downmixes to mono;
 - loads `.ats` through `ats_load` into `AtsSoundPtr` ownership;
-- rejects an invalid A/B slot, empty path, format mismatch, missing/oversized
-  file, decoder failure, and cancellation with a stable error code.
-
-The standalone, AU, and VST3 editor action handlers route `ImportWavAction`
-and `ImportAtsAction` to `HostAdapter::importSource`; the action is no longer
-silently ignored by those wrappers. Imported data is kept in the selected A/B
-slot and is explicitly outside the audio callback.
+- rejects invalid slot, empty path, format mismatch, missing/oversized file,
+  decoder failure, and cancellation with a stable error code.
 
 Evidence:
 
-```sh
-arch -x86_64 cmake --build /private/tmp/ats-file-drop-native \
-  --target source_import_service_test plugin_model_test host_lifecycle_test -j1
-ctest --test-dir /private/tmp/ats-file-drop-native --output-on-failure \
-  -R '^(source_import_service_test|plugin_model_test|host_lifecycle_test)$'
+```text
+arch -x86_64 cmake --build build-review \
+  --target preset_file_workflow_test source_import_service_test -j4
+ctest --test-dir build-review --output-on-failure \
+  -R '^(preset_file_workflow_test|source_import_service_test)$'
 ```
 
-The service test creates a stereo WAV and proves libsndfile decoding/downmix,
-then analyses and saves an ATS fixture before importing it through `ats_load`.
-It also proves cancellation and extension rejection. The model and host tests
-prove selected-slot ownership and typed action execution.
+`test_dialog_cancel_and_error` verifies all 5 kinds × 3 outcomes (cancelled,
+empty-path, and accepted variants). `test_dialog_import_wav/ats/export_ats/
+save_preset/load_preset` verify per-kind slot and path passthrough.
+`source_import_service_test` verifies stereo WAV decode/downmix, ATS fixture
+round-trip, cancellation, and extension rejection.
 
-The real native drop harness now writes a WAV fixture, scans the embedded
-`NSView` to find both A/B targets, and routes the resulting typed actions into
-`HostAdapter::importSource`. It asserts a decoded, 48 kHz, four-frame source
-in each slot. This is injected-pasteboard evidence because the runner cannot
-use the system drag pasteboard service reliably.
-
-This does **not** promote `UI-FILE-01` in the parity manifest: chooser
-success/cancel/error is still unproven. Nor does this prove queued analysis,
-playback publication, or DAW-host output.
+Deviations: the native blocking file chooser (OS title, filter strings, browse
+focus) and actual disk-path acceptance from the OS require the Visage native
+dispatch harness. The injected-pasteboard drop path is covered by `UI-FILE-02`.

@@ -24,15 +24,19 @@ public:
     void setScale(double scale) override;
     bool setParent(void* nativeParent) override;
     bool showStandalone() override;
+    void runStandaloneEventLoop();
     void show() override;
     void hide() override;
     bool isShowing() const override;
     void* nativeHandle() const override;
+    EditorSizeLimits sizeLimits() const override;
+    EditorSize constrainSize(EditorSize requested) const override;
 
     void setTheme(ThemeId theme);
     void setHistoryAvailability(bool canUndo, bool canRedo);
     void setActivity(bool analysisRunning, bool renderRunning);
     void setTelemetry(TelemetrySnapshot snapshot);
+    void setEditorSnapshot(EditorSnapshot snapshot);
     void setSpectrumSnapshot(SpectralTraceSnapshot snapshot);
 
 private:

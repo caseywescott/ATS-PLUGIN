@@ -419,7 +419,8 @@ add_library(ats_core STATIC
   src/core/AtsTransientSmear.cpp
   src/core/ParameterRegistry.cpp
   src/core/ResampleLinear.cpp
-  src/core/TimbreMotionPlan.cpp)
+  src/core/TimbreMotionPlan.cpp
+  src/dsp/MorphTrajectoryRenderer.cpp)
 target_include_directories(ats_core PUBLIC "${CMAKE_SOURCE_DIR}/src/core" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_core PUBLIC cxx_std_17)
 target_link_libraries(ats_core PUBLIC atsa)
@@ -533,6 +534,14 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
       ats_visage_editor ats_core ats_source_import visage "-framework Cocoa")
     add_test(NAME real_dispatch_harness_test COMMAND real_dispatch_harness_test)
 
+    add_executable(popup_focus_retention_test tests/ui/popup_focus_retention_test.mm)
+    target_include_directories(popup_focus_retention_test PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(popup_focus_retention_test PRIVATE cxx_std_17)
+    target_link_libraries(popup_focus_retention_test PRIVATE
+      ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME popup_focus_retention_test COMMAND popup_focus_retention_test)
+
     add_executable(native_file_dialog_contract_test tests/ui/native_file_dialog_contract_test.mm)
     target_include_directories(native_file_dialog_contract_test PRIVATE
       "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
@@ -540,6 +549,17 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
     target_link_libraries(native_file_dialog_contract_test PRIVATE
       ats_visage_editor ats_core visage "-framework Cocoa")
     add_test(NAME native_file_dialog_contract_test COMMAND native_file_dialog_contract_test)
+
+    add_executable(page_column_layout_test tests/ui/page_column_layout_test.mm)
+    target_include_directories(page_column_layout_test PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(page_column_layout_test PRIVATE cxx_std_17)
+    # tests/CMakeLists.txt does this for its own directory; this target lives in
+    # the top-level file, so without it the Release NDEBUG erases every assert.
+    target_compile_options(page_column_layout_test PRIVATE -UNDEBUG)
+    target_link_libraries(page_column_layout_test PRIVATE
+      ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME page_column_layout_test COMMAND page_column_layout_test)
 
     add_executable(ats_widget_dispatch_test tests/ui/ats_widget_dispatch_test.mm)
     target_include_directories(ats_widget_dispatch_test PRIVATE

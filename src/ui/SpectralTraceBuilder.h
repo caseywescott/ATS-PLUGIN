@@ -11,6 +11,14 @@
 namespace ats::ui
 {
 
+enum class FrequencyShapeMode : std::uint8_t
+{
+    Linear, Stretch, Compress, Harmonic,
+    // Lower-case aliases preserve the page-model API while the spectrum
+    // snapshot mirrors the core ATS spelling.
+    linear = Linear, stretch = Stretch, compress = Compress, harmonic = Harmonic
+};
+
 enum class SpectralTraceSource : std::uint8_t { current, sourceA, sourceB };
 enum class SpectralTraceMode : std::uint8_t
 {
@@ -48,6 +56,8 @@ struct SpectralOnsetInput
 {
     double normalizedTime = 0.0;
     double strength = 1.0;
+    double preNormalizedTime = -1.0;
+    double peakNormalizedTime = -1.0;
 };
 
 struct SpectralTraceInput
@@ -58,9 +68,21 @@ struct SpectralTraceInput
     double durationSeconds = 0.0;
     double displayAmpPeak = 0.0;
     double displayResidualPeak = 0.0;
+    // These are the dimensions of the source ATS_SOUND.  They are distinct
+    // from the lengths of the diagnostic/display vectors: the legacy builder
+    // uses the model dimensions for frame alignment and residual grouping.
+    std::size_t partialCount = 0;
+    std::size_t frameCount = 0;
     std::vector<SpectralPartialInput> partials;
     std::vector<SpectralResidualBandInput> residualBands;
     std::vector<SpectralOnsetInput> onsets;
+    std::vector<double> smearnovDetectionCurve;
+    std::vector<double> smearnovThresholdCurve;
+    FrequencyShapeMode frequencyShapeMode = FrequencyShapeMode::Linear;
+    double frequencyShapeAmount = 1.0;
+    double frequencyShapePivotHz = 0.0;
+    double resolvedFrequencyShapePivotHz = 0.0;
+    double nyquistHz = 22050.0;
     std::vector<double> envelope;
 };
 
@@ -101,6 +123,14 @@ struct SpectralResidualBandTrace
     std::vector<float> energyNorm;
 };
 
+struct SpectralOnset
+{
+    float norm = 0.0f;
+    float preNorm = 0.0f;
+    float peakNorm = 0.0f;
+    float strength = 0.0f;
+};
+
 struct SpectralTraceSnapshot
 {
     SpectralTraceSource source = SpectralTraceSource::current;
@@ -117,7 +147,16 @@ struct SpectralTraceSnapshot
     double residualDisplayReferencePeak = 0.0;
     std::vector<SpectralTrace> partials;
     std::vector<SpectralResidualBandTrace> residualBands;
+    std::vector<SpectralOnset> onsets;
+    // Kept as a compatibility projection for older editor snapshots. New code
+    // should use `onsets`, which preserves the attack-window handles.
     std::vector<float> onsetNorms;
+    std::vector<float> smearnovDetectionCurve;
+    std::vector<float> smearnovThresholdCurve;
+    FrequencyShapeMode frequencyShapeMode = FrequencyShapeMode::Linear;
+    double frequencyShapeAmount = 1.0;
+    double frequencyShapePivotHz = 0.0;
+    double resolvedFrequencyShapePivotHz = 0.0;
     std::vector<float> envelopeNorm;
 
     [[nodiscard]] bool hasResidual() const noexcept { return !residualBands.empty(); }
@@ -136,22 +175,36 @@ public:
         output.sourceRevision = input.sourceRevision;
         output.displayShapeRevision = input.displayShapeRevision;
         output.durationSeconds = finitePositive(input.durationSeconds) ? input.durationSeconds : 0.0;
-        output.partialCount = static_cast<std::uint32_t>(input.partials.size());
+        output.partialCount = static_cast<std::uint32_t>(input.partialCount != 0
+            ? input.partialCount : input.partials.size());
         output.frameCount = frameCount(input);
+        output.frequencyShapeMode = input.frequencyShapeMode;
+        output.frequencyShapeAmount = std::isfinite(input.frequencyShapeAmount) ? input.frequencyShapeAmount : 1.0;
+        output.frequencyShapePivotHz = std::isfinite(input.frequencyShapePivotHz) ? input.frequencyShapePivotHz : 0.0;
+        output.resolvedFrequencyShapePivotHz = std::isfinite(input.resolvedFrequencyShapePivotHz)
+            ? input.resolvedFrequencyShapePivotHz : 0.0;
+        for (const auto value : input.smearnovDetectionCurve)
+            output.smearnovDetectionCurve.push_back(static_cast<float>(value));
+        for (const auto value : input.smearnovThresholdCurve)
+            output.smearnovThresholdCurve.push_back(static_cast<float>(value));
 
+        // Detector vectors are frame-aligned legacy data.  Keep their order
+        // and length verbatim; filtering NaNs or sorting records changes the
+        // time associated with every later curve/handle.
+        output.onsets.reserve(input.onsets.size());
         for (const auto& onset : input.onsets)
-            if (std::isfinite(onset.normalizedTime))
-                output.onsetNorms.push_back(clampUnit(onset.normalizedTime));
-        std::sort(output.onsetNorms.begin(), output.onsetNorms.end());
+            output.onsets.push_back({ static_cast<float>(onset.normalizedTime),
+                                      static_cast<float>(onset.preNormalizedTime >= 0.0
+                                          ? onset.preNormalizedTime : onset.normalizedTime),
+                                      static_cast<float>(onset.peakNormalizedTime >= 0.0
+                                          ? onset.peakNormalizedTime : onset.normalizedTime),
+                                      static_cast<float>(onset.strength) });
+        output.onsetNorms.reserve(output.onsets.size());
+        for (const auto& onset : output.onsets)
+            output.onsetNorms.push_back(onset.norm);
         output.envelopeNorm.reserve(input.envelope.size());
         for (const auto value : input.envelope)
             output.envelopeNorm.push_back(clampUnit(value));
-
-        const auto partialsEnabled = mode != SpectralTraceMode::residual
-                                  && mode != SpectralTraceMode::isometricResidual;
-        const auto residualEnabled = mode == SpectralTraceMode::combined
-                                  || mode == SpectralTraceMode::residual
-                                  || mode == SpectralTraceMode::isometricResidual;
 
         struct Candidate
         {
@@ -177,31 +230,21 @@ public:
                 candidate.weightedHz += frame.frequencyHz * frame.amplitude;
                 candidate.ampSum += frame.amplitude;
                 ++candidate.activeFrames;
-                minHz = std::min(minHz, frame.frequencyHz);
-                maxHz = std::max(maxHz, frame.frequencyHz);
+                const auto displayHz = shapedFrequency(frame.frequencyHz,
+                                                       partial.frequencyShapeRank, input);
+                minHz = std::min(minHz, displayHz);
+                maxHz = std::max(maxHz, displayHz);
                 maxAmp = std::max(maxAmp, frame.amplitude);
             }
             if (candidate.activeFrames > 0)
                 candidates.push_back(candidate);
         }
 
-        // Residual-only views still need meaningful logarithmic axes. Include
-        // valid band extents when partials are absent (or do not define the
-        // visible frequency range for the selected mode).
-        if (residualEnabled)
-            for (const auto& band : input.residualBands)
-            {
-                if (finitePositive(band.lowHz))
-                    minHz = std::min(minHz, band.lowHz);
-                if (finitePositive(band.highHz))
-                    maxHz = std::max(maxHz, band.highHz);
-            }
-
         output.ampDisplayReferencePeak = finitePositive(input.displayAmpPeak)
             ? input.displayAmpPeak : maxAmp;
         output.residualDisplayReferencePeak = finitePositive(input.displayResidualPeak)
             ? input.displayResidualPeak : measuredResidualPeak(input);
-        setFrequencyBounds(output, minHz, maxHz);
+        setFrequencyBounds(output, minHz, maxHz, input.nyquistHz);
 
         const auto ampPeak = std::max(1.0e-15, output.ampDisplayReferencePeak);
         const double maxAmpDb = 20.0 * std::log10(ampPeak);
@@ -209,7 +252,6 @@ public:
         const double ampDbRange = 72.0;
         const double logRange = std::log(output.maxFrequencyHz / output.minFrequencyHz);
 
-        if (partialsEnabled)
         {
             std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
                 return a.peak > b.peak;
@@ -229,28 +271,35 @@ public:
                 trace.frequencyShapeRank = partial.frequencyShapeRank;
                 trace.sourceMeanFrequencyHz = candidate.ampSum > 0.0
                     ? candidate.weightedHz / candidate.ampSum : 0.0;
-                trace.meanFrequencyHz = trace.sourceMeanFrequencyHz;
-                trace.peakAmpNorm = clampUnit((20.0 * std::log10(std::max(1.0e-15, candidate.peak))
-                                               - minAmpDb) / ampDbRange);
+                double weightedDisplayHz = 0.0;
+                for (const auto& frame : partial.frames)
+                    if (activeFrame(frame))
+                        weightedDisplayHz += shapedFrequency(frame.frequencyHz,
+                                                              partial.frequencyShapeRank, input)
+                            * frame.amplitude;
+                trace.meanFrequencyHz = candidate.ampSum > 0.0
+                    ? weightedDisplayHz / candidate.ampSum : trace.sourceMeanFrequencyHz;
+                trace.peakAmpNorm = clampFloor((20.0 * std::log10(std::max(1.0e-15, candidate.peak))
+                                                - minAmpDb) / ampDbRange);
 
-                const auto step = pointStep(partial.frames.size(), limits.maxPointsPerPartial);
+                const auto step = pointStep(output.frameCount, limits.maxPointsPerPartial);
                 trace.points.reserve(partial.frames.size() / step + 2);
                 for (std::size_t frame = 0; frame < partial.frames.size(); frame += step)
                     appendPoint(trace.points, partial.frames[frame], frame,
-                                partial.frames.size(), output, minAmpDb, ampDbRange, logRange);
+                                output.frameCount, output, partial.frequencyShapeRank,
+                                input, minAmpDb, ampDbRange, logRange);
                 if (!partial.frames.empty() && (partial.frames.size() - 1) % step != 0)
                     appendPoint(trace.points, partial.frames.back(), partial.frames.size() - 1,
-                                partial.frames.size(), output, minAmpDb, ampDbRange, logRange);
+                                output.frameCount, output, partial.frequencyShapeRank,
+                                input, minAmpDb, ampDbRange, logRange);
                 output.partials.push_back(std::move(trace));
             }
             output.visiblePartialCount = static_cast<std::uint32_t>(output.partials.size());
         }
 
-        if (residualEnabled)
         {
-            const auto columns = limits.maxResidualColumns == 0 || input.residualBands.empty()
-                ? 0
-                : std::min(limits.maxResidualColumns, std::max<std::size_t>(1, maxResidualFrames(input)));
+            const auto columns = input.residualBands.empty() ? 0
+                : std::clamp(limits.maxResidualColumns, std::size_t { 16 }, std::size_t { 512 });
             const auto reference = std::max(1.0e-20, output.residualDisplayReferencePeak);
             const auto floorDb = 10.0 * std::log10(reference) - 72.0;
             output.residualBands.reserve(input.residualBands.size());
@@ -261,16 +310,19 @@ public:
                 result.lowHz = finitePositive(band.lowHz) ? band.lowHz : 0.0;
                 result.highHz = finitePositive(band.highHz) ? band.highHz : result.lowHz;
                 result.energyNorm.reserve(columns);
+                const auto framesPerColumn = std::max<std::size_t>(
+                    1, (output.frameCount + columns - 1) / columns);
                 for (std::size_t column = 0; column < columns; ++column)
                 {
-                    const auto begin = column * band.energy.size() / columns;
-                    const auto end = (column + 1) * band.energy.size() / columns;
+                    const auto begin = column * framesPerColumn;
+                    const auto end = std::min<std::size_t>(output.frameCount,
+                                                           begin + framesPerColumn);
                     double peak = 0.0;
-                    for (auto i = begin; i < std::max(begin, end); ++i)
+                    for (auto i = begin; i < end && i < band.energy.size(); ++i)
                         if (std::isfinite(band.energy[i]) && band.energy[i] > 0.0)
                             peak = std::max(peak, band.energy[i]);
                     const auto db = 10.0 * std::log10(std::max(1.0e-20, peak));
-                    result.energyNorm.push_back(clampUnit((db - floorDb) / 72.0));
+                    result.energyNorm.push_back(clampFloor((db - floorDb) / 72.0));
                 }
                 output.residualBands.push_back(std::move(result));
             }
@@ -291,22 +343,41 @@ private:
         return static_cast<float>(std::clamp(value, 0.0, 1.0));
     }
 
+    [[nodiscard]] static float clampFloor(double value) noexcept
+    {
+        if (!std::isfinite(value)) return 0.0f;
+        return static_cast<float>(std::max(0.0, value));
+    }
+
+    [[nodiscard]] static double shapedFrequency(double hz, int rank,
+                                                const SpectralTraceInput& input) noexcept
+    {
+        if (!finitePositive(hz) || input.frequencyShapeMode == FrequencyShapeMode::Linear)
+            return hz;
+        const auto amount = std::isfinite(input.frequencyShapeAmount)
+            && input.frequencyShapeAmount > 0.0 ? input.frequencyShapeAmount : 1.0;
+        const auto pivot = std::isfinite(input.resolvedFrequencyShapePivotHz)
+            && input.resolvedFrequencyShapePivotHz > 0.0
+            ? input.resolvedFrequencyShapePivotHz : input.frequencyShapePivotHz;
+        if (!finitePositive(pivot)) return hz;
+        const auto anchor = input.frequencyShapeMode == FrequencyShapeMode::Harmonic && rank > 0
+            ? pivot * static_cast<double>(rank) : pivot;
+        if (!finitePositive(anchor)) return hz;
+        const auto warped = anchor * std::pow(hz / anchor, amount);
+        const auto top = finitePositive(input.nyquistHz) ? input.nyquistHz * 0.99 : 20000.0;
+        return std::clamp(warped, 1.0, std::max(1.0, top));
+    }
+
     [[nodiscard]] static std::size_t frameCount(const SpectralTraceInput& input) noexcept
     {
+        if (input.frameCount != 0)
+            return input.frameCount;
         std::size_t result = 0;
         for (const auto& partial : input.partials)
             result = std::max(result, partial.frames.size());
         for (const auto& band : input.residualBands)
             result = std::max(result, band.energy.size());
         result = std::max(result, input.envelope.size());
-        return result;
-    }
-
-    [[nodiscard]] static std::size_t maxResidualFrames(const SpectralTraceInput& input) noexcept
-    {
-        std::size_t result = 0;
-        for (const auto& band : input.residualBands)
-            result = std::max(result, band.energy.size());
         return result;
     }
 
@@ -319,10 +390,16 @@ private:
         return result;
     }
 
-    static void setFrequencyBounds(SpectralTraceSnapshot& output, double minHz, double maxHz) noexcept
+    static void setFrequencyBounds(SpectralTraceSnapshot& output, double minHz, double maxHz,
+                                   double nyquistHz) noexcept
     {
         if (!finitePositive(minHz) || !finitePositive(maxHz) || maxHz <= minHz)
+        {
+            output.minFrequencyHz = 20.0;
+            output.maxFrequencyHz = std::max(20000.0,
+                                             finitePositive(nyquistHz) ? nyquistHz : 0.0);
             return;
+        }
         const auto logMin = std::log(std::max(1.0, minHz));
         const auto logMax = std::log(std::max(minHz * 1.01, maxHz));
         const auto pad = std::max(0.04, (logMax - logMin) * 0.06);
@@ -332,14 +409,18 @@ private:
 
     [[nodiscard]] static std::size_t pointStep(std::size_t frameCount,
                                                 std::size_t limit) noexcept
-    { return std::max<std::size_t>(1, (frameCount + std::max<std::size_t>(1, limit) - 1)
-                                      / std::max<std::size_t>(1, limit)); }
+    {
+        const auto effectiveLimit = std::max<std::size_t>(32, limit);
+        return std::max<std::size_t>(1, (frameCount + effectiveLimit - 1) / effectiveLimit);
+    }
 
     static void appendPoint(std::vector<SpectralTracePoint>& points,
                             const SpectralPartialFrame& frame,
                             std::size_t index,
                             std::size_t count,
                             const SpectralTraceSnapshot& output,
+                            int frequencyShapeRank,
+                            const SpectralTraceInput& input,
                             double minAmpDb,
                             double ampDbRange,
                             double logRange)
@@ -353,11 +434,12 @@ private:
         point.active = activeFrame(frame);
         if (point.active)
         {
+            point.frequencyHz = shapedFrequency(point.frequencyHz, frequencyShapeRank, input);
             const auto clampedHz = std::clamp(point.frequencyHz,
                                               output.minFrequencyHz, output.maxFrequencyHz);
             point.freqNorm = clampUnit(std::log(clampedHz / output.minFrequencyHz) / logRange);
-            point.ampNorm = clampUnit((20.0 * std::log10(std::max(1.0e-15, point.amplitude))
-                                       - minAmpDb) / ampDbRange);
+            point.ampNorm = clampFloor((20.0 * std::log10(std::max(1.0e-15, point.amplitude))
+                                        - minAmpDb) / ampDbRange);
         }
         points.push_back(point);
     }

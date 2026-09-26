@@ -1,32 +1,18 @@
-# UI-SPECTRUM-08 — Envelope display and box-gain editing
+# UI-SPECTRUM-08 — Envelope waterfall and box gain
 
-Status: implemented
+Status: implemented — parity port complete; see `docs/spectrum-view-parity-spec.md`.
 
-Replaces `SpectrogramPanel::isEnvelopeDisplayMode` and `scaleEnvBoxGain`.
+Isometric envelope and RDC modes render 30 real frequency slices built from
+partial frames, Gaussian box-blurred, tapered, projected, and filled to the
+floor. The complementary source is carried as a full overlay snapshot and is
+drawn with the warm alternate ramp.
 
-## Ownership
+Dragging in envelope-editing mode selects a normalized time/frequency range.
+Dragging inside the active range scales the selected partials, or all partials
+when none are selected, and emits `gainPartialEnvelope` with the mapped frame
+and partial bounds. The host applies the operation through
+`PartialEditService::gainBox` while preserving the display reference.
 
-`SpectrumInteractionModel::setEnvelopeRange(timeStart, timeEnd, freqStart, freqEnd)`
-sets the active editing region.  `SpectrumNavigationState::envelopeEditing` is
-true when the user is dragging a gain box.
-
-`envelopeTrace` draw commands are emitted by `SpectrumRenderer` from
-`SpectralTraceSnapshot::envelopeNorm[]`.  The gain-box overlay is a separate
-`residualBand`-class rect around the selection.
-
-## Gestures
-
-| Gesture | Model method | Action emitted |
-|---|---|---|
-| Drag gain box handle | `setEnvelopeRange(...)` | (editor-local) |
-| Release drag | (commit) | `SpectrumEditAction { envelopeScale, range, factor }` |
-| Double-click canvas (env mode) | `setEnvelopeRange(...)` | (editor-local) |
-
-## Actions
-
-`SpectrumEditAction` (thread domain: ui, undo: oneTransaction).
-
-Evidence: SP-ENV-01, `spectrum_interaction_model_test`.
-
-Deviation: isometric envelope modes (UI-SPECTRUM-08 + isometricEnvelope)
-share gesture routing but use 3D-projected hit tests not covered by headless suite.
+Evidence: `src/ui/SpectrumRenderer.h`, `src/ui/SpectrumInteractionModel.h`,
+`src/ui/VisageEditor.cpp`, `src/host/HostAdapter.h`,
+`tests/spectrum_renderer_test.cpp`, `tests/host_session_behavior_test.cpp`.

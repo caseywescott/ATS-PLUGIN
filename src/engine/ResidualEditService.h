@@ -98,6 +98,15 @@ public:
     static constexpr double kDbFloor = -120.0;
     static constexpr double kDbCeiling = 48.0;
 
+    [[nodiscard]] static double readBandEnergyDb(const ResidualMatrix& matrix, int band,
+                                                 int frame) noexcept
+    {
+        const auto* value = matrix.find(band);
+        if (value == nullptr || frame < 0 || frame >= static_cast<int>(value->energy.size()))
+            return kDbFloor;
+        return energyToDb(value->energy[static_cast<std::size_t>(frame)]);
+    }
+
     [[nodiscard]] static ResidualEditResult apply(ResidualMatrix& matrix,
                                                   ResidualEditOperation operation,
                                                   const ResidualSelection& selection,

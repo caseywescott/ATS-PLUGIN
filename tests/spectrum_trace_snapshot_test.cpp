@@ -35,19 +35,30 @@ int main()
                                                                  limits);
     assert(snapshot.source == ats::ui::SpectralTraceSource::sourceA);
     assert(snapshot.partials.size() == 2);
-    assert(snapshot.partials[0].points.size() <= 4);
+    assert(snapshot.partials[0].points.size() <= 9);
     assert(snapshot.partials[0].points.front().active);
     assert(snapshot.residualBands.size() == 1);
-    assert(snapshot.residualBands[0].energyNorm.size() == 3);
-    assert(snapshot.onsetNorms.size() == 2 && snapshot.onsetNorms[0] == 0.25f);
+    assert(snapshot.residualBands[0].energyNorm.size() == 16);
+    assert(snapshot.onsetNorms.size() == 2 && snapshot.onsetNorms[0] == 0.75f);
     assert(snapshot.envelopeNorm.size() == 3 && snapshot.envelopeNorm[1] == 0.9f);
     for (const auto& trace : snapshot.partials)
         for (const auto& point : trace.points)
             assert(std::isfinite(point.freqNorm) && std::isfinite(point.ampNorm));
 
+    ats::ui::SpectralTraceInput gainUpInput;
+    gainUpInput.displayAmpPeak = 1.0;
+    ats::ui::SpectralPartialInput gainUpPartial;
+    gainUpPartial.partialIndex = 0;
+    gainUpPartial.frames.push_back({ 440.0, 4.0 });
+    gainUpInput.partials.push_back(std::move(gainUpPartial));
+    const auto gainUp = ats::ui::SpectralTraceBuilder::build(
+        gainUpInput, ats::ui::SpectralTraceMode::partials);
+    assert(gainUp.partials.size() == 1 && gainUp.partials.front().peakAmpNorm > 1.0f);
+    assert(gainUp.partials.front().points.front().ampNorm > 1.0f);
+
     const auto residualOnly = ats::ui::SpectralTraceBuilder::build(
         input, ats::ui::SpectralTraceMode::residual, limits);
-    assert(residualOnly.partials.empty() && residualOnly.hasResidual());
+    assert(residualOnly.partials.size() == snapshot.partials.size() && residualOnly.hasResidual());
 
     ats::ui::SpectralTraceInput residualInput;
     residualInput.residualBands.push_back({ 0, 800.0, 1200.0, { 1.0, 0.5 } });
@@ -67,5 +78,18 @@ int main()
     auto newer = snapshot;
     newer.sourceRevision = 5;
     assert(view.accept(std::move(newer)));
+
+    ats::ui::SpectrumViewModel shapeView;
+    auto shaped = snapshot;
+    shaped.frequencyShapeMode = ats::ui::FrequencyShapeMode::Stretch;
+    shaped.frequencyShapeAmount = 1.4;
+    shaped.frequencyShapePivotHz = 440.0;
+    shaped.resolvedFrequencyShapePivotHz = 440.0;
+    assert(shapeView.accept(shaped));
+    const auto pivotCache = shapeView.cacheRevision();
+    shaped.frequencyShapePivotHz = 880.0;
+    shaped.resolvedFrequencyShapePivotHz = 880.0;
+    assert(shapeView.accept(std::move(shaped)));
+    assert(shapeView.cacheRevision() != pivotCache);
     return 0;
 }
