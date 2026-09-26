@@ -631,6 +631,16 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
     const int preMargin = secondsToFrames(params.preMarginSeconds, hop);
 
     // Peak picking: local maximum, above adaptive threshold, respecting the gap.
+    // Strengths within kTieTolerance (relative) count as equal so a flat-topped
+    // peak — e.g. a linear attack whose per-frame rises are mathematically
+    // identical — resolves to its earliest frame instead of whichever frame
+    // rounding noise favours. normalizeStream can amplify that noise enormously
+    // when a window's MAD is zero, which made the chosen frame differ between
+    // x86_64 and arm64.
+    constexpr double kTieTolerance = 1.0e-9;
+    const auto clearlyGreater = [](double a, double b) {
+        return a > b + kTieTolerance * std::max(std::abs(a), std::abs(b));
+    };
     std::vector<int> peakFrames;
     int lastOnset = -minGap - 1;
     for (int f = 0; f < frames; ++f)
@@ -642,9 +652,9 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
         bool isLocalMax = true;
         for (int k = 1; k <= w && isLocalMax; ++k)
         {
-            if (f - k >= 0 && combined[(size_t) (f - k)] > v)
+            if (f - k >= 0 && clearlyGreater(combined[(size_t) (f - k)], v))
                 isLocalMax = false;
-            if (f + k < frames && combined[(size_t) (f + k)] > v)
+            if (f + k < frames && clearlyGreater(combined[(size_t) (f + k)], v))
                 isLocalMax = false;
         }
         if (!isLocalMax)
@@ -653,7 +663,7 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
         if (f - lastOnset < minGap)
         {
             // Keep the stronger of the two within the refractory window.
-            if (!peakFrames.empty() && v > combined[(size_t) peakFrames.back()])
+            if (!peakFrames.empty() && clearlyGreater(v, combined[(size_t) peakFrames.back()]))
             {
                 peakFrames.back() = f;
                 lastOnset = f;
