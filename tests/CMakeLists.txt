@@ -568,6 +568,10 @@ target_include_directories(ats_math_expr_test PRIVATE
   "${ATS_ATSA_SOURCE_DIR}")
 target_link_libraries(ats_math_expr_test PRIVATE atsa)
 target_compile_features(ats_math_expr_test PRIVATE cxx_std_17)
+# The test compares the interpreter bit-for-bit with the same formula compiled
+# inline. Clang contracts a*b+c into FMA by default on arm64, which changes the
+# inline expectation by an ulp but not the interpreter's step-by-step result.
+target_compile_options(ats_math_expr_test PRIVATE -ffp-contract=off)
 
 add_executable(timbre_motion_plan_test timbre_motion_plan_test.cpp
   ../src/core/TimbreMotionPlan.cpp)
