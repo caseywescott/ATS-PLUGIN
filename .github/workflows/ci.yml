@@ -34,23 +34,15 @@ jobs:
         with:
           submodules: false
 
+      # Pinned upstream base; patches/ carries every local ATSA change on top of
+      # it (see patches/README.md). Unpinned HEAD drifts and breaks the stack.
       - name: Clone Qatsh (ATSA + synthesis sources)
-        run: git clone --depth 1 https://gitlab.com/dxarts/projects/ats/qatsh.git qatsh
+        run: |
+          git clone https://gitlab.com/dxarts/projects/ats/qatsh.git qatsh
+          git -C qatsh checkout --detach 5515648358ffaa8d863b3f2507e03a4943d79667
 
       - name: Apply Qatsh vendor patches
-        run: |
-          ./scripts/apply_qatsh_residual_fixes.sh apply
-          ./scripts/apply_qatsh_progress.sh apply
-          ./scripts/apply_qatsh_reassignment.sh apply
-          ./scripts/apply_qatsh_qifft.sh apply
-          ./scripts/apply_qatsh_ddm.sh apply
-          ./scripts/apply_qatsh_multires.sh apply
-          ./scripts/apply_qatsh_ifft.sh apply
-          ./scripts/apply_qatsh_rfft_pack.sh apply
-          ./scripts/apply_qatsh_vdsp_fft.sh apply
-          ./scripts/apply_qatsh_parallel.sh apply
-          ./scripts/apply_qatsh_residual_parallel.sh apply
-          ./scripts/apply_qatsh_mainlobe_parallel.sh apply
+        run: ./scripts/apply_qatsh_all_patches.sh
 
       - name: Install libsndfile (Linux)
         if: runner.os == 'Linux'

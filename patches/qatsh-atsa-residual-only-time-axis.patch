@@ -1,0 +1,79 @@
+--- a/src/atsa/save-load-sound.c
++++ b/src/atsa/save-load-sound.c
+@@ -132,12 +132,14 @@
+     {
+ 	// 1) Load partials.
+ 	fread(&dTmp,1,sizeof(double),pATSFile);  //read just one time value per frame
+-   
++
++	/* time[0] exists even for partial-less sounds (init_sound guarantees it);
++	   residual-only synthesis still needs the frame time axis. */
+ 	if (bNeedByteSwap) {
+-	    sound->time[0][nFrameIdx]=byte_swap(&dTmp); 
++	    sound->time[0][nFrameIdx]=byte_swap(&dTmp);
+ 	}
+ 	else {
+-	    sound->time[0][nFrameIdx]=dTmp; 
++	    sound->time[0][nFrameIdx]=dTmp;
+ 	}
+ 
+ 	// For each partial :
+--- a/src/atsa/utilities.c
++++ b/src/atsa/utilities.c
+@@ -330,7 +330,9 @@
+   sound->ampmax = NIL;
+   sound->frqmax = NIL;
+   sound->av = (ATS_PEAK *)malloc(partials * sizeof(ATS_PEAK));
+-  sound->time = (double **)malloc(partials * sizeof(double *));
++  /* The frame time axis (time[0]) must exist even for partial-less
++     (residual-only) sounds: synthesis uses it via locate_frame. */
++  sound->time = (double **)malloc((partials > 0 ? partials : 1) * sizeof(double *));
+   sound->frq = (double **)malloc(partials * sizeof(double *));
+   sound->amp = (double **)malloc(partials * sizeof(double *));
+   sound->pha = (double **)malloc(partials * sizeof(double *));
+@@ -353,6 +355,12 @@
+     sound->amp_slope[k] = (double *)malloc(frames * sizeof(double));
+   }
+ 
++  if (partials == 0) {
++    sound->time[0] = (double *)malloc(frames * sizeof(double));
++    for (j = 0; j < frames; j++)
++      sound->time[0][j] = 0.0;
++  }
++
+   /* init all array values with 0.0 */
+   for(i = 0 ; i < partials ; i++){
+     for(j = 0 ; j < frames ; j++){
+@@ -398,6 +406,9 @@
+   sound_copy->has_slopes = sound->has_slopes; /* ATSA_DDM_SLOPES */
+ 
+   memcpy(sound_copy->av, sound->av, sound->partials * sizeof(ATS_PEAK));
++
++  if (sound->partials == 0)
++    memcpy(sound_copy->time[0], sound->time[0], sound->frames * sizeof(double));
+ 
+   for(k=0; k<sound->partials; k++) {
+     memcpy(sound_copy->time[k], sound->time[k], sound->frames * sizeof(double));
+@@ -448,7 +459,10 @@
+ 
+   /* allocate memory for time, amp, frq, smr, and res data for new possible partials */
+   for(k=sound->max_partials; k<new_max_partials; k++) {
+-    sound->time[k] = (double *)malloc(sound->frames * sizeof(double));
++    /* Row 0 already holds the residual-only time axis allocated by init_sound
++       when the sound started with zero partials; keep it. */
++    if (!(k == 0 && sound->max_partials == 0))
++      sound->time[k] = (double *)malloc(sound->frames * sizeof(double));
+     sound->amp[k] = (double *)malloc(sound->frames * sizeof(double));
+     sound->frq[k] = (double *)malloc(sound->frames * sizeof(double));
+     sound->pha[k] = (double *)malloc(sound->frames * sizeof(double));
+@@ -489,6 +503,10 @@
+     freez(sound->amp_slope[k]);
+   }
+ 
++  /* residual-only time axis row allocated by init_sound when partials == 0 */
++  if (sound->max_partials == 0)
++    freez(sound->time[0]);
++
+   /* pointers to data */
+   freez(sound->time);
+   freez(sound->frq);

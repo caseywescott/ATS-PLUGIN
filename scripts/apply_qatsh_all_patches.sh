@@ -13,13 +13,17 @@ if [[ ! -d "$qatsh_dir" ]]; then
   exit 1
 fi
 
+# Qatsh upstream base: 5515648358ffaa8d863b3f2507e03a4943d79667. local_base
+# carries the historical local commit a536955 that the rest of the stack was
+# cut against; residual_only_time_axis goes last because it rewrites the
+# ats_load / init_sound time-axis handling touched by earlier patches.
 base_patches=(
-  residual_fixes progress reassignment qifft ddm multires ifft
+  local_base residual_fixes progress reassignment qifft ddm multires ifft
   rfft_pack vdsp_fft parallel residual_parallel mainlobe_parallel
 )
 perf_patches=(
   ifft_srand ddm_slopes_maint trackstore smr_precompute tracking_ds
-  residual_pow2 scratch synth_state
+  residual_pow2 scratch synth_state residual_only_time_axis
 )
 
 apply_one() {

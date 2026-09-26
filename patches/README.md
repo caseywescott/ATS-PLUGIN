@@ -3,6 +3,38 @@
 `qatsh/` is intentionally ignored by the top-level repository, but this plugin builds against `qatsh/src/atsa`.
 Keep any local ATSA fixes mirrored here so a fresh checkout can reproduce the same engine behavior.
 
+## Reproducing the engine from a fresh clone
+
+The stack targets upstream Qatsh commit
+`5515648358ffaa8d863b3f2507e03a4943d79667`. On a fresh clone at that commit,
+`./scripts/apply_qatsh_all_patches.sh` produces a `src/atsa` tree that is
+byte-identical to the one the plugin is developed against. The scripts are
+meant for a fresh clone; several report "unknown or conflicting" on an
+already-patched tree because later patches rewrite earlier hunks.
+
+```sh
+git clone https://gitlab.com/dxarts/projects/ats/qatsh.git qatsh
+git -C qatsh checkout --detach 5515648358ffaa8d863b3f2507e03a4943d79667
+./scripts/apply_qatsh_all_patches.sh
+```
+
+## `qatsh-atsa-local-base.patch`
+
+The historical local commit `a536955` ("fix(residual): correct five synthesis
+and analysis bugs": residual band centre frequency, per-band / per-partial
+noise-generator indexing and the double-applied ramp in `synthesis.c`, and a
+partial-count bound on the critical-band scan in `residual-analysis.c`). Every later patch was cut on top
+of it, so it is applied first.
+
+## `qatsh-atsa-residual-only-time-axis.patch`
+
+Applied last. Keeps a frame time axis (`time[0]`) for partial-less
+(residual-only) sounds: `init_sound` allocates it, `copy_sound` copies it,
+`add_partials` / `free_sound` preserve and release it, and `ats_load` always
+reads the per-frame time. Supersedes the local commit `c164d6d` guard, which
+avoided the `ats_load` null write on zero-partial files by skipping the time
+axis entirely.
+
 Apply the residual fixes after cloning or updating Qatsh with:
 
 ```sh

@@ -1,0 +1,51 @@
+diff --git a/src/atsa/residual-analysis.c b/src/atsa/residual-analysis.c
+index 4bde5d0..f23df33 100644
+--- a/src/atsa/residual-analysis.c
++++ b/src/atsa/residual-analysis.c
+@@ -218,7 +218,8 @@ void res_to_band_energy(ATS_SOUND *sound, int frame)
+   par = 0;
+   for(j=0 ; j<ATSA_CRITICAL_BANDS ; j++){
+     sum = 0.0;
+-    while(sound->frq[par][frame] >= edges[j] && 
++    while(par < sound->partials &&
++	  sound->frq[par][frame] >= edges[j] &&
+ 	  sound->frq[par][frame] < edges[j+1])
+       {
+ 	sum += sound->res[par][frame];
+diff --git a/src/atsa/synthesis.c b/src/atsa/synthesis.c
+index 2b748bd..91d236a 100644
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -538,9 +538,9 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+               ampl_n  = ENG_RMS(ats_sound->band_energy[b][f_n], ats_sound->window_size)
+                   * sparams->ramp;
+               freq_c  = res_band_centers[b] * sparams->frec;
+-              frame_samps = synth_residual_only(ampl_p, ampl_c, ampl_n, res_band_centers[p],
++              frame_samps = synth_residual_only(ampl_p, ampl_c, ampl_n, freq_c,
+                                                 time_offset, duration, sparams->sr,
+-                                                ospt+b, &rarray[p], *out_samps + n_samps);
++                                                ospt+b, &rarray[b], *out_samps + n_samps);
+           }
+       } else {
+           //residual and deterministic synthesis
+@@ -556,16 +556,16 @@ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *se
+               pha_p = ats_sound->pha[d][f_p];
+               pha_c = ats_sound->pha[d][f];
+               pha_n = ats_sound->pha[d][f_n];
+-              resid_p = ENG_RMS(ats_sound->res[d][f_p] * sparams->ramp, ats_sound->window_size)
++              resid_p = ENG_RMS(ats_sound->res[d][f_p], ats_sound->window_size)
+                   * sparams->ramp;
+-              resid_c = ENG_RMS(ats_sound->res[d][f] * sparams->ramp, ats_sound->window_size)
++              resid_c = ENG_RMS(ats_sound->res[d][f], ats_sound->window_size)
+                   * sparams->ramp;
+-              resid_n = ENG_RMS(ats_sound->res[d][f_n] * sparams->ramp, ats_sound->window_size)
++              resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
+                   * sparams->ramp;
+               frame_samps = synth_both(ampl_p, ampl_c, ampl_n, freq_p, freq_c, freq_n,
+                                        pha_p, pha_c, pha_n, resid_p, resid_c, resid_n,
+                                        time_offset, duration, sparams->sr, sparams->upha,
+-                                       ospt+d, &rarray[p], *out_samps + n_samps);
++                                       ospt+d, &rarray[d], *out_samps + n_samps);
+           }
+       }
+         
