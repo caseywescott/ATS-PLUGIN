@@ -398,6 +398,26 @@ int main(int argc, char** argv)
     // the imported-source fixture; this keeps the artifact test focused on
     // controller/processor ownership rather than an all-parameters-at-75%
     // analysis preset that legitimately rejects the fixture tone.
+    // The sweep also leaves playback parameters at 75% (residual-only
+    // audition, long stretch), which would make the preview check silent for
+    // a pure-tone fixture. Return every parameter to its declared default.
+    TestParameterChanges defaultChanges;
+    for (Steinberg::int32 index = 0; index < controller->getParameterCount(); ++index)
+    {
+        Steinberg::Vst::ParameterInfo info {};
+        require(controller->getParameterInfo(index, info) == Steinberg::kResultTrue,
+                "default parameter info");
+        Steinberg::int32 queueIndex = -1;
+        auto* queue = defaultChanges.addParameterData(info.id, queueIndex);
+        Steinberg::int32 pointIndex = -1;
+        require(queue != nullptr &&
+                queue->addPoint(0, info.defaultNormalizedValue, pointIndex) == Steinberg::kResultTrue,
+                "default parameter point");
+    }
+    data.inputParameterChanges = &defaultChanges;
+    data.inputEvents = nullptr;
+    require(processor->process(data) == Steinberg::kResultTrue, "process default parameters");
+
     TestMessage resetProfileMessage("ats.editor.apply-analysis-profile");
     require(resetProfileMessage.getAttributes()->setInt("profile", 0) == Steinberg::kResultTrue &&
             processorConnection->notify(&resetProfileMessage) == Steinberg::kResultTrue,
@@ -426,13 +446,26 @@ int main(int argc, char** argv)
     require(processorConnection->notify(&analyzeMessage) == Steinberg::kResultTrue,
             "processor queues editor analysis");
 
+    // Like the legacy processor, analysis completion does not auto-play: the
+    // processor stays silent until a session preview starts. The preview
+    // message is only accepted once the processor owns the analysed model.
     bool published = false;
+    bool previewStarted = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (std::chrono::steady_clock::now() < deadline && !published)
     {
         TestMessage pollMessage("ats.editor.poll-analysis");
         require(processorConnection->notify(&pollMessage) == Steinberg::kResultTrue,
                 "processor polls queued analysis");
+        if (!previewStarted)
+        {
+            TestMessage startMessage("ats.editor.session-preview");
+            require(startMessage.getAttributes()->setInt("slot", 0) == Steinberg::kResultTrue &&
+                    startMessage.getAttributes()->setInt("layer", 0) == Steinberg::kResultTrue &&
+                    startMessage.getAttributes()->setInt("start", 1) == Steinberg::kResultTrue,
+                    "analysis preview attributes");
+            previewStarted = processorConnection->notify(&startMessage) == Steinberg::kResultTrue;
+        }
         left.fill(0.0f);
         right.fill(0.0f);
         data.inputParameterChanges = nullptr;
