@@ -6,15 +6,22 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 
 namespace ats
 {
 namespace
 {
+// The patched ATSA tracker reports progress from every frame_worker thread
+// concurrently. Progress callers expect serial, monotonic calls (the host
+// stores an atomic, tests append to a vector), so serialize here and drop
+// values that arrive behind one already reported.
 struct ProgressContext
 {
     const CancellationToken* cancellation = nullptr;
     AtsEngine::Progress* progress = nullptr;
+    std::mutex mutex;
+    double last = 0.0;
 };
 
 void progressCallback(void* user, double fraction)
@@ -22,7 +29,11 @@ void progressCallback(void* user, double fraction)
     auto* context = static_cast<ProgressContext*>(user);
     if (context == nullptr || context->progress == nullptr || !*context->progress) return;
     if (context->cancellation != nullptr && context->cancellation->isCancelled()) return;
-    (*context->progress)(std::clamp(fraction, 0.0, 1.0));
+    const auto value = std::clamp(fraction, 0.0, 1.0);
+    std::lock_guard<std::mutex> lock(context->mutex);
+    if (value < context->last) return;
+    context->last = value;
+    (*context->progress)(value);
 }
 
 JobResult<AnalysisOutput> failedAnalysis(JobGeneration generation, const char* code, const char* text)
@@ -51,7 +62,9 @@ JobResult<AnalysisOutput> AtsEngine::analyze(JobGeneration generation,
 
     ANARGS arguments {};
     request.parameters.toAnargs(arguments);
-    ProgressContext context { &cancellation, &progress };
+    ProgressContext context;
+    context.cancellation = &cancellation;
+    context.progress = &progress;
     arguments.progress_cb = progress ? progressCallback : nullptr;
     arguments.progress_user = progress ? &context : nullptr;
 

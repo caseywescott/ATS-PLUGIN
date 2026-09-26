@@ -31,6 +31,10 @@ int main()
     require(analysed.status == ats::JobResult<ats::AnalysisOutput>::Status::success,
             "analysis status success");
     require(analysed.value.sound && !progress.empty(), "analysis model and progress");
+    // Worker threads report concurrently; the engine must deliver them serially
+    // and in order.
+    for (std::size_t i = 1; i < progress.size(); ++i)
+        require(progress[i] >= progress[i - 1], "progress is monotonic");
 
     float left[8192] = {};
     float right[8192] = {};
