@@ -143,8 +143,11 @@ int main()
     const bool processed = host.process({ channels, 2, 4 }, { events, 1 });
     assert(processed);
     assert(host.semitoneOffset() == 12);
-    assert(left[0] > 0.49f && right[0] < -0.49f);
-    assert(left[1] == 0.0f && right[1] == 0.0f);
+    // Legacy processBlock only rendered while previewPlaying was set, so a
+    // published buffer stays silent until preview starts. Audible playback
+    // after PreviewAction is covered by host_analysis_playback_test.
+    for (int frame = 0; frame < 4; ++frame)
+        assert(left[frame] == 0.0f && right[frame] == 0.0f);
     host.release();
     assert(host.state() == ats::host::HostState::released);
     host.detachEditor();
