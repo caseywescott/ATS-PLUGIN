@@ -213,6 +213,30 @@ inline void paintPageRows(visage::Canvas& canvas, const ThemeTokens& tokens,
 // Analyze/Cancel action buttons are drawn inline.
 // -----------------------------------------------------------------------
 
+// Section 7.2 widget choice, shared by every page: booleans are toggle pills,
+// choices with more than three options are combos (a segmented radio only
+// stays legible up to three short segments), everything else is a slider.
+// Pages whose rows carry no caption for a toggle pass its inline label.
+inline std::unique_ptr<visage::Frame> makeParameterWidget(
+    ParameterBinding& binding, const ParameterDescriptor* descriptor,
+    const std::function<ThemeTokens()>& theme, bool labelToggle = false)
+{
+    if (descriptor == nullptr)
+        return std::make_unique<AtsSlider>(binding, theme);
+    if (descriptor->type == ParameterType::boolean)
+        return std::make_unique<AtsToggle>(
+            binding, labelToggle ? std::string(descriptor->name) : std::string(), theme);
+    if (descriptor->type != ParameterType::choice)
+        return std::make_unique<AtsSlider>(binding, theme);
+    if (descriptor->choiceCount > 3)
+        return std::make_unique<AtsCombo>(binding, theme);
+    std::vector<std::string> segs;
+    for (std::uint16_t c = 0; c < descriptor->choiceCount; ++c)
+        segs.push_back(descriptor->choices ? std::string(descriptor->choices[c])
+                                           : std::to_string(c));
+    return std::make_unique<AtsSegmented>(binding, std::move(segs), theme);
+}
+
 class AtsAnalysisPage final : public visage::Frame
 {
 public:
@@ -245,27 +269,9 @@ public:
                                                                dispatcher_);
             bindings_.push_back(std::move(binding));
 
-            if (descriptor && (descriptor->type == ParameterType::boolean ||
-                               descriptor->type == ParameterType::choice))
-            {
-                std::vector<std::string> segs;
-                if (descriptor->type == ParameterType::boolean)
-                    segs = { "OFF", "ON" };
-                else
-                    for (std::uint16_t c = 0; c < descriptor->choiceCount; ++c)
-                        segs.push_back(descriptor->choices
-                            ? std::string(descriptor->choices[c]) : std::to_string(c));
-                auto widget = std::make_unique<AtsSegmented>(*bindings_.back(), std::move(segs),
-                                                              theme_);
-                widgets_.push_back(widget.get());
-                addChild(std::move(widget));
-            }
-            else
-            {
-                auto widget = std::make_unique<AtsSlider>(*bindings_.back(), theme_);
-                widgets_.push_back(widget.get());
-                addChild(std::move(widget));
-            }
+            auto widget = makeParameterWidget(*bindings_.back(), descriptor, theme_, true);
+            widgets_.push_back(widget.get());
+            addChild(std::move(widget));
         }
     }
 
@@ -549,27 +555,9 @@ public:
             auto binding = std::make_unique<ParameterBinding>(store_, std::string(id), dispatcher_);
             bindings_.push_back(std::move(binding));
 
-            if (descriptor && (descriptor->type == ParameterType::boolean ||
-                               descriptor->type == ParameterType::choice))
-            {
-                std::vector<std::string> segs;
-                if (descriptor->type == ParameterType::boolean)
-                    segs = { "OFF", "ON" };
-                else
-                    for (std::uint16_t c = 0; c < descriptor->choiceCount; ++c)
-                        segs.push_back(descriptor->choices
-                            ? std::string(descriptor->choices[c]) : std::to_string(c));
-                auto widget = std::make_unique<AtsSegmented>(*bindings_.back(), std::move(segs),
-                                                              theme_);
-                widgets_.push_back(widget.get());
-                addChild(std::move(widget));
-            }
-            else
-            {
-                auto widget = std::make_unique<AtsSlider>(*bindings_.back(), theme_);
-                widgets_.push_back(widget.get());
-                addChild(std::move(widget));
-            }
+            auto widget = makeParameterWidget(*bindings_.back(), descriptor, theme_, true);
+            widgets_.push_back(widget.get());
+            addChild(std::move(widget));
         }
     }
 
@@ -763,27 +751,8 @@ public:
             auto binding = std::make_unique<ParameterBinding>(store_, std::string(id), dispatcher_);
             bindings_.push_back(std::move(binding));
 
-            // Section 7.2: booleans are toggle pills and choices are combos. A
-            // segmented radio only stays legible up to three short segments, and
-            // the context grid's cells are far too narrow for five.
-            std::unique_ptr<visage::Frame> widget;
-            if (descriptor == nullptr)
-                widget = std::make_unique<AtsSlider>(*bindings_.back(), theme_);
-            else if (descriptor->type == ParameterType::boolean)
-                widget = std::make_unique<AtsToggle>(*bindings_.back(), std::string(), theme_);
-            else if (descriptor->type != ParameterType::choice)
-                widget = std::make_unique<AtsSlider>(*bindings_.back(), theme_);
-            else if (descriptor->choiceCount > 3)
-                widget = std::make_unique<AtsCombo>(*bindings_.back(), theme_);
-            else
-            {
-                std::vector<std::string> segs;
-                for (std::uint16_t c = 0; c < descriptor->choiceCount; ++c)
-                    segs.push_back(descriptor->choices ? std::string(descriptor->choices[c])
-                                                       : std::to_string(c));
-                widget = std::make_unique<AtsSegmented>(*bindings_.back(), std::move(segs),
-                                                        theme_);
-            }
+            // The context grid's cells are far too narrow for five segments.
+            auto widget = makeParameterWidget(*bindings_.back(), descriptor, theme_);
             widgets_.push_back(widget.get());
             addChild(std::move(widget));
         }

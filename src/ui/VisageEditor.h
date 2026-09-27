@@ -5,6 +5,7 @@
 #include "ThemeTokens.h"
 
 #include <memory>
+#include <string>
 
 namespace ats::ui
 {
@@ -33,6 +34,10 @@ public:
     EditorSize constrainSize(EditorSize requested) const override;
 
     void setTheme(ThemeId theme);
+    // Selects one of the five pages (SESSION..MATH) as a tab click would.
+    void selectPage(int page);
+    // Saves the most recently rendered frame as PNG; false without a window.
+    bool captureScreenshot(const std::string& path);
     void setHistoryAvailability(bool canUndo, bool canRedo);
     void setActivity(bool analysisRunning, bool renderRunning);
     void setTelemetry(TelemetrySnapshot snapshot);

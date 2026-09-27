@@ -263,10 +263,9 @@ public:
                 popup.onSelection() += [this](int optionId) {
                     if (optionId == 1 || optionId == 2)
                     {
-                        shell_.setTheme(optionId == 2 ? ThemeId::porcelain : ThemeId::ember);
+                        setTheme(optionId == 2 ? ThemeId::porcelain : ThemeId::ember);
                         if (sink_.themeSelected)
                             sink_.themeSelected(sink_.context, optionId - 1);
-                        redraw();
                     }
                 };
                 popup.onCancel() += [this] {
@@ -311,12 +310,20 @@ public:
         }
     }
 
+    void selectPage(std::size_t page)
+    {
+        if (pageContainerRaw_ != nullptr)
+            pageContainerRaw_->selectPage(page);
+    }
+
     void setTheme(ThemeId theme)
     {
         shell_.setTheme(theme);
-        if (pageContainerRaw_ != nullptr)
-            pageContainerRaw_->redraw();
-        redraw();
+        // Widgets read the theme at draw time, but Visage keeps each frame's
+        // last drawing until that frame is invalidated; redrawing only the
+        // container left the visible page's sliders and segments in the old
+        // theme (seen on ANALYSIS in the screenshot matrix).
+        redrawAll();
     }
 
     void setHistoryAvailability(bool canUndo, bool canRedo)
@@ -2010,6 +2017,25 @@ VisageEditor::~VisageEditor() = default;
 void VisageEditor::setTheme(ThemeId theme)
 {
     impl_->frame.setTheme(theme);
+}
+
+void VisageEditor::selectPage(int page)
+{
+    if (page >= 0)
+        impl_->frame.selectPage(static_cast<std::size_t>(page));
+}
+
+bool VisageEditor::captureScreenshot(const std::string& path)
+{
+    // Composites the canvas as last rendered; callers must let the window draw
+    // (spin the run loop) after changing state and before capturing.
+    if (impl_->app.window() == nullptr)
+        return false;
+    const auto& screenshot = impl_->app.takeScreenshot();
+    if (screenshot.width() <= 0 || screenshot.height() <= 0)
+        return false;
+    screenshot.save(path);
+    return true;
 }
 
 void VisageEditor::setHistoryAvailability(bool canUndo, bool canRedo)
