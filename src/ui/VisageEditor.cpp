@@ -5,6 +5,7 @@
 #include "SessionFileDrop.h"
 #include "VisageNativeMac.h"
 #include "../core/ParameterRegistry.h"
+#include "../state/FactoryPresetState.h"
 
 #include <embedded/fonts.h>
 #include <visage/app.h>
@@ -202,7 +203,8 @@ public:
             {
                 visage::PopupMenu popup("Presets");
                 for (int index = 0; index < 12; ++index)
-                    popup.addOption(index + 1, "Factory " + std::to_string(index + 1));
+                    popup.addOption(index + 1, std::string(state::kFactoryPresets[
+                                                   static_cast<std::size_t>(index)].name));
                 popup.addOption(13, "Save preset...");
                 popup.addOption(14, "Load preset...");
                 popup.onSelection() += [this](int optionId) {

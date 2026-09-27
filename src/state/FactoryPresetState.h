@@ -9,15 +9,41 @@
 namespace ats::state
 {
 
+struct FactoryPresetInfo
+{
+    std::string_view name;
+    std::string_view description;
+    bool morphPreset = false;
+};
+
+// Names and descriptions exactly as the legacy PresetLibrary shipped them.
+inline constexpr std::array<FactoryPresetInfo, 12> kFactoryPresets {{
+    { "Default", "Classic neutral ATS playback defaults.", false },
+    { "Bright partials", "Classic playback with stronger sinusoidal partials and reduced residual energy.", false },
+    { "Residual emphasis", "Classic playback with a quieter partial layer and stronger residual layer.", false },
+    { "Residuals only", "Classic playback focused entirely on the residual/noise layer.", false },
+    { "Inharmonic spread", "Stretch mode opens partial spacing around the auto pivot for clangorous inharmonic color.", false },
+    { "Clustered partials", "Compress mode pulls partial spacing inward around the auto pivot.", false },
+    { "Harmonic bloom", "Harmonic mode gently exaggerates rank-based harmonic spacing from the auto F0 estimate.", false },
+    { "Morph stable default", "Bark grid, frequency-rank matching, log-frequency/power interpolation, oscillator phase, and conservative smoothing for broad source material.", true },
+    { "Morph tonal", "Bark grid with greedy nearest matching, Bark-coordinate frequency motion, relative-cluster phase metadata, and lower residual gain for sustained harmonic material.", true },
+    { "Morph vocal/formant", "Bark grid with greedy nearest matching, dB amplitude interpolation, source-only merge-to-residual handling, and sustained-after-attack protection for vowel/formant material.", true },
+    { "Morph percussive", "Bark grid with quick smoothing, crossfaded attack metadata, and hold/fade unmatched handling for plucked or struck sources.", true },
+    { "Morph noisy texture", "Mel grid with greedy nearest matching, dB amplitude interpolation, merge-to-residual unmatched handling, and a residual-heavy lane balance for breathy or noisy material.", true },
+}};
+
 // JUCE-free port of the twelve documented factory presets.  This is kept next
 // to the neutral preset service so hosts and the editor share exactly one
 // parameter recipe rather than reproducing legacy UI-side mutations.
+//
+// Like the legacy PresetLibrary, a recipe only writes the parameters it names:
+// analysis, timbre, Smearnov and (for the classic presets) morph settings the
+// user has made survive loading a factory preset.
 inline bool applyFactoryPreset(std::int32_t index, ParameterStore& parameters) noexcept
 {
     if (index < 0 || index >= 12)
         return false;
 
-    parameters.resetToDefaults();
     const auto set = [&parameters](std::string_view id, float value) {
         (void) parameters.write(id, value);
     };

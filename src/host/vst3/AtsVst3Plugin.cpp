@@ -1083,7 +1083,13 @@ public:
         }
         if (const auto* factory = std::get_if<ats::ui::ApplyFactoryPresetAction>(&action))
         {
+            // Seed from the controller's current values so the recipe only
+            // changes the parameters it names (legacy no-reset semantics).
             ats::ParameterStore preset;
+            for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+                (void) preset.write(descriptor.denseIndex,
+                                    descriptor.denormalize(static_cast<float>(getParamNormalized(
+                                        static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId)))));
             if (!ats::state::applyFactoryPreset(factory->index, preset))
                 return;
             (void) sendIntAction(kFactoryPresetMessage, kSourceAttribute, factory->index);
@@ -1585,6 +1591,8 @@ private:
         {
             const auto tag = static_cast<Steinberg::Vst::ParamID>(descriptor.hostNumericId);
             const auto normalized = descriptor.normalize(preset.read(descriptor.denseIndex));
+            if (std::abs(normalized - getParamNormalized(tag)) < 1.0e-7)
+                continue; // untouched: do not write an automation edit
             beginEdit(tag);
             setParamNormalized(tag, normalized);
             performEdit(tag, normalized);
