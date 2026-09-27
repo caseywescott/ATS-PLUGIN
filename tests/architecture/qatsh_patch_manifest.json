@@ -2,25 +2,277 @@
   "schema_version": 1,
   "patch_directory": "patches",
   "entries": [
-    {"id": "residual-fixes", "patch": "qatsh-atsa-residual-fixes.patch", "checks": [["synthesis.c", "ATSA_SYNTH_RANDOM_SEED"], ["synthesis.c", "has_residual = ats_sound->band_energy != NULL"], ["residual-analysis.c", "DB_AMP(ATSA_NOISE_THRESHOLD) * DB_AMP(ATSA_NOISE_THRESHOLD)"]]},
-    {"id": "progress", "patch": "qatsh-atsa-progress.patch", "checks": [["atsa.h", "void (*progress_cb)(void *user, double fraction)"]]},
-    {"id": "reassignment", "patch": "qatsh-atsa-reassignment.patch", "checks": [["peak-detection.c", "ATSA_REASSIGN_FREQ"], ["tracker.c", "ATSA_REASSIGN_FREQ"]]},
-    {"id": "qifft", "patch": "qatsh-atsa-qifft.patch", "checks": [["peak-detection.c", "ATSA_QIFFT_AMP"], ["tracker.c", "ATSA_QIFFT_AMP"]]},
-    {"id": "ddm", "patch": "qatsh-atsa-ddm.patch", "checks": [["tracker.c", "ATSA_DDM_SLOPES"], ["synthesis.c", "ATSA_DDM_SLOPES"]]},
-    {"id": "multires", "patch": "qatsh-atsa-multires.patch", "checks": [["tracker.c", "ATSA_MULTIRES"], ["atsa.h", "ATSA_MULTIRES"]]},
-    {"id": "ifft", "patch": "qatsh-atsa-ifft.patch", "checks": [["synthesis.c", "ATSA_IFFT_SYNTH"], ["atsa.h", "ATSA_IFFT_SYNTH"]]},
-    {"id": "rfft-pack", "patch": "qatsh-atsa-rfft-pack.patch", "checks": [["tracker.c", "ATSA_RFFT_PACK"]]},
-    {"id": "vdsp-fft", "patch": "qatsh-atsa-vdsp-fft.patch", "checks": [["other-utils.c", "ATSA_VDSP_FFT"]]},
-    {"id": "parallel", "patch": "qatsh-atsa-parallel.patch", "checks": [["tracker.c", "ATSA_PARALLEL"], ["peak-detection.c", "ATSA_PARALLEL"]]},
-    {"id": "residual-parallel", "patch": "qatsh-atsa-residual-parallel.patch", "checks": [["residual.c", "ATSA_PARALLEL"], ["residual-analysis.c", "ATSA_PARALLEL"]]},
-    {"id": "mainlobe-parallel", "patch": "qatsh-atsa-mainlobe-parallel.patch", "checks": [["peak-detection.c", "mainlobe_worker"]]},
-    {"id": "ifft-srand", "patch": "qatsh-atsa-ifft-srand.patch", "checks": [["synthesis.c", "atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED)"], ["synthesis.c", "sparams->use_ifft"]]},
-    {"id": "ddm-slopes-maint", "patch": "qatsh-atsa-ddm-slopes-maint.patch", "checks": [["utilities.c", "swap(double*, sound->frq_slope[part], sound->frq_slope[kept])"]]},
-    {"id": "trackstore", "patch": "qatsh-atsa-trackstore.patch", "checks": [["tracker.c", "ATSA_TRACKSTORE"]]},
-    {"id": "smr-precompute", "patch": "qatsh-atsa-smr-precompute.patch", "checks": [["critical-bands.c", "ATSA_SMR_PRECOMPUTE"]]},
-    {"id": "tracking-ds", "patch": "qatsh-atsa-tracking-ds.patch", "checks": [["peak-tracking.c", "ATSA_TRACKING_DS"]]},
-    {"id": "residual-pow2", "patch": "qatsh-atsa-residual-pow2.patch", "checks": [["residual-analysis.c", "ATSA_RESIDUAL_POW2"]]},
-    {"id": "scratch", "patch": "qatsh-atsa-scratch.patch", "checks": [["other-utils.c", "ATSA_SCRATCH_PEAKS"], ["tracker.c", "polar_mags"]]},
-    {"id": "synth-state", "patch": "qatsh-atsa-synth-state.patch", "checks": [["synthesis.c", "ATSA_SYNTH_STATE"], ["residual-analysis.c", "atsa_prefill_partial_residual"]]}
+    {
+      "id": "local-base",
+      "patch": "qatsh-atsa-local-base.patch",
+      "checks": [
+        [
+          "residual-analysis.c",
+          "par < sound->partials &&"
+        ]
+      ]
+    },
+    {
+      "id": "residual-fixes",
+      "patch": "qatsh-atsa-residual-fixes.patch",
+      "checks": [
+        [
+          "synthesis.c",
+          "ATSA_SYNTH_RANDOM_SEED"
+        ],
+        [
+          "synthesis.c",
+          "has_residual = ats_sound->band_energy != NULL"
+        ],
+        [
+          "residual-analysis.c",
+          "DB_AMP(ATSA_NOISE_THRESHOLD) * DB_AMP(ATSA_NOISE_THRESHOLD)"
+        ]
+      ]
+    },
+    {
+      "id": "progress",
+      "patch": "qatsh-atsa-progress.patch",
+      "checks": [
+        [
+          "atsa.h",
+          "void (*progress_cb)(void *user, double fraction)"
+        ]
+      ]
+    },
+    {
+      "id": "reassignment",
+      "patch": "qatsh-atsa-reassignment.patch",
+      "checks": [
+        [
+          "peak-detection.c",
+          "ATSA_REASSIGN_FREQ"
+        ],
+        [
+          "tracker.c",
+          "ATSA_REASSIGN_FREQ"
+        ]
+      ]
+    },
+    {
+      "id": "qifft",
+      "patch": "qatsh-atsa-qifft.patch",
+      "checks": [
+        [
+          "peak-detection.c",
+          "ATSA_QIFFT_AMP"
+        ],
+        [
+          "tracker.c",
+          "ATSA_QIFFT_AMP"
+        ]
+      ]
+    },
+    {
+      "id": "ddm",
+      "patch": "qatsh-atsa-ddm.patch",
+      "checks": [
+        [
+          "tracker.c",
+          "ATSA_DDM_SLOPES"
+        ],
+        [
+          "synthesis.c",
+          "ATSA_DDM_SLOPES"
+        ]
+      ]
+    },
+    {
+      "id": "multires",
+      "patch": "qatsh-atsa-multires.patch",
+      "checks": [
+        [
+          "tracker.c",
+          "ATSA_MULTIRES"
+        ],
+        [
+          "atsa.h",
+          "ATSA_MULTIRES"
+        ]
+      ]
+    },
+    {
+      "id": "ifft",
+      "patch": "qatsh-atsa-ifft.patch",
+      "checks": [
+        [
+          "synthesis.c",
+          "ATSA_IFFT_SYNTH"
+        ],
+        [
+          "atsa.h",
+          "ATSA_IFFT_SYNTH"
+        ]
+      ]
+    },
+    {
+      "id": "rfft-pack",
+      "patch": "qatsh-atsa-rfft-pack.patch",
+      "checks": [
+        [
+          "tracker.c",
+          "ATSA_RFFT_PACK"
+        ]
+      ]
+    },
+    {
+      "id": "vdsp-fft",
+      "patch": "qatsh-atsa-vdsp-fft.patch",
+      "checks": [
+        [
+          "other-utils.c",
+          "ATSA_VDSP_FFT"
+        ]
+      ]
+    },
+    {
+      "id": "parallel",
+      "patch": "qatsh-atsa-parallel.patch",
+      "checks": [
+        [
+          "tracker.c",
+          "ATSA_PARALLEL"
+        ],
+        [
+          "peak-detection.c",
+          "ATSA_PARALLEL"
+        ]
+      ]
+    },
+    {
+      "id": "residual-parallel",
+      "patch": "qatsh-atsa-residual-parallel.patch",
+      "checks": [
+        [
+          "residual.c",
+          "ATSA_PARALLEL"
+        ],
+        [
+          "residual-analysis.c",
+          "ATSA_PARALLEL"
+        ]
+      ]
+    },
+    {
+      "id": "mainlobe-parallel",
+      "patch": "qatsh-atsa-mainlobe-parallel.patch",
+      "checks": [
+        [
+          "peak-detection.c",
+          "mainlobe_worker"
+        ]
+      ]
+    },
+    {
+      "id": "ifft-srand",
+      "patch": "qatsh-atsa-ifft-srand.patch",
+      "checks": [
+        [
+          "synthesis.c",
+          "atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED)"
+        ],
+        [
+          "synthesis.c",
+          "sparams->use_ifft"
+        ]
+      ]
+    },
+    {
+      "id": "ddm-slopes-maint",
+      "patch": "qatsh-atsa-ddm-slopes-maint.patch",
+      "checks": [
+        [
+          "utilities.c",
+          "swap(double*, sound->frq_slope[part], sound->frq_slope[kept])"
+        ]
+      ]
+    },
+    {
+      "id": "trackstore",
+      "patch": "qatsh-atsa-trackstore.patch",
+      "checks": [
+        [
+          "tracker.c",
+          "ATSA_TRACKSTORE"
+        ]
+      ]
+    },
+    {
+      "id": "smr-precompute",
+      "patch": "qatsh-atsa-smr-precompute.patch",
+      "checks": [
+        [
+          "critical-bands.c",
+          "ATSA_SMR_PRECOMPUTE"
+        ]
+      ]
+    },
+    {
+      "id": "tracking-ds",
+      "patch": "qatsh-atsa-tracking-ds.patch",
+      "checks": [
+        [
+          "peak-tracking.c",
+          "ATSA_TRACKING_DS"
+        ]
+      ]
+    },
+    {
+      "id": "residual-pow2",
+      "patch": "qatsh-atsa-residual-pow2.patch",
+      "checks": [
+        [
+          "residual-analysis.c",
+          "ATSA_RESIDUAL_POW2"
+        ]
+      ]
+    },
+    {
+      "id": "scratch",
+      "patch": "qatsh-atsa-scratch.patch",
+      "checks": [
+        [
+          "other-utils.c",
+          "ATSA_SCRATCH_PEAKS"
+        ],
+        [
+          "tracker.c",
+          "polar_mags"
+        ]
+      ]
+    },
+    {
+      "id": "synth-state",
+      "patch": "qatsh-atsa-synth-state.patch",
+      "checks": [
+        [
+          "synthesis.c",
+          "ATSA_SYNTH_STATE"
+        ],
+        [
+          "residual-analysis.c",
+          "atsa_prefill_partial_residual"
+        ]
+      ]
+    },
+    {
+      "id": "residual-only-time-axis",
+      "patch": "qatsh-atsa-residual-only-time-axis.patch",
+      "checks": [
+        [
+          "utilities.c",
+          "partials > 0 ? partials : 1"
+        ],
+        [
+          "save-load-sound.c",
+          "residual-only synthesis still needs the frame time axis"
+        ]
+      ]
+    }
   ]
 }

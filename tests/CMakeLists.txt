@@ -474,6 +474,15 @@ target_compile_features(host_analysis_playback_test PRIVATE cxx_std_17)
 target_link_libraries(host_analysis_playback_test PRIVATE ats_host_vst3)
 add_test(NAME host_analysis_playback_test COMMAND host_analysis_playback_test)
 
+add_executable(release_matrix_test release_matrix_test.cpp)
+target_include_directories(release_matrix_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(release_matrix_test PRIVATE cxx_std_17)
+target_link_libraries(release_matrix_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME release_matrix_test COMMAND release_matrix_test)
+
 add_executable(host_async_analysis_test host_async_analysis_test.cpp)
 target_include_directories(host_async_analysis_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
