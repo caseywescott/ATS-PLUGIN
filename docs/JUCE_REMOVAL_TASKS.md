@@ -217,12 +217,12 @@ listed commit supplies the cross-layer proof.
   SP-NAV-01, SP-PART-01, SP-RES-01/03, SP-ENV-01, UI-SPECTRUM-01/08 promoted
   to `verified`; all SP-* source_files updated to src/ui/. atas_ui_parity_manifest
   passes the Python validator with no planned rows.
-- [ ] Commits 31–32 (live dispatch matrix): real-window screenshot matrix and
-  cross-layer live dispatch in standalone + one DAW remain open (require
+- [ ] Commits 31–32 (live dispatch matrix): screenshot matrix (RMJ-031) and
+  standalone live dispatch (RMJ-032) done 2026-09-27; one DAW remains open (require
   windowed environment; arm64 AppKit/Visage probe still traps in headless CI).
-- [ ] Commit 33 (release matrix): host/RT/DSP/compatibility matrix open.
-- [ ] Commit 34 (final JUCE removal cleanup): AppleDouble / .git pack sidecars;
-  final license/NOTICE update.
+- [x] Commit 33 (release matrix): RMJ-100 (2026-09-27).
+- [x] Commit 34 (final JUCE removal cleanup): AppleDouble cleaner + ignores;
+  THIRD_PARTY updated (2026-09-27).
 - [ ] Commit 35 (final parity packet): remaining `implemented` rows → `verified`;
   deviation register closure; full assembly of release evidence artifacts.
 
@@ -231,22 +231,24 @@ listed commit supplies the cross-layer proof.
 - [ ] Every `ARCH-*`/`DSP-*` row has one owner, typed API, thread domain,
   invariants, test, fixture, and evidence; every `UI-*`/`SP-*` row has a full
   surface record and real-dispatch test.
-- [ ] All 81 parameters preserve IDs/order/ranges/defaults/skews/choices/text,
+- [x] All 81 parameters preserve IDs/order/ranges/defaults/skews/choices/text,
   automation, snapping, gestures, state and smoothing.
-- [ ] ATSP v2–v17, v17 field order, 12 factory presets, user presets, ATS
+- [x] ATSP v2–v17 (now v2–v19), v17 field order, 12 factory presets, user presets, ATS
   import/export, embedded models, malformed inputs, and undo policy pass.
-- [ ] Analysis types 1–4, all synthesis/residual/IFFT/frequency/timbre/morph/
+- [x] Analysis types 1–4, all synthesis/residual/IFFT/frequency/timbre/morph/
   Smearnov/MathExpr/partial/residual/playback paths pass deterministic tests
   and approved tolerances.
-- [ ] Audio is allocation-free and non-blocking; Qatsh patches remain active;
+- [x] Audio is allocation-free and non-blocking; Qatsh patches remain active;
   generation cancellation and triple-buffer publication are stress-tested.
-- [ ] VST3/AU/Standalone identity, buses, MIDI offsets, automation, state,
+- [x] VST3/AU/Standalone identity, buses, MIDI offsets, automation, state,
   zero latency/tail, editor attach/detach, resize, and shutdown pass.
 - [ ] Both themes, all selected sizes/scales, five pages, seven spectrum modes,
   exact menus/copy, dialogs, text, focus, overlays, and cache states pass.
 - [ ] Standalone and one DAW/VST3 host are actually exercised with build hash.
 - [ ] Clean checkout, no-JUCE scan, dependency/license docs, artifacts, and
-  final manifest/status promotion pass.
+  final manifest/status promotion pass. (Clean checkout, scan, docs and
+  artifacts pass per RMJ-110; promotion incomplete: 2 architecture and 31 UI
+  rows remain `implemented`.)
 
 The native graph now has a dedicated `ats_no_juce_native_scan` CTest gate.
 `BUILD_PLUGIN=ON` is now routed to the pinned JUCE-free VST3/AU/standalone

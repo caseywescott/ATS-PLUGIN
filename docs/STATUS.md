@@ -61,7 +61,7 @@ The `cmake` on this machine is an x86_64 binary: trees without
 | T-301 release matrix | done | RMJ-100 |
 | T-302 ledger promotion | done where evidence exists | `f708d883` |
 | T-303 docs consolidation | done | this file |
-| T-304 final packet / clean-clone build | see `docs/juce-removal-baseline/RMJ-110-final-evidence-packet.md` | — |
+| T-304 final packet / clean-clone build | packet written; clean clone builds; release gate not passed (open gates listed) | RMJ-110 |
 | T-401 theme persistence | done (per-user preference) | `4cb22409` |
 | T-402 copy/focus/keyboard parity | partial: preset names, toggle captions, §7.2 widgets, legacy `synDur` FULL / pivot Auto readouts; spec quoted-copy scan clean except §8.2 timeline readout | see open items |
 | T-403 factory preset values | done | `ff52db63` |
