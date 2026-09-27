@@ -97,6 +97,12 @@ constexpr const char* kCommandAttribute = "command";
 constexpr const char* kFirstFrameAttribute = "firstFrame";
 constexpr const char* kLastFrameAttribute = "lastFrame";
 constexpr const char* kValueAttribute = "value";
+// Packed SpectrumPointWire records for draw/read spectrum edits. Optional on
+// decode so older controllers that never sent points still interoperate.
+constexpr const char* kSpectrumPointsAttribute = "spectrumPoints";
+// Packed SpectralOnset records (norm, preNorm, peakNorm, strength) sent beside
+// the marker list; peers that only read the markers keep working.
+constexpr const char* kOnsetHandlesAttribute = "onsetHandles";
 constexpr const char* kPathAttribute = "path";
 constexpr const char* kSourceAttribute = "source";
 
@@ -200,6 +206,57 @@ bool readTimelinePoints(Steinberg::Vst::IAttributeList* attributes,
     return true;
 }
 
+struct SpectrumPointWire
+{
+    std::int32_t frame = 0;
+    float value = 0.0f;
+};
+static_assert(sizeof(SpectrumPointWire) == 8, "spectrum point wire layout changed");
+// Same bound as validateAction(SpectrumEditAction).
+constexpr std::size_t kMaximumSpectrumPoints = 4096;
+
+// Absent attribute -> empty points (true); malformed or oversize -> false.
+bool readSpectrumPoints(Steinberg::Vst::IAttributeList* attributes,
+                        std::vector<std::pair<std::int32_t, float>>& points)
+{
+    points.clear();
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr ||
+        attributes->getBinary(kSpectrumPointsAttribute, bytes, size) != Steinberg::kResultTrue)
+        return true;
+    if (bytes == nullptr || size % sizeof(SpectrumPointWire) != 0)
+        return false;
+    const auto count = static_cast<std::size_t>(size / sizeof(SpectrumPointWire));
+    if (count > kMaximumSpectrumPoints)
+        return false;
+    std::vector<SpectrumPointWire> wire(count);
+    if (count != 0)
+        std::memcpy(wire.data(), bytes, size);
+    points.reserve(count);
+    for (const auto& point : wire)
+        points.emplace_back(point.frame, point.value);
+    return true;
+}
+
+static_assert(sizeof(ats::ui::SpectralOnset) == 4 * sizeof(float), "onset handle wire layout changed");
+
+// Absent -> false (caller falls back to markers); malformed -> false as well.
+bool readOnsetHandles(Steinberg::Vst::IAttributeList* attributes, std::size_t expectedCount,
+                      std::vector<ats::ui::SpectralOnset>& handles)
+{
+    const void* bytes = nullptr;
+    Steinberg::uint32 size = 0;
+    if (attributes == nullptr ||
+        attributes->getBinary(kOnsetHandlesAttribute, bytes, size) != Steinberg::kResultTrue ||
+        bytes == nullptr || size % sizeof(ats::ui::SpectralOnset) != 0 ||
+        size / sizeof(ats::ui::SpectralOnset) != expectedCount)
+        return false;
+    handles.resize(expectedCount);
+    std::memcpy(handles.data(), bytes, size);
+    return true;
+}
+
 bool readIntVector(Steinberg::Vst::IAttributeList* attributes, const char* key,
                    std::vector<int>& values)
 {
@@ -235,6 +292,11 @@ public:
 
     static Steinberg::FUnknown* createInstance(void*)
     { return static_cast<Steinberg::Vst::IAudioProcessor*>(new AtsVst3Processor()); }
+
+#ifdef ATS_VST3_DIFFERENTIAL_TEST
+    // tests/host/vst3_differential_test.cpp compares editor-facing state too.
+    [[nodiscard]] const ats::host::HostAdapter& hostForTest() const noexcept { return host_; }
+#endif
 
     Steinberg::tresult PLUGIN_API initialize(Steinberg::FUnknown* context) SMTG_OVERRIDE
     {
@@ -472,7 +534,13 @@ public:
             if (Steinberg::FIDStringsEqual(messageId, kSessionSeekMessage) && values.size() == 1)
                 action = ats::ui::SeekPreviewAction { values.front() };
             else if (Steinberg::FIDStringsEqual(messageId, kSessionOnsetsMessage))
-                action = ats::ui::EditSmearnovOnsetsAction { std::move(values) };
+            {
+                std::vector<ats::ui::SpectralOnset> handles;
+                if (readOnsetHandles(attributes, values.size(), handles))
+                    action = ats::ui::EditSmearnovOnsetHandlesAction { std::move(handles) };
+                else
+                    action = ats::ui::EditSmearnovOnsetsAction { std::move(values) };
+            }
             else
                 return Steinberg::kResultFalse;
             ats::Error error;
@@ -628,18 +696,21 @@ public:
             Steinberg::int64 command = 0, first = 0, last = 0;
             double value = 0.0;
             std::vector<int> bands;
+            std::vector<std::pair<std::int32_t, float>> points;
             if (!validPayloadVersion(attributes) ||
                 attributes->getInt(kCommandAttribute, command) != Steinberg::kResultTrue ||
                 !readIntVector(attributes, kSessionValuesAttribute, bands) ||
                 attributes->getInt(kFirstFrameAttribute, first) != Steinberg::kResultTrue ||
                 attributes->getInt(kLastFrameAttribute, last) != Steinberg::kResultTrue ||
-                attributes->getFloat(kValueAttribute, value) != Steinberg::kResultTrue)
+                attributes->getFloat(kValueAttribute, value) != Steinberg::kResultTrue ||
+                !readSpectrumPoints(attributes, points))
                 return Steinberg::kResultFalse;
             ats::Error error;
             return host_.applyEditorAction(ats::ui::SpectrumEditAction {
                                                 static_cast<ats::ui::SpectrumEditCommand>(command),
                                                 std::move(bands), static_cast<std::int32_t>(first),
-                                                static_cast<std::int32_t>(last), static_cast<float>(value) }, error) && !error
+                                                static_cast<std::int32_t>(last), static_cast<float>(value),
+                                                std::move(points) }, error) && !error
                        ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kMathMessage))
@@ -996,14 +1067,7 @@ public:
         }
         if (const auto* handles = std::get_if<ats::ui::EditSmearnovOnsetHandlesAction>(&action))
         {
-            std::vector<float> markers;
-            markers.reserve(handles->onsets.size());
-            for (const auto& onset : handles->onsets)
-                markers.push_back(onset.norm);
-            // The existing controller message is marker-only; the in-process
-            // host path preserves the edge handles, while older VST3 peers
-            // continue to receive the compatible marker projection.
-            (void) sendFloatValues(kSessionOnsetsMessage, markers);
+            (void) sendOnsetHandles(handles->onsets);
             return;
         }
         if (const auto* timbre = std::get_if<ats::ui::SetTimbreMotionPlanAction>(&action))
@@ -1268,8 +1332,13 @@ private:
 
     bool sendSpectrumEdit(const ats::ui::SpectrumEditAction& edit)
     {
-        if (edit.bands.empty() || edit.bands.size() > 220)
+        if (edit.bands.empty() || edit.bands.size() > 220 ||
+            edit.points.size() > kMaximumSpectrumPoints)
             return false;
+        std::vector<SpectrumPointWire> wirePoints;
+        wirePoints.reserve(edit.points.size());
+        for (const auto& [frame, value] : edit.points)
+            wirePoints.push_back({ frame, value });
         auto* message = allocateMessage();
         if (message == nullptr)
             return false;
@@ -1283,6 +1352,11 @@ private:
             attributes->setInt(kFirstFrameAttribute, edit.firstFrame) == Steinberg::kResultTrue &&
             attributes->setInt(kLastFrameAttribute, edit.lastFrame) == Steinberg::kResultTrue &&
             attributes->setFloat(kValueAttribute, edit.value) == Steinberg::kResultTrue &&
+            (wirePoints.empty() ||
+             attributes->setBinary(kSpectrumPointsAttribute, wirePoints.data(),
+                                   static_cast<Steinberg::uint32>(wirePoints.size() *
+                                                                  sizeof(SpectrumPointWire))) ==
+                 Steinberg::kResultTrue) &&
             sendMessage(message) == Steinberg::kResultTrue;
         message->release();
         return result;
@@ -1362,6 +1436,35 @@ private:
         const auto result = attributes != nullptr &&
             attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
             attributes->setBinary(kSessionValuesAttribute, values.data(), byteCount) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    // Markers plus the full handles: the processor applies the handles, older
+    // processors that only read the markers still get the compatible projection.
+    bool sendOnsetHandles(const std::vector<ats::ui::SpectralOnset>& handles)
+    {
+        if (handles.empty() || handles.size() > 4096)
+            return false;
+        std::vector<float> markers;
+        markers.reserve(handles.size());
+        for (const auto& onset : handles)
+            markers.push_back(onset.norm);
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSessionOnsetsMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
+            attributes->setBinary(kSessionValuesAttribute, markers.data(),
+                                  static_cast<Steinberg::uint32>(markers.size() * sizeof(float))) ==
+                Steinberg::kResultTrue &&
+            attributes->setBinary(kOnsetHandlesAttribute, handles.data(),
+                                  static_cast<Steinberg::uint32>(handles.size() *
+                                                                 sizeof(ats::ui::SpectralOnset))) ==
+                Steinberg::kResultTrue &&
             sendMessage(message) == Steinberg::kResultTrue;
         message->release();
         return result;
