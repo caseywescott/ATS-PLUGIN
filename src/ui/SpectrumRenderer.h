@@ -131,6 +131,27 @@ public:
     // Data primitives must never escape the spectrum plot.  Visage shares a
     // canvas across the frame tree, so an offscreen zoom coordinate can
     // otherwise tint or cover unrelated editor panels.
+    // Visage draws every path segment as one quad, and a batch is indexed with
+    // 16-bit indices (at most 16383 quads). Large models in data-scaled modes
+    // (e.g. isometric at 400 partials x 2000 frames: ~100k segments) would
+    // overflow both that and bgfx's per-frame transient buffer, silently
+    // dropping the rest of the editor. The painter thins vertices by this
+    // stride so a frame stays near the budget; endpoints are always kept.
+    static constexpr std::size_t kMaxPathSegmentsPerFrame = 12000;
+
+    [[nodiscard]] static std::size_t pathSegmentStride(
+        const std::vector<SpectrumDrawCommand>& commands,
+        std::size_t budget = kMaxPathSegmentsPerFrame) noexcept
+    {
+        std::size_t total = 0;
+        for (const auto& command : commands)
+            if (command.isPath())
+                total += command.vertices.size() - 1;
+        if (budget == 0 || total <= budget)
+            return 1;
+        return (total + budget - 1) / budget;
+    }
+
     [[nodiscard]] static bool requiresPlotClip(const SpectrumDrawCommand& command) noexcept
     {
         if (command.isPath())

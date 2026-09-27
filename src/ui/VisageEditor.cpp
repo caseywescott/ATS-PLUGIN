@@ -526,6 +526,7 @@ public:
         const auto plot = SpectrumRenderer::getPlotBounds(well, spectrumSnapshot_);
         const auto commands = SpectrumRenderer::render(
             spectrumSnapshot_, well, renderOptions);
+        const auto segmentStride = SpectrumRenderer::pathSegmentStride(commands);
         for (const auto& command : commands)
         {
             const auto clipToPlot = SpectrumRenderer::requiresPlotClip(command);
@@ -587,10 +588,13 @@ public:
                 const auto axisX = command.gradEnd.x - command.gradStart.x;
                 const auto axisY = command.gradEnd.y - command.gradStart.y;
                 const auto axisLength2 = axisX * axisX + axisY * axisY;
-                for (std::size_t i = 0; i + 1 < command.vertices.size(); ++i)
+                const auto last = command.vertices.size() - 1;
+                for (std::size_t i = 0; i < last;)
                 {
+                    const auto next = std::min(i + segmentStride, last);
                     const auto& a = command.vertices[i];
-                    const auto& b = command.vertices[i + 1];
+                    const auto& b = command.vertices[next];
+                    i = next;
                     const auto midpointX = (a.x + b.x) * 0.5f - command.gradStart.x;
                     const auto midpointY = (a.y + b.y) * 0.5f - command.gradStart.y;
                     const auto proportion = axisLength2 > 1.0e-6f

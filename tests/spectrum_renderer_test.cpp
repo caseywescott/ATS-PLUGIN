@@ -333,5 +333,48 @@ int main()
         assert((c1 >> 24) == 0xff && (c2 >> 24) == 0xff); // fully opaque
     }
 
+    // Frame geometry budget: a large model in a data-scaled mode must be
+    // thinned so the painter stays near kMaxPathSegmentsPerFrame; a small one
+    // is drawn at full resolution.
+    {
+        SpectralTraceInput large;
+        large.source = SpectralTraceSource::current;
+        large.sourceRevision = 1;
+        large.displayShapeRevision = 1;
+        large.durationSeconds = 20.0;
+        large.partialCount = 400;
+        large.frameCount = 2000;
+        large.nyquistHz = 24000.0;
+        large.displayAmpPeak = 1.0;
+        large.displayResidualPeak = 1.0;
+        for (int partial = 0; partial < 400; ++partial)
+        {
+            SpectralPartialInput trace;
+            trace.partialIndex = partial;
+            trace.frequencyShapeRank = partial + 1;
+            for (int frame = 0; frame < 2000; ++frame)
+                trace.frames.push_back({ 220.0 + partial * 40.0 + frame * 0.1,
+                                         0.05 + 0.5 * ((partial * 7 + frame) % 13) / 13.0 });
+            large.partials.push_back(std::move(trace));
+        }
+        const auto snapshot = SpectralTraceBuilder::build(large, SpectralTraceMode::isometric);
+        const auto commands = SpectrumRenderer::render(snapshot, { 0.0f, 0.0f, 556.0f, 280.0f });
+        const auto stride = SpectrumRenderer::pathSegmentStride(commands);
+        std::size_t total = 0, drawn = 0, paths = 0;
+        for (const auto& command : commands)
+        {
+            if (!command.isPath())
+                continue;
+            ++paths;
+            const auto segments = command.vertices.size() - 1;
+            total += segments;
+            drawn += (segments + stride - 1) / stride;
+        }
+        assert(total > SpectrumRenderer::kMaxPathSegmentsPerFrame);
+        assert(stride > 1);
+        assert(drawn <= SpectrumRenderer::kMaxPathSegmentsPerFrame + paths);
+        assert(SpectrumRenderer::pathSegmentStride(commands, total) == 1);
+    }
+
     return 0;
 }

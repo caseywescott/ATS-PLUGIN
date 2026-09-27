@@ -512,6 +512,17 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
     FetchContent_MakeAvailable(visage)
   endif()
 
+  # bgfx's default per-frame transient buffers (6 MB vertex / 2 MB index) hold
+  # about 13k Visage shape quads (~480 B each). The isometric envelope spectrum
+  # alone emits ~11.8k, so every batch after it was silently dropped ("Not
+  # enough transient buffer memory") and most of the editor vanished. 24 MB /
+  # 6 MB fits ~52k quads; the spectrum painter also caps its own geometry.
+  if(TARGET bgfx)
+    target_compile_definitions(bgfx PRIVATE
+      "BGFX_CONFIG_TRANSIENT_VERTEX_BUFFER_SIZE=(24<<20)"
+      "BGFX_CONFIG_TRANSIENT_INDEX_BUFFER_SIZE=(6<<20)")
+  endif()
+
   add_library(ats_visage_editor STATIC src/ui/VisageEditor.cpp src/ui/VisageNativeMac.mm)
   target_include_directories(ats_visage_editor PUBLIC
     "${CMAKE_SOURCE_DIR}/src/ui" "${CMAKE_SOURCE_DIR}/src/core"
