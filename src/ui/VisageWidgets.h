@@ -335,9 +335,10 @@ class AtsTextField final : public visage::Frame
 public:
     using ThemeGetter = std::function<ThemeTokens()>;
     using Commit = std::function<void(const std::string&)>;
+    using Change = std::function<void(const std::string&)>;
 
-    AtsTextField(Commit onCommit, ThemeGetter theme)
-        : onCommit_(std::move(onCommit)), theme_(std::move(theme))
+    AtsTextField(Commit onCommit, ThemeGetter theme, Change onChange = {})
+        : onCommit_(std::move(onCommit)), onChange_(std::move(onChange)), theme_(std::move(theme))
     {
         onMouseDown() += [this](const visage::MouseEvent&) {
             focused_ = true;
@@ -379,6 +380,8 @@ public:
     void handleCharInput(char c)
     {
         text_ += c;
+        if (onChange_)
+            onChange_(text_);
         redraw();
     }
 
@@ -387,6 +390,8 @@ public:
         if (!text_.empty())
         {
             text_.pop_back();
+            if (onChange_)
+                onChange_(text_);
             redraw();
         }
     }
@@ -423,6 +428,7 @@ public:
 
 private:
     Commit onCommit_;
+    Change onChange_;
     ThemeGetter theme_;
     std::string text_;
     bool focused_ = false;

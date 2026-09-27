@@ -259,6 +259,11 @@ public:
         snapshot.progress = analysisProgress_.load(std::memory_order_acquire);
         if (snapshot.analysisRunning)
             snapshot.state = ui::UiState::analyzing;
+        // Live transport state; the published telemetry only changes on
+        // analysis events, so a preview that starts, stops or runs out would
+        // otherwise leave the editor's transport showing the wrong state.
+        snapshot.previewPlaying = previewPlaying_.load(std::memory_order_acquire);
+        snapshot.normalizedPlayhead = normalizedPlayhead_.load(std::memory_order_acquire);
         return snapshot;
     }
 
@@ -727,8 +732,12 @@ public:
         spectrumResidualDisplayReferences_[static_cast<std::size_t>(displayReferenceIndex)] = 0.0;
         if (state_ == HostState::prepared)
         {
-            const int previewSlot = analysisSlot_ == 3 ? 0 : analysisSlot_;
-            (void) renderSourceForPreview(previewSlot, error);
+            // Slot 3 is the current model; rendering "slot 0" here previewed
+            // morph source A (usually absent) and failed with missing_model.
+            if (analysisSlot_ == 3)
+                (void) renderCurrentForPreview(error);
+            else
+                (void) renderSourceForPreview(analysisSlot_, error);
         }
         auto snapshot = telemetry();
         snapshot.analysisRunning = false;
@@ -792,7 +801,15 @@ public:
         }
         if (std::holds_alternative<ui::AnalyzeCurrentAction>(action))
         {
-            (void) queueAnalysisSource(0, error);
+            // The current model is slot 3 (cb8b6423). Analysing slot 0 here
+            // updated morph source A instead, so SESSION's CURRENT preview and
+            // PARTIALS/MATH edits reported a missing model after analysis.
+            if (!currentSource_)
+            {
+                error = { "missing_current_source", "select an imported current source before analysis" };
+                return true;
+            }
+            (void) queueAnalysisSource(3, error);
             return true;
         }
         if (std::holds_alternative<ui::CancelJobsAction>(action))

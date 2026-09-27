@@ -132,7 +132,9 @@ public:
             shell_.analysis(), [this](const EditorAction& action) { emitPageAction(action); }, theme);
         analysisPageRaw_ = analysisPage.get();
         analysisPage->setChromeHandlers(
-            [this](UiRect) { runSourceImportDialog(NativeFileDialogKind::importWav, 0); },
+            // ANALYSIS works on the current model (slot 3) — the one SESSION's
+            // CURRENT audition plays and PARTIALS/MATH edit — not morph source A.
+            [this](UiRect) { runSourceImportDialog(NativeFileDialogKind::importWav, 3); },
             [this](UiRect anchor) { showAnalysisProfileMenu(anchor); });
         pageContainer_->addPage(std::move(analysisPage));
         auto synthesisPage = std::make_unique<AtsSynthesisPage>(
@@ -348,6 +350,8 @@ public:
     {
         shell_.setActivity(analysisRunning, renderRunning);
         shell_.analysis().setWorkerRunning(analysisRunning);
+        if (analysisPageRaw_ != nullptr)
+            analysisPageRaw_->redraw();
         redraw();
     }
 
@@ -356,6 +360,8 @@ public:
         telemetry_ = std::move(snapshot);
         shell_.setActivity(telemetry_.analysisRunning, telemetry_.renderRunning);
         shell_.analysis().setWorkerRunning(telemetry_.analysisRunning);
+        if (analysisPageRaw_ != nullptr)
+            analysisPageRaw_->redraw();
         shell_.analysis().setHasSource(telemetry_.hasSourceA || telemetry_.hasSourceB ||
                                        telemetry_.hasCurrentModel);
 
@@ -371,6 +377,8 @@ public:
         shell_.setActivity(telemetry_.analysisRunning, telemetry_.renderRunning);
         shell_.setHistoryAvailability(telemetry_.canUndo, telemetry_.canRedo);
         shell_.analysis().setWorkerRunning(telemetry_.analysisRunning);
+        if (analysisPageRaw_ != nullptr)
+            analysisPageRaw_->redraw();
         shell_.analysis().setHasSource(telemetry_.hasSourceA || telemetry_.hasSourceB ||
                                        telemetry_.hasCurrentModel);
 

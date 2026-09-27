@@ -290,9 +290,12 @@ public:
         redraw();
     }
 
+    // Worker state lives in AnalysisPageModel, which the editor updates from
+    // telemetry. The page used to keep its own copy that nothing set, so
+    // CANCEL never fired and ANALYZE stayed enabled during analysis.
     void setWorkerRunning(bool running)
     {
-        workerRunning_ = running;
+        model_.setWorkerRunning(running);
         redraw();
     }
 
@@ -449,7 +452,7 @@ private:
             }
             // CANCEL is live only while the worker runs; the other three are the
             // inverse.
-            const bool enabled = rows[i].index == 2 ? workerRunning_ : !workerRunning_;
+            const bool enabled = rows[i].index == 2 ? model_.workerRunning() : !model_.workerRunning();
             paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, slot, false, false));
             canvas.setColor(enabled ? tokens.textPrimary.argb : tokens.textFaint.argb);
             canvas.text(rows[i].label, font, visage::Font::kCenter, slot.x, slot.y, slot.width,
@@ -488,10 +491,10 @@ private:
                 if (onImportWav_) onImportWav_(rightSlots[i].bounds);
                 break;
             case 1:
-                if (!workerRunning_ && emit_) emit_(AnalyzeCurrentAction {});
+                if (!model_.workerRunning() && emit_) emit_(AnalyzeCurrentAction {});
                 break;
             case 2:
-                if (workerRunning_ && emit_) emit_(CancelJobsAction {});
+                if (model_.workerRunning() && emit_) emit_(CancelJobsAction {});
                 break;
             default:
                 if (emit_) emit_(StopPreviewAction {});
@@ -521,7 +524,6 @@ private:
     std::vector<std::unique_ptr<ParameterBinding>> bindings_;
     std::vector<visage::Frame*> widgets_;
     int profile_ = 0;
-    bool workerRunning_ = false;
 };
 
 
@@ -1694,12 +1696,18 @@ public:
     AtsMathPage(MathPageModel& model, Emitter emit, ThemeGetter theme)
         : model_(model), emit_(std::move(emit)), theme_(std::move(theme))
     {
+        // Every edit updates the draft so APPLY SCRIPT sends what is on screen;
+        // Return is a shortcut that commits and applies.
         auto field = std::make_unique<AtsTextField>(
             [this](const std::string& text) {
                 model_.setDraft(text);
                 apply();
             },
-            theme_);
+            theme_,
+            [this](const std::string& text) {
+                model_.setDraft(text);
+                redraw();
+            });
         textField_ = field.get();
         addChild(std::move(field));
 
