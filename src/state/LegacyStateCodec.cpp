@@ -1,7 +1,11 @@
 #include "LegacyStateCodec.h"
+#include "../core/AtsStateCodec.h"
 
 #include <algorithm>
 #include <limits>
+
+static_assert(ats::LegacyStateCodec::kCurrentVersion == ats::StateHeader::kCurrentVersion,
+              "state header and payload codec versions must advance together");
 
 namespace ats
 {
@@ -136,7 +140,9 @@ bool validState(const LegacyState& state) noexcept
     if (!finite(s.startTime) || !finite(s.duration) || !finite(s.partialsGain) || !finite(s.residualGain) ||
         !finite(s.frequencyFactor) || !finite(s.timeFactor) || !finite(s.sampleRate) ||
         !finite(state.frequencyShape.amount) || !finite(state.frequencyShape.pivotHz) ||
-        !finite(state.outputTrim) || state.atsModel.size() > kMaxBlobBytes ||
+        !finite(state.outputTrim) || !finite(state.timbreBrightnessDb) ||
+        !finite(state.timbreTiltDbPerOct) || !finite(state.timbreNoiseBalance) ||
+        state.atsModel.size() > kMaxBlobBytes ||
         state.morphRecipe.size() > kMaxBlobBytes)
         return false;
     for (const auto& path : state.morphSourcePaths)
@@ -240,6 +246,14 @@ std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::u
         writeString(writer, state.timbreJson);
         writeFloatVec(writer, state.smearnovOnsets);
     }
+    if (version >= 19)
+    {
+        writer.writeU8(state.analysis.multiRes ? 1 : 0);
+        writer.writeU8(state.synth.useIfftSynth ? 1 : 0);
+        writer.writeF64(state.timbreBrightnessDb);
+        writer.writeF64(state.timbreTiltDbPerOct);
+        writer.writeF64(state.timbreNoiseBalance);
+    }
     return std::move(writer).take();
 }
 
@@ -319,6 +333,16 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
         if (!readFloatVec(reader, state.morphTimeline, 32)) return std::nullopt;
         if (!readString(reader, state.timbreJson)) return std::nullopt;
         if (!readFloatVec(reader, state.smearnovOnsets, 4096)) return std::nullopt;
+    }
+    if (version >= 19)
+    {
+        std::uint8_t multiRes = 0, ifft = 0;
+        if (!reader.readU8(multiRes) || !reader.readU8(ifft) ||
+            !reader.readF64(state.timbreBrightnessDb) || !reader.readF64(state.timbreTiltDbPerOct) ||
+            !reader.readF64(state.timbreNoiseBalance))
+            return std::nullopt;
+        state.analysis.multiRes = multiRes != 0;
+        state.synth.useIfftSynth = ifft != 0;
     }
     if (!validState(state) || reader.remaining() != 0) return std::nullopt;
     return state;

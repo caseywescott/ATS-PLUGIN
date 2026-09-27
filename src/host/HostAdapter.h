@@ -1574,6 +1574,9 @@ public:
         ls.synth.frequencyShape.pivotHz = static_cast<double>(parameters_.read("freqShapePivotHz"));
         ls.frequencyShape  = ls.synth.frequencyShape;
         ls.outputTrim      = static_cast<double>(parameters_.read("outputTrim"));
+        ls.timbreBrightnessDb = static_cast<double>(parameters_.read("timbreBrightnessDb"));
+        ls.timbreTiltDbPerOct = static_cast<double>(parameters_.read("timbreTiltDbPerOct"));
+        ls.timbreNoiseBalance = static_cast<double>(parameters_.read("timbreNoiseBalance"));
         ls.residualOnly    = parameters_.read("residualOnly") >= 0.5f;
         ls.classicPreviewMode = static_cast<std::int32_t>(std::round(parameters_.read("classicPreviewMode")));
 

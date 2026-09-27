@@ -29,9 +29,16 @@ inline void applyLegacyStateToParameterStore(const LegacyState& ls, ParameterSto
     set("freq",             static_cast<float>(ls.synth.frequencyFactor));
     set("timeStretch",      static_cast<float>(ls.synth.timeFactor));
     set("useIfftSynth",     ls.synth.useIfftSynth ? 1.0f : 0.0f);
-    set("freqShapeMode",    static_cast<float>(static_cast<int>(ls.synth.frequencyShape.mode)));
-    set("freqShapeAmount",  static_cast<float>(ls.synth.frequencyShape.amount));
-    set("freqShapePivotHz", static_cast<float>(ls.synth.frequencyShape.pivotHz));
+    // The chunk carries the shape once, as LegacyState::frequencyShape (v13+);
+    // synth.frequencyShape is never serialized, so reading it reset the shape
+    // on every project reload.
+    set("freqShapeMode",    static_cast<float>(static_cast<int>(ls.frequencyShape.mode)));
+    set("freqShapeAmount",  static_cast<float>(ls.frequencyShape.amount));
+    set("freqShapePivotHz", static_cast<float>(ls.frequencyShape.pivotHz));
+    // v19; older chunks keep the registry defaults held by LegacyState.
+    set("timbreBrightnessDb", static_cast<float>(ls.timbreBrightnessDb));
+    set("timbreTiltDbPerOct", static_cast<float>(ls.timbreTiltDbPerOct));
+    set("timbreNoiseBalance", static_cast<float>(ls.timbreNoiseBalance));
     set("outputTrim",       static_cast<float>(ls.outputTrim));
     set("residualOnly",     ls.residualOnly ? 1.0f : 0.0f);
     set("classicPreviewMode", static_cast<float>(ls.classicPreviewMode));

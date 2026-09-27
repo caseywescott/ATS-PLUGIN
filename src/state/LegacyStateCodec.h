@@ -97,12 +97,17 @@ struct LegacyState
     std::vector<float> morphTimeline { 0.0f, 1.0f };
     std::string timbreJson;
     std::vector<float> smearnovOnsets;
+    // v19: parameters the legacy chunk never carried, so they reset on reload.
+    // analysis.multiRes and synth.useIfftSynth are serialized from v19 too.
+    double timbreBrightnessDb = 0.0;
+    double timbreTiltDbPerOct = 0.0;
+    double timbreNoiseBalance = 0.5;
 };
 
 class LegacyStateCodec
 {
 public:
-    static constexpr std::uint32_t kCurrentVersion = 18;
+    static constexpr std::uint32_t kCurrentVersion = 19;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     [[nodiscard]] static std::vector<std::byte> encode(const LegacyState& state,

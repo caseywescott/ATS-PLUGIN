@@ -28,6 +28,11 @@ int main()
     source.morphTimeline = { 0.0f, 0.25f, 0.75f, 1.0f };
     source.timbreJson = "{\"version\":1,\"plan\":[]}";
     source.smearnovOnsets = { 0.1f, 0.5f, 0.9f };
+    source.analysis.multiRes = true;
+    source.synth.useIfftSynth = true;
+    source.timbreBrightnessDb = -7.5;
+    source.timbreTiltDbPerOct = 3.25;
+    source.timbreNoiseBalance = 0.8;
 
     for (std::uint32_t version = 2; version <= ats::LegacyStateCodec::kCurrentVersion; ++version)
     {
@@ -53,6 +58,21 @@ int main()
             assert(decoded->timbreJson.empty());
             assert(decoded->smearnovOnsets.empty());
         }
+        if (version >= 19)
+        {
+            assert(decoded->analysis.multiRes && decoded->synth.useIfftSynth);
+            assert(decoded->timbreBrightnessDb == -7.5 && decoded->timbreTiltDbPerOct == 3.25 &&
+                   decoded->timbreNoiseBalance == 0.8);
+        }
+        else
+        {
+            // Not carried before v19: registry defaults.
+            assert(!decoded->analysis.multiRes && !decoded->synth.useIfftSynth);
+            assert(decoded->timbreBrightnessDb == 0.0 && decoded->timbreTiltDbPerOct == 0.0 &&
+                   decoded->timbreNoiseBalance == 0.5);
+        }
+        if (version >= 13)
+            assert(decoded->frequencyShape.mode == ats::FrequencyShapeMode::Harmonic);
         auto truncated = bytes;
         truncated.pop_back();
         assert(!ats::LegacyStateCodec::decode(truncated.data(), truncated.size()));
@@ -82,5 +102,5 @@ int main()
     for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
         corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
     assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
-    std::cout << "legacy_state_codec_test: ATSP v2-v18 payload round-trip ok\n";
+    std::cout << "legacy_state_codec_test: ATSP v2-v19 payload round-trip ok\n";
 }
