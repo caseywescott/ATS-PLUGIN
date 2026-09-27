@@ -183,7 +183,21 @@ float ParameterDescriptor::snap(float value) const noexcept
     if (type == ParameterType::boolean || type == ParameterType::choice || type == ParameterType::integer)
         return std::round(clamped);
     if (interval <= 0.0f) return clamped;
-    return clamp(minimum + std::round((clamped - minimum) / interval) * interval);
+    // minimum + steps * interval in float is not exact (0.01f is inexact) and
+    // depends on FMA contraction: -12 + 1200 * 0.01f is 0 on x86_64 but
+    // 2.2e-7 on arm64, which the editor then printed as "2.2209e-07". Work in
+    // double and round to the decimal precision the interval implies.
+    const double steps = std::round((static_cast<double>(clamped) - minimum) / interval);
+    double snapped = static_cast<double>(minimum) + steps * static_cast<double>(interval);
+    const double decimals = std::ceil(-std::log10(static_cast<double>(interval)) - 1.0e-9);
+    if (decimals > 0.0 && decimals <= 8.0)
+    {
+        const double scale = std::pow(10.0, decimals);
+        snapped = std::round(snapped * scale) / scale;
+    }
+    if (snapped == 0.0)
+        snapped = 0.0; // no "-0" from rounding a tiny negative
+    return clamp(static_cast<float>(snapped));
 }
 
 std::string ParameterDescriptor::text(float value) const

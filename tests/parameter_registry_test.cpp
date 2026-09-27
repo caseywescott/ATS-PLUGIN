@@ -1,3 +1,4 @@
+#include <string>
 #include "ParameterRegistry.h"
 
 #include <cassert>
@@ -50,4 +51,21 @@ int main()
     store.resetToDefaults();
     assert(store.read("partGain") == 1.0f && store.read("morphQuality") == 1.0f);
     std::cout << "parameter_registry_test: 81 descriptors ok\n";
+
+    // Snapping must land exactly on interval multiples on every architecture;
+    // arm64 FMA used to leave -12 + 1200 * 0.01f at 2.2e-7 ("2.2209e-07").
+    for (const auto* id : { "timbreBrightnessDb", "timbreTiltDbPerOct" })
+    {
+        const auto* descriptor = ats::ParameterRegistry::find(id);
+        assert(descriptor != nullptr);
+        assert(descriptor->snap(0.0f) == 0.0f);
+        assert(descriptor->snap(1.0e-7f) == 0.0f);
+        assert(descriptor->text(0.0f) == "0");
+        assert(descriptor->text(descriptor->defaultValue) == "0");
+        assert(descriptor->snap(1.234f) == 1.23f);
+    }
+    for (const auto& descriptor : ats::ParameterRegistry::descriptors())
+        if (descriptor.type != ats::ParameterType::choice &&
+            descriptor.type != ats::ParameterType::boolean)
+            assert(descriptor.text(descriptor.defaultValue).find('e') == std::string::npos);
 }
