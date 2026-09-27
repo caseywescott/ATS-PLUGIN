@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
 
-add_executable(ats_resynth_standalone MACOSX_BUNDLE AtsStandaloneMain.mm)
+add_executable(ats_resynth_standalone MACOSX_BUNDLE AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm)
 target_compile_features(ats_resynth_standalone PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_standalone PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
   "${CMAKE_SOURCE_DIR}/src/host"
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_standalone PRIVATE
-  ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa")
+  ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa"
+  "-framework AudioToolbox" "-framework CoreAudio")
 set_target_properties(ats_resynth_standalone PROPERTIES
   OUTPUT_NAME "ATS Resynth"
   MACOSX_BUNDLE_GUI_IDENTIFIER "com.atsplugin.resynth"
@@ -57,19 +58,26 @@ add_custom_command(TARGET ats_resynth_standalone POST_BUILD
   COMMENT "Embedding dependencies and signing ATS Resynth.app"
   VERBATIM)
 
-add_executable(ats_resynth_standalone_smoke AtsStandaloneMain.mm)
+add_executable(ats_resynth_standalone_smoke AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm)
 target_compile_features(ats_resynth_standalone_smoke PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_standalone_smoke PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
   "${CMAKE_SOURCE_DIR}/src/host"
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_standalone_smoke PRIVATE
-  ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa")
+  ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa"
+  "-framework AudioToolbox" "-framework CoreAudio")
 enable_testing()
 add_test(NAME ats_resynth_standalone_smoke
   COMMAND ats_resynth_standalone_smoke --smoke)
 add_test(NAME ats_resynth_standalone_close_smoke
   COMMAND ats_resynth_standalone_smoke --close-smoke)
 # Both smokes launch the standalone window; they need a window-server session.
+# Live dispatch matrix (audit T-202): native events through the real editor,
+# silent real audio device, JSONL log of every action/result/telemetry step.
+add_test(NAME ats_resynth_standalone_dispatch_matrix
+  COMMAND ats_resynth_standalone_smoke --dispatch-matrix
+    "${CMAKE_CURRENT_BINARY_DIR}/dispatch-matrix.jsonl" "ctest")
 set_tests_properties(ats_resynth_standalone_smoke ats_resynth_standalone_close_smoke
+  ats_resynth_standalone_dispatch_matrix
   PROPERTIES LABELS windowed)

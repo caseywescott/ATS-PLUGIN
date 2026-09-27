@@ -4,6 +4,7 @@
 #include "../../state/ParameterPresetCodec.h"
 #include "../../platform/FileService.h"
 #include "../../ui/VisageEditor.h"
+#include "StandaloneAudioOutput.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -13,6 +14,11 @@
 #include <iostream>
 #include <thread>
 #include <variant>
+
+namespace ats::standalone
+{
+int runDispatchMatrix(NSApplication* application, const char* logPath, const char* revision);
+}
 
 namespace
 {
@@ -182,6 +188,17 @@ int main(int argc, char** argv)
             return runDropSmoke(application, argv[2]);
         }
 
+        if (argc > 2 && std::strcmp(argv[1], "--dispatch-matrix") == 0)
+        {
+            [application finishLaunching];
+            [application activateIgnoringOtherApps:YES];
+            const int result = ats::standalone::runDispatchMatrix(
+                application, argv[2], argc > 3 ? argv[3] : "unknown");
+            [application setDelegate:nil];
+            std::cout.flush();
+            std::_Exit(result);
+        }
+
         const bool closeSmoke = argc > 1 && std::strcmp(argv[1], "--close-smoke") == 0;
 
         ats::host::HostAdapter host;
@@ -195,6 +212,15 @@ int main(int argc, char** argv)
         if (!host.initialize(ats::host::HostFormat::standalone) ||
             !host.attachStandaloneEditor(editor, 1.0f, 1280.0f, 940.0f))
             return 2;
+        // Default-output audio so SESSION preview is audible (JUCE's standalone
+        // holder did this). The close smoke stays device-independent.
+        ats::standalone::StandaloneAudioOutput audio;
+        if (!closeSmoke)
+        {
+            std::string audioError;
+            if (!audio.start(host, false, audioError))
+                std::cerr << "ATS Resynth: audio output unavailable: " << audioError << '\n';
+        }
         auto* hostAdapter = &host;
         auto* editorView = &editor;
         NSTimer* analysisTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer*) {
@@ -229,6 +255,7 @@ int main(int argc, char** argv)
         // it attached until the outer autorelease pool drains can make AppKit
         // message a delegate whose C++ window has already been destroyed.
         [application setDelegate:nil];
+        audio.stop();
         const bool closed = !editor.isShowing();
         host.detachEditor();
         const int exitCode = closeSmoke && !closed ? 3
