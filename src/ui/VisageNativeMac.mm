@@ -39,6 +39,21 @@ void setNativeViewFrame(void* nativeHandle, float width, float height)
         [view setFrame:NSMakeRect(0.0, 0.0, width, height)];
 }
 
+std::string defaultEditorPreferencesPath()
+{
+    NSArray<NSString*>* roots = NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    if (roots.count == 0)
+        return {};
+    NSString* folder = [roots.firstObject stringByAppendingPathComponent:@"ATS Resynth"];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:folder
+                                   withIntermediateDirectories:YES
+                                                    attributes:nil
+                                                         error:nil])
+        return {};
+    return [[folder stringByAppendingPathComponent:@"editor-preferences.txt"] UTF8String];
+}
+
 void setNativeWindowContentLimits(void* nativeHandle, float minWidth, float minHeight,
                                   float maxWidth, float maxHeight)
 {

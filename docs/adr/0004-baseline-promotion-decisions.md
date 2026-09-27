@@ -83,6 +83,16 @@ Parity manifest record: `UI-SHELL-03` (`theme-combo/editor`). No deviation
 required — the surface port can proceed as editor-only state without a
 parameter binding.
 
+**Implemented 2026-09-27 (audit T-401):** the theme is a per-user editor
+preference (`src/ui/EditorPreferences.h`), stored as `theme=<ember|porcelain>`
+in `~/Library/Application Support/ATS Resynth/editor-preferences.txt`. The
+AU, VST3 and standalone wrappers opt in with
+`VisageEditor::enableUserPreferences()`; a menu choice saves it, and every new
+editor instance opens in it. The theme is not stored in the project state
+chunk, because the v18 decoder rejects trailing bytes and changing that is the
+state-version decision this ADR defers. So the theme follows the user, not
+the project. Evidence: `editor_preferences_test`, `editor_preferences_probe`.
+
 ### 6. CLAP, noisc, and CF-Synth-only preset actions
 
 **Decision: exclude from removal parity scope.**

@@ -237,6 +237,7 @@ static constexpr CGFloat kGripSize = 15.0;
         _editor.reset();
         return nil;
     }
+    _editor->enableUserPreferences();
     _editor->show();
 
     // MTKView has no autoresizingMask by default; drawable stays fixed when Logic resizes the window.

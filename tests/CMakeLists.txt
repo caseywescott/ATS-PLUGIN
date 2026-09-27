@@ -325,6 +325,12 @@ target_include_directories(theme_token_spec_test PRIVATE
 target_compile_features(theme_token_spec_test PRIVATE cxx_std_17)
 add_test(NAME theme_token_spec_test COMMAND theme_token_spec_test)
 
+add_executable(editor_preferences_test editor_preferences_test.cpp)
+target_include_directories(editor_preferences_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
+target_compile_features(editor_preferences_test PRIVATE cxx_std_17)
+add_test(NAME editor_preferences_test COMMAND editor_preferences_test)
+
 add_executable(theme_recipe_spec_test theme_recipe_spec_test.cpp)
 target_include_directories(theme_recipe_spec_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"

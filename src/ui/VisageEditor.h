@@ -34,6 +34,11 @@ public:
     EditorSize constrainSize(EditorSize requested) const override;
 
     void setTheme(ThemeId theme);
+    // Opt-in per-user preferences (theme). Wrappers call this; tests that
+    // build an editor directly stay independent of the user's file. An empty
+    // path uses ~/Library/Application Support/ATS Resynth.
+    void enableUserPreferences(const std::string& path = {});
+    [[nodiscard]] ThemeId theme() const;
     // Selects one of the five pages (SESSION..MATH) as a tab click would.
     void selectPage(int page);
     // Saves the most recently rendered frame as PNG; false without a window.

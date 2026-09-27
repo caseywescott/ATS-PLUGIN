@@ -857,6 +857,7 @@ public:
             editor_ = std::make_unique<ats::ui::VisageEditor>();
         if (!editor_->setParent(parent))
             return Steinberg::kResultFalse;
+        editor_->enableUserPreferences();
         editor_->show();
         workPump_.startTimer(20);
         return Steinberg::kResultTrue;

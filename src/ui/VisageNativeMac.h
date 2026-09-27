@@ -2,6 +2,8 @@
 
 #include "NativeFileDialog.h"
 
+#include <string>
+
 namespace ats::ui::detail
 {
 
@@ -13,6 +15,9 @@ bool nativeViewIsHidden(void* nativeHandle);
 void setNativeViewFrame(void* nativeHandle, float width, float height);
 // Applies the editor's size limits to the NSWindow that owns a standalone
 // editor view, so live window resizing honours min and max.
+// ~/Library/Application Support/ATS Resynth/editor-preferences.txt, creating
+// the folder if needed; empty when it cannot be resolved.
+std::string defaultEditorPreferencesPath();
 void setNativeWindowContentLimits(void* nativeHandle, float minWidth, float minHeight,
                                   float maxWidth, float maxHeight);
 

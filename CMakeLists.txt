@@ -582,6 +582,14 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
       ats_visage_editor ats_core visage "-framework Cocoa")
     add_test(NAME ats_widget_dispatch_test COMMAND ats_widget_dispatch_test)
 
+    add_executable(editor_preferences_probe tests/ui/editor_preferences_probe.mm)
+    target_include_directories(editor_preferences_probe PRIVATE
+      "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
+    target_compile_features(editor_preferences_probe PRIVATE cxx_std_17)
+    target_link_libraries(editor_preferences_probe PRIVATE
+      ats_visage_editor ats_core visage "-framework Cocoa")
+    add_test(NAME editor_preferences_probe COMMAND editor_preferences_probe)
+
     # Screenshot matrix capture tool (audit T-201); run manually, not a test.
     add_executable(ui_screenshot_matrix tools/ui_screenshot_matrix.mm)
     target_include_directories(ui_screenshot_matrix PRIVATE
@@ -595,7 +603,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
     # `ctest -LE windowed`.
     set_tests_properties(visage_editor_probe real_dispatch_harness_test
       popup_focus_retention_test native_file_dialog_contract_test
-      page_column_layout_test ats_widget_dispatch_test
+      page_column_layout_test ats_widget_dispatch_test editor_preferences_probe
       PROPERTIES LABELS windowed)
   endif()
 endif()

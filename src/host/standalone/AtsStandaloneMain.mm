@@ -189,6 +189,9 @@ int main(int argc, char** argv)
         sink.context = &host;
         sink.action = &forwardEditorAction;
         ats::ui::VisageEditor editor(sink);
+        // The close smoke must not depend on this machine's saved theme.
+        if (!closeSmoke)
+            editor.enableUserPreferences();
         if (!host.initialize(ats::host::HostFormat::standalone) ||
             !host.attachStandaloneEditor(editor, 1.0f, 1280.0f, 940.0f))
             return 2;

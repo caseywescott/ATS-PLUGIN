@@ -4,6 +4,7 @@
 #include "FileDialogModel.h"
 #include "SessionFileDrop.h"
 #include "VisageNativeMac.h"
+#include "EditorPreferences.h"
 #include "../core/ParameterRegistry.h"
 #include "../state/FactoryPresetState.h"
 
@@ -266,6 +267,8 @@ public:
                     if (optionId == 1 || optionId == 2)
                     {
                         setTheme(optionId == 2 ? ThemeId::porcelain : ThemeId::ember);
+                        if (onThemeChosen_)
+                            onThemeChosen_(shell_.state().theme);
                         if (sink_.themeSelected)
                             sink_.themeSelected(sink_.context, optionId - 1);
                     }
@@ -311,6 +314,13 @@ public:
             updateSourceDropTargetBounds(body);
         }
     }
+
+    // Called when the user picks a theme from the menu (not for programmatic
+    // setTheme), so preferences record only deliberate choices.
+    [[nodiscard]] ThemeId theme() const noexcept { return shell_.state().theme; }
+
+    void setThemeChosenHandler(std::function<void(ThemeId)> handler)
+    { onThemeChosen_ = std::move(handler); }
 
     void selectPage(std::size_t page)
     {
@@ -1909,6 +1919,7 @@ private:
     std::array<SourceDropTarget*, 2> analysisDropTargets_ {};
     std::array<bool, 2> sourceDropActive_ {};
     EditorShellModel shell_{};
+    std::function<void(ThemeId)> onThemeChosen_;
     std::unique_ptr<AtsPageContainer> pageContainer_;
     AtsPageContainer* pageContainerRaw_ = nullptr;
     AtsSessionPage* sessionPageRaw_ = nullptr;
@@ -2019,6 +2030,24 @@ VisageEditor::~VisageEditor() = default;
 void VisageEditor::setTheme(ThemeId theme)
 {
     impl_->frame.setTheme(theme);
+}
+
+ThemeId VisageEditor::theme() const
+{
+    return impl_->frame.theme();
+}
+
+void VisageEditor::enableUserPreferences(const std::string& path)
+{
+    const auto file = path.empty() ? detail::defaultEditorPreferencesPath() : path;
+    if (file.empty())
+        return;
+    impl_->frame.setTheme(EditorPreferences::load(file).theme);
+    impl_->frame.setThemeChosenHandler([file](ThemeId theme) {
+        auto preferences = EditorPreferences::load(file);
+        preferences.theme = theme;
+        (void) preferences.save(file);
+    });
 }
 
 void VisageEditor::selectPage(int page)
