@@ -687,6 +687,16 @@ public:
             analysisFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             return smearnovCompleted;
         auto analysed = analysisFuture_.get();
+        // CANCEL can land after the worker returned but before this poll; the
+        // engine's own check has passed by then, so honour it here and never
+        // install a model the user cancelled.
+        if (analysed.status == JobResult<AnalysisOutput>::Status::success &&
+            analysisCancellation_.isCancelled())
+        {
+            analysed.status = JobResult<AnalysisOutput>::Status::cancelled;
+            analysed.error = { "cancelled", "analysis cancelled" };
+            analysed.value = {};
+        }
         analysisRunning_.store(false, std::memory_order_release);
         analysisProgress_.store(analysed.status == JobResult<AnalysisOutput>::Status::success ? 1.0f : 0.0f,
                                 std::memory_order_release);
@@ -2505,6 +2515,10 @@ private:
             return false;
         auto result = smearnovFuture_.get();
         smearnovRunning_.store(false, std::memory_order_release);
+        // Same window as analysis: a cancel after the worker finished but
+        // before this poll must still discard the result.
+        if (!result.error && smearnovCancellation_.isCancelled())
+            result.error = { "cancelled", "Smearnov cancelled" };
         if (result.error)
         {
             error = std::move(result.error);

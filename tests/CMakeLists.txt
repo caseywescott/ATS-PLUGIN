@@ -325,6 +325,11 @@ target_include_directories(theme_token_spec_test PRIVATE
 target_compile_features(theme_token_spec_test PRIVATE cxx_std_17)
 add_test(NAME theme_token_spec_test COMMAND theme_token_spec_test)
 
+add_executable(parameter_display_test parameter_display_test.cpp ../src/core/ParameterRegistry.cpp)
+target_include_directories(parameter_display_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core")
+target_compile_features(parameter_display_test PRIVATE cxx_std_17)
+add_test(NAME parameter_display_test COMMAND parameter_display_test)
+
 add_executable(editor_preferences_test editor_preferences_test.cpp)
 target_include_directories(editor_preferences_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/ui")
@@ -482,6 +487,15 @@ target_include_directories(host_current_model_workflow_test PRIVATE
 target_compile_features(host_current_model_workflow_test PRIVATE cxx_std_17)
 target_link_libraries(host_current_model_workflow_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
 add_test(NAME host_current_model_workflow_test COMMAND host_current_model_workflow_test)
+
+add_executable(host_analysis_cancel_test host_analysis_cancel_test.cpp)
+target_include_directories(host_analysis_cancel_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_analysis_cancel_test PRIVATE cxx_std_17)
+target_link_libraries(host_analysis_cancel_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME host_analysis_cancel_test COMMAND host_analysis_cancel_test)
 
 add_executable(release_matrix_test release_matrix_test.cpp)
 target_include_directories(release_matrix_test PRIVATE
