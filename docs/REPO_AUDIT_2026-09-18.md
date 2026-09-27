@@ -1,5 +1,7 @@
 # Repository audit — JUCE removal status and gap-closure task spec
 
+> **Historical — not current status.** The live scoreboard is [`docs/STATUS.md`](STATUS.md). This document is kept for its reasoning and history; where it disagrees with STATUS.md, STATUS.md wins.
+
 **Audit date:** 2026-09-18
 **Branch:** `remove-juce` at `c598ea45` plus a dirty working tree
 (65 content-modified files, ~7,075 insertions; 117 real untracked files)

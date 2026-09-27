@@ -1,5 +1,7 @@
 # JUCE-removal parity audit — what remains before the spec can close
 
+> **Historical — not current status.** The live scoreboard is [`docs/STATUS.md`](STATUS.md). This document is kept for its reasoning and history; where it disagrees with STATUS.md, STATUS.md wins.
+
 **Audit date:** 2026-08-05
 **Branch:** `remove-juce` (HEAD `4a61aa0`)
 **Baseline source commit:** `36244a3ff041491d9a8cc4f5bf641105b52c8e35`

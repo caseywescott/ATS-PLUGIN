@@ -1,5 +1,7 @@
 # ATS Resynth JUCE-less parity review and completion specification
 
+> **Historical — not current status.** The live scoreboard is [`docs/STATUS.md`](STATUS.md). This document is kept for its reasoning and history; where it disagrees with STATUS.md, STATUS.md wins.
+
 **Review date:** 2026-08-22  
 **Legacy oracle:** `ui-refactor` at `36244a3ff041491d9a8cc4f5bf641105b52c8e35`  
 **JUCE-less implementation reviewed:** `remove-juce` at `a8b9357` plus the

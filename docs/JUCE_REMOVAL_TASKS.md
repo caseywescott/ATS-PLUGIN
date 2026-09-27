@@ -180,6 +180,8 @@ listed commit supplies the cross-layer proof.
 
 ### Current execution status (2026-07-29)
 
+> **Historical.** This section records status as of 2026-07-29. Current status: [`STATUS.md`](STATUS.md).
+
 - [x] Commit 21 VST3 artifact slice: exact SDK commit pinned in CMake and a
   real arm64 artifact/lifecycle/process test passes, including all-81
   controller parameter round-trips and processor state rewind/reopen.

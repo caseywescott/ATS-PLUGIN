@@ -8,6 +8,14 @@ This repository integrates software from several upstream projects. **This is no
 - **Standalone reference:** [ATSA](https://gitlab.com/dxarts/projects/ats/atsa) on GitLab (analysis-focused; does not include the Qatsh synthesis extensions). A checkout also lives at `atsa/` in this repo for reference; it is **not** the build source.
 - **License:** permissive (BSD-style academic license). Copyright 2002-2004 Oscar Pablo Di Liscia, Pete Moss and Juan Pampin. See `atsa/LICENSE` for the full grant.
 
+### Local ATSA modifications
+
+The build applies 24 patches from `patches/` to Qatsh upstream commit
+`5515648358ffaa8d863b3f2507e03a4943d79667` (`scripts/apply_qatsh_all_patches.sh`,
+manifest `tests/architecture/qatsh_patch_manifest.json`). Modified ATSA sources
+remain under their original license; ship the patch set with any source
+distribution.
+
 ## Qatsh / ATSH lineage
 
 - **Qatsh** (Qt port of ATSH): GPL v2 or later for the GUI code; icons mix GPL and LGPL. See `qatsh/COPYRIGHT.txt` and `qatsh/COPYING.txt`.
@@ -27,6 +35,16 @@ This repository integrates software from several upstream projects. **This is no
   `20de59464243447816d142e9d38e9723d068f755` (GitHub: VitalAudio/visage). Fetched
   via CMake `FetchContent` when `ATS_BUILD_VISAGE_UI_PROBE=ON`. Follow the
   upstream Visage license and retain its notices when distributing binaries.
+- **License:** MIT-style (Copyright Vital Audio, LLC; see the Visage `LICENSE`).
+- **Transitive dependencies linked into the editor** (fetched by Visage's CMake):
+  - **bgfx / bx / bimg** (Branimir Karadzic): BSD 2-clause. This project builds
+    bgfx with enlarged transient buffers (`BGFX_CONFIG_TRANSIENT_VERTEX_BUFFER_SIZE`
+    / `_INDEX_BUFFER_SIZE`, see `CMakeLists.txt`); no source is modified.
+  - **FreeType:** FreeType License (FTL), or GPLv2 at the distributor's option.
+    Binaries must credit FreeType per the FTL.
+  - **Embedded fonts:** the editor draws with Visage's embedded Lato
+    (`visage::fonts::Lato_Regular_ttf`), distributed under the SIL Open Font
+    License 1.1. Include the OFL text with binary releases.
 
 ## VST3 SDK (Steinberg)
 
