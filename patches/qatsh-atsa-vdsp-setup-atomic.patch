@@ -1,0 +1,38 @@
+--- a/src/atsa/other-utils.c
++++ b/src/atsa/other-utils.c
+@@ -20,6 +20,7 @@
+ #ifdef __APPLE__
+ #include <Accelerate/Accelerate.h>
+ #include <pthread.h>
++#include <stdatomic.h>
+ #endif
+ 
+ /* private function prototypes */
+@@ -129,20 +130,23 @@
+  * Setup creation is relatively expensive, so it is memoized; the mutex makes
+  * lazy creation safe when the analysis frame loop is parallelized. */
+ #define ATSA_VDSP_MAXLOG2 28
+-static FFTSetupD atsa_vdsp_setups[ATSA_VDSP_MAXLOG2 + 1];
++/* ATSA_VDSP_SETUP_ATOMIC: the lock-free fast path must use acquire/release
++   atomics; a plain read racing the locked write is a data race, and on arm64
++   a worker could observe the pointer before the setup it points to. */
++static _Atomic(FFTSetupD) atsa_vdsp_setups[ATSA_VDSP_MAXLOG2 + 1];
+ static pthread_mutex_t atsa_vdsp_mtx = PTHREAD_MUTEX_INITIALIZER;
+ 
+ static FFTSetupD atsa_vdsp_get_setup(int log2n)
+ {
+   FFTSetupD s;
+   if (log2n < 1 || log2n > ATSA_VDSP_MAXLOG2) return NULL;
+-  s = atsa_vdsp_setups[log2n];
++  s = atomic_load_explicit(&atsa_vdsp_setups[log2n], memory_order_acquire);
+   if (s != NULL) return s;
+   pthread_mutex_lock(&atsa_vdsp_mtx);
+-  s = atsa_vdsp_setups[log2n];
++  s = atomic_load_explicit(&atsa_vdsp_setups[log2n], memory_order_relaxed);
+   if (s == NULL) {
+     s = vDSP_create_fftsetupD((vDSP_Length)log2n, kFFTRadix2);
+-    atsa_vdsp_setups[log2n] = s;
++    atomic_store_explicit(&atsa_vdsp_setups[log2n], s, memory_order_release);
+   }
+   pthread_mutex_unlock(&atsa_vdsp_mtx);
+   return s;

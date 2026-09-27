@@ -1,0 +1,32 @@
+--- a/src/atsa/residual.c
++++ b/src/atsa/residual.c
+@@ -52,21 +52,26 @@
+ double compute_alpha(double aux, double frq_1, double frq, int buffer_size)
+ {
+   double val;
+-  val = (double)(((3.0 / (double)(buffer_size * buffer_size)) * aux ) - ((frq - frq_1) / (double)buffer_size));
++  /* ATSA_CUBIC_PHASE_DOUBLE: products in double; int buffer_size^3 and i^3
++     overflow (UB) for frames longer than 1290 samples. */
++  const double n = (double)buffer_size;
++  val = (double)(((3.0 / (n * n)) * aux ) - ((frq - frq_1) / n));
+   return(val);
+ }
+ 
+ double compute_beta(double aux, double frq_1, double frq, int buffer_size)
+ {
+   double val;
+-  val = (double)(((-2.0 / (double)(buffer_size * buffer_size * buffer_size)) * aux) + ((frq - frq_1) / (double)(buffer_size * buffer_size)));
++  const double n = (double)buffer_size; /* ATSA_CUBIC_PHASE_DOUBLE */
++  val = (double)(((-2.0 / (n * n * n)) * aux) + ((frq - frq_1) / (n * n)));
+   return(val);
+ }
+ 
+ double interp_phase(double pha_1, double frq_1, double alpha, double beta, int i) 
+ {
+   double val;
+-  val = (double)((beta * (double)(i * i * i)) + (alpha * (double)(i * i)) + (frq_1 * (double)i) + pha_1);
++  const double x = (double)i; /* ATSA_CUBIC_PHASE_DOUBLE */
++  val = (double)((beta * (x * x * x)) + (alpha * (x * x)) + (frq_1 * x) + pha_1);
+   return(val);
+ }
+ 

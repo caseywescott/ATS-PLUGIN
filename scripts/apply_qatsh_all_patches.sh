@@ -24,6 +24,7 @@ base_patches=(
 perf_patches=(
   ifft_srand ddm_slopes_maint trackstore smr_precompute tracking_ds
   residual_pow2 scratch synth_state residual_only_time_axis
+  cubic_phase_overflow vdsp_setup_atomic
 )
 
 apply_one() {

@@ -273,6 +273,26 @@
           "residual-only synthesis still needs the frame time axis"
         ]
       ]
+    },
+    {
+      "id": "cubic-phase-overflow",
+      "patch": "qatsh-atsa-cubic-phase-overflow.patch",
+      "checks": [
+        [
+          "residual.c",
+          "ATSA_CUBIC_PHASE_DOUBLE"
+        ]
+      ]
+    },
+    {
+      "id": "vdsp-setup-atomic",
+      "patch": "qatsh-atsa-vdsp-setup-atomic.patch",
+      "checks": [
+        [
+          "other-utils.c",
+          "ATSA_VDSP_SETUP_ATOMIC"
+        ]
+      ]
     }
   ]
 }
