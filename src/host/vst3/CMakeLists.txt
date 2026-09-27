@@ -94,3 +94,22 @@ if(APPLE)
     "-framework Foundation" "-framework CoreFoundation")
 endif()
 add_test(NAME ats_vst3_differential_test COMMAND ats_vst3_differential_test)
+
+# Editor size negotiation on the real plug view (audit T-404).
+add_executable(ats_vst3_view_negotiation_test
+  "${CMAKE_SOURCE_DIR}/tests/host/vst3_view_negotiation_test.cpp"
+  "${_ats_vst3_sdk_root}/public.sdk/source/vst/hosting/hostclasses.cpp"
+  "${_ats_vst3_sdk_root}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp")
+target_compile_features(ats_vst3_view_negotiation_test PRIVATE cxx_std_17)
+target_compile_options(ats_vst3_view_negotiation_test PRIVATE -UNDEBUG)
+target_include_directories(ats_vst3_view_negotiation_test PRIVATE
+  "${CMAKE_SOURCE_DIR}/src/core"
+  "${CMAKE_SOURCE_DIR}/src/host"
+  "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(ats_vst3_view_negotiation_test PRIVATE
+  ats_vst3_sdk ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor)
+if(APPLE)
+  target_link_libraries(ats_vst3_view_negotiation_test PRIVATE
+    "-framework Foundation" "-framework CoreFoundation")
+endif()
+add_test(NAME ats_vst3_view_negotiation_test COMMAND ats_vst3_view_negotiation_test)

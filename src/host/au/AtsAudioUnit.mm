@@ -212,8 +212,15 @@ static constexpr CGFloat kGripSize = 15.0;
 
 - (instancetype)initWithPreferredSize:(NSSize)size endpoint:(AuEditorEndpoint)endpoint
 {
-    const CGFloat width = size.width > 1.0 ? size.width : 1280.0;
-    const CGFloat height = size.height > 1.0 ? size.height : 940.0;
+    // A host's preferred size is honoured within the editor limits; with no
+    // preference the editor's design size is used.
+    const ats::ui::EditorSizeLimits lim{};
+    const CGFloat width = size.width > 1.0
+        ? std::clamp(size.width, static_cast<CGFloat>(lim.minWidth), static_cast<CGFloat>(lim.maxWidth))
+        : static_cast<CGFloat>(lim.defaultWidth);
+    const CGFloat height = size.height > 1.0
+        ? std::clamp(size.height, static_cast<CGFloat>(lim.minHeight), static_cast<CGFloat>(lim.maxHeight))
+        : static_cast<CGFloat>(lim.defaultHeight);
     self = [super initWithFrame:NSMakeRect(0.0, 0.0, width, height)];
     if (self == nil)
         return nil;
@@ -251,6 +258,13 @@ static constexpr CGFloat kGripSize = 15.0;
 
 - (void)setFrameSize:(NSSize)newSize
 {
+    // Host-driven resizes (Logic's window corner) get the same limits as the
+    // grip and the VST3 checkSizeConstraint path, as JUCE's constrainer did.
+    const ats::ui::EditorSizeLimits lim{};
+    newSize.width = std::clamp(newSize.width, static_cast<CGFloat>(lim.minWidth),
+                               static_cast<CGFloat>(lim.maxWidth));
+    newSize.height = std::clamp(newSize.height, static_cast<CGFloat>(lim.minHeight),
+                                static_cast<CGFloat>(lim.maxHeight));
     [super setFrameSize:newSize];
     if (_editor != nullptr && newSize.width > 0.0 && newSize.height > 0.0)
         _editor->setSize(static_cast<std::uint32_t>(newSize.width),

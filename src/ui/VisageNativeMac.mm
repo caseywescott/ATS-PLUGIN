@@ -39,6 +39,17 @@ void setNativeViewFrame(void* nativeHandle, float width, float height)
         [view setFrame:NSMakeRect(0.0, 0.0, width, height)];
 }
 
+void setNativeWindowContentLimits(void* nativeHandle, float minWidth, float minHeight,
+                                  float maxWidth, float maxHeight)
+{
+    NSView* view = (__bridge NSView*)nativeHandle;
+    NSWindow* window = view != nil ? view.window : nil;
+    if (window == nil)
+        return;
+    window.contentMinSize = NSMakeSize(minWidth, minHeight);
+    window.contentMaxSize = NSMakeSize(maxWidth, maxHeight);
+}
+
 void* installNativeMagnifyMonitor(void* nativeHandle, void* context,
                                   NativeMagnifyCallback callback,
                                   float logicalWidth, float logicalHeight)

@@ -2130,10 +2130,19 @@ bool VisageEditor::setParent(void* nativeParent)
 
 bool VisageEditor::showStandalone()
 {
+    // A standalone window is resized by the user directly, so the size limits
+    // hosts negotiate through the wrappers are enforced on the window itself.
+    const auto limits = sizeLimits();
+    impl_->app.setMinimumDimensions(static_cast<float>(limits.minWidth),
+                                    static_cast<float>(limits.minHeight));
     if (!impl_->app.window())
         impl_->app.show();
     else
         impl_->app.window()->show();
+    detail::setNativeWindowContentLimits(nativeHandle(), static_cast<float>(limits.minWidth),
+                                         static_cast<float>(limits.minHeight),
+                                         static_cast<float>(limits.maxWidth),
+                                         static_cast<float>(limits.maxHeight));
     impl_->attached = impl_->app.window() != nullptr;
     detail::setNativeViewFrame(nativeHandle(), static_cast<float>(impl_->width / impl_->scale),
                                static_cast<float>(impl_->height / impl_->scale));

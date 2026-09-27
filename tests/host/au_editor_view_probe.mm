@@ -147,8 +147,14 @@ int main(int argc, char** argv)
         REQUIRE([hostWindow makeFirstResponder:editorView]);
         drainEvents(application);
 
+        // Host-driven resizes are negotiated against EditorSizeLimits: within
+        // range they are taken as-is, outside they clamp to min/max.
+        [editorView setFrameSize:NSMakeSize(1500.0, 1000.0)];
+        REQUIRE(NSEqualSizes(editorView.frame.size, NSMakeSize(1500.0, 1000.0)));
+        [editorView setFrameSize:NSMakeSize(2500.0, 2000.0)];
+        REQUIRE(NSEqualSizes(editorView.frame.size, NSMakeSize(1900.0, 1400.0)));
         [editorView setFrameSize:NSMakeSize(720.0, 480.0)];
-        REQUIRE(NSEqualSizes(editorView.frame.size, NSMakeSize(720.0, 480.0)));
+        REQUIRE(NSEqualSizes(editorView.frame.size, NSMakeSize(1100.0, 860.0)));
         drainEvents(application);
 
         // Exercise the real embedded Visage view, then verify that the AU
@@ -175,9 +181,9 @@ int main(int argc, char** argv)
                 [embeddedView mouseDown:event];
         };
         // The §10.3 page strip is centred in the body and capped at 640, so at
-        // this 720x480 logical size it runs from editor x 40 to 680 at y 78..108
-        // in five 128px tabs. ANALYSIS is tab 1: editor x 168..296.
-        const CGFloat pageX[] { 220.0, 240.0, 260.0 };
+        // the clamped 1100x860 minimum it runs from editor x 230 to 870 at
+        // y 78..108 in five 128px tabs. ANALYSIS is tab 1: editor x 358..486.
+        const CGFloat pageX[] { 410.0, 430.0, 450.0 };
         const CGFloat pageY[] { 90.0, 96.0 };
         for (const auto x : pageX)
             for (const auto y : pageY)

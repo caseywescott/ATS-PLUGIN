@@ -11,6 +11,10 @@ namespace ats::ui::detail
 void setNativeViewHidden(void* nativeHandle, bool hidden);
 bool nativeViewIsHidden(void* nativeHandle);
 void setNativeViewFrame(void* nativeHandle, float width, float height);
+// Applies the editor's size limits to the NSWindow that owns a standalone
+// editor view, so live window resizing honours min and max.
+void setNativeWindowContentLimits(void* nativeHandle, float minWidth, float minHeight,
+                                  float maxWidth, float maxHeight);
 
 using NativeMagnifyCallback = void (*)(void* context, float x, float y,
                                         float scaleFactor);

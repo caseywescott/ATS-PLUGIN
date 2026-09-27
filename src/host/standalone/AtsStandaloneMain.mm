@@ -200,12 +200,21 @@ int main(int argc, char** argv)
             editorView->setEditorSnapshot(hostAdapter->editorSnapshot());
         }];
         NSTimer* closeTimer = nil;
+        __block bool sizeLimitsApplied = true;
         if (closeSmoke)
         {
             // Exercise the same NSWindowDelegate path as the title-bar red
             // button after Visage has installed its application delegate.
             closeTimer = [NSTimer scheduledTimerWithTimeInterval:0.10 repeats:NO block:^(NSTimer*) {
                 NSView* nativeView = (__bridge NSView*) editorView->nativeHandle();
+                // The user resizes a standalone window directly, so it must
+                // carry the same min/max the wrappers negotiate with hosts.
+                const auto limits = editorView->sizeLimits();
+                sizeLimitsApplied = nativeView.window != nil &&
+                    NSEqualSizes(nativeView.window.contentMinSize,
+                                 NSMakeSize(limits.minWidth, limits.minHeight)) &&
+                    NSEqualSizes(nativeView.window.contentMaxSize,
+                                 NSMakeSize(limits.maxWidth, limits.maxHeight));
                 [nativeView.window performClose:nil];
             }];
         }
@@ -219,7 +228,8 @@ int main(int argc, char** argv)
         [application setDelegate:nil];
         const bool closed = !editor.isShowing();
         host.detachEditor();
-        const int exitCode = closeSmoke && !closed ? 3 : 0;
+        const int exitCode = closeSmoke && !closed ? 3
+                           : closeSmoke && !sizeLimitsApplied ? 4 : 0;
         // This is the terminal standalone path: worker polling is stopped and
         // the host/editor are detached above. Visage leaves an AppKit object in
         // the outer autorelease pool after its last native window closes, so
