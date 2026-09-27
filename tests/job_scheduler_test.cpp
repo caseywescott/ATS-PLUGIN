@@ -46,9 +46,13 @@ int main()
     ats::CancellationSource runningSource;
     std::atomic<bool> started { false };
     std::atomic<bool> sawRunningCancellation { false };
-    assert(scheduler.submit({ 8 }, runningSource.token(), [&started] {
+    // The job stays running until cancel() has been issued; a fixed sleep let
+    // it finish first whenever the test thread was descheduled (~1/64 runs
+    // under load), which is a legitimate success, not a missed cancellation.
+    std::atomic<bool> cancelIssued { false };
+    assert(scheduler.submit({ 8 }, runningSource.token(), [&started, &cancelIssued] {
         started.store(true, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        while (!cancelIssued.load(std::memory_order_acquire)) std::this_thread::yield();
         return 8;
     }, [&sawRunningCancellation](ats::JobResult<int> result) {
         sawRunningCancellation.store(result.status == ats::JobResult<int>::Status::cancelled,
@@ -56,6 +60,7 @@ int main()
     }));
     while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
     runningSource.cancel();
+    cancelIssued.store(true, std::memory_order_release);
     scheduler.waitIdle();
     assert(sawRunningCancellation.load(std::memory_order_acquire));
 
