@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ParameterDisplay.h"
 #include "ParameterBinding.h"
 #include "ThemeCanvas.h"
 #include "ThemeLayout.h"
@@ -110,7 +111,7 @@ public:
         {
             const visage::Font mono(ThemeFont::monoValue, visage::fonts::DroidSansMono_ttf);
             canvas.setColor(tokens.textPrimary.argb);
-            canvas.text(descriptor->text(binding_.value()).c_str(), mono, visage::Font::kRight,
+            canvas.text(sliderValueText(*descriptor, binding_.value()).c_str(), mono, visage::Font::kRight,
                         width() - valueBoxWidth(), 0.0f, valueBoxWidth(), height());
         }
     }

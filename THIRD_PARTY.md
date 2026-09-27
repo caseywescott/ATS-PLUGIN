@@ -43,8 +43,9 @@ distribution.
   - **FreeType:** FreeType License (FTL), or GPLv2 at the distributor's option.
     Binaries must credit FreeType per the FTL.
   - **Embedded fonts:** the editor draws with Visage's embedded Lato
-    (`visage::fonts::Lato_Regular_ttf`), distributed under the SIL Open Font
-    License 1.1. Include the OFL text with binary releases.
+    (`visage::fonts::Lato_Regular_ttf`, SIL Open Font License 1.1) and Droid Sans
+    Mono (`visage::fonts::DroidSansMono_ttf`, Apache License 2.0) for value
+    readouts. Include both license texts with binary releases.
 
 ## VST3 SDK (Steinberg)
 
