@@ -190,6 +190,24 @@ int runDispatchMatrix(NSApplication* application, const char* logPath, const cha
     NSView* view = (__bridge NSView*) editor.nativeHandle();
     if (view == nil || view.window == nil || ![view.window makeFirstResponder:view])
         return 42;
+    // Visage renders (and finishes popup fades) only for an on-screen window.
+    // With the session locked or the window occluded nothing here can be
+    // observed, so report a ctest skip (77) rather than a pass or a failure.
+    bool locked = false;
+    if (CFDictionaryRef session = CGSessionCopyCurrentDictionary())
+    {
+        const auto value = static_cast<CFBooleanRef>(
+            CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")));
+        locked = value != nullptr && CFBooleanGetValue(value);
+        CFRelease(session);
+    }
+    if (locked || !(view.window.occlusionState & NSWindowOcclusionStateVisible))
+    {
+        log << "{\"skipped\":\"" << (locked ? "screen locked" : "window not visible") << "\"}\n";
+        std::cout << "dispatch matrix: skipped (" << (locked ? "screen locked" : "window not visible")
+                  << ")\n";
+        return 77;
+    }
 
     int eventNumber = 1;
     auto mouse = [&](NSEventType type, CGFloat x, CGFloat y) {

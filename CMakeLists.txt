@@ -600,11 +600,13 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
 
     # These drive a real NSWindow and Visage's render loop; they need a logged-in
     # window-server session with the window on screen. CI excludes them with
-    # `ctest -LE windowed`.
+    # `ctest -LE windowed`. RUN_SERIAL: concurrent windowed tests steal each
+    # other's key focus and break popup sequences.
     set_tests_properties(visage_editor_probe real_dispatch_harness_test
       popup_focus_retention_test native_file_dialog_contract_test
       page_column_layout_test ats_widget_dispatch_test editor_preferences_probe
-      PROPERTIES LABELS windowed)
+      PROPERTIES LABELS windowed RUN_SERIAL TRUE)
+    set_tests_properties(popup_focus_retention_test PROPERTIES SKIP_RETURN_CODE 77)
   endif()
 endif()
 

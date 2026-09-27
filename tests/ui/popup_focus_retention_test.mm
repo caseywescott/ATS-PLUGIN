@@ -106,6 +106,23 @@ int main()
         editor->setSize(1280, 940);
         REQUIRE(editor->setParent((__bridge void*) host));
         editor->show();
+        drainEvents(application);
+        // The defect only shows once Visage renders the popup fade, which it
+        // does for an on-screen window only; otherwise skip (ctest code 77)
+        // instead of passing vacuously.
+        bool locked = false;
+        if (CFDictionaryRef session = CGSessionCopyCurrentDictionary())
+        {
+            const auto value = static_cast<CFBooleanRef>(
+                CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")));
+            locked = value != nullptr && CFBooleanGetValue(value);
+            CFRelease(session);
+        }
+        if (locked || !(window.occlusionState & NSWindowOcclusionStateVisible))
+        {
+            std::cout << "popup_focus_retention_test: skipped (window not rendering)\n";
+            return 77;
+        }
         // A loaded current source enables the spectrum mode rows.
         ats::ui::EditorSnapshot snapshot;
         snapshot.revision = 1;

@@ -71,7 +71,7 @@ if(APPLE)
         "$<TARGET_BUNDLE_DIR:ats_vst3_editor_view_probe>"
         "$<TARGET_FILE:ats_resynth_vst3>"
         "${CMAKE_CURRENT_BINARY_DIR}/ats_vst3_editor_view_probe.json")
-    set_tests_properties(ats_vst3_editor_view_probe PROPERTIES LABELS windowed)
+    set_tests_properties(ats_vst3_editor_view_probe PROPERTIES LABELS windowed RUN_SERIAL TRUE)
   endif()
 endif()
 

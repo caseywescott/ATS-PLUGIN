@@ -80,4 +80,5 @@ add_test(NAME ats_resynth_standalone_dispatch_matrix
     "${CMAKE_CURRENT_BINARY_DIR}/dispatch-matrix.jsonl" "ctest")
 set_tests_properties(ats_resynth_standalone_smoke ats_resynth_standalone_close_smoke
   ats_resynth_standalone_dispatch_matrix
-  PROPERTIES LABELS windowed)
+  PROPERTIES LABELS windowed RUN_SERIAL TRUE)
+set_tests_properties(ats_resynth_standalone_dispatch_matrix PROPERTIES SKIP_RETURN_CODE 77)
