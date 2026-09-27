@@ -1,6 +1,6 @@
 # UI-SHELL-03 — Theme selector
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces the `ComboBox` theme selector in `PluginEditor.cpp`.  Implemented as
 an `AtsCombo`-style popup that offers Ember and Porcelain themes.
@@ -13,7 +13,8 @@ selection; no widget stores secondary theme state.
 
 ADR-0004 decision: `uiTheme` is kept as editor/session UI state; no versioned
 parameter is added.  Theme is NOT written into `LegacyState` or the 81-parameter
-preset format.  Persistence is editor-layer only (DAW UI state where supported).
+preset format.  Persistence is a per-user editor preference (`EditorPreferences`, Application
+Support/ATS Resynth), loaded by every wrapper-created editor.
 
 ## Geometry (§10.2 right cluster)
 
@@ -25,7 +26,7 @@ preset format.  Persistence is editor-layer only (DAW UI state where supported).
 
 ## Interaction
 
-`ProbeFrame::onMouseDown` checks `point.y < 48 && point.x >= width() - 220`
+`AtsProductionEditorShell` mouse-down checks `point.y < 48 && point.x >= width() - 220`
 and opens a `visage::PopupMenu` with options "Ember" (id 1) and "Porcelain"
 (id 2).  On selection, `shell_.setTheme(...)` is called and the frame
 re-draws.  The `EditorEventSink::themeSelected` callback fires so the
@@ -44,3 +45,7 @@ the popup lifecycle.
 ```
 
 Deviation: none (`UI-SHELL-03` proceeds without a parameter binding per ADR-0004).
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-031 Ember/Porcelain captures (after the redrawAll theme fix); RMJ-032 step 9 theme popup; editor_preferences_probe: menu choice persists as a per-user preference (ADR-0004 §5).

@@ -1,6 +1,6 @@
 # UI-SHELL-01 — Editor page selector (AtsPageContainer)
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces the `TabbedComponent` page bar in `PluginEditor.cpp` with an
 `AtsPageContainer` instance holding the five page labels
@@ -51,3 +51,7 @@ Evidence:
 ```
 
 Deviation: none.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-031 page captures (5 pages x 2 themes x 3 sizes, pixel-deterministic); RMJ-032 steps 0-4: native tab clicks select SESSION..MATH (arm64 + x86_64).

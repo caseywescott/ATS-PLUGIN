@@ -1,6 +1,6 @@
 # UI-SYNTH-01 — Synthesis parameter controls and Linear dimming
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces `SynthTabPanel` APVTS slider/button/combo attachments and the
 4 Hz timer-driven `updateFrequencyShapeUi` call.
@@ -39,3 +39,7 @@ validation and thread-domain contract.
 Deviations: 4 Hz timer-based refresh is not replicated; the model is
 invalidation-driven via telemetry revision. Live dispatch evidence remains a
 follow-on probe.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-031 SYNTHESIS captures with §7.2 widgets (toggle pills with labels, combos); RMJ-032 steps 7-8: usePhase toggle and Both-playback segmented control dispatch SetParameter.

@@ -1,6 +1,6 @@
 # UI-MATH-01 — MathExpr script editor and worker-result state machine
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces `MathExprPanel` JUCE `TextEditor`, progress/error labels, and the
 timer-driven success flash.
@@ -14,7 +14,7 @@ No timer or widget owns secondary truth; the model is the single state source.
 
 | Trigger | State before | State after |
 |---|---|---|
-| `setDraft(script)` | any | draft updated; status unchanged |
+| `setDraft(script)` (every text edit, and on Return) | any | draft updated; status unchanged |
 | `beginApply()` | idle / success / error / cancelled | `running`; returns `false` if already running |
 | `complete(true, {}, now)` | running | `success`; flash expires at `now + 600 ms` |
 | `complete(false, msg, now)` | running | `error`; `error()` returns `msg` |
@@ -63,3 +63,7 @@ boundary.
 Deviations: live script-editor text entry and worker result dispatch require
 the native Visage harness. The `ats_math_expr_test` provides deterministic
 script evaluation evidence separately.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-032 step 18: typed script + APPLY SCRIPT emits ApplyMath with the text (draft now updates per edit); host_current_model_workflow_test applies and undoes MATH on the current model.

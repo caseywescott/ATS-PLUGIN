@@ -1,6 +1,6 @@
 # UI-SHELL-02 — Undo / Redo buttons
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces the `TextButton` undo/redo pair in `PluginEditor.cpp`.  The two
 buttons live in the top-bar right cluster, separated by a 4 px gap.
@@ -45,3 +45,7 @@ editor_page_models_test: confirms canUndo/canRedo state transitions.
 ```
 
 Deviation: none.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-032 steps 11-12: header UNDO/REDO emit HistoryAction and revert/re-apply the factory preset; buttons enabled from pumped snapshot history.

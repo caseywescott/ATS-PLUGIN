@@ -131,12 +131,14 @@
         "required: block-size/channel-layout matrix"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R 'ats_primitives_test|host_lifecycle_test' --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R 'ats_primitives_test|host_lifecycle_test' --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "release_matrix_test: 56 rate x block x stereo/mono x in-block MIDI cases finite/bounded/audible (RMJ-100)"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-PARAM-001",
@@ -182,12 +184,14 @@
         "required: normalized-value matrix"
       ],
       "evidence": [
-        "cmake --build build-review --target parameter_registry_test -j2 && ctest --test-dir build-review --output-on-failure -R parameter_registry_test"
+        "cmake --build build-review --target parameter_registry_test -j2 && ctest --test-dir build-review --output-on-failure -R parameter_registry_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "release_matrix_test: 81 parameters x min/max = 162 save/reopen cases byte-identical (RMJ-100)"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-PARAM-002",
@@ -231,12 +235,14 @@
         "tests/ui/ats_ui_parity_manifest.json"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R parameter_binding_dispatch_test --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R parameter_binding_dispatch_test --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "ats_vst3_differential_test: controller-encoded vs direct actions byte-identical over 18 steps; RMJ-032 live slider/combo/toggle/segmented dispatch"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-STATE-001",
@@ -287,12 +293,14 @@
         "required: preset round-trip fixtures"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R legacy_state_codec_test --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R legacy_state_codec_test --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "legacy_state_codec_test v2-v19; release_matrix_test 162 parameter-edge reopen cases (RMJ-100)"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-PRESET-001",
@@ -335,12 +343,14 @@
         "required: temporary preset directory fixture"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R file_service_preset_test --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R file_service_preset_test --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "factory_preset_state_test: 12 presets x 81 values vs legacy recipes incl. preservation; RMJ-032 presets popup live"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-UNDO-001",
@@ -381,12 +391,14 @@
         "required: model edit state fixtures"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R undo_history_test --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R undo_history_test --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "RMJ-032 live header UNDO/REDO steps 11-12; host_current_model_workflow_test undoable MATH"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-SCHED-001",
@@ -438,7 +450,7 @@
         },
         {
           "path": "tests/ui/real_dispatch_harness_test.mm",
-          "state": "required",
+          "state": "existing",
           "proves": "Worker results and UI actions traverse the target backend."
         }
       ],
@@ -447,12 +459,14 @@
       ],
       "evidence": [
         "cmake --build build-review --target job_coordinator_test job_scheduler_test -j2 && ctest --test-dir build-review -R 'job_coordinator_test|job_scheduler_test' --output-on-failure",
-        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "real_dispatch_harness_test and ats_resynth_standalone_dispatch_matrix (RMJ-032) pass on arm64 windowed"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-THREAD-001",
@@ -497,9 +511,9 @@
           "proves": "Concurrent reader/publication stress for coherent playback, meter, and playhead snapshots."
         },
         {
-          "path": "required: ThreadSanitizer build",
-          "state": "required",
-          "proves": "No data race across model, worker, UI, and audio publication."
+          "path": "scripts/run_sanitizers.sh",
+          "state": "existing",
+          "proves": "Core suite runs clean under ThreadSanitizer (and ASan+UBSan) with the parallel ATSA analysis workers."
         }
       ],
       "fixtures_or_goldens": [
@@ -507,12 +521,14 @@
       ],
       "evidence": [
         "cmake --build build-review --target audio_thread_safety_test playback_telemetry_contract_test -j2 && ctest --test-dir build-review --output-on-failure -R 'audio_thread_safety_test|playback_telemetry_contract_test'",
-        "cmake -S . -B /tmp/ats-juce-tsan -DBUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_C_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread && cmake --build /tmp/ats-juce-tsan --target audio_thread_safety_test -j2 && ctest --test-dir /tmp/ats-juce-tsan --output-on-failure -R audio_thread_safety_test"
+        "cmake -S . -B /tmp/ats-juce-tsan -DBUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_C_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread && cmake --build /tmp/ats-juce-tsan --target audio_thread_safety_test -j2 && ctest --test-dir /tmp/ats-juce-tsan --output-on-failure -R audio_thread_safety_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "TSan 93/93 after fixing the vDSP setup race and serializing ATSA progress callbacks (RMJ-100); ats_engine_test 0/160 under 8-way stress"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-EDITOR-001",
@@ -631,7 +647,7 @@
         },
         {
           "path": "tests/ui/real_dispatch_harness_test.mm",
-          "state": "required",
+          "state": "existing",
           "proves": "Target-backend hit testing, native page selection, parameter begin/drag/end, focus, popup creation and row selection, keyboard, and action dispatch."
         },
         {
@@ -645,12 +661,14 @@
         "required: geometry/hit-region manifest"
       ],
       "evidence": [
-        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "RMJ-031 deterministic screenshot matrix (44/44 run-to-run identical); RMJ-032 live dispatch 21/21"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "2026-07-28"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-DIAG-001",
@@ -698,12 +716,13 @@
         "required: progress/error event trace"
       ],
       "evidence": [
-        "cmake --build build-review --target telemetry_test ui_action_dispatcher_test -j2 && ctest --test-dir build-review --output-on-failure -R 'telemetry_test|ui_action_dispatcher_test'"
+        "cmake --build build-review --target telemetry_test ui_action_dispatcher_test -j2 && ctest --test-dir build-review --output-on-failure -R 'telemetry_test|ui_action_dispatcher_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "ARCH-QATSH-001",
@@ -758,12 +777,14 @@
       ],
       "evidence": [
         "python3 tests/architecture/qatsh_patch_manifest_check.py tests/architecture/qatsh_patch_manifest.json qatsh/src/atsa",
-        "ctest --test-dir build-review -R ats_qatsh_patch_manifest --output-on-failure"
+        "ctest --test-dir build-review -R ats_qatsh_patch_manifest --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "ats_qatsh_patch_manifest 24/24; fresh clone @5515648 + apply_qatsh_all_patches.sh byte-identical to local ATSA (RMJ-100)"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-ATSA-001",
@@ -881,12 +902,13 @@
         "required: partial synthesis audio golden"
       ],
       "evidence": [
-        "cmake --build build-review --target ats_engine_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_engine_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target ats_engine_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_engine_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-SYNTH-002",
@@ -990,12 +1012,13 @@
         "required: IFFT impulse/phase/audio goldens"
       ],
       "evidence": [
-        "cmake --build build-review --target ifft_synth_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ifft_synth_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target ifft_synth_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ifft_synth_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-RESAMPLE-001",
@@ -1041,12 +1064,13 @@
         "required: resampler impulse/ramp/sine goldens"
       ],
       "evidence": [
-        "cmake --build build-review --target resampler_contract_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'resampler_contract_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target resampler_contract_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'resampler_contract_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-FREQ-001",
@@ -1094,12 +1118,14 @@
         "required: shaped-spectrum audio golden"
       ],
       "evidence": [
-        "cmake --build build-review --target frequency_shape_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'frequency_shape_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target frequency_shape_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'frequency_shape_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "release_matrix_test: freqShape* survive save/reopen (fixed restore mapping)"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-TIMBRE-001",
@@ -1145,12 +1171,14 @@
         "required: timbre plan serialization and descriptor fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target timbre_motion_plan_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'timbre_motion_plan_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target timbre_motion_plan_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'timbre_motion_plan_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "release_matrix_test: timbre* persisted from state v19"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-001",
@@ -1198,12 +1226,13 @@
         "required: serialized recipe fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'"
+        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-002",
@@ -1252,12 +1281,13 @@
         "required: envelope transfer numerical report"
       ],
       "evidence": [
-        "cmake --build build-review --target spectral_envelope_transfer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'spectral_envelope_transfer_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target spectral_envelope_transfer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'spectral_envelope_transfer_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-003",
@@ -1306,12 +1336,13 @@
         "required: split/merge correspondence fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target morph_transport_test morph_transport_correspondence_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_transport_test|morph_transport_correspondence_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target morph_transport_test morph_transport_correspondence_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_transport_test|morph_transport_correspondence_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-004",
@@ -1357,12 +1388,13 @@
         "tests/fixtures/morph_metric_tolerances.json"
       ],
       "evidence": [
-        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'"
+        "cmake --build build-review --target morph_recipe_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-005",
@@ -1410,12 +1442,13 @@
         "required: phase/residual/transient morph goldens"
       ],
       "evidence": [
-        "cmake --build build-review --target morph_recipe_test ats_transient_layer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|ats_transient_layer_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target morph_recipe_test ats_transient_layer_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'morph_recipe_roundtrip|ats_transient_layer_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-SMEAR-001",
@@ -1460,12 +1493,14 @@
         "required: detection curve/onset fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target ats_transient_smear_test ats_transient_smear_accuracy_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_test|ats_transient_smear_accuracy_test'"
+        "cmake --build build-review --target ats_transient_smear_test ats_transient_smear_accuracy_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_test|ats_transient_smear_accuracy_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "ats_transient_layer_test onset frame identical on arm64 and x86_64 after tie-tolerant peak picking"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-SMEAR-002",
@@ -1510,12 +1545,13 @@
         "required: before/after Smearnov audio goldens"
       ],
       "evidence": [
-        "cmake --build build-review --target ats_transient_smear_accuracy_test ats_transient_layer_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_accuracy_test|ats_transient_layer_test'"
+        "cmake --build build-review --target ats_transient_smear_accuracy_test ats_transient_layer_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_transient_smear_accuracy_test|ats_transient_layer_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MATHEXPR-001",
@@ -1562,12 +1598,14 @@
         "required: expression grammar/error fixtures"
       ],
       "evidence": [
-        "cmake --build build-review --target ats_math_expr_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_math_expr_test|dsp_contract_matrix_test'"
+        "cmake --build build-review --target ats_math_expr_test dsp_contract_matrix_test -j2 && ctest --test-dir build-review --output-on-failure -R 'ats_math_expr_test|dsp_contract_matrix_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "ats_math_expr_test bit-exact on arm64 with -ffp-contract=off; RMJ-032 MATH typed script applies"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-EDIT-001",
@@ -1839,7 +1877,7 @@
         },
         {
           "path": "tests/ui/real_dispatch_harness_test.mm",
-          "state": "required",
+          "state": "existing",
           "proves": "The refresh action traverses a real target backend and preserves target ownership."
         }
       ],
@@ -1848,12 +1886,14 @@
       ],
       "evidence": [
         "cmake --build build-review --target ui_refresh_ownership_test ui_scheduler_test -j2 && ctest --test-dir build-review -R 'ui_refresh_ownership_test|ui_scheduler_test' --output-on-failure",
-        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test"
+        "cmake --build /tmp/ats-visage-probe-arm64-release --target real_dispatch_harness_test -j2 && ctest --test-dir /tmp/ats-visage-probe-arm64-release --output-on-failure -R real_dispatch_harness_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "RMJ-032 dispatch matrix pumps analysis + snapshots like the app timer; transport follows live preview telemetry"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "2026-07-28"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-SPECTRUM-001",
@@ -1907,12 +1947,14 @@
       "evidence": [
         "cmake --build build-review-ui --target spectrum_chrome_test spectrum_renderer_test -j2",
         "ctest --test-dir build-review-ui --output-on-failure -R 'spectrum_(chrome|renderer)_test'",
-        "python3 tests/architecture/traceability_manifest_check.py"
+        "python3 tests/architecture/traceability_manifest_check.py",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "RMJ-031: all 7 spectrum modes x 2 themes captured; envelope modes render the full editor after the bgfx budget fix"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "2026-08-27"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-VIS-001",
@@ -1974,12 +2016,14 @@
       ],
       "evidence": [
         "cmake --build build-review-ui --target spectrum_trace_snapshot_test spectrum_renderer_test spectrum_geometry_test spectrum_path_builder_test spectrum_rdc_test spectrum_dispatch_test -j2 && ctest --test-dir build-review-ui --output-on-failure -R 'spectrum_(trace_snapshot|renderer|geometry|path_builder|rdc|dispatch)_test'",
-        "cmake --build build-plugin --target host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R host_session_behavior_test"
+        "cmake --build build-plugin --target host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R host_session_behavior_test",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "RMJ-031 spectrum captures; spectrum_renderer_test frame geometry budget"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "2026-08-27"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-EDIT-002",
@@ -2036,12 +2080,13 @@
       ],
       "evidence": [
         "cmake --build build-review-ui --target residual_edit_service_test partial_edit_transaction_test spectrum_dispatch_test -j2 && ctest --test-dir build-review-ui --output-on-failure -R 'residual_edit_service_test|partial_edit_transaction_test|spectrum_dispatch_test'",
-        "cmake --build build-plugin --target host_action_routing_test host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R 'host_action_routing_test|host_session_behavior_test'"
+        "cmake --build build-plugin --target host_action_routing_test host_session_behavior_test -j2 && ctest --test-dir build-plugin --output-on-failure -R 'host_action_routing_test|host_session_behavior_test'",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "2026-08-27"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MORPH-006",
@@ -2139,12 +2184,14 @@
         "required: rerender debounce timing report"
       ],
       "evidence": [
-        "ctest --test-dir /tmp/ats-juce-removal-headless -R playback_cache_generation_test --output-on-failure"
+        "ctest --test-dir /tmp/ats-juce-removal-headless -R playback_cache_generation_test --output-on-failure",
+        "2026-09-27 @ f2057a51: ctest --test-dir build-arm64-ui -LE perf 108/108 (arm64, windowed GUI + wrappers); build-plugin 101/101; build-review-ui 100/100; build-macos-arm64 98/98; scripts/run_sanitizers.sh ASan+UBSan 93/93, TSan 93/93 — docs/juce-removal-baseline/RMJ-100-release-matrix-report.md",
+        "host_lifecycle_test / host_analysis_playback_test preview gating; RMJ-032 PLAY/STOP renders through the live audio device"
       ],
-      "status": "implemented",
+      "status": "verified",
       "deviation_id": null,
       "blocked_by": [],
-      "last_reviewed": "TO_BE_REVIEWED"
+      "last_reviewed": "2026-09-27"
     },
     {
       "trace_id": "DSP-MIDI-001",

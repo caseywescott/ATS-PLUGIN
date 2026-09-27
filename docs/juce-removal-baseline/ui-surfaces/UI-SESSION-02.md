@@ -1,6 +1,6 @@
 # UI-SESSION-02 — Transport / play-preview controls
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces the play-button, source selector, and playhead scrubber from
 `SessionTabPanel.cpp`.  Implemented in `ProbeFrame` at fixed y-ranges below
@@ -47,3 +47,7 @@ known coordinates.
 ```
 
 Deviation: none.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-032 steps 16-17: SESSION PLAY/STOP emit Preview(source 3, start/stop); the live CoreAudio device renders non-zero audio while playing; telemetry follows the live preview state.

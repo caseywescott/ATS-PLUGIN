@@ -1,6 +1,6 @@
 # UI-PRESET-01 — Preset combo: factory list, user list, and selection dispatch
 
-Status: implemented
+Status: verified (2026-09-27)
 
 Replaces `PresetLibrary` JUCE `ComboBox` item population and
 `SessionTabPanel::presetComboChanged()`.
@@ -48,3 +48,7 @@ user saves, sorted user order after saves.
 
 Deviations: combo-widget rendering, popup focus management, and selection-event
 routing from the native Visage combo widget require the live dispatch harness.
+
+## Verification (2026-09-27, `f2057a51`)
+
+RMJ-032 step 10: presets popup lists legacy names and applies 'Bright partials' (ApplyFactoryPreset, partGain 1.6); factory_preset_state_test 12 x 81 values vs legacy.
