@@ -63,7 +63,7 @@ The `cmake` on this machine is an x86_64 binary: trees without
 | T-303 docs consolidation | done | this file |
 | T-304 final packet / clean-clone build | see `docs/juce-removal-baseline/RMJ-110-final-evidence-packet.md` | — |
 | T-401 theme persistence | done (per-user preference) | `4cb22409` |
-| T-402 copy/focus/keyboard parity | partial: preset names, toggle captions, §7.2 widgets; full copy audit open | — |
+| T-402 copy/focus/keyboard parity | partial: preset names, toggle captions, §7.2 widgets, legacy `synDur` FULL / pivot Auto readouts; spec quoted-copy scan clean except §8.2 timeline readout | see open items |
 | T-403 factory preset values | done | `ff52db63` |
 | T-404 resize negotiation | done | `6ab26a68` |
 | T-405 keyboard / output spectrum / meter | out of parity scope (ADR-0004), not started | — |
@@ -77,4 +77,9 @@ The `cmake` on this machine is an x86_64 binary: trees without
 - Standalone: device selection and MIDI input (legacy holder had both).
 - `assets/` and `slider/` (UI design assets, ~80 MB, untracked and
   unreferenced): decide whether they belong in the repository.
-- T-402 full copy/tooltip/keyboard audit against `ats-mearcstapa-ui-spec.md`.
+- T-402 remaining: tooltip text and keyboard navigation audit against
+  `ats-mearcstapa-ui-spec.md`.
+- **SESSION morph timeline (spec §8.2) is a scrub track, not the node editor.**
+  Handles, double-click add/remove, curve/fill, BOUNCE/RESET, axis labels and
+  the `"{t}s  {amount}"` drag readout are not implemented. This is feature
+  work, not copy.
