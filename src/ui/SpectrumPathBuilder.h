@@ -29,6 +29,22 @@ namespace ats::ui
              | channel(stops[i] & 0xffu, stops[i + 1] & 0xffu) };
 }
 
+// Source B in the envelope overlay keeps its own purple->orange ramp so an
+// A+B comparison stays readable; both ramps are driven by amplitude.
+[[nodiscard]] inline UiColor overlayAmpColour(float ampNorm) noexcept
+{
+    const auto t = std::clamp(ampNorm, 0.0f, 1.0f);
+    constexpr std::uint32_t from = 0xff8a2f8eu, to = 0xffe8a04au;
+    const auto channel = [t](std::uint32_t a, std::uint32_t b) {
+        return static_cast<std::uint32_t>(std::clamp(
+            static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t,
+            0.0f, 255.0f));
+    };
+    return { 0xff000000u | (channel(from >> 16 & 0xffu, to >> 16 & 0xffu) << 16)
+             | (channel(from >> 8 & 0xffu, to >> 8 & 0xffu) << 8)
+             | channel(from & 0xffu, to & 0xffu) };
+}
+
 struct TraceVertex
 {
     UiPoint pos{};
@@ -42,6 +58,10 @@ struct TraceStop
     float amp = 0.0f;
     float shade = 1.0f;
     float fade = 1.0f;
+    // Per-stop opacity multiplier.  The legacy painter derived each stop's
+    // alpha from its own amplitude/depth, so a loud partial still fades
+    // where it is quiet; painters multiply this into the command alpha.
+    float alpha = 1.0f;
 };
 
 struct GradientTrace

@@ -14,7 +14,7 @@ int main()
     partials.frameCount = 20;
     const auto screen = SpectrumGeometry::getScreenBounds(local, partials.mode);
     const auto plot = SpectrumGeometry::getPlotBounds(local, partials.mode, 0, partials.frameCount);
-    assert(screen.x == 5.0f && screen.y == 35.0f);
+    assert(screen.x == 5.0f && screen.y == 55.0f); // header + tool row
     assert(plot.x > screen.x && plot.width > 0.0f && plot.height > 0.0f);
     assert(SpectrumGeometry::showsFreqLabelGutter(partials.mode, partials.frameCount));
     assert(!SpectrumGeometry::showsBandLabelGutter(partials.mode, 4, partials.frameCount));

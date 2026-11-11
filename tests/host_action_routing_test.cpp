@@ -264,6 +264,44 @@ static void writeTestWave(const std::filesystem::path& path)
 // table. Model edits used to index that table directly, so with Current
 // selected every edit reported "no model" and left the model on screen
 // untouched.
+// Editors poll a snapshot every UI tick and take its spectrum mode, so the
+// snapshot must carry the selected view.  It used to be built as Trace +
+// Residual unconditionally, which undid every selection on the next poll.
+static void test_spectrum_snapshot_carries_selected_view()
+{
+    const auto path = std::filesystem::temp_directory_path() / "ats-routing-view.wav";
+    writeTestWave(path);
+
+    ats::host::HostAdapter host;
+    host.initialize(ats::host::HostFormat::standalone);
+    ats::Error error;
+    assert(host.importSource({ path.u8string() }, 3, ats::engine::SourceImportKind::audio, error));
+    assert(host.analyzeSource(3, error));
+    assert(!error);
+
+    auto snapshot = host.editorSnapshot();
+    assert(snapshot.spectrum.has_value());
+    assert(snapshot.spectrum->mode == ats::ui::SpectralTraceMode::combined);
+
+    const auto source = host.spectralViewSource();
+    for (const auto mode : { ats::ui::SpectralTraceMode::residual,
+                             ats::ui::SpectralTraceMode::isometricEnvelope,
+                             ats::ui::SpectralTraceMode::isometricEnvelopeRdc })
+    {
+        error = {};
+        assert(host.applyEditorAction(
+            ats::ui::SetSpectralViewAction{ source, static_cast<int>(mode) }, error));
+        assert(!error);
+        for (int poll = 0; poll < 2; ++poll)
+        {
+            snapshot = host.editorSnapshot();
+            assert(snapshot.spectrum.has_value());
+            assert(snapshot.spectrum->mode == mode);
+        }
+    }
+    std::filesystem::remove(path);
+}
+
 static void test_model_edits_follow_the_current_selection()
 {
     const auto path = std::filesystem::temp_directory_path() / "ats-routing-current.wav";
@@ -651,6 +689,7 @@ int main()
     test_apply_factory_preset_invalid();
     test_note_action_semitone_offset();
     test_spectral_view_action();
+    test_spectrum_snapshot_carries_selected_view();
     test_history_action_empty();
     test_history_action_roundtrip();
     test_preset_direct_file_roundtrip();

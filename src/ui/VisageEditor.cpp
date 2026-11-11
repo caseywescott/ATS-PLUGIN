@@ -456,7 +456,16 @@ public:
         if (spectrumSnapshot_.onsets.empty() && spectrumSnapshot_.onsetNorms.empty())
             spectrumOnsetEditing_ = false;
         shell_.spectrum().setSource(spectrumSnapshot_.source);
-        shell_.spectrum().setMode(spectrumSnapshot_.mode);
+        // Snapshots arrive on every UI tick.  The view mode is the editor's
+        // own state: take the host's only when the host's value changes
+        // (state restore, another editor instance), never on each poll, so a
+        // selection is not undone by a snapshot published before the host
+        // applied it.
+        if (!hostSpectrumMode_ || *hostSpectrumMode_ != spectrumSnapshot_.mode)
+        {
+            hostSpectrumMode_ = spectrumSnapshot_.mode;
+            shell_.spectrum().setMode(spectrumSnapshot_.mode);
+        }
         redraw();
     }
 
@@ -537,15 +546,14 @@ public:
             renderOptions.selectedBands.push_back(navigation.selectedBand);
         renderOptions.residualFirstFrame = navigation.residualFirstFrame;
         renderOptions.residualLastFrame = navigation.residualLastFrame;
-        if (navigation.envelopeEditing)
-        {
-            const auto plot = SpectrumRenderer::getPlotBounds(well, spectrumSnapshot_);
-            renderOptions.envelopeRange = {
-                plot.x + plot.width * navigation.envelopeTimeStart,
-                plot.y + plot.height * (1.0f - navigation.envelopeFrequencyEnd),
-                plot.width * (navigation.envelopeTimeEnd - navigation.envelopeTimeStart),
-                plot.height * (navigation.envelopeFrequencyEnd - navigation.envelopeFrequencyStart) };
-        }
+        renderOptions.hoveredBand = navigation.hoveredBand;
+        // The range is absolute normalised time/frequency; the renderer maps
+        // it through the viewport (a slab in the isometric envelope views).
+        renderOptions.envelopeEditing = navigation.envelopeEditing;
+        renderOptions.envelopeTimeStart = navigation.envelopeTimeStart;
+        renderOptions.envelopeTimeEnd = navigation.envelopeTimeEnd;
+        renderOptions.envelopeFrequencyStart = navigation.envelopeFrequencyStart;
+        renderOptions.envelopeFrequencyEnd = navigation.envelopeFrequencyEnd;
         renderOptions.viewport = { (navigation.timeStart + navigation.timeEnd) * 0.5f,
                                    1.0f / std::max(1.0e-6f, navigation.timeEnd - navigation.timeStart),
                                    (navigation.frequencyStart + navigation.frequencyEnd) * 0.5f,
@@ -553,6 +561,22 @@ public:
         const auto plot = SpectrumRenderer::getPlotBounds(well, spectrumSnapshot_);
         const auto commands = SpectrumRenderer::render(
             spectrumSnapshot_, well, renderOptions);
+        const visage::Font font8_5(8.5f, visage::fonts::Lato_Regular_ttf);
+        const visage::Font font9(9.0f, visage::fonts::Lato_Regular_ttf);
+        const visage::Font font10(10.0f, visage::fonts::Lato_Regular_ttf);
+        const visage::Font font11(11.0f, visage::fonts::Lato_Regular_ttf);
+        const auto fontFor = [&](const SpectrumDrawCommand& command,
+                                 const visage::Font& fallback) -> const visage::Font& {
+            if (command.fontSize <= 0.0f) return fallback;
+            if (command.fontSize < 8.8f) return font8_5;
+            if (command.fontSize < 9.5f) return font9;
+            if (command.fontSize < 10.5f) return font10;
+            return font11;
+        };
+        const auto justification = [](const SpectrumDrawCommand& command) {
+            return command.justify == 2 ? visage::Font::kRight
+                : command.justify == 1 ? visage::Font::kCenter : visage::Font::kLeft;
+        };
         const auto segmentStride = SpectrumRenderer::pathSegmentStride(commands);
         for (const auto& command : commands)
         {
@@ -582,35 +606,84 @@ public:
                 continue;
             }
             canvas.setColor(color);
+            // Fills fade from `color` at gradStart to transparent at gradEnd
+            // when those points differ (absolute canvas coordinates).
+            const auto fillBrush = [&](bool verticalFallback) {
+                const auto clear = color & 0x00ffffffu;
+                const auto gx = command.gradEnd.x - command.gradStart.x;
+                const auto gy = command.gradEnd.y - command.gradStart.y;
+                if (gx * gx + gy * gy > 1.0e-6f)
+                    canvas.setColor(visage::Brush::linear(
+                        visage::Color(color), visage::Color(clear),
+                        visage::Point(command.gradStart.x, command.gradStart.y),
+                        visage::Point(command.gradEnd.x, command.gradEnd.y)));
+                else if (verticalFallback)
+                    canvas.setColor(visage::Brush::vertical(color, clear));
+            };
+            // Fills are one path each: per-triangle fills left anti-aliased
+            // seams along every shared edge, visible as vertical hatching.
+            if (command.filled && command.vertices.size() >= 3)
+            {
+                fillBrush(false);
+                visage::Path path;
+                path.moveTo(command.vertices.front().x, command.vertices.front().y);
+                for (std::size_t i = 1; i < command.vertices.size(); ++i)
+                    path.lineTo(command.vertices[i].x, command.vertices[i].y);
+                path.close();
+                canvas.fill(path);
+                restoreClip();
+                continue;
+            }
+            if (command.isStrip())
+            {
+                // Top vertices, then down to the floor line through
+                // (front.x, floorY) and (back.x, floorY2).
+                fillBrush(true);
+                const auto& v = command.vertices;
+                visage::Path path;
+                path.moveTo(v.front().x, v.front().y);
+                for (std::size_t i = segmentStride; i < v.size(); i += segmentStride)
+                    path.lineTo(v[i].x, v[i].y);
+                path.lineTo(v.back().x, v.back().y);
+                path.lineTo(v.back().x, command.floorY2);
+                path.lineTo(v.front().x, command.floorY);
+                path.close();
+                canvas.fill(path);
+                restoreClip();
+                continue;
+            }
             if (command.isPath())
             {
                 const auto solidPath = command.flat
                     || command.kind == SpectrumDrawKind::selectedPartial
                     || command.kind == SpectrumDrawKind::glowHalo
-                    || command.kind == SpectrumDrawKind::traceGlow
-                    || command.kind == SpectrumDrawKind::envelopeTrace;
+                    || command.kind == SpectrumDrawKind::traceGlow;
+                const auto rampColour = [&](float amp) {
+                    return command.colorRamp == 1 ? overlayAmpColour(amp) : ampColour(amp);
+                };
                 const auto colorAt = [&](float proportion) {
                     if (solidPath || command.stops.empty())
                         return UiColor { color };
+                    const auto shaded = [&](float amp, float fade, float stopAlpha) {
+                        return rampColour(amp).withAlpha(
+                            std::clamp(command.alpha * fade * stopAlpha, 0.0f, 1.0f));
+                    };
                     auto next = std::lower_bound(command.stops.begin(), command.stops.end(), proportion,
                         [](const TraceStop& stop, float value) { return stop.proportion < value; });
                     if (next == command.stops.begin())
-                        return ampColour(next->amp).withAlpha(
-                            std::clamp(command.alpha * next->fade, 0.0f, 1.0f));
+                        return shaded(next->amp, next->fade, next->alpha);
                     if (next == command.stops.end())
                     {
                         const auto& stop = command.stops.back();
-                        return ampColour(stop.amp).withAlpha(
-                            std::clamp(command.alpha * stop.fade, 0.0f, 1.0f));
+                        return shaded(stop.amp, stop.fade, stop.alpha);
                     }
                     const auto& previous = *(next - 1);
                     const auto span = std::max(1.0e-6f, next->proportion - previous.proportion);
                     const auto amount = std::clamp(
                         (proportion - previous.proportion) / span, 0.0f, 1.0f);
-                    const auto amp = previous.amp + amount * (next->amp - previous.amp);
-                    const auto fade = previous.fade + amount * (next->fade - previous.fade);
-                    return ampColour(amp).withAlpha(
-                        std::clamp(command.alpha * fade, 0.0f, 1.0f));
+                    return shaded(previous.amp + amount * (next->amp - previous.amp),
+                                  previous.fade + amount * (next->fade - previous.fade),
+                                  previous.alpha + amount * (next->alpha - previous.alpha));
                 };
                 const auto axisX = command.gradEnd.x - command.gradStart.x;
                 const auto axisY = command.gradEnd.y - command.gradStart.y;
@@ -621,6 +694,7 @@ public:
                     const auto next = std::min(i + segmentStride, last);
                     const auto& a = command.vertices[i];
                     const auto& b = command.vertices[next];
+                    const auto endSegment = i == 0 || next == last;
                     i = next;
                     const auto midpointX = (a.x + b.x) * 0.5f - command.gradStart.x;
                     const auto midpointY = (a.y + b.y) * 0.5f - command.gradStart.y;
@@ -629,7 +703,9 @@ public:
                                      0.0f, 1.0f)
                         : 0.0f;
                     canvas.setColor(colorAt(proportion).argb);
-                    canvas.segment(a.x, a.y, b.x, b.y, command.thickness, true);
+                    // Round caps only at the two ends: translucent round caps
+                    // overlap at every interior joint and read as beads.
+                    canvas.segment(a.x, a.y, b.x, b.y, command.thickness, endSegment);
                 }
                 restoreClip();
                 continue;
@@ -657,7 +733,7 @@ public:
                                command.thickness, true);
                 break;
             case SpectrumDrawKind::selectionMarker:
-                canvas.rectangleBorder(b.x, b.y, b.width, b.height, 1.0f);
+                canvas.rectangleBorder(b.x, b.y, b.width, b.height, command.thickness);
                 break;
             case SpectrumDrawKind::traceGlow:
                 canvas.segment(b.x, b.y, b.x + b.width, b.y + b.height,
@@ -667,8 +743,34 @@ public:
                 canvas.rectangle(b.x, b.y, b.width, b.height);
                 break;
             case SpectrumDrawKind::playhead:
-                canvas.rectangle(b.x, b.y, b.width, b.height);
+                // The isometric playhead marks its front floor point with a dot.
+                if (command.index == 1)
+                    canvas.circle(b.x, b.y, b.width);
+                else
+                    canvas.rectangle(b.x, b.y, b.width, b.height);
                 break;
+            case SpectrumDrawKind::smearnovCurve:
+                canvas.roundedRectangle(b.x, b.y, b.width, b.height, 3.0f);
+                break;
+            case SpectrumDrawKind::infoText:
+                canvas.text(command.label, fontFor(command, labelFont), justification(command),
+                            b.x, b.y, b.width, b.height);
+                break;
+            case SpectrumDrawKind::badge:
+            {
+                // x2 = background alpha, y2 = 1 for a border.
+                const auto backgroundAlpha = static_cast<std::uint32_t>(
+                    std::clamp(command.x2, 0.0f, 1.0f) * 255.0f + 0.5f);
+                canvas.setColor((backgroundAlpha << 24) | 0x0007110fu);
+                canvas.roundedRectangle(b.x, b.y, b.width, b.height, 3.0f);
+                canvas.setColor(color);
+                if (command.y2 > 0.0f)
+                    canvas.roundedRectangleBorder(b.x + 0.5f, b.y + 0.5f, b.width - 1.0f,
+                                                  b.height - 1.0f, 4.0f, 0.8f);
+                canvas.text(command.label, fontFor(command, labelFont), justification(command),
+                            b.x + 6.0f, b.y, std::max(0.0f, b.width - 12.0f), b.height);
+                break;
+            }
             case SpectrumDrawKind::residualBand:
                 canvas.segment(b.x, b.y, b.x + b.width, b.y + b.height,
                                command.thickness, true);
@@ -688,7 +790,8 @@ public:
                 break;
             case SpectrumDrawKind::axisLabel:
                 canvas.setColor(color);
-                canvas.text(command.label, axisFont, visage::Font::kCenter,
+                canvas.text(command.label, fontFor(command, axisFont),
+                            command.fontSize > 0.0f ? justification(command) : visage::Font::kCenter,
                             b.x, b.y, b.width, b.height);
                 break;
             case SpectrumDrawKind::title:
@@ -703,7 +806,7 @@ public:
             case SpectrumDrawKind::bandLabel:
             case SpectrumDrawKind::freqLabel:
                 canvas.setColor(color);
-                canvas.text(command.label, labelFont, visage::Font::kCenter,
+                canvas.text(command.label, fontFor(command, labelFont), visage::Font::kLeft,
                             b.x, b.y, b.width, b.height);
                 break;
             case SpectrumDrawKind::ampLegend:
@@ -754,8 +857,9 @@ public:
                                         command.index == 0 ? 2.0f : 3.0f);
                 if (command.index == 0)
                 {
+                    const auto borderAlpha = command.kind == SpectrumDrawKind::zoomBar ? 0.45f : 0.22f;
                     canvas.setColor((SpectralCanvasTokens::fixed().axisFrame.argb & 0x00ffffffu) |
-                                    (static_cast<std::uint32_t>(0.45f * 255.0f) << 24));
+                                    (static_cast<std::uint32_t>(borderAlpha * 255.0f) << 24));
                     canvas.roundedRectangleBorder(b.x, b.y, b.width, b.height,
                                                   2.0f, 1.0f);
                 }
@@ -794,22 +898,8 @@ public:
             }
         }
 
-        const bool isometric = spectrumSnapshot_.mode == SpectralTraceMode::isometric ||
-                               spectrumSnapshot_.mode == SpectralTraceMode::isometricResidual ||
-                               spectrumSnapshot_.mode == SpectralTraceMode::isometricEnvelope ||
-                               spectrumSnapshot_.mode == SpectralTraceMode::isometricEnvelopeRdc;
-        if (isometric)
-        {
-            const auto axisFont = visage::Font(8.0f, visage::fonts::Lato_Regular_ttf);
-            canvas.setColor((SpectralCanvasTokens::fixed().axisFrame.argb & 0x00ffffffu) |
-                            (static_cast<std::uint32_t>(0.70f * 255.0f) << 24));
-            canvas.text("TIME", axisFont, visage::Font::kCenter,
-                        well.x + well.width * 0.48f, well.y + well.height - 18.0f, 52.0f, 12.0f);
-            canvas.text("FREQ", axisFont, visage::Font::kLeft,
-                        well.x + 8.0f, well.y + well.height * 0.48f, 48.0f, 12.0f);
-            canvas.text("AMP", axisFont, visage::Font::kRight,
-                        well.x + well.width - 46.0f, well.y + 8.0f, 38.0f, 12.0f);
-        }
+        // Isometric axis captions are placed by the renderer at the projected
+        // axis ends, so they follow the floor rather than the panel corners.
         const auto residualMode = spectrumSnapshot_.mode == SpectralTraceMode::residual
             || spectrumSnapshot_.mode == SpectralTraceMode::isometricResidual;
         const auto hasSelection = residualMode
@@ -819,15 +909,61 @@ public:
             || !spectrumSnapshot_.onsetNorms.empty();
         const auto chrome = SpectrumChromeLayout::layout(well, spectrumSnapshot_.mode,
                                                           hasOnsets, hasSelection);
-        const UiRect modeChip = chrome.viewMenuButton;
-        paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, modeChip, false, false));
-        canvas.setColor((SpectralCanvasTokens::fixed().axisFrame.argb & 0x00ffffffu) |
-                        (static_cast<std::uint32_t>(0.45f * 255.0f) << 24));
-        canvas.roundedRectangleBorder(modeChip.x, modeChip.y, modeChip.width, modeChip.height,
-                                      4.0f, 1.0f);
-        canvas.setColor(tokens.textSecondary.argb);
-        canvas.text(spectrumModeLabel(), labelFont, visage::Font::kCenter, modeChip.x,
-                    modeChip.y, modeChip.width, modeChip.height);
+        const auto chipBorder = (SpectralCanvasTokens::fixed().axisFrame.argb & 0x00ffffffu) |
+                                (static_cast<std::uint32_t>(0.45f * 255.0f) << 24);
+        const auto paintChip = [&](UiRect chip, const std::string& text, float rightInset) {
+            paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, chip, false, false));
+            canvas.setColor(chipBorder);
+            canvas.roundedRectangleBorder(chip.x, chip.y, chip.width, chip.height, 4.0f, 1.0f);
+            canvas.setColor(tokens.textSecondary.argb);
+            // A long source name ("Current: <file>") is cut with an ellipsis
+            // and left-aligned; centred, it was clipped at both ends.
+            const auto room = std::max(0.0f, chip.width - 10.0f - rightInset);
+            auto shown = visage::String(text).toUtf32();
+            if (labelFont.stringWidth(shown) > room)
+            {
+                const std::u32string ellipsis = U"\u2026";
+                while (!shown.empty() && labelFont.stringWidth(shown + ellipsis) > room)
+                    shown.pop_back();
+                shown += ellipsis;
+            }
+            canvas.text(visage::String(shown), labelFont,
+                        shown.size() < visage::String(text).toUtf32().size()
+                            ? visage::Font::kLeft : visage::Font::kCenter,
+                        chip.x + 6.0f, chip.y, chip.width - 6.0f - rightInset, chip.height);
+        };
+        if (chrome.modeStrip)
+        {
+            const auto capabilities = spectrumCapabilities();
+            const auto source = SpectrumInteractionModel::sourceIndex(shell_.spectrum().source());
+            const auto& sourceChip = chrome.sourceMenuButton;
+            paintChip(sourceChip, spectrumSourceLabel(source, capabilities), 16.0f);
+            canvas.setColor(tokens.textSecondary.argb);
+            canvas.triangleDown(sourceChip.x + sourceChip.width - 14.0f,
+                                sourceChip.y + sourceChip.height * 0.5f - 2.0f, 4.0f);
+            const auto& first = chrome.modeButtons.front();
+            const auto& last = chrome.modeButtons.back();
+            const UiRect strip { first.x, first.y, last.x + last.width - first.x, first.height };
+            const auto trackRadius = ThemeRadius::segmentedTrack(strip.height);
+            paintThemeOps(canvas, ThemeRecipes::well(tokens, strip, trackRadius));
+            const auto activeMode = static_cast<std::size_t>(shell_.spectrum().mode());
+            for (std::size_t i = 0; i < chrome.modeButtons.size(); ++i)
+            {
+                const auto& button = chrome.modeButtons[i];
+                const auto active = i == activeMode;
+                const auto enabled = spectrumModeEnabled(source, static_cast<int>(i), capabilities);
+                paintThemeOps(canvas, ThemeRecipes::segmentedSegment(tokens, button, trackRadius,
+                                                                     active, false));
+                const auto colour = ThemeRecipes::segmentedText(tokens, active, false);
+                canvas.setColor(enabled ? colour.argb : colour.withAlpha(0.35f).argb);
+                canvas.text(std::string(SpectrumChromeLayout::kModeButtonLabels[i]), labelFont,
+                            visage::Font::kCenter, button.x, button.y, button.width, button.height);
+            }
+        }
+        else
+        {
+            paintChip(chrome.viewMenuButton, spectrumModeLabel(), 4.0f);
+        }
         if (hasSelection)
         {
             const auto deleteButton = chrome.deleteButton;
@@ -911,49 +1047,78 @@ public:
                                                   UiRect { x + 90.0f, y, 82.0f, 28.0f } } };
     }
 
-    // Shown against the session page, not the shell, because the rect handed to
-    // the delegate is page-local.
-    void showSpectrumModeMenu(visage::Point origin)
+    // Applies a view chosen from the header buttons or either menu.  Returns
+    // false when that source/view pair is unavailable (no residual, empty slot).
+    bool applySpectrumView(int source, int mode)
     {
-        visage::PopupMenu popup("Spectrum view");
         const auto capabilities = spectrumCapabilities();
-        const auto items = shell_.spectrum().menu(capabilities);
-        const auto sourceLabels = shell_.spectrum().sourceMenuLabels(capabilities);
-        const auto addSourceMenu = [&](int source, std::string_view label, bool enabled) {
-            visage::PopupMenu submenu { std::string(label) };
-            for (const auto& item : items)
-            {
-                const auto itemEnabled = enabled &&
-                    (item.mode != SpectralTraceMode::residual || capabilities.hasResidualForSource(source));
-                submenu.addOption((source + 1) * 100 + item.id + 1,
-                                  std::string(item.label)).enable(itemEnabled).select(
-                                      enabled && source == SpectrumInteractionModel::sourceIndex(
-                                          shell_.spectrum().source())
-                                      && item.mode == shell_.spectrum().mode());
-            }
-            popup.addSubMenu(std::move(submenu));
-        };
-        addSourceMenu(0, sourceLabels[0], capabilities.hasCurrentSource);
-        addSourceMenu(1, sourceLabels[1].empty() ? std::string_view { "Source A" } : sourceLabels[1],
-                      capabilities.hasSourceA);
-        addSourceMenu(2, sourceLabels[2].empty() ? std::string_view { "Source B" } : sourceLabels[2],
-                      capabilities.hasSourceB);
-        popup.onSelection() += [this, capabilities](int optionId) {
-            if (optionId < 101)
-                return;
-            const auto source = optionId / 100 - 1;
-            const auto mode = optionId % 100 - 1;
-            const auto action = shell_.spectrum().selectSourceMenuItem(source, mode, capabilities);
-            if (action.mode < 0)
-                return;
-            shell_.spectrum().setSource(static_cast<SpectralTraceSource>(source));
-            shell_.spectrum().setMode(static_cast<SpectralTraceMode>(mode));
-            if (sink_.spectrumModeSelected)
-                sink_.spectrumModeSelected(sink_.context, action.source, action.mode);
-            emitAction(action);
+        const auto action = shell_.spectrum().selectSourceMenuItem(source, mode, capabilities);
+        if (action.mode < 0)
+            return false;
+        shell_.spectrum().setSource(static_cast<SpectralTraceSource>(action.source));
+        shell_.spectrum().setMode(static_cast<SpectralTraceMode>(action.mode));
+        if (sink_.spectrumModeSelected)
+            sink_.spectrumModeSelected(sink_.context, action.source, action.mode);
+        emitAction(action);
+        redraw();
+        return true;
+    }
+
+    [[nodiscard]] bool spectrumSourceEnabled(int source,
+                                             const SpectrumCapabilities& capabilities) const noexcept
+    {
+        return source == 0 ? capabilities.hasCurrentSource
+             : source == 1 ? capabilities.hasSourceA
+             : source == 2 && capabilities.hasSourceB;
+    }
+
+    [[nodiscard]] bool spectrumModeEnabled(int source, int mode,
+                                           const SpectrumCapabilities& capabilities) const noexcept
+    {
+        return spectrumSourceEnabled(source, capabilities)
+            && (mode != static_cast<int>(SpectralTraceMode::residual)
+                || capabilities.hasResidualForSource(source));
+    }
+
+    [[nodiscard]] std::string spectrumSourceLabel(int source,
+                                                  const SpectrumCapabilities& capabilities) const
+    {
+        const auto name = source == 0 ? capabilities.currentName
+                        : source == 1 ? capabilities.sourceAName : capabilities.sourceBName;
+        const auto prefix = source == 0 ? "Current" : source == 1 ? "A" : "B";
+        if (source == 0 && name == "Current")
+            return "Current";
+        return std::string(prefix) + ": " + std::string(name);
+    }
+
+    // Menu ids: 1..7 pick a view on the current source, 11..13 pick a source
+    // and keep the view (falling back to Trace + Residual where it is missing).
+    static constexpr int kMenuModeBase = 1;
+    static constexpr int kMenuSourceBase = 11;
+
+    void selectSpectrumMenuOption(int optionId)
+    {
+        const auto source = SpectrumInteractionModel::sourceIndex(shell_.spectrum().source());
+        const auto mode = static_cast<int>(shell_.spectrum().mode());
+        if (optionId >= kMenuSourceBase && optionId < kMenuSourceBase + 3)
+        {
+            const auto wanted = optionId - kMenuSourceBase;
+            if (!applySpectrumView(wanted, mode))
+                (void) applySpectrumView(wanted, static_cast<int>(SpectralTraceMode::combined));
+        }
+        else if (optionId >= kMenuModeBase
+                 && optionId < kMenuModeBase + static_cast<int>(SpectrumChromeLayout::kModeButtonCount))
+        {
+            (void) applySpectrumView(source, optionId - kMenuModeBase);
+        }
+    }
+
+    void showSpectrumPopup(visage::PopupMenu popup, visage::Point origin)
+    {
+        popup.onSelection() += [this](int optionId) {
+            selectSpectrumMenuOption(optionId);
             if (sink_.popupDismissed)
                 sink_.popupDismissed(sink_.context);
-            redraw();
         };
         popup.onCancel() += [this] {
             if (sink_.popupDismissed)
@@ -961,8 +1126,44 @@ public:
         };
         if (sink_.popupShown)
             sink_.popupShown(sink_.context);
+        // Shown against the session page, not the shell, because the rect
+        // handed to the delegate is page-local.
         popup.show(sessionPageRaw_ != nullptr ? static_cast<visage::Frame*>(sessionPageRaw_) : this,
                    origin);
+    }
+
+    void addSpectrumSourceOptions(visage::PopupMenu& popup,
+                                  const SpectrumCapabilities& capabilities) const
+    {
+        const auto current = SpectrumInteractionModel::sourceIndex(shell_.spectrum().source());
+        for (int source = 0; source < 3; ++source)
+            popup.addOption(kMenuSourceBase + source, spectrumSourceLabel(source, capabilities))
+                .enable(spectrumSourceEnabled(source, capabilities))
+                .select(source == current);
+    }
+
+    // Narrow wells: every view, then the sources, in one flat list.  (Views
+    // used to sit in a submenu per source, which was hard to reach.)
+    void showSpectrumModeMenu(visage::Point origin)
+    {
+        visage::PopupMenu popup("Spectrum view");
+        const auto capabilities = spectrumCapabilities();
+        const auto source = SpectrumInteractionModel::sourceIndex(shell_.spectrum().source());
+        for (const auto& item : shell_.spectrum().menu(capabilities))
+            popup.addOption(kMenuModeBase + item.id, std::string(item.label))
+                .enable(spectrumModeEnabled(source, static_cast<int>(item.mode), capabilities))
+                .select(item.mode == shell_.spectrum().mode());
+        popup.addBreak();
+        addSpectrumSourceOptions(popup, capabilities);
+        showSpectrumPopup(std::move(popup), origin);
+    }
+
+    // Wide wells: the views are buttons, so the chip only picks the source.
+    void showSpectrumSourceMenu(visage::Point origin)
+    {
+        visage::PopupMenu popup("Spectrum source");
+        addSpectrumSourceOptions(popup, spectrumCapabilities());
+        showSpectrumPopup(std::move(popup), origin);
     }
 
     bool sessionCentreMouseDown(visage::Point point, UiRect well, UiRect timeline,
@@ -1006,10 +1207,27 @@ public:
             redraw();
             return true;
         }
-        if (pointInRect(point, modeChip))
+        if (modeChip.width > 0.0f && pointInRect(point, modeChip))
         {
             showSpectrumModeMenu({ modeChip.x, modeChip.y + modeChip.height + 4.0f });
             return true;
+        }
+        if (chrome.modeStrip)
+        {
+            const auto& sourceChip = chrome.sourceMenuButton;
+            if (pointInRect(point, sourceChip))
+            {
+                showSpectrumSourceMenu({ sourceChip.x, sourceChip.y + sourceChip.height + 4.0f });
+                return true;
+            }
+            for (std::size_t i = 0; i < chrome.modeButtons.size(); ++i)
+                if (pointInRect(point, chrome.modeButtons[i]))
+                {
+                    (void) applySpectrumView(
+                        SpectrumInteractionModel::sourceIndex(shell_.spectrum().source()),
+                        static_cast<int>(i));
+                    return true;
+                }
         }
         if (pointInRect(point, chrome.envSourceAButton)
             || pointInRect(point, chrome.envSourceBButton))
@@ -1028,7 +1246,8 @@ public:
         }
         if (pointInRect(point, chrome.zoomBar))
         {
-            const auto position = std::clamp((point.x - chrome.zoomBar.x - 8.0f) / 188.0f,
+            const auto position = std::clamp((point.x - chrome.zoomBar.x - 8.0f)
+                                                  / SpectrumRenderer::zoomBarTrackWidth(chrome.zoomBar),
                                               0.0f, 1.0f);
             const auto currentZoom = 1.0f / std::max(1.0e-6f,
                 shell_.spectrum().navigation().timeEnd - shell_.spectrum().navigation().timeStart);
@@ -1935,6 +2154,8 @@ private:
     AtsSynthesisPage* synthesisPageRaw_ = nullptr;
     AtsPartialsPage* partialsPageRaw_ = nullptr;
     SpectralTraceSnapshot spectrumSnapshot_{};
+    // The last mode the host published; see setSpectrumSnapshot().
+    std::optional<SpectralTraceMode> hostSpectrumMode_;
     std::optional<SpectralTraceSnapshot> spectrumOverlaySnapshot_;
     std::array<std::string, 3> sourceNames_ {};
     std::array<bool, 3> sourceAvailable_ {};

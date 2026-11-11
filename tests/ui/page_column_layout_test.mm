@@ -7,6 +7,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -28,10 +29,16 @@ struct Column
 constexpr float kWindowW = 1280.0f;
 constexpr float kWindowH = 940.0f;
 
+UiRect pageArea(float width = kWindowW, float height = kWindowH)
+{
+    // Pages lay out in their own frame, whose origin is the page area's.
+    const auto page = ThemeLayout::pageArea(ThemeLayout::body(width, height));
+    return { 0.0f, 0.0f, page.width, page.height };
+}
+
 UiRect panel(const std::vector<float>& widths, std::size_t index)
 {
-    const auto page = ThemeLayout::pageArea(ThemeLayout::body(kWindowW, kWindowH));
-    return ThemeLayout::panelContent(ThemeLayout::columns(page, widths)[index]);
+    return ThemeLayout::panelContent(ThemeLayout::columns(pageArea(), widths)[index]);
 }
 
 std::vector<LayoutSlot> walk(const Column& column)
@@ -44,28 +51,34 @@ std::vector<LayoutSlot> walk(const Column& column)
 // Every column in the editor, described exactly as its page describes it.
 std::vector<Column> allColumns()
 {
-    const std::vector<float> session { 260.0f, 0.0f, 360.0f };
     const std::vector<float> analysis { 300.0f, 0.0f, 320.0f };
     const std::vector<float> synthesis { 380.0f, 0.0f };
     const std::vector<float> partials { 0.0f, 320.0f };
 
-    // §10.4's right column is anchored from both ends, so the top group only
-    // owns what the bottom group leaves behind.
-    const UiRect sessionRight = panel(session, 2);
-    const float reserved =
-        ThemeLayout::columnHeight(pageLayoutItems(AtsSessionPage::rightBottomRows()));
-    const UiRect sessionRightTop { sessionRight.x, sessionRight.y, sessionRight.width,
-                                   sessionRight.height - reserved };
+    // SESSION: the spectrum spans the centre and right columns, so the right
+    // panel under it shows one group per tab above the bottom-anchored output
+    // group.  Each tab is walked as its own column.
+    const auto sessionPanels = AtsSessionPage::sessionPanels(pageArea());
+    std::vector<Column> columns {
+        { "session.left", &AtsSessionPage::leftRows(),
+          ThemeLayout::panelContent(sessionPanels.left), false },
+    };
+    const auto morphTab = AtsSessionPage::rightColumn(sessionPanels.right, 0);
+    for (int tab = 0; tab < 3; ++tab)
+        columns.push_back({ std::string("session.right.") + AtsSessionPage::kRightTabLabels[tab],
+                            &AtsSessionPage::rightGroupRows(tab),
+                            AtsSessionPage::rightColumn(sessionPanels.right, tab).rowArea, false });
+    columns.push_back({ "session.right.bottom", &AtsSessionPage::rightBottomRows(),
+                        morphTab.content, true });
 
-    return {
-        { "session.left", &AtsSessionPage::leftRows(), panel(session, 0), false },
-        { "session.right.top", &AtsSessionPage::rightTopRows(), sessionRightTop, false },
-        { "session.right.bottom", &AtsSessionPage::rightBottomRows(), sessionRight, true },
+    const std::vector<Column> others {
         { "analysis.left", &AtsAnalysisPage::leftRows(), panel(analysis, 0), false },
         { "analysis.right", &AtsAnalysisPage::rightRows(), panel(analysis, 2), false },
         { "synthesis.left", &AtsSynthesisPage::leftRows(), panel(synthesis, 0), false },
         { "partials.right", &AtsPartialsPage::cellRows(), panel(partials, 1), false },
     };
+    columns.insert(columns.end(), others.begin(), others.end());
+    return columns;
 }
 
 bool nearly(float a, float b) { return std::fabs(a - b) < 1.0e-4f; }
@@ -128,7 +141,13 @@ void checkNothingDroppedAtShippingSize()
         assert(ThemeLayout::columnHeight(pageLayoutItems(*column.rows)) <=
                column.area.height + 1.0e-4f);
         for (const auto& slot : walk(column))
+        {
+            if (!slot.visible)
+                std::fprintf(stderr, "dropped row in %s (area h %.1f, needs %.1f)\n",
+                             column.name.c_str(), column.area.height,
+                             ThemeLayout::columnHeight(pageLayoutItems(*column.rows)));
             assert(slot.visible);
+        }
     }
 }
 
@@ -183,7 +202,7 @@ void checkLabelledRowsLeaveRoomForTheWidget()
 void checkFixtureIsNotEmpty()
 {
     const auto columns = allColumns();
-    assert(columns.size() == 7);
+    assert(columns.size() >= 7);
     std::size_t visible = 0;
     for (const auto& column : columns)
     {
@@ -192,6 +211,63 @@ void checkFixtureIsNotEmpty()
             visible += slot.visible ? 1 : 0;
     }
     assert(visible >= 90);
+}
+
+bool inside(UiRect inner, UiRect outer)
+{
+    return inner.x >= outer.x - 1.0e-4f && inner.y >= outer.y - 1.0e-4f
+        && inner.x + inner.width <= outer.x + outer.width + 1.0e-4f
+        && inner.y + inner.height <= outer.y + outer.height + 1.0e-4f;
+}
+
+// The spectrum spans everything right of the left column; the centre and right
+// panels sit under it, and no panel overlaps another, at every window size.
+void checkSessionSpectrumSpansTheRightSide()
+{
+    for (const auto& size : { std::pair { 1100.0f, 860.0f }, std::pair { kWindowW, kWindowH },
+                              std::pair { 1900.0f, 1400.0f } })
+    {
+        const auto area = pageArea(size.first, size.second);
+        const auto p = AtsSessionPage::sessionPanels(area);
+        assert(nearly(p.spectrum.x, p.left.x + p.left.width + ThemeLayout::kColumnGap));
+        assert(nearly(p.spectrum.x + p.spectrum.width, p.right.x + p.right.width));
+        assert(nearly(p.spectrum.x + p.spectrum.width, area.x + area.width));
+        assert(nearly(p.spectrum.y, p.left.y));
+        assert(p.spectrum.height >= AtsSessionPage::kMinSpectrumPanelH - 1.0f
+               || size.second < kWindowH);
+        assert(p.spectrum.width > p.centre.width + p.right.width);
+        for (const auto& lower : { p.centre, p.right })
+        {
+            assert(nearly(lower.y, p.spectrum.y + p.spectrum.height + ThemeLayout::kColumnGap));
+            assert(nearly(lower.y + lower.height, p.left.y + p.left.height));
+            assert(!overlaps(lower, p.spectrum) && !overlaps(lower, p.left));
+        }
+        assert(!overlaps(p.centre, p.right));
+        const auto centre = AtsSessionPage::centreRects(p);
+        assert(inside(centre.well, p.spectrum));
+        assert(inside(centre.timeline, p.centre) && inside(centre.context, p.centre));
+
+        // The right panel holds its tab strip, each group and the output
+        // group without the overflow guard dropping a control.
+        for (int tab = 0; tab < 3; ++tab)
+        {
+            const auto right = AtsSessionPage::rightColumn(p.right, tab);
+            assert(inside(right.rowArea, right.content));
+            assert(inside(right.tabStrip, right.content));
+            assert(right.tabStrip.y + right.tabStrip.height <= right.rowArea.y);
+            for (const auto& slot : ThemeLayout::column(pageLayoutItems(*right.rows), right.rowArea))
+                assert(slot.visible);
+        }
+    }
+
+    // At the shipping size both engine grids show every cell (SMEARNOV's
+    // twenty need four columns under the shorter centre panel).
+    const auto p = AtsSessionPage::sessionPanels(pageArea());
+    const auto grid = AtsSessionPage::contextGridArea(AtsSessionPage::centreRects(p).context);
+    assert(AtsSessionPage::contextGrid(grid, 10).size() == 10);
+    assert(AtsSessionPage::contextGrid(grid, 20).size() == 20);
+    for (const auto& cell : AtsSessionPage::contextGrid(grid, 20))
+        assert(inside(cell, grid));
 }
 
 } // namespace
@@ -204,5 +280,6 @@ int main()
     checkNothingDroppedAtShippingSize();
     checkRowsAdvanceMonotonically();
     checkLabelledRowsLeaveRoomForTheWidget();
+    checkSessionSpectrumSpansTheRightSide();
     return 0;
 }

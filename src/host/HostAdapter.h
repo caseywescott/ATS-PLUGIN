@@ -413,8 +413,13 @@ public:
                     residual.highHz = ats::criticalBandEdgeHz(band + 1);
                     input.residualBands.push_back(std::move(residual));
                 }
+            // The snapshot carries the view the user picked.  The editor
+            // takes its mode from every snapshot, so publishing `combined`
+            // here snapped each selection back on the next poll.
             return ui::SpectralTraceBuilder::build(
-                input, ui::SpectralTraceMode::combined);
+                input, static_cast<ui::SpectralTraceMode>(std::clamp(
+                           spectralViewMode_, 0,
+                           static_cast<int>(ui::SpectralTraceMode::isometricEnvelopeRdc))));
             }
         };
         if (spectrumSource && spectrumSource->sound)

@@ -11,6 +11,10 @@
 // each capture's pixel size and SHA-256 of the decoded RGBA pixels.
 //
 // Usage: ui_screenshot_matrix <output-dir> [--revision <git-hash>] [--screen-grab]
+//                             [--ats <file.ats>]
+// --ats loads a real model through HostAdapter::importSource (the drop/import
+// path) as the current model and source A, and captures that instead of the
+// fixture.  Not deterministic across revisions of the file; use for review.
 // --screen-grab also saves `<name>.screen.png` via `screencapture -l` of the
 // tool's own window, to confirm the composite matches what is on screen.
 // Needs a logged-in session with the window on screen (the render loop only
@@ -20,11 +24,13 @@
 #include "../src/ui/Editor.h"
 #include "../src/ui/SpectralTraceBuilder.h"
 #include "../src/core/ParameterRegistry.h"
+#include "../src/host/HostAdapter.h"
 
 #import <Cocoa/Cocoa.h>
 #include <CommonCrypto/CommonDigest.h>
 
 #include <array>
+#include <optional>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
@@ -183,12 +189,33 @@ int main(int argc, char** argv)
         const std::filesystem::path output = argv[1];
         std::string revision = "unknown";
         bool screenGrab = false;
+        std::string atsPath;
         for (int i = 2; i < argc; ++i)
         {
             if (std::string(argv[i]) == "--revision" && i + 1 < argc)
                 revision = argv[++i];
             else if (std::string(argv[i]) == "--screen-grab")
                 screenGrab = true;
+            else if (std::string(argv[i]) == "--ats" && i + 1 < argc)
+                atsPath = argv[++i];
+        }
+        std::optional<EditorSnapshot> realSession;
+        if (!atsPath.empty())
+        {
+            static ats::host::HostAdapter host;
+            ats::Error error;
+            for (const auto slot : { 3, 0 })
+                if (!host.importSource({ atsPath }, slot, ats::engine::SourceImportKind::ats, error))
+                {
+                    std::cerr << "could not import " << atsPath << ": " << error.text << '\n';
+                    return 1;
+                }
+            realSession = host.editorSnapshot();
+            if (!realSession->spectrum)
+            {
+                std::cerr << "import published no spectrum\n";
+                return 1;
+            }
         }
         std::filesystem::create_directories(output);
 
@@ -231,7 +258,7 @@ int main(int argc, char** argv)
                 return;
             }
             editor->show();
-            editor->setEditorSnapshot(loadedSession());
+            editor->setEditorSnapshot(realSession ? *realSession : loadedSession());
             runFor(application, 0.5);
             body(*editor);
             editor.reset();
@@ -242,7 +269,14 @@ int main(int argc, char** argv)
         auto capture = [&](VisageEditor& editor, const std::string& name, const SizeCase& size,
                            int theme, int page, int mode) {
             editor.setTheme(theme == 0 ? ThemeId::ember : ThemeId::porcelain);
-            editor.setSpectrumSnapshot(fixture(static_cast<SpectralTraceMode>(mode)));
+            if (realSession)
+            {
+                auto spectrum = *realSession->spectrum;
+                spectrum.mode = static_cast<SpectralTraceMode>(mode);
+                editor.setSpectrumSnapshot(std::move(spectrum));
+            }
+            else
+                editor.setSpectrumSnapshot(fixture(static_cast<SpectralTraceMode>(mode)));
             editor.selectPage(page);
             const auto file = output / (name + ".png");
             Capture previous;

@@ -298,8 +298,15 @@ public:
         }
 
         {
-            const auto columns = input.residualBands.empty() ? 0
-                : std::clamp(limits.maxResidualColumns, std::size_t { 16 }, std::size_t { 512 });
+            // Columns partition the model's frames proportionally, so every
+            // column holds at least one frame and the residual spans the
+            // whole sound.  (The legacy ceil(frames / columns) grouping left
+            // the tail columns silent: a 100-frame file drew its residual
+            // over the first 45% of the time axis only.)
+            const auto requested = std::clamp(limits.maxResidualColumns,
+                                              std::size_t { 16 }, std::size_t { 512 });
+            const auto columns = input.residualBands.empty() || output.frameCount == 0
+                ? 0 : std::min<std::size_t>(requested, output.frameCount);
             const auto reference = std::max(1.0e-20, output.residualDisplayReferencePeak);
             const auto floorDb = 10.0 * std::log10(reference) - 72.0;
             output.residualBands.reserve(input.residualBands.size());
@@ -310,13 +317,10 @@ public:
                 result.lowHz = finitePositive(band.lowHz) ? band.lowHz : 0.0;
                 result.highHz = finitePositive(band.highHz) ? band.highHz : result.lowHz;
                 result.energyNorm.reserve(columns);
-                const auto framesPerColumn = std::max<std::size_t>(
-                    1, (output.frameCount + columns - 1) / columns);
                 for (std::size_t column = 0; column < columns; ++column)
                 {
-                    const auto begin = column * framesPerColumn;
-                    const auto end = std::min<std::size_t>(output.frameCount,
-                                                           begin + framesPerColumn);
+                    const auto [begin, end] = residualColumnFrames(column, columns,
+                                                                   output.frameCount);
                     double peak = 0.0;
                     for (auto i = begin; i < end && i < band.energy.size(); ++i)
                         if (std::isfinite(band.energy[i]) && band.energy[i] > 0.0)
@@ -328,6 +332,31 @@ public:
             }
         }
         return output;
+    }
+
+    /** Half-open frame range [first, last) that residual column `column` covers. */
+    [[nodiscard]] static std::pair<std::size_t, std::size_t> residualColumnFrames(
+        std::size_t column, std::size_t columns, std::size_t frames) noexcept
+    {
+        if (columns == 0 || frames == 0)
+            return { 0, 0 };
+        return { column * frames / columns, (column + 1) * frames / columns };
+    }
+
+    /**
+        Normalised time of a residual column: the centre of the frames it
+        covers, on the same frame/(frames-1) axis the partial points use, so
+        residual ridges line up with partials, the playhead and selections.
+    */
+    [[nodiscard]] static float residualColumnTimeNorm(std::size_t column, std::size_t columns,
+                                                      std::size_t frames) noexcept
+    {
+        if (columns == 0 || frames <= 1)
+            return columns <= 1 ? 0.0f
+                : static_cast<float>(column) / static_cast<float>(columns - 1);
+        const auto [first, last] = residualColumnFrames(column, columns, frames);
+        const auto centre = 0.5 * (static_cast<double>(first) + static_cast<double>(last) - 1.0);
+        return static_cast<float>(std::clamp(centre / static_cast<double>(frames - 1), 0.0, 1.0));
     }
 
 private:

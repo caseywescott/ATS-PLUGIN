@@ -787,9 +787,7 @@ public:
 
     [[nodiscard]] UiRect centreWell() const
     {
-        const auto cols = columnRects();
-        return cols.size() < 2 ? UiRect {}
-                               : centreRects(ThemeLayout::panelContent(cols[1])).well;
+        return centreRects(panels()).well;
     }
 
     // Returns the source card bounding rect in page-local coordinates for
@@ -821,20 +819,24 @@ public:
         if (cols.empty())
             return;
 
-        for (const auto& col : cols)
-            paintPagePanel(canvas, tokens, col);
+        const auto p = panels();
+        for (const auto& panel : { p.left, p.spectrum, p.centre, p.right })
+            paintPagePanel(canvas, tokens, panel);
 
-        drawCentreColumn(canvas, tokens, ThemeLayout::panelContent(cols[1]));
+        drawCentreColumn(canvas, tokens, p);
         drawLeftColumn(canvas, tokens, ThemeLayout::panelContent(cols[0]));
 
-        const UiRect right = ThemeLayout::panelContent(cols[2]);
-        const auto& top = rightTopRows();
-        const auto topSlots = pageRowSlots(top, rightTopArea(right));
+        const auto rightLayout = rightColumn(p.right, rightTab_);
+        paintSegments(canvas, tokens, rightLayout.tabStrip,
+                      { kRightTabLabels.begin(), kRightTabLabels.end() }, rightTab_);
+        const auto& top = *rightLayout.rows;
+        const auto topSlots = pageRowSlots(top, rightLayout.rowArea);
         paintPageRows(canvas, tokens, top, topSlots, controlName);
         paintRightCustomRows(canvas, tokens, top, topSlots);
 
         const auto& bottom = rightBottomRows();
-        const auto bottomSlots = ThemeLayout::columnFromBottom(pageLayoutItems(bottom), right);
+        const auto bottomSlots = ThemeLayout::columnFromBottom(pageLayoutItems(bottom),
+                                                               rightLayout.content);
         paintPageRows(canvas, tokens, bottom, bottomSlots, controlName);
     }
 
@@ -1137,8 +1139,21 @@ private:
         redraw();
     }
 
-    // Section 10.4's centre column: spectrogram well, morph timeline, then the
-    // §7.2 engine context panel taking whatever is left.
+public:
+    // The left column runs the full height.  The spectrum panel spans the
+    // centre and right columns at the top; the centre (timeline, engine
+    // context) and right (morph, lanes, timbre, output) panels sit under it.
+    struct SessionPanels
+    {
+        UiRect left {};
+        UiRect spectrum {};
+        UiRect centre {};
+        UiRect right {};
+    };
+
+    // The spectrogram well, then the centre column's morph timeline and the
+    // §7.2 engine context panel taking whatever is left.  Public so
+    // tests/page_column_layout_test can check the real geometry.
     struct CentreRects
     {
         UiRect well {};
@@ -1146,15 +1161,16 @@ private:
         UiRect context {};
     };
 
-    [[nodiscard]] static CentreRects centreRects(UiRect c) noexcept
+    // The spectrogram well fills its own panel, which spans the centre and
+    // right columns; the timeline and the engine context panel sit under it
+    // in the centre column.
+    [[nodiscard]] static CentreRects centreRects(const SessionPanels& p) noexcept
     {
         CentreRects r;
+        r.well = spectrumWell(p.spectrum);
+        const auto c = ThemeLayout::panelContent(p.centre);
         const float bottom = c.y + c.height;
-        r.well = { c.x, c.y, c.width,
-                   std::min(std::max(240.0f, c.height * 0.38f), std::max(0.0f, c.height)) };
-        const float afterWell = r.well.y + r.well.height + 14.0f;
-        r.timeline = { c.x, afterWell, c.width,
-                       std::clamp(bottom - afterWell, 0.0f, 96.0f) };
+        r.timeline = { c.x, c.y, c.width, std::clamp(c.height, 0.0f, kTimelineH) };
         const float afterTimeline = r.timeline.y + r.timeline.height + 14.0f;
         r.context = { c.x, afterTimeline, c.width, std::max(0.0f, bottom - afterTimeline) };
         return r;
@@ -1175,6 +1191,7 @@ private:
                  std::max(0.0f, context.y + context.height - top) };
     }
 
+private:
     // §7.2's MORPH grid is not in registry order, so the cell walk is explicit.
     [[nodiscard]] std::vector<int> contextCells() const
     {
@@ -1186,6 +1203,9 @@ private:
         return cells;
     }
 
+public:
+    // Three columns, or four when three rows short of the cell count would
+    // otherwise drop cells (SMEARNOV's twenty under the wide spectrum).
     [[nodiscard]] static std::vector<UiRect> contextGrid(UiRect area, std::size_t count)
     {
         std::vector<UiRect> out;
@@ -1194,11 +1214,15 @@ private:
         constexpr float cellH = 42.0f;
         if (count == 0 || area.width <= 0.0f)
             return out;
-        const float colW = (area.width - 2.0f * colGap) / 3.0f;
+        const auto rowsFit = static_cast<std::size_t>(
+            std::max(0.0f, (area.height + rowGap) / (cellH + rowGap)));
+        const std::size_t columns = rowsFit * 3 >= count ? 3 : 4;
+        const auto colCount = static_cast<float>(columns);
+        const float colW = (area.width - (colCount - 1.0f) * colGap) / colCount;
         for (std::size_t i = 0; i < count; ++i)
         {
-            const auto col = static_cast<float>(i % 3);
-            const auto row = static_cast<float>(i / 3);
+            const auto col = static_cast<float>(i % columns);
+            const auto row = static_cast<float>(i / columns);
             const float y = area.y + row * (cellH + rowGap);
             if (y + cellH > area.y + area.height)
                 break;
@@ -1206,10 +1230,12 @@ private:
         }
         return out;
     }
+private:
 
-    void drawCentreColumn(visage::Canvas& canvas, const ThemeTokens& tokens, UiRect area)
+    void drawCentreColumn(visage::Canvas& canvas, const ThemeTokens& tokens,
+                          const SessionPanels& p)
     {
-        const auto rects = centreRects(area);
+        const auto rects = centreRects(p);
         paintThemeOps(canvas,
                       ThemeRecipes::well(tokens, rects.well, ThemeRadius::spectrumWell));
         paintThemeOps(canvas,
@@ -1250,15 +1276,100 @@ public:
         return rows;
     }
 
-    static const std::vector<PageRow>& rightTopRows()
+private:
+
+
+    static const char* controlName(int index)
     {
-        static const std::vector<PageRow> rows {
-            { PageRowKind::heading,        -1, "MORPH",      0.0f, 0.0f, false, false },
+        const auto* descriptor = ParameterRegistry::find(
+            kControlIds[static_cast<std::size_t>(index)]);
+        return descriptor ? descriptor->name.data() : nullptr;
+    }
+
+    std::vector<UiRect> columnRects() const
+    {
+        return ThemeLayout::columns({ 0.0f, 0.0f, width(), height() }, kColumnWidths);
+    }
+
+    [[nodiscard]] SessionPanels panels() const
+    {
+        return sessionPanels({ 0.0f, 0.0f, width(), height() });
+    }
+
+public:
+    static inline const std::vector<float> kColumnWidths { 260.0f, 0.0f, 360.0f };
+    static constexpr float kTimelineH = 96.0f;
+    static constexpr float kSpectrumShare = 0.44f;
+    static constexpr float kMinSpectrumPanelH = 260.0f;
+    static constexpr float kRightTabStripH = 30.0f;
+    static constexpr float kRightTabGap = 10.0f;
+    static constexpr std::array<const char*, 3> kRightTabLabels { "MORPH", "LANES", "TIMBRE" };
+
+    [[nodiscard]] static SessionPanels sessionPanels(UiRect area)
+    {
+        SessionPanels p;
+        const auto cols = ThemeLayout::columns(area, kColumnWidths);
+        if (cols.size() < 3)
+            return p;
+        p.left = cols[0];
+        const float x = cols[1].x;
+        const float top = cols[1].y;
+        const float height = cols[1].height;
+        // The spectrum takes its share, but never so much that the right
+        // panel cannot hold its widest tab plus the output group.
+        const float wanted = std::max(kMinSpectrumPanelH, height * kSpectrumShare);
+        const float spectrumH = std::max(0.0f, std::min(wanted, height - ThemeLayout::kColumnGap
+                                                                - minRightPanelHeight()));
+        p.spectrum = { x, top, cols[2].x + cols[2].width - x, spectrumH };
+        const float lowerY = top + spectrumH + ThemeLayout::kColumnGap;
+        const float lowerH = std::max(0.0f, top + height - lowerY);
+        p.centre = { cols[1].x, lowerY, cols[1].width, lowerH };
+        p.right = { cols[2].x, lowerY, cols[2].width, lowerH };
+        return p;
+    }
+
+    // The well is inset by the panel pad on every side: the panel has no
+    // caption, so the well takes the whole body.
+    [[nodiscard]] static UiRect spectrumWell(UiRect panel) noexcept
+    {
+        const auto pad = ThemeLayout::kPanelPad;
+        return { panel.x + pad, panel.y + pad, std::max(0.0f, panel.width - 2.0f * pad),
+                 std::max(0.0f, panel.height - 2.0f * pad) };
+    }
+
+    struct RightColumn
+    {
+        UiRect content {};
+        UiRect tabStrip {};
+        UiRect rowArea {};
+        const std::vector<PageRow>* rows = nullptr;
+    };
+
+    // A MORPH | LANES | TIMBRE strip and the chosen group above the output
+    // group.  Under the wide spectrum the three groups do not fit together
+    // even at the largest window size.
+    [[nodiscard]] static RightColumn rightColumn(UiRect panel, int tab)
+    {
+        RightColumn r;
+        r.content = ThemeLayout::panelContent(panel);
+        const auto top = rightTopArea(r.content);
+        r.tabStrip = { top.x, top.y, top.width, std::min(kRightTabStripH, top.height) };
+        const float rowsY = top.y + kRightTabStripH + kRightTabGap;
+        r.rowArea = { top.x, rowsY, top.width, std::max(0.0f, top.y + top.height - rowsY) };
+        r.rows = &rightGroupRows(std::clamp(tab, 0, 2));
+        return r;
+    }
+
+    // Each right-column group without its heading (the tab names it).
+    static const std::vector<PageRow>& rightGroupRows(int tab)
+    {
+        static const std::vector<PageRow> morph {
             { PageRowKind::control,         0, nullptr,     42.0f, 0.0f, false, true },
             { PageRowKind::custom, kSnapshotStrip, nullptr, 24.0f, 4.0f, false, false },
             { PageRowKind::control,         1, nullptr,     42.0f, 0.0f, true,  true },
             { PageRowKind::control,         2, nullptr,     42.0f, 0.0f, false, true },
-            { PageRowKind::dividedHeading, -1, "LANES",      0.0f, 0.0f, false, false },
+        };
+        static const std::vector<PageRow> lanes {
             { PageRowKind::control,        36, nullptr,     30.0f, 0.0f, true,  true },
             { PageRowKind::control,        37, nullptr,     30.0f, 0.0f, false, true },
             { PageRowKind::control,        38, nullptr,     30.0f, 4.0f, true,  true },
@@ -1272,27 +1383,37 @@ public:
             { PageRowKind::control,        46, nullptr,     30.0f, 4.0f, true,  true },
             { PageRowKind::control,        47, nullptr,     30.0f, 0.0f, false, true },
             { PageRowKind::custom, kLinkLanes, "LINK LANES", 26.0f, 4.0f, false, false },
-            { PageRowKind::dividedHeading, -1, "TIMBRE",     0.0f, 0.0f, false, false },
+        };
+        static const std::vector<PageRow> timbre {
             { PageRowKind::control,        33, nullptr,     42.0f, 0.0f, true,  true },
             { PageRowKind::control,        34, nullptr,     42.0f, 0.0f, false, true },
             { PageRowKind::control,        35, nullptr,     42.0f, 0.0f, false, true },
         };
-        return rows;
-    }
-private:
-
-
-    static const char* controlName(int index)
-    {
-        const auto* descriptor = ParameterRegistry::find(
-            kControlIds[static_cast<std::size_t>(index)]);
-        return descriptor ? descriptor->name.data() : nullptr;
+        return tab == 1 ? lanes : tab == 2 ? timbre : morph;
     }
 
-    std::vector<UiRect> columnRects() const
+    // The right panel's least height in tabbed form: pads, strip, the tallest
+    // group and the bottom-anchored output group with its divider.
+    // The height a row table needs to show every row: its own height, plus
+    // what the overflow guard wants left for a final control shorter than
+    // ThemeLayout::kMinCompactControlH (LINK LANES).
+    [[nodiscard]] static float rowsNeed(const std::vector<PageRow>& rows) noexcept
     {
-        return ThemeLayout::columns({ 0.0f, 0.0f, width(), height() },
-                                    { 260.0f, 0.0f, 360.0f });
+        const auto items = pageLayoutItems(rows);
+        const auto height = ThemeLayout::columnHeight(items);
+        if (items.empty() || items.back().kind != LayoutItemKind::control)
+            return height;
+        return height + std::max(0.0f, ThemeLayout::kMinCompactControlH - items.back().height);
+    }
+
+    [[nodiscard]] static float minRightPanelHeight() noexcept
+    {
+        float tallest = 0.0f;
+        for (int tab = 0; tab < 3; ++tab)
+            tallest = std::max(tallest, rowsNeed(rightGroupRows(tab)));
+        return 3.0f * ThemeLayout::kPanelPad + kRightTabStripH + kRightTabGap + tallest
+            + ThemeLayout::columnHeight(pageLayoutItems(rightBottomRows()))
+            + ThemeRecipes::kDividerHeight;
     }
 
     // The top group may not run past the bottom group's engraved divider.
@@ -1302,6 +1423,7 @@ private:
                                ThemeRecipes::kDividerHeight;
         return { right.x, right.y, right.width, std::max(0.0f, right.height - reserved) };
     }
+private:
 
     void paintRightCustomRows(visage::Canvas& canvas, const ThemeTokens& tokens,
                               const std::vector<PageRow>& rows,
@@ -1362,7 +1484,8 @@ private:
         for (auto* widget : widgets_)
             widget->setVisible(false);
 
-        const auto centre = centreRects(ThemeLayout::panelContent(cols[1]));
+        const auto p = panels();
+        const auto centre = centreRects(p);
         const auto cells = contextCells();
         const auto grid = contextGrid(contextGridArea(centre.context), cells.size());
         for (std::size_t i = 0; i < grid.size(); ++i)
@@ -1374,11 +1497,12 @@ private:
             widget->setVisible(true);
         }
 
-        const UiRect right = ThemeLayout::panelContent(cols[2]);
-        const auto& top = rightTopRows();
-        placePageWidgets(top, pageRowSlots(top, rightTopArea(right)), widgets_);
+        const auto rightLayout = rightColumn(p.right, rightTab_);
+        const auto& top = *rightLayout.rows;
+        placePageWidgets(top, pageRowSlots(top, rightLayout.rowArea), widgets_);
         const auto& bottom = rightBottomRows();
-        placePageWidgets(bottom, ThemeLayout::columnFromBottom(pageLayoutItems(bottom), right),
+        placePageWidgets(bottom, ThemeLayout::columnFromBottom(pageLayoutItems(bottom),
+                                                               rightLayout.content),
                          widgets_);
     }
 
@@ -1402,7 +1526,8 @@ private:
             return;
         }
 
-        const auto centre = centreRects(ThemeLayout::panelContent(cols[1]));
+        const auto p = panels();
+        const auto centre = centreRects(p);
         const UiRect strip = contextModeStrip(centre.context);
         if (rectContains(strip, point.x, point.y))
         {
@@ -1418,8 +1543,16 @@ private:
             return;
         }
 
-        const auto& rows = rightTopRows();
-        const auto slots = pageRowSlots(rows, rightTopArea(ThemeLayout::panelContent(cols[2])));
+        const auto rightLayout = rightColumn(p.right, rightTab_);
+        if (rectContains(rightLayout.tabStrip, point.x, point.y))
+        {
+            rightTab_ = segmentIndexAt(rightLayout.tabStrip, point.x, kRightTabLabels.size());
+            layoutWidgets();
+            redraw();
+            return;
+        }
+        const auto& rows = *rightLayout.rows;
+        const auto slots = pageRowSlots(rows, rightLayout.rowArea);
 
         for (std::size_t i = 0; i < rows.size(); ++i)
         {
@@ -1462,6 +1595,7 @@ private:
     std::vector<std::unique_ptr<ParameterBinding>> bindings_;
     std::vector<visage::Frame*> widgets_;
     bool contextMorph_ = true;
+    int rightTab_ = 0;
 };
 
 

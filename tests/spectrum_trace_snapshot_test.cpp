@@ -38,7 +38,8 @@ int main()
     assert(snapshot.partials[0].points.size() <= 9);
     assert(snapshot.partials[0].points.front().active);
     assert(snapshot.residualBands.size() == 1);
-    assert(snapshot.residualBands[0].energyNorm.size() == 16);
+    // Never more columns than model frames (9 here), so no column is empty.
+    assert(snapshot.residualBands[0].energyNorm.size() == 9);
     assert(snapshot.onsetNorms.size() == 2 && snapshot.onsetNorms[0] == 0.75f);
     assert(snapshot.envelopeNorm.size() == 3 && snapshot.envelopeNorm[1] == 0.9f);
     for (const auto& trace : snapshot.partials)
@@ -66,6 +67,42 @@ int main()
         residualInput, ats::ui::SpectralTraceMode::residual);
     assert(residualBounds.minFrequencyHz < 800.0);
     assert(residualBounds.maxFrequencyHz > 1200.0);
+
+    // Residual columns cover the whole sound.  The legacy ceil(frames/columns)
+    // grouping left the tail silent: 100 frames over 220 requested columns
+    // filled only the first 100, and 230 frames only the first 115.
+    for (const std::size_t frames : { std::size_t { 17 }, std::size_t { 100 },
+                                      std::size_t { 221 }, std::size_t { 230 },
+                                      std::size_t { 997 } })
+    {
+        ats::ui::SpectralTraceInput coverage;
+        coverage.frameCount = frames;
+        coverage.displayResidualPeak = 1.0;
+        ats::ui::SpectralResidualBandInput flat;
+        flat.bandIndex = 0;
+        flat.lowHz = 100.0;
+        flat.highHz = 200.0;
+        flat.energy.assign(frames, 0.5);
+        coverage.residualBands.push_back(flat);
+        const auto built = ats::ui::SpectralTraceBuilder::build(coverage);
+        const auto& energy = built.residualBands.front().energyNorm;
+        assert(energy.size() == std::min<std::size_t>(220, frames));
+        for (const auto value : energy)
+            assert(value > 0.9f);
+        using Builder = ats::ui::SpectralTraceBuilder;
+        assert(Builder::residualColumnTimeNorm(0, energy.size(), frames) < 0.01f);
+        assert(Builder::residualColumnTimeNorm(energy.size() - 1, energy.size(), frames) > 0.99f);
+        std::size_t covered = 0;
+        for (std::size_t column = 0; column < energy.size(); ++column)
+        {
+            const auto [first, last] = Builder::residualColumnFrames(column, energy.size(), frames);
+            assert(first == covered && last > first);
+            covered = last;
+        }
+        assert(covered == frames);
+    }
+    // One column per frame lands exactly on the partial frame times.
+    assert(ats::ui::SpectralTraceBuilder::residualColumnTimeNorm(3, 9, 9) == 3.0f / 8.0f);
 
     ats::ui::SpectrumViewModel view;
     assert(view.accept(snapshot));

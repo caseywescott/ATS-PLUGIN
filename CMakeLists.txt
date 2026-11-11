@@ -596,7 +596,7 @@ if(ATS_BUILD_VISAGE_UI_PROBE OR ATS_BUILD_NATIVE_VST3 OR ATS_BUILD_NATIVE_STANDA
       "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/ui")
     target_compile_features(ui_screenshot_matrix PRIVATE cxx_std_17)
     target_link_libraries(ui_screenshot_matrix PRIVATE
-      ats_visage_editor ats_core visage "-framework Cocoa")
+      ats_visage_editor ats_core ats_source_import visage "-framework Cocoa")
 
     # These drive a real NSWindow and Visage's render loop; they need a logged-in
     # window-server session with the window on screen. CI excludes them with

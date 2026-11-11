@@ -39,11 +39,20 @@ public:
                                                  SpectralTraceMode mode) noexcept
     {
         auto r = reduced(localBounds, 5.0f, 5.0f);
-        const auto residual = isResidualDisplayMode(mode);
-        r.y += residual ? 50.0f : 30.0f;
-        r.height = std::max(0.0f, r.height - (residual ? 50.0f : 30.0f));
+        const auto reserve = headerReserve(mode);
+        r.y += reserve;
+        r.height = std::max(0.0f, r.height - reserve);
         return r;
     }
+
+    /**
+        Height above the screen: the 26-px header row, plus the 24-px tool row
+        in every mode that has one (all but Iso 3D).  The JUCE layout reserved
+        only 30 px outside the residual modes, so the tool row covered the top
+        of the screen and its title.
+    */
+    [[nodiscard]] static float headerReserve(SpectralTraceMode mode) noexcept
+    { return mode == SpectralTraceMode::isometric ? 30.0f : 50.0f; }
 
     [[nodiscard]] static UiRect getTraceContentBounds(UiRect screen) noexcept
     {

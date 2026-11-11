@@ -1,5 +1,6 @@
 #include "../src/ui/SpectrumRenderer.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <limits>
@@ -117,7 +118,8 @@ int main()
                 // First five values of the reference generator at seed 0x5eed;
                 // this guards the recurrence and per-dot consumption order.
                 assert(std::abs(command.bounds.x - 115.709f) < 0.01f);
-                assert(std::abs(command.bounds.y - 105.420f) < 0.01f);
+                // y follows the plot, which starts below the tool row.
+                assert(std::abs(command.bounds.y - 120.439f) < 0.01f);
                 assert(std::abs(command.bounds.width - 2.498f) < 0.01f);
                 assert(std::abs(command.bounds.height - 2.498f) < 0.01f);
             }
@@ -308,7 +310,85 @@ int main()
             if (c.kind == SpectrumDrawKind::envelopeTrace && c.isPath()) ++slices;
             if (c.kind == SpectrumDrawKind::envelopeFill) ++fills;
         }
-        assert(slices == 30 && fills > 30);
+        // One crest-tint strip per slice, plus a halo per slice.
+        assert(slices == 30 && fills == 30);
+
+        // With the playhead inside the view, one extra slice marks the
+        // envelope being heard, on top of the waterfall.
+        SpectrumRenderOptions playing;
+        playing.showPlayhead = true;
+        playing.playheadNorm = 0.4f;
+        const auto withPlayhead = SpectrumRenderer::render(snap, bounds, playing);
+        int playheadSlices = 0;
+        std::size_t lastSlice = 0, playheadSlice = 0;
+        for (std::size_t i = 0; i < withPlayhead.size(); ++i)
+            if (withPlayhead[i].kind == SpectrumDrawKind::envelopeTrace && withPlayhead[i].isPath())
+            {
+                if (withPlayhead[i].index == -1) { ++playheadSlices; playheadSlice = i; }
+                else lastSlice = i;
+            }
+        assert(playheadSlices == 1 && playheadSlice > lastSlice);
+    }
+
+    // Band labels are spaced, not dropped, when bands are ~12 px tall.
+    {
+        auto residual = makeSnapshot(SpectralTraceMode::residual);
+        residual.residualBands.clear();
+        double low = 100.0;
+        for (int band = 0; band < 25; ++band)
+        {
+            residual.residualBands.push_back({ band, low, low * 1.3, { 0.5f, 0.5f } });
+            low *= 1.3;
+        }
+        int labels = 0;
+        float previous = -1.0e9f;
+        for (const auto& c : SpectrumRenderer::render(residual, { 0.0f, 0.0f, 557.0f, 470.0f },
+                                                      SpectrumRenderOptions {}))
+            if (c.kind == SpectrumDrawKind::bandLabel)
+            {
+                ++labels;
+                assert(std::abs(c.bounds.y - previous) >= 10.9f || c.bounds.y == previous);
+                previous = c.bounds.y;
+            }
+        assert(labels >= 10);
+    }
+
+    // Envelope source B draws behind source A on its own ramp.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::isometricEnvelope);
+        auto overlay = snap;
+        SpectrumRenderOptions options;
+        options.overlaySnapshot = &overlay;
+        const auto cmds = SpectrumRenderer::render(snap, bounds, options);
+        int lastOverlay = -1, firstPrimary = -1;
+        for (int i = 0; i < static_cast<int>(cmds.size()); ++i)
+            if (cmds[static_cast<std::size_t>(i)].kind == SpectrumDrawKind::envelopeTrace)
+            {
+                if (cmds[static_cast<std::size_t>(i)].colorRamp == 1) lastOverlay = i;
+                else if (firstPrimary < 0) firstPrimary = i;
+            }
+        assert(lastOverlay >= 0 && firstPrimary > lastOverlay);
+    }
+
+    // The envelope edit range is a slab through the viewport, not a planar box.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::isometricEnvelope);
+        snap.durationSeconds = 2.0;
+        SpectrumRenderOptions options;
+        options.envelopeEditing = true;
+        options.envelopeTimeStart = 0.25f;
+        options.envelopeTimeEnd = 0.5f;
+        options.envelopeFrequencyStart = 0.0f;
+        options.envelopeFrequencyEnd = 1.0f;
+        const auto cmds = SpectrumRenderer::render(snap, bounds, options);
+        int slabPolygons = 0;
+        bool label = false;
+        for (const auto& c : cmds)
+        {
+            if (c.kind == SpectrumDrawKind::selectionMarker && c.filled) ++slabPolygons;
+            if (c.kind == SpectrumDrawKind::badge && c.label == "0.500 - 1.000 s") label = true;
+        }
+        assert(slabPolygons == 1 && label);
     }
 
     // --- isometricEnvelopeRdc: empty input has no fabricated floor tiles ---
@@ -323,6 +403,152 @@ int main()
         int isoCount = 0;
         for (const auto& c : cmds) if (c.kind == SpectrumDrawKind::isometricTile) ++isoCount;
         assert(isoCount == 0);
+    }
+
+    // Overlays follow the time zoom: the playhead, onset markers and the
+    // detector curves used to be drawn on the unzoomed axis.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::combined);
+        snap.onsets = { { 0.75f, 0.70f, 0.80f, 1.0f } };
+        for (int i = 0; i <= 32; ++i)
+            snap.smearnovDetectionCurve.push_back(static_cast<float>(i % 4) * 0.25f);
+        SpectrumRenderOptions options;
+        options.showPlayhead = true;
+        options.playheadNorm = 0.75f;
+        options.showOnsetOverlay = true;
+        options.viewport.timeCenter = 0.75f;
+        options.viewport.timeZoom = 4.0f;
+        const auto plot = SpectrumRenderer::getPlotBounds(bounds, snap);
+        const auto centreX = plot.x + plot.width * 0.5f;
+        const auto cmds = SpectrumRenderer::render(snap, bounds, options);
+        bool playheadAtCentre = false, markerAtCentre = false, curve = false;
+        for (const auto& c : cmds)
+        {
+            if (c.kind == SpectrumDrawKind::playhead && c.isPath())
+                playheadAtCentre = playheadAtCentre || std::abs(c.vertices.front().x - centreX) < 0.01f;
+            if (c.kind == SpectrumDrawKind::onsetMarker && c.isPath())
+                markerAtCentre = markerAtCentre || std::abs(c.vertices.front().x - centreX) < 0.01f;
+            if (c.kind == SpectrumDrawKind::smearnovCurve && c.isPath())
+            {
+                curve = true;
+                for (const auto& v : c.vertices)
+                    // The curves live in a strip at the bottom of the plot.
+                    assert(v.y >= plot.y + plot.height * 0.5f);
+            }
+        }
+        assert(playheadAtCentre && markerAtCentre && curve);
+
+        options.playheadNorm = 0.1f; // outside the zoomed window
+        for (const auto& c : SpectrumRenderer::render(snap, bounds, options))
+            assert(c.kind != SpectrumDrawKind::playhead);
+    }
+
+    // Gutter labels: frequency labels follow the zoom; band labels sit on the band.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::partials);
+        const auto plot = SpectrumRenderer::getPlotBounds(bounds, snap);
+        const auto labels = [&](SpectrumViewport viewport) {
+            std::vector<std::string> result;
+            for (const auto& c : SpectrumRenderer::render(snap, bounds, viewport))
+                if (c.kind == SpectrumDrawKind::freqLabel)
+                {
+                    assert(c.bounds.y + 5.0f >= plot.y - 0.01f);
+                    assert(c.bounds.y + 5.0f <= plot.y + plot.height + 0.01f);
+                    result.push_back(c.label);
+                }
+            return result;
+        };
+        const auto full = labels({});
+        SpectrumViewport zoomed;
+        zoomed.frequencyCenter = 0.2f;
+        zoomed.frequencyZoom = 4.0f;
+        const auto low = labels(zoomed);
+        assert(!full.empty() && !low.empty() && full != low);
+        assert(std::find(full.begin(), full.end(), "10k") != full.end());
+        assert(std::find(low.begin(), low.end(), "10k") == low.end());
+
+        auto residual = makeSnapshot(SpectralTraceMode::residual);
+        residual.residualBands = { { 4, 200.0, 400.0, { 0.2f, 0.8f } },
+                                   { 5, 400.0, 2000.0, { 0.5f, 0.5f } } };
+        const UiRect tall { 10.0f, 20.0f, 400.0f, 420.0f };
+        const auto residualPlot = SpectrumRenderer::getPlotBounds(tall, residual);
+        const auto logRange = std::log(20000.0 / 20.0);
+        const auto yForHz = [&](double hz) {
+            return residualPlot.y + residualPlot.height
+                - residualPlot.height * static_cast<float>(std::log(hz / 20.0) / logRange);
+        };
+        bool found = false;
+        for (const auto& c : SpectrumRenderer::render(residual, tall, SpectrumRenderOptions {}))
+            if (c.kind == SpectrumDrawKind::bandLabel && c.index == 5 && c.label == "B5")
+            {
+                found = true;
+                const auto centre = (yForHz(400.0) + yForHz(2000.0)) * 0.5f;
+                assert(std::abs(c.bounds.y + 9.0f - centre) < 0.5f);
+            }
+        assert(found);
+    }
+
+    // A partial keeps its amplitude ramp along its length: per-stop alpha.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::partials);
+        snap.partials.front().points = {
+            { 0, 0.0f, 0.5f, 0.05f, 440.0, 440.0, 0.1, true },
+            { 1, 0.5f, 0.5f, 0.50f, 440.0, 440.0, 0.5, true },
+            { 2, 1.0f, 0.5f, 0.95f, 440.0, 440.0, 0.9, true } };
+        float lowest = 1.0f, highest = 0.0f;
+        for (const auto& c : SpectrumRenderer::render(snap, bounds, SpectrumRenderOptions {}))
+            if (c.kind == SpectrumDrawKind::partialTrace)
+                for (const auto& stop : c.stops)
+                {
+                    lowest = std::min(lowest, stop.alpha);
+                    highest = std::max(highest, stop.alpha);
+                }
+        assert(highest - lowest > 0.3f);
+    }
+
+    // Isometric views cull out-of-range data instead of projecting it beside
+    // the floor, and draw no planar time labels or planar residual selection.
+    {
+        auto snap = makeSnapshot(SpectralTraceMode::isometric);
+        SpectralTrace early;
+        early.partialIndex = 50;
+        early.points = { { 0, 0.02f, 0.5f, 0.9f, 440.0, 440.0, 0.9, true },
+                         { 1, 0.08f, 0.5f, 0.9f, 440.0, 440.0, 0.9, true } };
+        snap.partials.push_back(early);
+        SpectrumRenderOptions options;
+        options.viewport.timeCenter = 0.75f;
+        options.viewport.timeZoom = 4.0f;
+        for (const auto& c : SpectrumRenderer::render(snap, bounds, options))
+        {
+            assert(c.index != 50 || (c.kind != SpectrumDrawKind::partialTrace
+                                     && c.kind != SpectrumDrawKind::floorShadow));
+            assert(c.kind != SpectrumDrawKind::axisLabel);
+        }
+
+        auto isoResidual = makeSnapshot(SpectralTraceMode::isometricResidual);
+        SpectrumRenderOptions selectedBand;
+        selectedBand.selectedBands = { 4 };
+        selectedBand.residualLastFrame = 1;
+        bool highlighted = false;
+        for (const auto& c : SpectrumRenderer::render(isoResidual, bounds, selectedBand))
+        {
+            assert(c.kind != SpectrumDrawKind::selectionMarker);
+            highlighted = highlighted || (c.kind == SpectrumDrawKind::glowHalo && c.index == 4);
+        }
+        assert(highlighted);
+    }
+
+    // Planar residual is a filled ridge, brighter in the residual view.
+    {
+        auto residual = makeSnapshot(SpectralTraceMode::residual);
+        auto combined = makeSnapshot(SpectralTraceMode::combined);
+        const auto fillAlpha = [&](const SpectralTraceSnapshot& snap) {
+            for (const auto& c : SpectrumRenderer::render(snap, bounds, SpectrumRenderOptions {}))
+                if (c.kind == SpectrumDrawKind::envelopeFill && c.isStrip() && c.index == 4)
+                    return c.alpha;
+            return 0.0f;
+        };
+        assert(fillAlpha(residual) > fillAlpha(combined) && fillAlpha(combined) > 0.0f);
     }
 
     // --- SpectrumLUT: the fixed blue/cyan/mint/lime ramp is theme independent ---

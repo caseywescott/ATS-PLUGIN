@@ -32,13 +32,15 @@ struct State
     int popupShown = 0;
     int popupDismissed = 0;
     int spectrumModeSelections = 0;
+    int lastSpectrumMode = -1;
 };
 
 void onPopupShown(void* context) { ++static_cast<State*>(context)->popupShown; }
 void onPopupDismissed(void* context) { ++static_cast<State*>(context)->popupDismissed; }
-void onSpectrumModeSelected(void* context, int, int)
+void onSpectrumModeSelected(void* context, int, int mode)
 {
     ++static_cast<State*>(context)->spectrumModeSelections;
+    static_cast<State*>(context)->lastSpectrumMode = mode;
 }
 
 void drainEvents(NSApplication* application)
@@ -158,12 +160,13 @@ int main()
             }
         };
 
-        // The spectrum view chip sits at the top-left of the SESSION well
-        // (SpectrumChromeLayout::viewMenuButton, editor x 311-493, y 153-175 at
-        // 1280x940); this point is its centre. REQUIRE below turns layout drift
-        // into a loud failure rather than a vacuous pass.
-        const CGFloat chipX = 402.0;
-        const CGFloat chipY = 164.0;
+        // At 1280x940 the SESSION well is wide enough for the view buttons,
+        // so the popup chip at its top-left is the source menu
+        // (SpectrumChromeLayout::sourceMenuButton, editor x 311-443, y 139-161);
+        // this point is its centre. REQUIRE below turns layout drift into a
+        // loud failure rather than a vacuous pass.
+        const CGFloat chipX = 377.0;
+        const CGFloat chipY = 150.0;
 
         send(NSEventTypeMouseMoved, chipX, chipY);
         send(NSEventTypeLeftMouseDown, chipX, chipY);
@@ -181,37 +184,36 @@ int main()
         runFor(application, 0.6);
 
         // The menu must still be there. Visage geometry (4 px selection padding,
-        // 22 px rows, 175 px minimum width) places the top-level list at editor
-        // (311, 179); its first row is the "Current" source submenu. Pressing a
-        // submenu row opens the mode list immediately at the list's right edge
-        // (x 486), row 0 at y 187. Each Visage list swallows its first mouse-up,
-        // so every submenu row is clicked twice. A menu that faded out on focus
-        // loss accepts none of this.
+        // 22 px rows) places the list at editor (311, 165); its first row,
+        // centred at y 180, is the "Current" source. The list is flat: no
+        // submenu to open first. A menu that faded out on focus loss accepts
+        // none of this.
         REQUIRE(state.popupDismissed == 0);
-        const CGFloat currentRowY = 194.0;
+        const CGFloat currentRowY = 180.0;
         send(NSEventTypeMouseMoved, chipX, currentRowY);
         drainEvents(application);
-        send(NSEventTypeLeftMouseDown, chipX, currentRowY);
-        send(NSEventTypeLeftMouseUp, chipX, currentRowY);
-        drainEvents(application);
-        const CGFloat modeX = 566.0;
-        for (int row = 0; row < 7 && state.spectrumModeSelections == 0; ++row)
+        for (int click = 0; click < 2 && state.spectrumModeSelections == 0; ++click)
         {
-            const CGFloat rowY = 198.0 + 22.0 * row;
-            send(NSEventTypeMouseMoved, modeX, rowY);
+            send(NSEventTypeLeftMouseDown, chipX, currentRowY);
+            send(NSEventTypeLeftMouseUp, chipX, currentRowY);
             drainEvents(application);
-            for (int click = 0; click < 2 && state.spectrumModeSelections == 0; ++click)
-            {
-                send(NSEventTypeLeftMouseDown, modeX, rowY);
-                send(NSEventTypeLeftMouseUp, modeX, rowY);
-                drainEvents(application);
-            }
         }
 
         REQUIRE(state.spectrumModeSelections == 1);
         // The selection must have come through the live popup, which reports
         // its own dismissal, not through a click that fell through to the well.
         REQUIRE(state.popupDismissed == 1);
+
+        // The views are one click each: the "Partials" button (second in the
+        // strip, editor x 525-587) switches without any popup.
+        const CGFloat partialsX = 556.0;
+        send(NSEventTypeMouseMoved, partialsX, chipY);
+        send(NSEventTypeLeftMouseDown, partialsX, chipY);
+        send(NSEventTypeLeftMouseUp, partialsX, chipY);
+        drainEvents(application);
+        REQUIRE(state.spectrumModeSelections == 2);
+        REQUIRE(state.lastSpectrumMode == 1);
+        REQUIRE(state.popupShown == 1);
 
         editor.reset();
         std::cout << "popup_focus_retention_test passed\n";

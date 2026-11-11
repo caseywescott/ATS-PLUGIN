@@ -304,9 +304,18 @@ public:
         const float trackRadius = ThemeRadius::segmentedTrack(height());
         paintWell(canvas, tokens, { 0.0f, 0.0f, width(), height() }, trackRadius);
 
-        const visage::Font font(ThemeFont::segment(static_cast<int>(labels_.size())),
-                                visage::fonts::Lato_Regular_ttf);
+        const auto baseSize = ThemeFont::segment(static_cast<int>(labels_.size()));
+        const visage::Font baseFont(baseSize, visage::fonts::Lato_Regular_ttf);
         const float segW = width() / static_cast<float>(labels_.size());
+        // Narrow cells (the four-column SMEARNOV grid, the minimum window)
+        // shrink every label to the widest one's fit, down to 70%, instead
+        // of letting neighbouring labels run into each other.
+        const float room = std::max(1.0f, segW - 8.0f);
+        float widest = 0.0f;
+        for (const auto& label : labels_)
+            widest = std::max(widest, baseFont.stringWidth(visage::String(label).toUtf32()));
+        const auto fit = widest > room ? std::max(0.7f, room / widest) : 1.0f;
+        const visage::Font font = fit < 1.0f ? baseFont.withSize(baseSize * fit) : baseFont;
         const int selected = static_cast<int>(std::round(binding_.value()));
         for (std::size_t i = 0; i < labels_.size(); ++i)
         {

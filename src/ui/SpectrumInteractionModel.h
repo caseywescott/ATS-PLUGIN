@@ -472,12 +472,23 @@ public:
         const auto iso = SpectrumGeometry::isIsometricDisplayMode(mode_);
         float best = maxDistancePx;
         int result = -1;
+        // The isometric painter culls points outside the visible range (they
+        // would project beside the floor); never pick what is not drawn.
+        const auto timeRange = SpectrumGeometry::visibleTimeRange(viewport);
+        const auto freqRange = SpectrumGeometry::visibleFrequencyRange(viewport);
+        const auto drawn = [&](const SpectralTracePoint& p) {
+            return p.active && (!iso
+                || (p.timeNorm >= timeRange.start - timeRange.length() * 0.025f
+                    && p.timeNorm <= timeRange.end + timeRange.length() * 0.025f
+                    && p.freqNorm >= freqRange.start - freqRange.length() * 0.04f
+                    && p.freqNorm <= freqRange.end + freqRange.length() * 0.04f));
+        };
         for (const auto& trace : snapshot_->partials)
             for (std::size_t i = 1; i < trace.points.size(); ++i)
             {
                 const auto& a = trace.points[i - 1];
                 const auto& b = trace.points[i];
-                if (!a.active || !b.active) continue;
+                if (!drawn(a) || !drawn(b)) continue;
                 const auto pa = iso ? SpectrumGeometry::positionForIsoCoords(a.timeNorm, a.freqNorm, a.ampNorm, plot, viewport)
                                     : SpectrumGeometry::positionForPoint(a, plot, viewport);
                 const auto pb = iso ? SpectrumGeometry::positionForIsoCoords(b.timeNorm, b.freqNorm, b.ampNorm, plot, viewport)
@@ -526,11 +537,15 @@ public:
             const auto minHz = std::max(1.0, snapshot_->minFrequencyHz);
             const auto maxHz = std::max(minHz * 1.2, snapshot_->maxFrequencyHz);
             const auto logRange = std::max(1.0e-6, std::log(maxHz / minHz));
+            const auto normForHz = [&](double hz) {
+                return static_cast<float>(std::clamp(
+                    std::log(std::clamp(std::max(1.0, hz), minHz, maxHz) / minHz) / logRange, 0.0, 1.0));
+            };
             for (const auto& band : snapshot_->residualBands)
             {
-                const auto centre = std::max(minHz, (band.lowHz + band.highHz) * 0.5);
-                const auto freq = static_cast<float>(std::clamp(
-                    std::log(std::clamp(centre, minHz, maxHz) / minHz) / logRange, 0.0, 1.0));
+                // Same band placement as the isometric residual painter.
+                const auto freq = std::clamp(0.5f * (normForHz(band.lowHz) + normForHz(band.highHz)),
+                                             0.0f, 1.0f);
                 if (freq < freqRange.start - freqRange.length() * 0.05f
                     || freq > freqRange.end + freqRange.length() * 0.05f)
                     continue;
@@ -540,14 +555,15 @@ public:
                 std::optional<UiPoint> previousRidge;
                 for (std::size_t c = 0; c < energy.size(); ++c)
                 {
-                    const auto time = static_cast<float>(c) / static_cast<float>(energy.size() - 1);
+                    const auto time = SpectralTraceBuilder::residualColumnTimeNorm(
+                        c, energy.size(), snapshot_->frameCount);
                     if (time < timeRange.start - timeRange.length() * 0.03f
                         || time > timeRange.end + timeRange.length() * 0.03f)
                         continue;
                     const auto base = SpectrumGeometry::positionForIsoCoords(time, freq, 0.0f,
                                                                                 plot, currentViewport());
                     const auto ridge = SpectrumGeometry::positionForIsoCoords(time, freq,
-                        std::clamp(energy[c] * 1.15f, 0.0f, 1.25f), plot, currentViewport());
+                        std::clamp(energy[c] * 1.15f, 0.0f, 1.15f), plot, currentViewport());
                     if (previousBase && previousRidge)
                     {
                         const auto distance = std::min(
@@ -668,6 +684,7 @@ public:
                 legacy.push_back({ value, value, value, 0.0f });
         }
         const auto& onsets = snapshot_->onsets.empty() ? legacy : snapshot_->onsets;
+        const auto timeRange = SpectrumGeometry::visibleTimeRange(currentViewport());
         float best = maxDistancePx;
         for (std::size_t i = 0; i < onsets.size(); ++i)
         {
@@ -679,8 +696,11 @@ public:
             for (const auto& candidate : candidates)
             {
                 if (candidate.second != OnsetHandleKind::marker && candidate.first < 0.0f) continue;
-                const auto distance = std::abs(point.x - (plot.x + plot.width *
-                                                           std::clamp(candidate.first, 0.0f, 1.0f)));
+                // Same viewport mapping the renderer uses for the markers.
+                const auto x = plot.x + plot.width * (std::clamp(candidate.first, 0.0f, 1.0f)
+                                                          - timeRange.start)
+                    / std::max(1.0e-6f, timeRange.length());
+                const auto distance = std::abs(point.x - x);
                 if (distance < best && point.y >= plot.y - maxDistancePx
                     && point.y <= plot.y + plot.height + maxDistancePx)
                 {

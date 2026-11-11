@@ -68,6 +68,26 @@ The `cmake` on this machine is an x86_64 binary: trees without
 | T-404 resize negotiation | done | `6ab26a68` |
 | T-405 keyboard / output spectrum / meter | out of parity scope (ADR-0004), not started | — |
 
+## Spectrum display review (2026-11-10)
+
+The Visage spectrum painter was compared against the deleted JUCE
+`SpectrogramPanel.cpp`. Port regressions fixed: playhead, onset markers and
+Smearnov curves ignored the time zoom; frequency labels ignored the frequency
+zoom; band labels were evenly spaced instead of on their bands; partials lost
+their per-point alpha ramp; isometric partials and residual were not culled
+(off-range data projected beside the floor) and had no depth cue; residual had
+no filled ridge; envelope bins could take a negative weight at the top edge,
+RDC had no edge taper; the envelope edit range ignored the viewport; footer,
+hover readout and frequency-shape pivot were missing. One legacy defect fixed
+on purpose: residual columns now cover the whole sound (tail columns were
+silent). Details: `docs/spectrum-view-parity-decisions.md` §2026-11-10. The
+spectrum screenshot matrix (RMJ-031) must be re-captured.
+
+2026-11-11: the SESSION spectrum spans the centre and right columns, views
+are one-click buttons, and a selected view no longer snaps back to Trace +
+Residual (the host published that mode on every snapshot). See
+`docs/spectrum-view-parity-decisions.md` §2026-11-11.
+
 ## Open items
 
 - Logic session (T-204) and plugin validation (ARCH-HOST-001).
