@@ -20,9 +20,10 @@ int main()
         SpectrumEditAction { SpectrumEditCommand::copyResidual, { 1, 2 }, 0, 4, 0.0f },
         EditSmearnovOnsetHandlesAction { { { 0.5f, 0.4f, 0.6f, 1.0f } } },
         ApplyMathAction { "amp *= 0.5;" }, DetectSmearnovAction {}, ApplySmearnovAction {},
-        EditSmearnovOnsetsAction { { 0.2f, 0.8f } }, SetTimbreMotionPlanAction { { 0.0f, 1.0f } }
+        EditSmearnovOnsetsAction { { 0.2f, 0.8f } }, SetTimbreMotionPlanAction { { 0.0f, 1.0f } },
+        AutoTuneAnalysisAction {}
     };
-    assert(actions.size() == 30);
+    assert(actions.size() == 31);
     for (const auto& action : actions)
     {
         const auto contract = actionContract(action);

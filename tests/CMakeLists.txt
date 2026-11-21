@@ -395,6 +395,12 @@ target_compile_features(ats_engine_test PRIVATE cxx_std_17)
 target_link_libraries(ats_engine_test PRIVATE ats_engine)
 add_test(NAME ats_engine_test COMMAND ats_engine_test WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+add_executable(analysis_autotune_test analysis_autotune_test.cpp)
+target_include_directories(analysis_autotune_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(analysis_autotune_test PRIVATE cxx_std_17)
+target_link_libraries(analysis_autotune_test PRIVATE ats_engine)
+add_test(NAME analysis_autotune_test COMMAND analysis_autotune_test WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
 add_executable(source_import_service_test source_import_service_test.cpp)
 target_include_directories(source_import_service_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -487,6 +493,15 @@ target_include_directories(host_current_model_workflow_test PRIVATE
 target_compile_features(host_current_model_workflow_test PRIVATE cxx_std_17)
 target_link_libraries(host_current_model_workflow_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
 add_test(NAME host_current_model_workflow_test COMMAND host_current_model_workflow_test)
+
+add_executable(host_autotune_test host_autotune_test.cpp)
+target_include_directories(host_autotune_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_autotune_test PRIVATE cxx_std_17)
+target_link_libraries(host_autotune_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME host_autotune_test COMMAND host_autotune_test)
 
 add_executable(host_analysis_cancel_test host_analysis_cancel_test.cpp)
 target_include_directories(host_analysis_cancel_test PRIVATE

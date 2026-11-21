@@ -63,6 +63,7 @@ template <typename T>
     if constexpr (std::is_same_v<T, EditSmearnovOnsetsAction>) return { "EditSmearnovOnsets", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, EditSmearnovOnsetHandlesAction>) return { "EditSmearnovOnsetHandles", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, SetTimbreMotionPlanAction>) return { "SetTimbreMotionPlan", ActionThreadDomain::worker, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
+    if constexpr (std::is_same_v<T, AutoTuneAnalysisAction>) return { "AutoTuneAnalysis", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
     return { "UnknownAction", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::none };
 }
 

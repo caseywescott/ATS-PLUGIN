@@ -389,6 +389,9 @@ public:
             { PageRowKind::heading,        -1, "ACTIONS",         0.0f, 0.0f, false, false },
             { PageRowKind::custom,          0, "IMPORT WAV",     30.0f, 0.0f, false, false },
             { PageRowKind::custom,          1, "ANALYZE CURRENT", 30.0f, 6.0f, false, false },
+            // Searches lowest/highest frequency, window cycles and hop for the
+            // closest resynthesis, applies them and re-analyses.
+            { PageRowKind::custom,          4, "AUTO-TUNE",       30.0f, 6.0f, false, false },
             { PageRowKind::custom,          2, "CANCEL",         30.0f, 6.0f, false, false },
             { PageRowKind::custom,          3, "STOP PREVIEW",   30.0f, 6.0f, false, false },
             { PageRowKind::dividedHeading, -1, "SOURCE A",        0.0f, 0.0f, false, false },
@@ -450,7 +453,7 @@ private:
                 paintThemeOps(canvas, ThemeRecipes::well(tokens, slot, ThemeRadius::control));
                 continue;
             }
-            // CANCEL is live only while the worker runs; the other three are the
+            // CANCEL is live only while the worker runs; the others are the
             // inverse.
             const bool enabled = rows[i].index == 2 ? model_.workerRunning() : !model_.workerRunning();
             paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, slot, false, false));
@@ -495,6 +498,9 @@ private:
                 break;
             case 2:
                 if (model_.workerRunning() && emit_) emit_(CancelJobsAction {});
+                break;
+            case 4:
+                if (!model_.workerRunning() && emit_) emit_(AutoTuneAnalysisAction {});
                 break;
             default:
                 if (emit_) emit_(StopPreviewAction {});

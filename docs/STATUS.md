@@ -115,6 +115,26 @@ recordings, ATSA/plugin default analysis settings):
   -12% on the vowel and -21% on the guitar), so an analysis-by-synthesis
   search warm-started from the current settings is the better route.
 
+## Analysis auto-tune (2026-11-22)
+
+ANALYSIS ▸ AUTO-TUNE runs an analysis-by-synthesis search
+(`src/engine/AnalysisAutoTune`, adapted from pyats `autotune.py`) over the
+lowest / highest frequency, window cycles and hop size. It starts from the
+current settings, scores each candidate's resynthesis against the input with
+a multi-resolution spectral loss plus a small per-partial penalty, keeps a
+change only when it improves the score, and never raises the lowest frequency
+above 0.9x the starting model's lowest strong partial (so a fundamental is not
+pushed into the residual). The result is written as one undoable change and
+the current model is re-analysed; CANCEL stops it. On the four
+`spectral-envelope-audio` recordings (40 evaluations, 0.5-15 s): guitar -42%,
+crotale -33%, vocal -14%, vowel phrase -53% loss. `tools/ats_autotune` runs it
+on a WAV. Tests: `analysis_autotune_test`, `host_autotune_test`, and the
+standalone dispatch matrix's AUTO-TUNE step.
+
+Fixed alongside: in the VST3 build, ANALYZE CURRENT sent slot 0, so it analysed
+morph source A instead of the current model (the host path had been fixed in
+`f41a0240`; the VST3 controller and processor still used 0/1 only).
+
 ## Open items
 
 - Logic session (T-204) and plugin validation (ARCH-HOST-001).

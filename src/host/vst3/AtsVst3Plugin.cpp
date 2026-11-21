@@ -42,6 +42,7 @@ namespace
 constexpr const char* kImportSourceMessage = "ats.editor.import-source";
 constexpr const char* kAnalyzeSourceMessage = "ats.editor.analyze-source";
 constexpr const char* kCancelAnalysisMessage = "ats.editor.cancel-analysis";
+constexpr const char* kAutoTuneAnalysisMessage = "ats.editor.auto-tune-analysis";
 constexpr const char* kPollAnalysisMessage = "ats.editor.poll-analysis";
 constexpr const char* kApplyAnalysisProfileMessage = "ats.editor.apply-analysis-profile";
 constexpr const char* kAnalysisTelemetryMessage = "ats.editor.analysis-telemetry";
@@ -450,8 +451,9 @@ public:
         if (Steinberg::FIDStringsEqual(messageId, kAnalyzeSourceMessage))
         {
             Steinberg::int64 slot = -1;
+            // Slots 0/1 are morph sources A/B, slot 3 the current model.
             if (attributes->getInt(kSourceSlotAttribute, slot) != Steinberg::kResultTrue ||
-                slot < 0 || slot > 1)
+                !(slot == 0 || slot == 1 || slot == 3))
                 return Steinberg::kResultFalse;
             ats::Error error;
             return host_.queueAnalysisSource(static_cast<int>(slot), error)
@@ -462,6 +464,11 @@ public:
         {
             host_.cancelAnalysis();
             return Steinberg::kResultTrue;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kAutoTuneAnalysisMessage))
+        {
+            ats::Error error;
+            return host_.queueAutoTune(error) ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kPollAnalysisMessage))
         {
@@ -1174,7 +1181,13 @@ public:
         }
         if (std::holds_alternative<ats::ui::AnalyzeCurrentAction>(action))
         {
-            (void) sendSlotCommand(kAnalyzeSourceMessage, 0);
+            // The current model is slot 3; slot 0 analysed morph source A.
+            (void) sendSlotCommand(kAnalyzeSourceMessage, 3);
+            return;
+        }
+        if (std::holds_alternative<ats::ui::AutoTuneAnalysisAction>(action))
+        {
+            (void) sendMessageId(kAutoTuneAnalysisMessage);
             return;
         }
         if (std::holds_alternative<ats::ui::CancelJobsAction>(action))
@@ -1561,7 +1574,7 @@ private:
 
     bool sendSlotCommand(const char* messageId, int slot)
     {
-        if (slot < 0 || slot > 1)
+        if (!(slot == 0 || slot == 1 || slot == 3))
             return false;
         auto* message = allocateMessage();
         if (message == nullptr)

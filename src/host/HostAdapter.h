@@ -17,6 +17,7 @@
 #include "../engine/PartialEditService.h"
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
+#include "../engine/AnalysisAutoTune.h"
 #include "../state/FactoryPresetState.h"
 #include "../state/LegacyStateCodec.h"
 #include "../state/LegacyStateParameters.h"
@@ -231,6 +232,8 @@ public:
         cancelAnalysis();
         if (analysisFuture_.valid())
             analysisFuture_.wait();
+        if (autoTuneFuture_.valid())
+            autoTuneFuture_.wait();
         cancelSmearnov();
         if (smearnovFuture_.valid())
             smearnovFuture_.wait();
@@ -681,6 +684,128 @@ public:
         return true;
     }
 
+    // Starts the analysis-by-synthesis search for the current model's
+    // resolution settings on the analysis worker.  It shares the analysis
+    // busy flag, progress and cancellation, so CANCEL stops it and an
+    // analysis cannot start underneath it.  pollAnalysis() commits it.
+    bool queueAutoTune(Error& error)
+    {
+        error = {};
+        if (analysisRunning_.load(std::memory_order_acquire))
+        {
+            error = { "analysis_busy", "an analysis job is already running" };
+            return false;
+        }
+        if (!currentSource_ || currentSource_->kind != engine::SourceImportKind::audio ||
+            currentSource_->monoSamples.empty() || currentSource_->sampleRate <= 0)
+        {
+            error = { "missing_current_source", "import audio as the current source before auto-tuning" };
+            return false;
+        }
+        analysisCancellation_.cancel();
+        analysisCancellation_ = CancellationSource {};
+        autoTuneSourceRevision_ = currentSourceRevision_;
+        analysisProgress_.store(0.0f, std::memory_order_release);
+        const auto generation = sourceGenerations_.next();
+        auto samples = currentSource_->monoSamples;
+        const auto sampleRate = currentSource_->sampleRate;
+        const auto start = analysisParamsForSource(*currentSource_);
+        const auto token = analysisCancellation_.token();
+        auto promise = std::make_shared<std::promise<JobResult<AutoTuneResult>>>();
+        autoTuneFuture_ = promise->get_future();
+        analysisScheduler_.submitVoid(
+            [this, generation, token, samples = std::move(samples), sampleRate, start, promise]() mutable {
+                AutoTuneRequest request;
+                request.samples = samples.data();
+                request.sampleCount = samples.size();
+                request.sampleRate = sampleRate;
+                request.start = start;
+                promise->set_value(AnalysisAutoTune::run(generation, token, request, [this](double progress) {
+                    analysisProgress_.store(static_cast<float>(progress), std::memory_order_release);
+                }));
+            });
+        analysisRunning_.store(true, std::memory_order_release);
+        autoTuneRunning_ = true;
+        auto snapshot = telemetry();
+        snapshot.state = ui::UiState::analyzing;
+        snapshot.analysisRunning = true;
+        snapshot.progress = 0.0f;
+        snapshot.status = "auto-tuning analysis settings";
+        snapshot.error.clear();
+        telemetry_.publish(std::move(snapshot));
+        return true;
+    }
+
+    // Commits a finished auto-tune: writes the tuned settings as one undoable
+    // change and re-analyses the current model with them.
+    bool pollAutoTune(Error& error)
+    {
+        if (!autoTuneRunning_ || !autoTuneFuture_.valid() ||
+            autoTuneFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return false;
+        auto tuned = autoTuneFuture_.get();
+        autoTuneRunning_ = false;
+        analysisRunning_.store(false, std::memory_order_release);
+        if (tuned.status == JobResult<AutoTuneResult>::Status::success && analysisCancellation_.isCancelled())
+        {
+            tuned.status = JobResult<AutoTuneResult>::Status::cancelled;
+            tuned.error = { "cancelled", "auto-tune cancelled" };
+        }
+        const auto publishEnd = [this](ui::UiState state, std::string status, std::string errorText) {
+            auto snapshot = telemetry();
+            snapshot.analysisRunning = false;
+            snapshot.progress = 0.0f;
+            snapshot.state = state;
+            snapshot.status = std::move(status);
+            snapshot.error = std::move(errorText);
+            telemetry_.publish(std::move(snapshot));
+        };
+        if (tuned.status != JobResult<AutoTuneResult>::Status::success)
+        {
+            const auto cancelled = tuned.status == JobResult<AutoTuneResult>::Status::cancelled;
+            if (!cancelled)
+                error = tuned.error;
+            publishEnd(cancelled ? ui::UiState::readyToAnalyze : ui::UiState::error,
+                       cancelled ? "auto-tune cancelled" : "auto-tune failed",
+                       cancelled ? std::string {} : tuned.error.text);
+            return true;
+        }
+        if (!currentSource_ || currentSourceRevision_ != autoTuneSourceRevision_)
+        {
+            error = { "stale_auto_tune", "the current source changed while auto-tune was running" };
+            publishEnd(ui::UiState::readyToAnalyze, "auto-tune result discarded", error.text);
+            return true;
+        }
+        const auto& result = tuned.value;
+        if (result.improved())
+        {
+            const auto before = captureState();
+            const auto& p = result.parameters;
+            (void) parameters_.write("analysisLowestFreq", static_cast<float>(p.lowest_freq));
+            (void) parameters_.write("analysisHighestFreq", static_cast<float>(p.highest_freq));
+            (void) parameters_.write("analysisWinCycles", static_cast<float>(p.win_cycles));
+            (void) parameters_.write("analysisHopSize", static_cast<float>(p.hop_size));
+            recordMutation("Auto-tune analysis", before);
+        }
+        lastAutoTuneSummary_ = result.improved()
+            ? "auto-tune: " + std::to_string(static_cast<int>(std::lround(
+                  100.0 * (result.initialLoss - result.loss) / result.initialLoss)))
+                  + "% closer match"
+            : "auto-tune: current settings are already the best found";
+        // Re-analyse with the tuned settings so the model matches them.
+        Error analysisError;
+        if (!queueAnalysisSource(3, analysisError))
+        {
+            error = analysisError;
+            publishEnd(ui::UiState::error, lastAutoTuneSummary_, analysisError.text);
+            return true;
+        }
+        auto snapshot = telemetry();
+        snapshot.status = lastAutoTuneSummary_ + "; analysing";
+        telemetry_.publish(std::move(snapshot));
+        return true;
+    }
+
     bool pollAnalysis(Error& error)
     {
         error = {};
@@ -688,10 +813,20 @@ public:
         const bool smearnovCompleted = pollSmearnov(smearnovError);
         if (smearnovCompleted && smearnovError)
             error = std::move(smearnovError);
+        Error autoTuneError;
+        if (pollAutoTune(autoTuneError))
+        {
+            if (autoTuneError)
+                error = std::move(autoTuneError);
+            return true;
+        }
         if (!analysisRunning_.load(std::memory_order_acquire) || !analysisFuture_.valid() ||
             analysisFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             return smearnovCompleted;
         auto analysed = analysisFuture_.get();
+        // An auto-tune summary belongs to this analysis only, whatever its outcome.
+        const auto autoTuneSummary = std::move(lastAutoTuneSummary_);
+        lastAutoTuneSummary_.clear();
         // CANCEL can land after the worker returned but before this poll; the
         // engine's own check has passed by then, so honour it here and never
         // install a model the user cancelled.
@@ -767,7 +902,8 @@ public:
                                    (analysisSlot_ != 3 && source.sound.get() != nullptr);
         snapshot.hasResidual = source.sound.get() != nullptr && source.sound.get()->res != nullptr;
         snapshot.hasPhase = source.sound.get() != nullptr && source.sound.get()->pha != nullptr;
-        snapshot.status = error ? "analysis render failed" : "analysis complete";
+        snapshot.status = error ? "analysis render failed"
+            : (!autoTuneSummary.empty() ? autoTuneSummary : "analysis complete");
         snapshot.error = error.text;
         telemetry_.publish(std::move(snapshot));
         // Auto-switch the spectrum view to the freshly analysed source when the
@@ -825,6 +961,11 @@ public:
                 return true;
             }
             (void) queueAnalysisSource(3, error);
+            return true;
+        }
+        if (std::holds_alternative<ui::AutoTuneAnalysisAction>(action))
+        {
+            (void) queueAutoTune(error);
             return true;
         }
         if (std::holds_alternative<ui::CancelJobsAction>(action))
@@ -3228,6 +3369,11 @@ private:
     std::future<JobResult<AnalysisOutput>> analysisFuture_;
     int analysisSlot_ = -1;
     std::uint64_t analysisSourceRevision_ = 0;
+    // AUTO-TUNE: shares analysisRunning_ / analysisProgress_ / analysisCancellation_.
+    std::future<JobResult<AutoTuneResult>> autoTuneFuture_;
+    bool autoTuneRunning_ = false;
+    std::uint64_t autoTuneSourceRevision_ = 0;
+    std::string lastAutoTuneSummary_;
     std::atomic<bool> analysisRunning_ { false };
     std::atomic<float> analysisProgress_ { 0.0f };
     ui::TelemetryPublisher telemetry_;

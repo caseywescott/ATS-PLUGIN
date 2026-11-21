@@ -38,7 +38,7 @@ constexpr const char* kActionNames[] {
     "MorphVariation", "SetMorphTimeline", "BounceMorphTimeline", "SetSpectralView",
     "ApplyFactoryPreset", "SavePreset", "LoadPreset", "Note", "History", "PartialEdit",
     "ResidualEdit", "SpectrumEdit", "ApplyMath", "DetectSmearnov", "ApplySmearnov",
-    "EditSmearnovOnsets", "EditSmearnovOnsetHandles", "SetTimbreMotionPlan" };
+    "EditSmearnovOnsets", "EditSmearnovOnsetHandles", "SetTimbreMotionPlan", "AutoTuneAnalysis" };
 static_assert(std::size(kActionNames) == std::variant_size_v<ui::EditorAction>,
               "action name table out of sync with EditorAction");
 
@@ -389,7 +389,7 @@ int runDispatchMatrix(NSApplication* application, const char* logPath, const cha
         click(1103.0, 226.0);
         const bool started = host.telemetry().analysisRunning;
         const auto cancelledAt = std::chrono::steady_clock::now();
-        click(1103.0, 262.0);
+        click(1103.0, 298.0); // CANCEL (AUTO-TUNE sits between it and ANALYZE)
         for (int i = 0; i < 1500 && host.telemetry().analysisRunning; ++i)
             drain(application, 0.01);
         const auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -397,6 +397,21 @@ int runDispatchMatrix(NSApplication* application, const char* logPath, const cha
         recorder.events.push_back("cancelLatencyMs:" + std::to_string(latency));
         return started && !host.telemetry().analysisRunning &&
                !host.editorSnapshot().telemetry.hasCurrentModel;
+    });
+    // AUTO-TUNE runs on the analysis worker and shares its CANCEL; a full
+    // search of this six-second clip is too slow for the matrix, so the step
+    // checks the button starts it and CANCEL leaves the settings untouched.
+    step("AUTO-TUNE then CANCEL", "auto-tune starts; CANCEL leaves analysis settings unchanged", [&] {
+        const auto lowest = parameter("analysisLowestFreq");
+        const auto cycles = parameter("analysisWinCycles");
+        click(1103.0, 262.0);
+        const bool started = host.telemetry().analysisRunning;
+        click(1103.0, 298.0);
+        for (int i = 0; i < 1500 && host.telemetry().analysisRunning; ++i)
+            drain(application, 0.01);
+        return started && !host.telemetry().analysisRunning && recorder.lastError.empty()
+            && parameter("analysisLowestFreq") == lowest && parameter("analysisWinCycles") == cycles
+            && !host.editorSnapshot().telemetry.hasCurrentModel;
     });
     step("ANALYZE CURRENT to completion", "current model analysed", [&] {
         click(1103.0, 226.0);

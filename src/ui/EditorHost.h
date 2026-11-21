@@ -20,6 +20,10 @@ struct ImportWavAction { ats::Path path; int slot = 0; };
 struct ImportAtsAction { ats::Path path; int slot = 0; };
 struct ExportAtsAction { ats::Path path; int source = 0; };
 struct AnalyzeCurrentAction {};
+// Analysis-by-synthesis search for the current model's resolution settings
+// (lowest / highest frequency, window cycles, hop); applies the result and
+// re-analyses.  Runs on the analysis worker and is cancelled by CancelJobs.
+struct AutoTuneAnalysisAction {};
 struct AnalyzeMorphSourceAction { int slot = 0; };
 struct ApplyAnalysisProfileAction { int profile = 0; };
 struct CancelJobsAction {};
@@ -133,7 +137,8 @@ using EditorAction = std::variant<SetParameterAction,
                                   ApplySmearnovAction,
                                   EditSmearnovOnsetsAction,
                                   EditSmearnovOnsetHandlesAction,
-                                  SetTimbreMotionPlanAction>;
+                                  SetTimbreMotionPlanAction,
+                                  AutoTuneAnalysisAction>;
 
 enum class ActionStatus : std::uint8_t { success, failed, cancelled, stale };
 

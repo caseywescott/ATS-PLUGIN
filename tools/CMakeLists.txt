@@ -29,3 +29,7 @@ endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(ats_roundtrip PRIVATE m)
 endif()
+
+add_executable(ats_autotune ats_autotune.cpp)
+target_link_libraries(ats_autotune PRIVATE ats_engine)
+target_compile_features(ats_autotune PRIVATE cxx_std_17)
