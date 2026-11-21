@@ -629,6 +629,12 @@ if(MSVC)
   target_compile_definitions(atsa_residual_test PRIVATE _USE_MATH_DEFINES)
 endif()
 
+add_executable(atsa_residual_split_test atsa_residual_split_test.c)
+target_link_libraries(atsa_residual_split_test PRIVATE atsa)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(atsa_residual_split_test PRIVATE m)
+endif()
+
 add_executable(estimator_accuracy_test estimator_accuracy_test.c)
 target_link_libraries(estimator_accuracy_test PRIVATE atsa)
 if(UNIX AND NOT APPLE)
@@ -706,6 +712,7 @@ add_test(
 
 add_test(NAME ats_roundtrip COMMAND $<TARGET_FILE:ats_roundtrip> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME atsa_residual_test COMMAND $<TARGET_FILE:atsa_residual_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME atsa_residual_split_test COMMAND $<TARGET_FILE:atsa_residual_split_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME estimator_accuracy_test COMMAND $<TARGET_FILE:estimator_accuracy_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME multires_resolution_test COMMAND $<TARGET_FILE:multires_resolution_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME ifft_synth_test COMMAND $<TARGET_FILE:ifft_synth_test> WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")

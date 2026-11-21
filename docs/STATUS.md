@@ -88,6 +88,33 @@ are one-click buttons, and a selected view no longer snaps back to Trace +
 Residual (the host published that mode on every snapshot). See
 `docs/spectrum-view-parity-decisions.md` §2026-11-11.
 
+## ATSA engine fixes (2026-11-21, from the pyats review)
+
+- `qatsh-atsa-partial-free-bands.patch`: the default combined synthesis
+  dropped the residual of critical bands holding no active partial
+  (`crotales.ats` played 40% of its residual energy; now 101%).
+- `qatsh-atsa-trim-segment-average.patch`: `trim_partials` judged each short
+  segment on a running SMR average over earlier segments.
+
+Both are behavior-changing; see `patches/README.md`. Re-render any saved
+comparison audio made with the default (oscillator) synthesis.
+
+Evaluated and **not adopted** (resynthesis scored against the original with
+pyats's multi-resolution spectral loss on the four `spectral-envelope-audio`
+recordings, ATSA/plugin default analysis settings):
+
+- pyats's *sinusoidality gate* (drop peaks whose time-reassignment offset
+  exceeds a fraction of the window). At pyats's 0.02 it raised the loss by
+  10-34% (1.6-20% with 40 ms windows); at 0.05-0.10 it was neutral within
+  about 2% except the crotale, whose decaying partials it discards (+2.6% to
+  +11%). Prototyped in ATSA and reverted.
+- pyats's *rule-based analysis-settings suggestion* (lowest frequency = YIN
+  pitch, highest = 1-2x spectral rolloff, class-based window/hop): -19% on
+  the guitar but +12%, +21% and +135% (crotale, pitch read as 1367 Hz) on the
+  others. Per-sound settings do matter (lowest frequency 100 Hz alone gave
+  -12% on the vowel and -21% on the guitar), so an analysis-by-synthesis
+  search warm-started from the current settings is the better route.
+
 ## Open items
 
 - Logic session (T-204) and plugin validation (ARCH-HOST-001).

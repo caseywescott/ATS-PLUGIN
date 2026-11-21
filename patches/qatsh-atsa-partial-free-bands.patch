@@ -1,0 +1,164 @@
+--- a/src/atsa/synthesis.c
++++ b/src/atsa/synthesis.c
+@@ -580,6 +580,48 @@
+ ////////////////////////////////////////////////////////////////////
+ /////////THIS IS THE MAIN SYNTHESIS LOOP////////////////////////////
+ ////////////////////////////////////////////////////////////////////
++/* ATSA_PARTIAL_FREE_BANDS: split one frame's residual between the partials
++ * and the bands.  A band holding at least one active partial gives its energy
++ * to those partials, amplitude-weighted (the band_energy_to_res model); a band
++ * with no active partial keeps its energy as band noise.  The legacy combined
++ * synthesis played only the partial share, so the energy of partial-free
++ * bands (noise above the highest partial, or between partials) was silent.
++ * Membership is by each partial's own frequency in this frame, not a walk
++ * that assumes partials stay sorted by frequency, and the result goes into
++ * caller buffers rather than ats_sound->res, so a render never mutates the
++ * (possibly shared) sound. */
++static void atsa_frame_residual_split(const ATS_SOUND *s, int frame, int *band_of,
++                                      double *res_row, double *band_row)
++{
++  double sum[ATSA_CRITICAL_BANDS];
++  int k, b;
++  for (b = 0; b < ATSA_CRITICAL_BANDS; ++b) {
++    sum[b] = 0.0;
++    band_row[b] = s->band_energy[b][frame];
++  }
++  for (k = 0; k < s->partials; ++k) {
++    const double a = s->amp[k][frame], fq = s->frq[k][frame];
++    res_row[k] = 0.0;
++    band_of[k] = -1;
++    if (!(a > 0.0) || !(fq > 0.0))
++      continue;
++    for (b = 0; b < ATSA_CRITICAL_BANDS; ++b)
++      if (fq >= ATSA_CRITICAL_BAND_EDGES[b] && fq < ATSA_CRITICAL_BAND_EDGES[b + 1]) {
++        band_of[k] = b;
++        sum[b] += a;
++        break;
++      }
++  }
++  for (k = 0; k < s->partials; ++k) {
++    b = band_of[k];
++    if (b >= 0 && sum[b] > 0.0)
++      res_row[k] = s->amp[k][frame] * s->band_energy[b][frame] / sum[b];
++  }
++  for (b = 0; b < ATSA_CRITICAL_BANDS; ++b)
++    if (sum[b] > 0.0)
++      band_row[b] = 0.0;
++}
++
+ void do_synthesis(ATS_SOUND *ats_sound, SPARAMS* sparams, CURVE* timenv, int *selected,
+                   double** out_samps, int* n_out_samps)
+ {
+@@ -604,6 +646,12 @@
+   double frame_dur, time_offset, duration;
+   int p, d, b;
+   int has_residual;
++  /* ATSA_PARTIAL_FREE_BANDS: band-noise state and per-frame split rows
++     (previous / current / next frame) for the combined path. */
++  double *band_ospt = 0;
++  RANDI *band_rarray = 0;
++  double *split_res = 0, *split_band = 0;
++  int *split_band_of = 0;
+ 
+   atsa_synth_seed_rng(ATSA_SYNTH_RANDOM_SEED);
+ 
+@@ -618,10 +666,8 @@
+       sparams->end = sparams->beg + ats_sound->dur;
+ 
+   has_residual = ats_sound->band_energy != NULL;
+-
+-  if (has_residual && sparams->ramp != 0.) {
+-    atsa_prefill_partial_residual(ats_sound);
+-  }
++  /* ATSA_PARTIAL_FREE_BANDS: the combined path splits the residual per frame
++     (atsa_frame_residual_split); it no longer prefills ats_sound->res. */
+ 
+   // Build envelop segments descriptor and compute number of samples to generate
+   nbp   = get_nbp(timenv);
+@@ -701,6 +747,21 @@
+                       BW_FREQ : ats_sound->frq[p][(int)floor(tdata[0].beg_frame)]);
+       randi_setup(sparams->sr,rfreq,&rarray[p]);
+     }
++    /* ATSA_PARTIAL_FREE_BANDS: band oscillators for the partial-free share,
++       set up exactly as in the residual-only path. */
++    band_ospt = (double*)calloc(ATSA_CRITICAL_BANDS, sizeof(double));
++    band_rarray = (RANDI*)malloc(ATSA_CRITICAL_BANDS * sizeof(RANDI));
++    for(b=0; b<ATSA_CRITICAL_BANDS; ++b) {
++      res_band_centers[b]=
++                (ATSA_CRITICAL_BAND_EDGES[b+1] + ATSA_CRITICAL_BAND_EDGES[b]) / 2;
++      randi_setup(sparams->sr, ATSA_CRITICAL_BAND_EDGES[b+1] - ATSA_CRITICAL_BAND_EDGES[b],
++                  &band_rarray[b]);
++    }
++    split_res = (double*)malloc((size_t)(3 * (ats_sound->partials > 0 ? ats_sound->partials : 1))
++                                * sizeof(double));
++    split_band = (double*)malloc(3 * ATSA_CRITICAL_BANDS * sizeof(double));
++    split_band_of = (int*)malloc((size_t)(ats_sound->partials > 0 ? ats_sound->partials : 1)
++                                 * sizeof(int));
+   }
+ 
+   // Generate samples :
+@@ -788,6 +849,16 @@
+           }
+       } else {
+           //residual and deterministic synthesis
++          /* ATSA_PARTIAL_FREE_BANDS: this frame's residual split, for the
++             previous / current / next frame used by the interpolation. */
++          const int np_split = ats_sound->partials;
++          double *res_rp = split_res, *res_rc = split_res + np_split,
++                 *res_rn = split_res + 2 * np_split;
++          double *band_rp = split_band, *band_rc = split_band + ATSA_CRITICAL_BANDS,
++                 *band_rn = split_band + 2 * ATSA_CRITICAL_BANDS;
++          atsa_frame_residual_split(ats_sound, f_p, split_band_of, res_rp, band_rp);
++          atsa_frame_residual_split(ats_sound, f,   split_band_of, res_rc, band_rc);
++          atsa_frame_residual_split(ats_sound, f_n, split_band_of, res_rn, band_rn);
+           for(d = 0; d < ats_sound->partials; d++) {
+               if (sparams->allorsel && selected && !selected[d])
+                   continue;
+@@ -800,11 +871,11 @@
+               pha_p = ats_sound->pha[d][f_p];
+               pha_c = ats_sound->pha[d][f];
+               pha_n = ats_sound->pha[d][f_n];
+-              resid_p = ENG_RMS(ats_sound->res[d][f_p], ats_sound->window_size)
++              resid_p = ENG_RMS(res_rp[d], ats_sound->window_size)
+                   * sparams->ramp;
+-              resid_c = ENG_RMS(ats_sound->res[d][f], ats_sound->window_size)
++              resid_c = ENG_RMS(res_rc[d], ats_sound->window_size)
+                   * sparams->ramp;
+-              resid_n = ENG_RMS(ats_sound->res[d][f_n], ats_sound->window_size)
++              resid_n = ENG_RMS(res_rn[d], ats_sound->window_size)
+                   * sparams->ramp;
+               /* ATSA_DDM_SLOPES: within-frame chirp -> Hz per frame (source time) */
+               fslope_c = ats_sound->has_slopes
+@@ -815,6 +886,20 @@
+                                        time_offset, duration, sparams->sr, sparams->upha,
+                                        ospt+d, &rarray[d], *out_samps + n_samps);
+           }
++          /* ATSA_PARTIAL_FREE_BANDS: bands with no active partial keep their
++             energy as band noise, synthesized as in the residual-only path. */
++          for(b = 0; b < ATSA_CRITICAL_BANDS; b++) {
++              if (band_rp[b] <= 0.0 && band_rc[b] <= 0.0 && band_rn[b] <= 0.0)
++                  continue;
++              ampl_p  = ENG_RMS(band_rp[b], ats_sound->window_size) * sparams->ramp;
++              ampl_c  = ENG_RMS(band_rc[b], ats_sound->window_size) * sparams->ramp;
++              ampl_n  = ENG_RMS(band_rn[b], ats_sound->window_size) * sparams->ramp;
++              freq_c  = res_band_centers[b] * sparams->frec;
++              frame_samps = synth_residual_only(ampl_p, ampl_c, ampl_n, freq_c,
++                                                time_offset, duration, sparams->sr,
++                                                band_ospt+b, &band_rarray[b],
++                                                *out_samps + n_samps);
++          }
+       }
+         
+       // Jump into sample buffer for next frame.
+@@ -832,6 +917,11 @@
+       free(ospt);
+   if (rarray)
+       free(rarray);
++  free(band_ospt);
++  free(band_rarray);
++  free(split_res);
++  free(split_band);
++  free(split_band_of);
+   free(tdata);
+ 
+   return;

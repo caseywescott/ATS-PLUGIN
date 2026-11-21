@@ -480,3 +480,54 @@ Restores parallel classic `do_synthesis` passes in the plugin. **Behavior-changi
 
 CMake requires it by default (markers `ATSA_SYNTH_STATE`, `atsa_prefill_partial_residual`).
 Use `-DATS_REQUIRE_QATSH_SYNTH_STATE=OFF` to bypass.
+
+## `qatsh-atsa-partial-free-bands.patch`
+
+**Behavior-changing** (found while reviewing pyats, 2026-11-21). Combined
+partials + residual oscillator synthesis (`do_synthesis`, `use_ifft == 0`, the
+plugin default) carried the residual only on partials, via `band_energy_to_res`:
+a critical band with no active partial in a frame had its energy dropped, so
+noise above the highest partial or between partials was silent. Measured with
+the partials muted to isolate the combined path's noise: `crotales.ats` 40% →
+101% of the residual-only render, `recovered-124-partials.ats` 73% → 91% (the
+rest is the linear-amplitude crossfade where a band switches between
+partial-carried and band noise from one frame to the next).
+
+The patch splits each frame's residual in `atsa_frame_residual_split`: bands
+holding an active partial give their energy to those partials,
+amplitude-weighted as before; bands with none are synthesized as band noise
+exactly as in the residual-only path. Membership uses each partial's own
+frequency in that frame (the old walk assumed partials stay sorted by
+frequency in every frame), and the split goes to local buffers, so the
+oscillator path no longer prefills or mutates `ats_sound->res` (the
+pointer-cached prefill could serve stale data after an in-place edit or a
+reused address). The IFFT path already synthesized every band and is
+unchanged. Touches `src/atsa/synthesis.c` only.
+
+```sh
+./scripts/apply_qatsh_partial_free_bands.sh apply
+./scripts/apply_qatsh_partial_free_bands.sh status
+```
+
+CMake requires it by default (marker `ATSA_PARTIAL_FREE_BANDS`). Covered by
+`tests/atsa_residual_split_test.c`.
+
+## `qatsh-atsa-trim-segment-average.patch`
+
+**Behavior-changing.** `trim_partials` initialized its SMR accumulators once
+per call, so each short segment was judged on a running average over every
+earlier short segment of every partial: whether a fragment survived depended
+on which partials were processed before it. The accumulators now reset per
+segment (pyats documents and fixes the same bug). On the four
+`spectral-envelope-audio` recordings with ATSA default parameters it keeps 26
+more short segments on the vowel phrase (+0.6% active partial-frames) and one
+on the crotale; partial counts are unchanged. Touches `src/atsa/utilities.c`
+only.
+
+```sh
+./scripts/apply_qatsh_trim_segment_average.sh apply
+./scripts/apply_qatsh_trim_segment_average.sh status
+```
+
+CMake requires it by default (marker `ATSA_TRIM_SEGMENT_AVERAGE`). Covered by
+`tests/atsa_residual_split_test.c`.
