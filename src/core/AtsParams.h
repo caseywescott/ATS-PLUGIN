@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "AtsAutomationCurves.h"
+
 extern "C" {
 #include "atsa.h"
 }
@@ -70,6 +72,8 @@ struct SynthParams
     /** Opt-in overlap-add IFFT synthesis (SPARAMS.use_ifft). Default off preserves oscillator path. */
     bool useIfftSynth = false;
     FrequencyShapeSettings frequencyShape;
+    /** Render-time automation (time warp, pitch, spectral warp). */
+    SoundCurves curves;
 
     void toSparams(SPARAMS& out, double soundDurationSec) const;
     static SynthParams fromSparams(const SPARAMS& s, double soundDurationSec, bool useAll, bool usePhase);

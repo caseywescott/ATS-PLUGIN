@@ -163,8 +163,19 @@ JobResult<RenderStats> AtsEngine::render(JobGeneration generation,
         }
     }
 
+    // Automation curves resample / re-pitch a copy after the static shape.
+    AtsSoundPtr curvedSound;
+    if (parameters.curves.active())
+    {
+        curvedSound = AtsAutomationCurves::apply(renderSound, parameters.curves);
+        if (curvedSound)
+            renderSound = curvedSound.get();
+    }
+
     SPARAMS synthesis {};
     parameters.toSparams(synthesis, renderSound->dur);
+    if (curvedSound)
+        synthesis.upha = 0; // stored phases do not survive the curves
     CURVE timeEnvelope {};
     curve_init(&timeEnvelope);
     double* raw = nullptr;

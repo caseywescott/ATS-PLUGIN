@@ -175,6 +175,12 @@ bool validState(const LegacyState& state) noexcept
         if (!std::isfinite(v) || v < 0.0f || v > 1.0f) return false;
     if (state.timbreJson.size() > kMaxBlobBytes) return false;
     if (state.smearnovOnsets.size() > 4096) return false;
+    for (const auto& curve : state.soundCurves)
+    {
+        if (curve.size() % 2 != 0 || curve.size() > 128) return false;
+        for (float v : curve)
+            if (!std::isfinite(v)) return false;
+    }
     for (float v : state.smearnovOnsets)
         if (!std::isfinite(v) || v < 0.0f || v > 1.0f) return false;
     return true;
@@ -254,6 +260,9 @@ std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::u
         writer.writeF64(state.timbreTiltDbPerOct);
         writer.writeF64(state.timbreNoiseBalance);
     }
+    if (version >= 20)
+        for (const auto& curve : state.soundCurves)
+            writeFloatVec(writer, curve);
     return std::move(writer).take();
 }
 
@@ -344,6 +353,9 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
         state.analysis.multiRes = multiRes != 0;
         state.synth.useIfftSynth = ifft != 0;
     }
+    if (version >= 20)
+        for (auto& curve : state.soundCurves)
+            if (!readFloatVec(reader, curve, 128)) return std::nullopt;
     if (!validState(state) || reader.remaining() != 0) return std::nullopt;
     return state;
 }

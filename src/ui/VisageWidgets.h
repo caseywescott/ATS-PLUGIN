@@ -359,6 +359,16 @@ public:
 
     bool receivesTextInput() override { return focused_; }
 
+    // Clicking another field moves keyboard focus; drop the caret here too.
+    void focusChanged(bool isFocused, bool) override
+    {
+        if (!isFocused && focused_)
+        {
+            focused_ = false;
+            redraw();
+        }
+    }
+
     void textInput(const std::string& text) override
     {
         for (char c : text)

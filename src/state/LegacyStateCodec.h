@@ -102,12 +102,15 @@ struct LegacyState
     double timbreBrightnessDb = 0.0;
     double timbreTiltDbPerOct = 0.0;
     double timbreNoiseBalance = 0.5;
+    // v20: render-time automation curves (time warp, pitch, spectral warp),
+    // flattened x, y pairs as in ui::SetSoundCurveAction.
+    std::array<std::vector<float>, 3> soundCurves {};
 };
 
 class LegacyStateCodec
 {
 public:
-    static constexpr std::uint32_t kCurrentVersion = 19;
+    static constexpr std::uint32_t kCurrentVersion = 20;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     [[nodiscard]] static std::vector<std::byte> encode(const LegacyState& state,

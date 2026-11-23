@@ -41,6 +41,10 @@ public:
     [[nodiscard]] ThemeId theme() const;
     // Selects one of the five pages (SESSION..MATH) as a tab click would.
     void selectPage(int page);
+    // Opens or closes the spectrum select-by-criteria panel (screenshots, tests).
+    void showPartialSelectionPanel(bool visible);
+    // Selects the SESSION timeline curve tab: 0 morph, 1 pitch, 2 time, 3 warp.
+    void selectTimelineCurve(int tab);
     // Saves the most recently rendered frame as PNG; false without a window.
     bool captureScreenshot(const std::string& path);
     void setHistoryAvailability(bool canUndo, bool canRedo);

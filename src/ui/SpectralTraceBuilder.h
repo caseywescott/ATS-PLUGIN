@@ -42,6 +42,8 @@ struct SpectralPartialInput
     int partialIndex = -1;
     int frequencyShapeRank = 0;
     std::vector<SpectralPartialFrame> frames;
+    /** Mean signal-to-mask ratio over active frames (dB); NaN when unknown. */
+    double meanSmrDb = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct SpectralResidualBandInput
@@ -113,6 +115,11 @@ struct SpectralTrace
     double sourceMeanFrequencyHz = 0.0;
     int frequencyShapeRank = 0;
     std::vector<SpectralTracePoint> points;
+    // Whole-partial summaries over every active frame (not the decimated
+    // points), used by select-by-criteria.
+    double meanLevelDb = -std::numeric_limits<double>::infinity();
+    double activeSeconds = 0.0;
+    double meanSmrDb = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct SpectralResidualBandTrace
@@ -281,6 +288,13 @@ public:
                     ? weightedDisplayHz / candidate.ampSum : trace.sourceMeanFrequencyHz;
                 trace.peakAmpNorm = clampFloor((20.0 * std::log10(std::max(1.0e-15, candidate.peak))
                                                 - minAmpDb) / ampDbRange);
+                trace.meanLevelDb = 20.0 * std::log10(std::max(
+                    1.0e-15, candidate.ampSum / static_cast<double>(candidate.activeFrames)));
+                trace.activeSeconds = output.frameCount > 0
+                    ? output.durationSeconds * static_cast<double>(candidate.activeFrames)
+                          / static_cast<double>(output.frameCount)
+                    : 0.0;
+                trace.meanSmrDb = partial.meanSmrDb;
 
                 const auto step = pointStep(output.frameCount, limits.maxPointsPerPartial);
                 trace.points.reserve(partial.frames.size() / step + 2);

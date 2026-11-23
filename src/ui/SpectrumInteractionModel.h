@@ -81,6 +81,10 @@ struct SpectrumNavigationState
     float envFreqEndNorm = -1.0f;
     bool lassoActive = false;
     UiRect lassoBounds{};
+    // Time range for Time... edits (inclusive frames; -1 = none), set from a
+    // lasso's horizontal extent in the planar views.
+    int timeSelectionFirstFrame = -1;
+    int timeSelectionLastFrame = -1;
     std::uint64_t revision = 0;
 };
 
@@ -424,10 +428,29 @@ public:
     {
         if (!navigation_.lassoActive) return navigation_.selectedPartials.size();
         navigation_.lassoActive = false;
-        const auto selected = selectPartialsInLasso(navigation_.lassoBounds, additive);
+        const auto lasso = navigation_.lassoBounds;
+        if (!SpectrumGeometry::isIsometricDisplayMode(mode_) && lasso.width >= 4.0f
+            && snapshot_ != nullptr && snapshot_->frameCount > 0)
+        {
+            navigation_.timeSelectionFirstFrame = frameForX(lasso.x);
+            navigation_.timeSelectionLastFrame = frameForX(lasso.x + lasso.width);
+        }
+        const auto selected = selectPartialsInLasso(lasso, additive);
         navigation_.lassoBounds = {};
         touch();
         return selected;
+    }
+
+    [[nodiscard]] bool hasTimeSelection() const noexcept
+    {
+        return navigation_.timeSelectionFirstFrame >= 0
+            && navigation_.timeSelectionLastFrame >= navigation_.timeSelectionFirstFrame;
+    }
+
+    void clearTimeSelection() noexcept
+    {
+        navigation_.timeSelectionFirstFrame = navigation_.timeSelectionLastFrame = -1;
+        touch();
     }
 
     bool selectBand(int band) noexcept

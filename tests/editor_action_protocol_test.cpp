@@ -21,9 +21,10 @@ int main()
         EditSmearnovOnsetHandlesAction { { { 0.5f, 0.4f, 0.6f, 1.0f } } },
         ApplyMathAction { "amp *= 0.5;" }, DetectSmearnovAction {}, ApplySmearnovAction {},
         EditSmearnovOnsetsAction { { 0.2f, 0.8f } }, SetTimbreMotionPlanAction { { 0.0f, 1.0f } },
-        AutoTuneAnalysisAction {}
+        AutoTuneAnalysisAction {}, TimeEditAction { TimeEditKind::cut, 2, 5, 0 },
+        SetSoundCurveAction { SoundCurveKind::pitch, { 0.0f, 0.0f, 1.0f, 12.0f } }
     };
-    assert(actions.size() == 31);
+    assert(actions.size() == 33);
     for (const auto& action : actions)
     {
         const auto contract = actionContract(action);

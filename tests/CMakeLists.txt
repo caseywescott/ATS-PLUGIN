@@ -138,6 +138,15 @@ target_include_directories(editor_lifecycle_model_test PRIVATE
 target_compile_features(editor_lifecycle_model_test PRIVATE cxx_std_17)
 add_test(NAME editor_lifecycle_model_test COMMAND editor_lifecycle_model_test)
 
+add_executable(curve_editor_model_test curve_editor_model_test.cpp)
+target_include_directories(curve_editor_model_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(curve_editor_model_test PRIVATE cxx_std_17)
+add_test(NAME curve_editor_model_test COMMAND curve_editor_model_test)
+
+add_executable(partial_selection_criteria_test partial_selection_criteria_test.cpp)
+target_compile_features(partial_selection_criteria_test PRIVATE cxx_std_17)
+add_test(NAME partial_selection_criteria_test COMMAND partial_selection_criteria_test)
+
 add_executable(spectrum_renderer_test spectrum_renderer_test.cpp)
 target_include_directories(spectrum_renderer_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
@@ -389,6 +398,18 @@ target_compile_features(preset_file_workflow_test PRIVATE cxx_std_17)
 target_link_libraries(preset_file_workflow_test PRIVATE ats_preset_service)
 add_test(NAME preset_file_workflow_test COMMAND preset_file_workflow_test)
 
+add_executable(ats_time_edit_test ats_time_edit_test.cpp)
+target_include_directories(ats_time_edit_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_time_edit_test PRIVATE cxx_std_17)
+target_link_libraries(ats_time_edit_test PRIVATE ats_core)
+add_test(NAME ats_time_edit_test COMMAND ats_time_edit_test)
+
+add_executable(ats_automation_curves_test ats_automation_curves_test.cpp)
+target_include_directories(ats_automation_curves_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${ATS_ATSA_SOURCE_DIR}")
+target_compile_features(ats_automation_curves_test PRIVATE cxx_std_17)
+target_link_libraries(ats_automation_curves_test PRIVATE ats_core)
+add_test(NAME ats_automation_curves_test COMMAND ats_automation_curves_test)
+
 add_executable(ats_engine_test ats_engine_test.cpp)
 target_include_directories(ats_engine_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/core" "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine" "${ATS_ATSA_SOURCE_DIR}")
 target_compile_features(ats_engine_test PRIVATE cxx_std_17)
@@ -502,6 +523,35 @@ target_include_directories(host_autotune_test PRIVATE
 target_compile_features(host_autotune_test PRIVATE cxx_std_17)
 target_link_libraries(host_autotune_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
 add_test(NAME host_autotune_test COMMAND host_autotune_test)
+
+add_executable(host_partial_smr_test host_partial_smr_test.cpp)
+target_include_directories(host_partial_smr_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_partial_smr_test PRIVATE cxx_std_17)
+target_compile_definitions(host_partial_smr_test PRIVATE ATS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(host_partial_smr_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME host_partial_smr_test COMMAND host_partial_smr_test)
+
+add_executable(host_time_edit_test host_time_edit_test.cpp)
+target_include_directories(host_time_edit_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_time_edit_test PRIVATE cxx_std_17)
+target_compile_definitions(host_time_edit_test PRIVATE ATS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(host_time_edit_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME host_time_edit_test COMMAND host_time_edit_test)
+
+add_executable(host_sound_curves_test host_sound_curves_test.cpp)
+target_include_directories(host_sound_curves_test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/engine"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/host")
+target_compile_features(host_sound_curves_test PRIVATE cxx_std_17)
+target_link_libraries(host_sound_curves_test PRIVATE ats_host_vst3 ats_preset_service ats_file_service)
+add_test(NAME host_sound_curves_test COMMAND host_sound_curves_test)
 
 add_executable(host_analysis_cancel_test host_analysis_cancel_test.cpp)
 target_include_directories(host_analysis_cancel_test PRIVATE

@@ -18,6 +18,7 @@
 #include "../engine/SourceImportService.h"
 #include "../engine/AtsEngine.h"
 #include "../engine/AnalysisAutoTune.h"
+#include "../core/AtsTimeEdit.h"
 #include "../state/FactoryPresetState.h"
 #include "../state/LegacyStateCodec.h"
 #include "../state/LegacyStateParameters.h"
@@ -189,6 +190,71 @@ inline std::optional<engine::ImportedSource> deserializeAtsSoundForState(
     return source;
 }
 
+// Mean signal-to-mask ratio per partial over its active frames (dB, clamped
+// at 0 as in pyats hybrid.partial_smr).  Uses the analysis SMR when the
+// model carries it; imported .ats files do not store SMR, so it is then
+// evaluated per frame with ATSA's masking model over the active partials.
+inline std::vector<double> partialMeanSmrDb(const ATS_SOUND* sound)
+{
+    const auto partials = sound != nullptr ? std::max(0, sound->partials) : 0;
+    std::vector<double> result(static_cast<std::size_t>(partials),
+                               std::numeric_limits<double>::quiet_NaN());
+    if (partials == 0 || sound->frames <= 0 || sound->amp == nullptr || sound->frq == nullptr)
+        return result;
+    const auto active = [sound](int p, int f) {
+        return sound->amp[p] != nullptr && sound->frq[p] != nullptr && sound->amp[p][f] > 0.0
+            && sound->frq[p][f] > 0.0;
+    };
+    bool stored = false;
+    if (sound->smr != nullptr)
+        for (int p = 0; p < partials && !stored; ++p)
+            if (sound->smr[p] != nullptr)
+                for (int f = 0; f < sound->frames && !stored; ++f)
+                    stored = active(p, f) && sound->smr[p][f] > 0.0;
+    std::vector<double> sum(static_cast<std::size_t>(partials), 0.0);
+    std::vector<int> count(static_cast<std::size_t>(partials), 0);
+    std::vector<ATS_PEAK> peaks;
+    std::vector<int> owners;
+    for (int f = 0; f < sound->frames; ++f)
+    {
+        if (stored)
+        {
+            for (int p = 0; p < partials; ++p)
+                if (active(p, f))
+                {
+                    sum[static_cast<std::size_t>(p)] += std::max(0.0, sound->smr[p][f]);
+                    ++count[static_cast<std::size_t>(p)];
+                }
+            continue;
+        }
+        peaks.clear();
+        owners.clear();
+        for (int p = 0; p < partials; ++p)
+            if (active(p, f))
+            {
+                ATS_PEAK peak {};
+                peak.amp = sound->amp[p][f];
+                peak.frq = sound->frq[p][f];
+                peak.track = p;
+                peaks.push_back(peak);
+                owners.push_back(p);
+            }
+        if (peaks.empty())
+            continue;
+        evaluate_smr(peaks.data(), static_cast<int>(peaks.size()));
+        for (std::size_t i = 0; i < peaks.size(); ++i)
+        {
+            sum[static_cast<std::size_t>(owners[i])] += std::max(0.0, peaks[i].smr);
+            ++count[static_cast<std::size_t>(owners[i])];
+        }
+    }
+    for (int p = 0; p < partials; ++p)
+        if (count[static_cast<std::size_t>(p)] > 0)
+            result[static_cast<std::size_t>(p)] = sum[static_cast<std::size_t>(p)]
+                / static_cast<double>(count[static_cast<std::size_t>(p)]);
+    return result;
+}
+
 inline ResidualState residualStateForSound(const ATS_SOUND* sound)
 {
     ResidualState state;
@@ -302,6 +368,14 @@ public:
         publishSource(1, sources_[0] ? &*sources_[0] : nullptr);
         publishSource(2, sources_[1] ? &*sources_[1] : nullptr);
         snapshot.timeline = timeline_;
+        snapshot.soundCurves = soundCurvesFlat();
+        snapshot.morphCurve.clear();
+        for (const auto& point : morphTimelinePoints())
+            if (point.kind == engine::TimelinePointKind::morph)
+            {
+                snapshot.morphCurve.push_back(static_cast<float>(point.timeNorm));
+                snapshot.morphCurve.push_back(static_cast<float>(point.amount));
+            }
         snapshot.timbrePlan = timbrePlan_;
         snapshot.onsets = onsetOverlay_;
 
@@ -383,12 +457,15 @@ public:
                     input.onsets.push_back({ onset, 0.0, onset, onset });
             input.partials.reserve(static_cast<std::size_t>(std::max(0, sound->partials)));
             const auto shapeRanks = buildFrequencyShapeRanks(sound);
+            const auto& meanSmr = cachedPartialMeanSmr(std::clamp(sourceId, 0, 2), input.sourceRevision, sound);
             for (int partial = 0; partial < sound->partials; ++partial)
             {
                 ui::SpectralPartialInput trace;
                 trace.partialIndex = partial;
                 trace.frequencyShapeRank = partial < static_cast<int>(shapeRanks.size())
                     ? shapeRanks[static_cast<std::size_t>(partial)] : 0;
+                if (partial < static_cast<int>(meanSmr.size()))
+                    trace.meanSmrDb = meanSmr[static_cast<std::size_t>(partial)];
                 trace.frames.reserve(static_cast<std::size_t>(std::max(0, sound->frames)));
                 for (int frame = 0; frame < sound->frames; ++frame)
                 {
@@ -1093,6 +1170,22 @@ public:
             recordMutation("Morph timeline", before);
             return true;
         }
+        if (const auto* curve = std::get_if<ui::SetSoundCurveAction>(&action))
+        {
+            // Mirrors validateAction(SetSoundCurveAction).
+            const auto valid = static_cast<int>(curve->curve) <= static_cast<int>(ui::SoundCurveKind::spectralWarp)
+                && curve->points.size() % 2 == 0 && curve->points.size() <= 128
+                && std::all_of(curve->points.begin(), curve->points.end(), [](float v) { return std::isfinite(v); });
+            if (!valid)
+            {
+                error = { "invalid_curve", "curve points are finite x, y pairs, at most 64" };
+                return true;
+            }
+            const auto before = captureState();
+            setSoundCurveFromFlat(curve->curve, curve->points);
+            recordMutation("Automation curve", before);
+            return true;
+        }
         if (const auto* onsets = std::get_if<ui::EditSmearnovOnsetsAction>(&action))
         {
             if (onsets->normalizedOnsets.size() > 4096 ||
@@ -1378,6 +1471,77 @@ public:
             if (state_ == HostState::prepared)
                 (void) renderSourceForPreview(slot, error);
             recordMutation("Math expression", before);
+            return true;
+        }
+        if (const auto* timeEdit = std::get_if<ui::TimeEditAction>(&action))
+        {
+            // Mirrors validateAction(TimeEditAction) in EditorActionProtocol.h.
+            if (static_cast<int>(timeEdit->kind) > static_cast<int>(ui::TimeEditKind::paste)
+                || timeEdit->firstFrame < 0
+                || (timeEdit->kind != ui::TimeEditKind::paste && timeEdit->lastFrame < timeEdit->firstFrame)
+                || timeEdit->crossfadeFrames < 0 || timeEdit->crossfadeFrames > 4096)
+            {
+                error = { "invalid_time_edit", "time edit requires a valid kind, an ordered frame range and a 0-4096 frame crossfade" };
+                return true;
+            }
+            const auto slot = previewSource_.load(std::memory_order_acquire);
+            auto* target = editableSource(slot);
+            if (target == nullptr || !target->sound || target->sound.get()->frames <= 0)
+            {
+                error = { "no_model", "analyse a source before editing time" };
+                return true;
+            }
+            const auto* sound = target->sound.get();
+            using Kind = ui::TimeEditKind;
+            if (timeEdit->kind == Kind::copy || timeEdit->kind == Kind::cut)
+            {
+                auto clip = AtsTimeEdit::copy(sound, timeEdit->firstFrame, timeEdit->lastFrame);
+                if (!clip)
+                {
+                    error = { "time_edit_failed", "nothing to copy" };
+                    return true;
+                }
+                timeClipboard_ = std::move(clip);
+                if (timeEdit->kind == Kind::copy)
+                    return true;
+            }
+            AtsSoundPtr edited;
+            switch (timeEdit->kind)
+            {
+            case Kind::cut:
+            case Kind::remove: edited = AtsTimeEdit::remove(sound, timeEdit->firstFrame, timeEdit->lastFrame); break;
+            case Kind::crop: edited = AtsTimeEdit::crop(sound, timeEdit->firstFrame, timeEdit->lastFrame); break;
+            case Kind::paste:
+                if (!timeClipboard_)
+                {
+                    error = { "empty_clipboard", "copy or cut a time range first" };
+                    return true;
+                }
+                if (timeClipboard_.get()->partials != sound->partials)
+                {
+                    error = { "clipboard_mismatch", "the clipboard was taken from a model with a different partial count" };
+                    return true;
+                }
+                edited = AtsTimeEdit::paste(sound, timeClipboard_.get(), timeEdit->firstFrame,
+                                            timeEdit->crossfadeFrames);
+                break;
+            case Kind::copy: break;
+            }
+            if (!edited)
+            {
+                error = { "time_edit_failed", "the edit would leave no frames" };
+                return true;
+            }
+            const auto before = captureState();
+            target->sound = std::move(edited);
+            // Smearnov onsets and detector curves are frame-aligned to the old grid.
+            onsetOverlay_.clear();
+            onsetHandleOverlay_.clear();
+            smearnovDetectionCurve_.clear();
+            smearnovThresholdCurve_.clear();
+            resetSpectrumDisplayReference(slot);
+            noteSourceMutation(slot);
+            recordMutation("Time edit", before);
             return true;
         }
         if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
@@ -1823,6 +1987,7 @@ public:
         ls.smearnov.useRpcaFallback     = parameters_.read("smearnovUseRpcaFallback") >= 0.5f;
 
         ls.morphTimeline   = timeline_;
+        ls.soundCurves     = soundCurvesFlat();
         ls.smearnovOnsets  = onsetOverlay_;
         ls.timbreJson      = timbrePlanJson_.empty()
             ? serializeTimbreMotionPlan(makeTimbreMotionPlan()) : timbrePlanJson_;
@@ -1929,6 +2094,7 @@ public:
         morphRecipeJson_.clear();
         variationStored_ = {};
         timelineRevision_ = 0;
+        soundCurves_ = {};
         timbreRevision_ = 0;
         onsetRevision_ = 0;
         spectralViewSource_ = 0;
@@ -2366,6 +2532,8 @@ private:
         applyLegacyStateToParameterStore(ls, parameters_);
 
         if (!ls.morphTimeline.empty()) timeline_ = ls.morphTimeline;
+        for (std::size_t i = 0; i < ls.soundCurves.size(); ++i)
+            setSoundCurveFromFlat(static_cast<ui::SoundCurveKind>(i), ls.soundCurves[i]);
         typedTimeline_.clear();
         timbrePlanJson_ = ls.timbreJson;
         onsetOverlay_ = ls.smearnovOnsets;
@@ -3163,6 +3331,21 @@ private:
         return identity ? editableSource(*identity) : nullptr;
     }
 
+    // Per-partial mean SMR for select-by-criteria, recomputed only when the
+    // source's model revision (or the model itself) changes.
+    const std::vector<double>& cachedPartialMeanSmr(int sourceId, std::uint64_t revision,
+                                                    const ATS_SOUND* sound) const
+    {
+        auto& entry = partialSmrCache_[static_cast<std::size_t>(sourceId)];
+        if (entry.sound != sound || entry.revision != revision)
+        {
+            entry.sound = sound;
+            entry.revision = revision;
+            entry.values = partialMeanSmrDb(sound);
+        }
+        return entry.values;
+    }
+
     void noteSourceMutation(int slot) noexcept
     {
         if (slot == 3)
@@ -3336,6 +3519,10 @@ private:
 
         params.partialsGain = (layer == 2) ? 0.0 : 1.0;
         params.residualGain = (layer == 1) ? 0.0 : 1.0;
+        params.curves = soundCurves_;
+        // The warp anchors on the frequency-shape pivot when one is set.
+        if (params.curves.warpAnchorHz <= 0.0 && params.frequencyShape.pivotHz > 0.0)
+            params.curves.warpAnchorHz = params.frequencyShape.pivotHz;
 
         return params;
     }
@@ -3371,6 +3558,16 @@ private:
     std::uint64_t analysisSourceRevision_ = 0;
     // AUTO-TUNE: shares analysisRunning_ / analysisProgress_ / analysisCancellation_.
     std::future<JobResult<AutoTuneResult>> autoTuneFuture_;
+    struct PartialSmrCacheEntry
+    {
+        const ATS_SOUND* sound = nullptr;
+        std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
+        std::vector<double> values;
+    };
+    mutable std::array<PartialSmrCacheEntry, 3> partialSmrCache_ {};
+    // Time-edit clipboard (copy / cut), pasted into any model with the same
+    // partial count.  Not part of the saved state.
+    AtsSoundPtr timeClipboard_;
     bool autoTuneRunning_ = false;
     std::uint64_t autoTuneSourceRevision_ = 0;
     std::string lastAutoTuneSummary_;
@@ -3422,6 +3619,40 @@ private:
     std::string morphRecipeJson_;
     std::array<bool, 3> variationStored_ {};
     std::uint64_t timelineRevision_ = 0;
+    SoundCurves soundCurves_;
+
+    AutomationCurve& soundCurve(ui::SoundCurveKind kind) noexcept
+    {
+        switch (kind)
+        {
+        case ui::SoundCurveKind::timeWarp: return soundCurves_.timeWarp;
+        case ui::SoundCurveKind::spectralWarp: return soundCurves_.spectralWarpGamma;
+        case ui::SoundCurveKind::pitch: default: return soundCurves_.pitchSemitones;
+        }
+    }
+
+    void setSoundCurveFromFlat(ui::SoundCurveKind kind, const std::vector<float>& flat)
+    {
+        auto& curve = soundCurve(kind);
+        curve.points.clear();
+        for (std::size_t i = 0; i + 1 < flat.size(); i += 2)
+            curve.points.push_back({ flat[i], flat[i + 1] });
+        soundCurves_.normalise();
+    }
+
+    [[nodiscard]] std::array<std::vector<float>, 3> soundCurvesFlat() const
+    {
+        std::array<std::vector<float>, 3> out;
+        const std::array<const AutomationCurve*, 3> curves {
+            &soundCurves_.timeWarp, &soundCurves_.pitchSemitones, &soundCurves_.spectralWarpGamma };
+        for (std::size_t i = 0; i < curves.size(); ++i)
+            for (const auto& point : curves[i]->points)
+            {
+                out[i].push_back(point.x);
+                out[i].push_back(point.y);
+            }
+        return out;
+    }
     std::uint64_t timbreRevision_ = 0;
     std::uint64_t onsetRevision_ = 0;
 

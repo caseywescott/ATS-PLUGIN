@@ -38,7 +38,7 @@ constexpr const char* kActionNames[] {
     "MorphVariation", "SetMorphTimeline", "BounceMorphTimeline", "SetSpectralView",
     "ApplyFactoryPreset", "SavePreset", "LoadPreset", "Note", "History", "PartialEdit",
     "ResidualEdit", "SpectrumEdit", "ApplyMath", "DetectSmearnov", "ApplySmearnov",
-    "EditSmearnovOnsets", "EditSmearnovOnsetHandles", "SetTimbreMotionPlan", "AutoTuneAnalysis" };
+    "EditSmearnovOnsets", "EditSmearnovOnsetHandles", "SetTimbreMotionPlan", "AutoTuneAnalysis", "TimeEdit", "SetSoundCurve" };
 static_assert(std::size(kActionNames) == std::variant_size_v<ui::EditorAction>,
               "action name table out of sync with EditorAction");
 

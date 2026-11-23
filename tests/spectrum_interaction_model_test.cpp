@@ -122,5 +122,37 @@ int main()
     const auto handle = model.onsetHandleAtPoint({ residualPlot.x + residualPlot.width * 0.4f,
                                                    residualPlot.y + residualPlot.height * 0.5f }, 6.0f);
     assert(handle.kind == ats::ui::OnsetHandleKind::leftEdge && handle.index == 0);
+
+    // A lasso in a planar view also records its time span for Time... edits;
+    // the isometric views do not (their time axis is diagonal).
+    {
+        ats::ui::SpectralTraceSnapshot timed;
+        timed.mode = ats::ui::SpectralTraceMode::partials;
+        timed.frameCount = 101;
+        timed.durationSeconds = 1.0;
+        ats::ui::SpectrumInteractionModel picker;
+        picker.setMode(ats::ui::SpectralTraceMode::partials);
+        const ats::ui::UiRect well { 0.0f, 0.0f, 900.0f, 400.0f };
+        picker.setSnapshot(&timed, well);
+        assert(!picker.hasTimeSelection());
+        const auto plot = picker.interactionPlotBounds();
+        const auto y = plot.y + plot.height * 0.5f;
+        picker.beginLasso({ plot.x + plot.width * 0.25f, y - 20.0f });
+        picker.updateLasso({ plot.x + plot.width * 0.75f, y + 20.0f });
+        picker.endLasso();
+        assert(picker.hasTimeSelection());
+        assert(std::abs(picker.navigation().timeSelectionFirstFrame - 25) <= 1);
+        assert(std::abs(picker.navigation().timeSelectionLastFrame - 75) <= 1);
+        picker.clearTimeSelection();
+        assert(!picker.hasTimeSelection());
+
+        picker.setMode(ats::ui::SpectralTraceMode::isometric);
+        timed.mode = ats::ui::SpectralTraceMode::isometric;
+        picker.setSnapshot(&timed, well);
+        picker.beginLasso({ plot.x + plot.width * 0.25f, y - 20.0f });
+        picker.updateLasso({ plot.x + plot.width * 0.75f, y + 20.0f });
+        picker.endLasso();
+        assert(!picker.hasTimeSelection());
+    }
     return 0;
 }

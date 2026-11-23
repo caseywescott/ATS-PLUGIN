@@ -3,6 +3,8 @@
 #include "AtsEditorPages.h"
 #include "FileDialogModel.h"
 #include "SessionFileDrop.h"
+#include "SpectrumSelectionPanel.h"
+#include "CurveEditorModel.h"
 #include "VisageNativeMac.h"
 #include "EditorPreferences.h"
 #include "../core/ParameterRegistry.h"
@@ -127,6 +129,14 @@ public:
                 return sessionCentreWheel(point, deltaX, deltaY, well, shift, command, alt, precise);
             },
         });
+        // Select-by-criteria panel: a child of the SESSION page so it shares
+        // the well's page-local coordinates and hides with the page.
+        auto selectionPanel = std::make_unique<SpectrumSelectionPanel>(
+            [this](const PartialCriteria& criteria, bool add) { applyPartialCriteria(criteria, add); },
+            [this] { setSelectionPanelVisible(false); }, theme);
+        selectionPanelRaw_ = selectionPanel.get();
+        selectionPanel->setVisible(false);
+        sessionPage->addChild(std::move(selectionPanel));
         pageContainer_->addPage(std::move(sessionPage));
         auto analysisPage = std::make_unique<AtsAnalysisPage>(
             shell_.analysis(), [this](const EditorAction& action) { emitPageAction(action); }, theme);
@@ -315,6 +325,60 @@ public:
             pageContainerRaw_->setBounds(body.x, body.y, body.width, body.height);
             updateSourceDropTargetBounds(body);
         }
+        if (selectionPanelRaw_ != nullptr && selectionPanelRaw_->isVisible())
+            positionSelectionPanel();
+    }
+
+    void selectTimelineCurve(int tab)
+    {
+        curveEditor_.setTab(static_cast<CurveTab>(std::clamp(tab, 0, 3)));
+        redraw();
+    }
+
+    void setSelectionPanelVisible(bool visible)
+    {
+        if (selectionPanelRaw_ == nullptr)
+            return;
+        if (visible)
+            positionSelectionPanel();
+        selectionPanelRaw_->setVisible(visible);
+        redraw();
+    }
+
+    // Top-left of the spectrum plot, inside the well.
+    void positionSelectionPanel()
+    {
+        if (selectionPanelRaw_ == nullptr || sessionPageRaw_ == nullptr)
+            return;
+        const auto well = sessionPageRaw_->centreWell();
+        const auto plot = SpectrumRenderer::getPlotBounds(well, spectrumSnapshot_);
+        selectionPanelRaw_->setBounds(plot.x + 8.0f, plot.y + 8.0f,
+                                      std::min(SpectrumSelectionPanel::kWidth, std::max(0.0f, plot.width - 16.0f)),
+                                      SpectrumSelectionPanel::kHeight);
+    }
+
+    void applyPartialCriteria(const PartialCriteria& criteria, bool add)
+    {
+        const auto matched = matchPartials(spectrumSnapshot_, criteria);
+        const auto& navigation = shell_.spectrum().navigation();
+        auto current = navigation.selectedPartials;
+        if (current.empty() && navigation.selectedPartial >= 0)
+            current.push_back(navigation.selectedPartial);
+        const auto selection = add ? unitePartials(std::move(current), matched) : matched;
+        shell_.spectrum().setSelectedPartials(selection);
+        std::string status = std::to_string(matched.size()) + " matched, "
+            + std::to_string(selection.size()) + " selected";
+        if (criteria.minSmrDb)
+        {
+            const auto unknown = std::count_if(spectrumSnapshot_.partials.begin(),
+                                               spectrumSnapshot_.partials.end(),
+                                               [](const SpectralTrace& t) { return std::isnan(t.meanSmrDb); });
+            if (unknown > 0)
+                status += " (" + std::to_string(unknown) + " without SMR)";
+        }
+        if (selectionPanelRaw_ != nullptr)
+            selectionPanelRaw_->setStatus(std::move(status));
+        redraw();
     }
 
     // Called when the user picks a theme from the menu (not for programmatic
@@ -431,6 +495,11 @@ public:
         }
         if (snapshot.timeline.size() >= 2)
             shell_.session().setTimeline(snapshot.timeline);
+        curveEditor_.setPoints(CurveTab::morph, CurveEditorModel::unflatten(snapshot.morphCurve));
+        curveEditor_.setPoints(CurveTab::timeWarp, CurveEditorModel::unflatten(snapshot.soundCurves[0]));
+        curveEditor_.setPoints(CurveTab::pitch, CurveEditorModel::unflatten(snapshot.soundCurves[1]));
+        curveEditor_.setPoints(CurveTab::spectralWarp, CurveEditorModel::unflatten(snapshot.soundCurves[2]));
+        curveDurationSeconds_ = snapshot.sourceDurations[0];
         const auto readParameter = [&snapshot](std::string_view id, float fallback) {
             const auto* descriptor = ParameterRegistry::find(id);
             return descriptor != nullptr && descriptor->denseIndex < snapshot.parameters.size()
@@ -540,6 +609,8 @@ public:
         renderOptions.hoveredPartial = spectrumHoverPartial_;
         renderOptions.lassoActive = navigation.lassoActive;
         renderOptions.lassoBounds = navigation.lassoBounds;
+        renderOptions.timeSelectionFirstFrame = navigation.timeSelectionFirstFrame;
+        renderOptions.timeSelectionLastFrame = navigation.timeSelectionLastFrame;
         renderOptions.showOnsetOverlay = spectrumOnsetEditing_;
         renderOptions.selectedBands = navigation.selectedBands;
         if (renderOptions.selectedBands.empty() && navigation.selectedBand >= 0)
@@ -1006,45 +1077,165 @@ public:
                         chrome.selectionLabel.width - 8.0f, chrome.selectionLabel.height);
         }
 
-        const UiRect track = timelineTrack(timeline);
-        paintThemeOps(canvas, ThemeRecipes::well(tokens, track, ThemeRadius::sliderTrack));
-        canvas.setColor(tokens.accent.argb);
-        if (session.morph.timeline.size() >= 3)
-            canvas.rectangle(track.x + track.width * session.morph.timeline[1], track.y - 6.0f,
-                             3.0f, track.height + 12.0f);
-        canvas.rectangle(track.x + track.width * session.transport.normalizedPlayhead,
-                         track.y - 10.0f, 2.0f, track.height + 20.0f);
-        canvas.setColor(tokens.textSecondary.argb);
-        canvas.text("MORPH TIMELINE", labelFont, visage::Font::kLeft, timeline.x + 10.0f,
-                    timeline.y + 6.0f, 180.0f, 14.0f);
+        drawCurveEditor(canvas, tokens, timeline, session.transport.normalizedPlayhead);
+    }
 
+    // SESSION timeline (spec §8.2): a node editor for the morph curve and the
+    // render-time automation curves, with DETECT / APPLY on the header row.
+    void drawCurveEditor(visage::Canvas& canvas, const ThemeTokens& tokens, UiRect timeline, float playhead)
+    {
+        const auto layout = curveEditorLayout(timeline);
+        curveEditor_.setPlot(layout.plot);
         const visage::Font buttonFont(ThemeFont::cheekButton, visage::fonts::Lato_Regular_ttf);
-        for (const auto& button : timelineButtons(timeline))
+        const visage::Font axisFont(8.5f, visage::fonts::Lato_Regular_ttf);
+
+        for (std::size_t i = 0; i < layout.tabs.size(); ++i)
         {
-            paintThemeOps(canvas,
-                          ThemeRecipes::buttonBackground(tokens, button.second, false, false));
+            const auto tab = static_cast<CurveTab>(i);
+            const auto active = curveEditor_.tab() == tab;
+            paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, layout.tabs[i], false, active));
+            canvas.setColor(active ? tokens.accent.argb : tokens.textSecondary.argb);
+            canvas.text(CurveEditorModel::range(tab).label, buttonFont, visage::Font::kCenter,
+                        layout.tabs[i].x, layout.tabs[i].y, layout.tabs[i].width, layout.tabs[i].height);
+        }
+        const std::array<std::pair<const char*, UiRect>, 3> buttons {{
+            { "RESET", layout.reset }, { "DETECT", layout.detect }, { "APPLY", layout.apply } }};
+        for (const auto& [label, rect] : buttons)
+        {
+            paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, rect, false, false));
             canvas.setColor(tokens.textPrimary.argb);
-            canvas.text(button.first, buttonFont, visage::Font::kCenter, button.second.x,
-                        button.second.y, button.second.width, button.second.height);
+            canvas.text(label, buttonFont, visage::Font::kCenter, rect.x, rect.y, rect.width, rect.height);
+        }
+
+        const auto plot = layout.plot;
+        paintThemeOps(canvas, ThemeRecipes::well(tokens, plot, ThemeRadius::sliderTrack));
+        const auto range = CurveEditorModel::range(curveEditor_.tab());
+        // Identity reference: dashed horizontal (or the time-warp diagonal).
+        canvas.setColor((tokens.textFaint.argb & 0x00ffffffu) | 0x80000000u);
+        const auto identityAt = [&](float x) {
+            return curveEditor_.toScreen({ x, range.diagonal ? range.minY + x * (range.maxY - range.minY)
+                                                             : range.identity });
+        };
+        for (int dash = 0; dash < 24; dash += 2)
+        {
+            const auto a = identityAt(dash / 24.0f), b = identityAt((dash + 1) / 24.0f);
+            canvas.segment(a.x, a.y, b.x, b.y, 1.0f, false);
+        }
+        // Axis range labels.
+        char text[32];
+        canvas.setColor(tokens.textSecondary.argb);
+        std::snprintf(text, sizeof text, range.diagonal ? "end" : "%.3g%s", range.maxY, range.unit);
+        canvas.text(text, axisFont, visage::Font::kRight, timeline.x + 2.0f, plot.y - 4.0f, plot.x - timeline.x - 6.0f, 10.0f);
+        std::snprintf(text, sizeof text, range.diagonal ? "start" : "%.3g%s", range.minY, range.unit);
+        canvas.text(text, axisFont, visage::Font::kRight, timeline.x + 2.0f, plot.y + plot.height - 6.0f,
+                    plot.x - timeline.x - 6.0f, 10.0f);
+        // Time labels under the plot (also the seek strip).
+        const auto duration = curveDurationSeconds_;
+        for (int i = 0; i <= 4; ++i)
+        {
+            const auto x = plot.x + plot.width * i / 4.0f;
+            std::snprintf(text, sizeof text, duration > 0.0f ? "%.1fs" : "%.0f%%",
+                          duration > 0.0f ? duration * i / 4.0 : 25.0 * i);
+            canvas.text(text, axisFont, i == 0 ? visage::Font::kLeft : i == 4 ? visage::Font::kRight
+                                                                               : visage::Font::kCenter,
+                        i == 0 ? x : i == 4 ? x - 40.0f : x - 20.0f, layout.seek.y, 40.0f, layout.seek.height);
+        }
+
+        // The curve, its fill (MORPH) and points.
+        const auto& points = curveEditor_.points();
+        if (!points.empty())
+        {
+            std::vector<UiPoint> line;
+            line.push_back(curveEditor_.toScreen({ 0.0f, points.front().y }));
+            for (const auto& p : points)
+                line.push_back(curveEditor_.toScreen(p));
+            line.push_back(curveEditor_.toScreen({ 1.0f, points.back().y }));
+            if (curveEditor_.tab() == CurveTab::morph)
+            {
+                canvas.setColor((tokens.accent.argb & 0x00ffffffu) | 0x22000000u);
+                const auto floor = plot.y + plot.height;
+                for (std::size_t i = 1; i < line.size(); ++i)
+                {
+                    canvas.triangle(line[i - 1].x, line[i - 1].y, line[i].x, line[i].y, line[i].x, floor);
+                    canvas.triangle(line[i - 1].x, line[i - 1].y, line[i].x, floor, line[i - 1].x, floor);
+                }
+            }
+            canvas.setColor(tokens.accent.argb);
+            for (std::size_t i = 1; i < line.size(); ++i)
+                canvas.segment(line[i - 1].x, line[i - 1].y, line[i].x, line[i].y, 1.5f, true);
+            for (std::size_t i = 0; i < points.size(); ++i)
+            {
+                const auto p = curveEditor_.toScreen(points[i]);
+                const auto dragged = static_cast<int>(i) == curveEditor_.dragging();
+                canvas.setColor(dragged ? tokens.textPrimary.argb : tokens.accent.argb);
+                canvas.circle(p.x - 3.5f, p.y - 3.5f, 7.0f);
+            }
+        }
+        // Playhead.
+        canvas.setColor((tokens.textPrimary.argb & 0x00ffffffu) | 0xb0000000u);
+        canvas.rectangle(plot.x + plot.width * std::clamp(playhead, 0.0f, 1.0f), plot.y, 1.0f, plot.height);
+        // Drag readout: "{t}s  {value}".
+        const auto readout = curveEditor_.readout(duration);
+        if (!readout.empty())
+        {
+            const auto p = curveEditor_.toScreen(points[static_cast<std::size_t>(curveEditor_.dragging())]);
+            const auto x = std::clamp(p.x + 8.0f, plot.x, plot.x + plot.width - 110.0f);
+            canvas.setColor((tokens.panel.argb & 0x00ffffffu) | 0xe0000000u);
+            canvas.roundedRectangle(x, plot.y + 2.0f, 110.0f, 14.0f, 3.0f);
+            canvas.setColor(tokens.textPrimary.argb);
+            canvas.text(readout, axisFont, visage::Font::kCenter, x, plot.y + 2.0f, 110.0f, 14.0f);
         }
     }
 
-    // The timeline panel is a scrub track with the two smearnov actions parked
-    // on its right; both are derived so the hit test cannot drift from the paint.
-    [[nodiscard]] static UiRect timelineTrack(UiRect timeline) noexcept
+    struct CurveEditorLayout
     {
-        return { timeline.x + 10.0f, timeline.y + timeline.height * 0.5f - 3.0f,
-                 std::max(0.0f, timeline.width - 200.0f), 6.0f };
+        std::array<UiRect, 4> tabs {};
+        UiRect reset {}, detect {}, apply {}, plot {}, seek {};
+    };
+
+    // Every timeline rect is derived here so paint and hit tests agree.
+    [[nodiscard]] static CurveEditorLayout curveEditorLayout(UiRect timeline) noexcept
+    {
+        CurveEditorLayout l;
+        const auto y = timeline.y + 6.0f;
+        constexpr float h = 20.0f, tabW = 52.0f;
+        for (std::size_t i = 0; i < l.tabs.size(); ++i)
+            l.tabs[i] = { timeline.x + 10.0f + static_cast<float>(i) * (tabW + 2.0f), y, tabW, h };
+        l.reset = { l.tabs.back().x + tabW + 8.0f, y, 50.0f, h };
+        l.apply = { timeline.x + timeline.width - 10.0f - 64.0f, y, 64.0f, h };
+        l.detect = { l.apply.x - 6.0f - 64.0f, y, 64.0f, h };
+        l.plot = { timeline.x + 42.0f, y + h + 6.0f, std::max(0.0f, timeline.width - 52.0f),
+                   std::max(10.0f, timeline.height - (h + 12.0f) - 18.0f) };
+        l.seek = { l.plot.x, l.plot.y + l.plot.height + 2.0f, l.plot.width, 12.0f };
+        return l;
     }
 
-    [[nodiscard]] static std::array<std::pair<const char*, UiRect>, 2>
-    timelineButtons(UiRect timeline) noexcept
+    // Sends the edited curve to the host.
+    void commitCurve()
     {
-        const float y = timeline.y + timeline.height * 0.5f - 14.0f;
-        const float x = timeline.x + timeline.width - 176.0f;
-        return { std::pair<const char*, UiRect> { "DETECT", UiRect { x, y, 82.0f, 28.0f } },
-                 std::pair<const char*, UiRect> { "APPLY",
-                                                  UiRect { x + 90.0f, y, 82.0f, 28.0f } } };
+        const auto& points = curveEditor_.points();
+        switch (curveEditor_.tab())
+        {
+        case CurveTab::morph:
+        {
+            SetMorphTimelineAction action;
+            for (const auto& p : points)
+                action.points.push_back({ p.x, std::clamp(p.y, 0.0f, 1.0f), 0, 0 });
+            if (action.points.empty())
+                action.points = { { 0.0f, 0.0f, 0, 0 }, { 1.0f, 1.0f, 0, 0 } };
+            emitAction(action);
+            break;
+        }
+        case CurveTab::pitch:
+            emitAction(SetSoundCurveAction { SoundCurveKind::pitch, CurveEditorModel::flatten(points) });
+            break;
+        case CurveTab::timeWarp:
+            emitAction(SetSoundCurveAction { SoundCurveKind::timeWarp, CurveEditorModel::flatten(points) });
+            break;
+        case CurveTab::spectralWarp:
+            emitAction(SetSoundCurveAction { SoundCurveKind::spectralWarp, CurveEditorModel::flatten(points) });
+            break;
+        }
     }
 
     // Applies a view chosen from the header buttons or either menu.  Returns
@@ -1057,6 +1248,11 @@ public:
             return false;
         shell_.spectrum().setSource(static_cast<SpectralTraceSource>(action.source));
         shell_.spectrum().setMode(static_cast<SpectralTraceMode>(action.mode));
+        // The criteria panel belongs to the partial views' toolbar.
+        const auto partialView = action.mode == static_cast<int>(SpectralTraceMode::combined)
+            || action.mode == static_cast<int>(SpectralTraceMode::partials);
+        if (!partialView)
+            setSelectionPanelVisible(false);
         if (sink_.spectrumModeSelected)
             sink_.spectrumModeSelected(sink_.context, action.source, action.mode);
         emitAction(action);
@@ -1159,6 +1355,67 @@ public:
     }
 
     // Wide wells: the views are buttons, so the chip only picks the source.
+    // Time... menu: structural edits on the selected time range (drag a box
+    // in a planar view), and paste at the playhead.
+    void showTimeEditMenu(visage::Point origin)
+    {
+        enum : int { kCopy = 1, kCut, kDelete, kCrop, kPasteFade, kPasteHard };
+        const auto hasRange = shell_.spectrum().hasTimeSelection();
+        const auto hasModel = spectrumSnapshot_.frameCount > 0;
+        visage::PopupMenu popup("Time edit");
+        popup.addOption(kCopy, "Copy time range").enable(hasRange);
+        popup.addOption(kCut, "Cut time range").enable(hasRange);
+        popup.addOption(kDelete, "Delete time range").enable(hasRange);
+        popup.addOption(kCrop, "Crop to time range").enable(hasRange);
+        popup.addBreak();
+        popup.addOption(kPasteFade, "Paste at playhead (crossfade)").enable(hasModel);
+        popup.addOption(kPasteHard, "Paste at playhead (no crossfade)").enable(hasModel);
+        popup.onSelection() += [this](int option) {
+            const auto& navigation = shell_.spectrum().navigation();
+            TimeEditAction edit;
+            edit.firstFrame = navigation.timeSelectionFirstFrame;
+            edit.lastFrame = navigation.timeSelectionLastFrame;
+            switch (option)
+            {
+            case kCopy: edit.kind = TimeEditKind::copy; break;
+            case kCut: edit.kind = TimeEditKind::cut; break;
+            case kDelete: edit.kind = TimeEditKind::remove; break;
+            case kCrop: edit.kind = TimeEditKind::crop; break;
+            case kPasteFade:
+            case kPasteHard:
+            {
+                edit.kind = TimeEditKind::paste;
+                const auto frames = std::max(1u, spectrumSnapshot_.frameCount);
+                edit.firstFrame = static_cast<int>(std::lround(
+                    std::clamp(shell_.session().state().transport.normalizedPlayhead, 0.0f, 1.0f)
+                    * static_cast<float>(frames)));
+                edit.lastFrame = edit.firstFrame;
+                edit.crossfadeFrames = option == kPasteFade ? kTimeEditCrossfadeFrames : 0;
+                break;
+            }
+            default: return;
+            }
+            emitAction(edit);
+            // The model's frame grid changed (except copy); the old range is stale.
+            if (edit.kind != TimeEditKind::copy)
+                shell_.spectrum().clearTimeSelection();
+            if (sink_.popupDismissed)
+                sink_.popupDismissed(sink_.context);
+            redraw();
+        };
+        popup.onCancel() += [this] {
+            if (sink_.popupDismissed)
+                sink_.popupDismissed(sink_.context);
+        };
+        if (sink_.popupShown)
+            sink_.popupShown(sink_.context);
+        popup.show(sessionPageRaw_ != nullptr ? static_cast<visage::Frame*>(sessionPageRaw_) : this,
+                   origin);
+    }
+
+    // Seam crossfade for "Paste at playhead (crossfade)": two frames each side.
+    static constexpr int kTimeEditCrossfadeFrames = 2;
+
     void showSpectrumSourceMenu(visage::Point origin)
     {
         visage::PopupMenu popup("Spectrum source");
@@ -1341,6 +1598,25 @@ public:
                 redraw();
                 return true;
             }
+            if (item.command == SpectrumEditCommand::selectPartialsByCriteria)
+            {
+                setSelectionPanelVisible(selectionPanelRaw_ != nullptr && !selectionPanelRaw_->isVisible());
+                return true;
+            }
+            if (item.command == SpectrumEditCommand::timeEditMenu)
+            {
+                showTimeEditMenu({ item.bounds.x, item.bounds.y + item.bounds.height + 4.0f });
+                return true;
+            }
+            if (item.command == SpectrumEditCommand::invertPartialSelection)
+            {
+                auto current = navigation.selectedPartials;
+                if (current.empty() && navigation.selectedPartial >= 0)
+                    current.push_back(navigation.selectedPartial);
+                shell_.spectrum().setSelectedPartials(invertPartials(spectrumSnapshot_, current));
+                redraw();
+                return true;
+            }
             if (item.command == SpectrumEditCommand::prunePartials)
             {
                 const auto prune = shell_.spectrum().runPartialPrune(10.0f);
@@ -1508,30 +1784,53 @@ public:
             requestKeyboardFocus();
             return true;
         }
-        const auto buttons = timelineButtons(timeline);
-        if (pointInRect(point, buttons[0].second))
+        const auto layout = curveEditorLayout(timeline);
+        if (pointInRect(point, layout.detect))
         {
             emitAction(DetectSmearnovAction {});
             return true;
         }
-        if (pointInRect(point, buttons[1].second))
+        if (pointInRect(point, layout.apply))
         {
             emitAction(ApplySmearnovAction {});
             return true;
         }
-        if (pointInRect(point, timeline))
+        for (std::size_t i = 0; i < layout.tabs.size(); ++i)
+            if (pointInRect(point, layout.tabs[i]))
+            {
+                curveEditor_.setTab(static_cast<CurveTab>(i));
+                redraw();
+                return true;
+            }
+        if (pointInRect(point, layout.reset))
         {
-            const auto track = timelineTrack(timeline);
-            const auto normalized =
-                std::clamp(track.width > 0.0f ? (point.x - track.x) / track.width : 0.0f, 0.0f,
-                           1.0f);
-            shell_.session().setPlayhead(normalized);
-            emitAction(shell_.session().seekAction());
-            shell_.session().setTimeline({ 0.0f, normalized, 1.0f });
-            emitAction(shell_.session().timelineAction());
+            curveEditor_.reset();
+            commitCurve();
+            redraw();
             return true;
         }
-        return false;
+        if (pointInRect(point, layout.seek))
+        {
+            const auto normalized = std::clamp(
+                layout.seek.width > 0.0f ? (point.x - layout.seek.x) / layout.seek.width : 0.0f, 0.0f, 1.0f);
+            shell_.session().setPlayhead(normalized);
+            emitAction(shell_.session().seekAction());
+            redraw();
+            return true;
+        }
+        curveEditor_.setPlot(layout.plot);
+        if (curveEditor_.inPlot({ point.x, point.y }))
+        {
+            // A removal commits at once; an added or grabbed point commits on
+            // release (if it was added or moved).
+            const auto changed = curveEditor_.press({ point.x, point.y }, doubleClick);
+            curvePressAdded_ = changed && curveEditor_.dragging() >= 0;
+            if (changed && curveEditor_.dragging() < 0)
+                commitCurve();
+            redraw();
+            return true;
+        }
+        return pointInRect(point, timeline);
     }
 
     void sessionCentreMove(visage::Point point, UiRect well)
@@ -1558,6 +1857,12 @@ public:
 
     void sessionCentreDrag(visage::Point point, UiRect well)
     {
+        if (curveEditor_.dragging() >= 0)
+        {
+            curveEditor_.drag({ point.x, point.y });
+            redraw();
+            return;
+        }
         if (well.width <= 0.0f || well.height <= 0.0f)
             return;
         if (spectrumOnsetDragging_)
@@ -1644,6 +1949,15 @@ public:
 
     void sessionCentreUp(visage::Point point, UiRect well)
     {
+        if (curveEditor_.dragging() >= 0)
+        {
+            const auto moved = curveEditor_.release();
+            if (moved || curvePressAdded_)
+                commitCurve();
+            curvePressAdded_ = false;
+            redraw();
+            return;
+        }
         if (spectrumScaleDragging_)
         {
             (void) point;
@@ -2148,6 +2462,10 @@ private:
     EditorShellModel shell_{};
     std::function<void(ThemeId)> onThemeChosen_;
     std::unique_ptr<AtsPageContainer> pageContainer_;
+    SpectrumSelectionPanel* selectionPanelRaw_ = nullptr;
+    CurveEditorModel curveEditor_;
+    float curveDurationSeconds_ = 0.0f;
+    bool curvePressAdded_ = false;
     AtsPageContainer* pageContainerRaw_ = nullptr;
     AtsSessionPage* sessionPageRaw_ = nullptr;
     AtsAnalysisPage* analysisPageRaw_ = nullptr;
@@ -2283,6 +2601,16 @@ void VisageEditor::selectPage(int page)
 {
     if (page >= 0)
         impl_->frame.selectPage(static_cast<std::size_t>(page));
+}
+
+void VisageEditor::selectTimelineCurve(int tab)
+{
+    impl_->frame.selectTimelineCurve(tab);
+}
+
+void VisageEditor::showPartialSelectionPanel(bool visible)
+{
+    impl_->frame.setSelectionPanelVisible(visible);
 }
 
 bool VisageEditor::captureScreenshot(const std::string& path)

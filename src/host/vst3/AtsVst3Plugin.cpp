@@ -43,6 +43,8 @@ constexpr const char* kImportSourceMessage = "ats.editor.import-source";
 constexpr const char* kAnalyzeSourceMessage = "ats.editor.analyze-source";
 constexpr const char* kCancelAnalysisMessage = "ats.editor.cancel-analysis";
 constexpr const char* kAutoTuneAnalysisMessage = "ats.editor.auto-tune-analysis";
+constexpr const char* kTimeEditMessage = "ats.editor.time-edit";
+constexpr const char* kSoundCurveMessage = "ats.editor.sound-curve";
 constexpr const char* kPollAnalysisMessage = "ats.editor.poll-analysis";
 constexpr const char* kApplyAnalysisProfileMessage = "ats.editor.apply-analysis-profile";
 constexpr const char* kAnalysisTelemetryMessage = "ats.editor.analysis-telemetry";
@@ -469,6 +471,39 @@ public:
         {
             ats::Error error;
             return host_.queueAutoTune(error) ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kSoundCurveMessage))
+        {
+            Steinberg::int64 kind = -1;
+            if (!validPayloadVersion(attributes) ||
+                attributes->getInt(kCommandAttribute, kind) != Steinberg::kResultTrue ||
+                kind < 0 || kind > static_cast<Steinberg::int64>(ats::ui::SoundCurveKind::spectralWarp))
+                return Steinberg::kResultFalse;
+            ats::ui::SetSoundCurveAction curve;
+            curve.curve = static_cast<ats::ui::SoundCurveKind>(kind);
+            // Absent points = reset the curve.
+            (void) readFloatVector(attributes, kSessionValuesAttribute, curve.points);
+            ats::Error error;
+            return host_.applySessionAction(curve, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
+        }
+        if (Steinberg::FIDStringsEqual(messageId, kTimeEditMessage))
+        {
+            Steinberg::int64 kind = -1, first = -1, last = -1;
+            double crossfade = 0.0;
+            if (!validPayloadVersion(attributes) ||
+                attributes->getInt(kCommandAttribute, kind) != Steinberg::kResultTrue ||
+                attributes->getInt(kFirstFrameAttribute, first) != Steinberg::kResultTrue ||
+                attributes->getInt(kLastFrameAttribute, last) != Steinberg::kResultTrue ||
+                attributes->getFloat(kValueAttribute, crossfade) != Steinberg::kResultTrue ||
+                kind < 0 || kind > static_cast<Steinberg::int64>(ats::ui::TimeEditKind::paste))
+                return Steinberg::kResultFalse;
+            ats::Error error;
+            return host_.applyEditorAction(ats::ui::TimeEditAction {
+                                               static_cast<ats::ui::TimeEditKind>(kind),
+                                               static_cast<std::int32_t>(first), static_cast<std::int32_t>(last),
+                                               static_cast<std::int32_t>(crossfade) }, error) && !error
+                       ? Steinberg::kResultTrue : Steinberg::kResultFalse;
         }
         if (Steinberg::FIDStringsEqual(messageId, kPollAnalysisMessage))
         {
@@ -1190,6 +1225,16 @@ public:
             (void) sendMessageId(kAutoTuneAnalysisMessage);
             return;
         }
+        if (const auto* timeEdit = std::get_if<ats::ui::TimeEditAction>(&action))
+        {
+            (void) sendTimeEdit(*timeEdit);
+            return;
+        }
+        if (const auto* curve = std::get_if<ats::ui::SetSoundCurveAction>(&action))
+        {
+            (void) sendSoundCurve(*curve);
+            return;
+        }
         if (std::holds_alternative<ats::ui::CancelJobsAction>(action))
         {
             (void) sendMessageId(kCancelAnalysisMessage);
@@ -1567,6 +1612,45 @@ private:
                                kind == ats::engine::SourceImportKind::audio ? 0 : 1) == Steinberg::kResultTrue &&
             attributes->setBinary(kSourcePathAttribute, path.string().data(),
                                   static_cast<Steinberg::uint32>(path.string().size())) == Steinberg::kResultTrue &&
+            sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendSoundCurve(const ats::ui::SetSoundCurveAction& curve)
+    {
+        if (curve.points.size() > 128 || curve.points.size() % 2 != 0)
+            return false;
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kSoundCurveMessage);
+        auto* attributes = message->getAttributes();
+        bool result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
+            attributes->setInt(kCommandAttribute, static_cast<std::int64_t>(curve.curve)) == Steinberg::kResultTrue;
+        if (result && !curve.points.empty())
+            result = attributes->setBinary(kSessionValuesAttribute, curve.points.data(),
+                                           static_cast<Steinberg::uint32>(curve.points.size() * sizeof(float)))
+                == Steinberg::kResultTrue;
+        result = result && sendMessage(message) == Steinberg::kResultTrue;
+        message->release();
+        return result;
+    }
+
+    bool sendTimeEdit(const ats::ui::TimeEditAction& edit)
+    {
+        auto* message = allocateMessage();
+        if (message == nullptr)
+            return false;
+        message->setMessageID(kTimeEditMessage);
+        auto* attributes = message->getAttributes();
+        const auto result = attributes != nullptr &&
+            attributes->setInt(kPayloadVersionAttribute, kPayloadVersion) == Steinberg::kResultTrue &&
+            attributes->setInt(kCommandAttribute, static_cast<std::int64_t>(edit.kind)) == Steinberg::kResultTrue &&
+            attributes->setInt(kFirstFrameAttribute, edit.firstFrame) == Steinberg::kResultTrue &&
+            attributes->setInt(kLastFrameAttribute, edit.lastFrame) == Steinberg::kResultTrue &&
+            attributes->setFloat(kValueAttribute, static_cast<double>(edit.crossfadeFrames)) == Steinberg::kResultTrue &&
             sendMessage(message) == Steinberg::kResultTrue;
         message->release();
         return result;

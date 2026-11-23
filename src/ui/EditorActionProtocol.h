@@ -64,6 +64,8 @@ template <typename T>
     if constexpr (std::is_same_v<T, EditSmearnovOnsetHandlesAction>) return { "EditSmearnovOnsetHandles", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, SetTimbreMotionPlanAction>) return { "SetTimbreMotionPlan", ActionThreadDomain::worker, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
     if constexpr (std::is_same_v<T, AutoTuneAnalysisAction>) return { "AutoTuneAnalysis", ActionThreadDomain::worker, ActionCancellation::explicitCancel, ActionUndoPolicy::oneTransaction };
+    if constexpr (std::is_same_v<T, TimeEditAction>) return { "TimeEdit", ActionThreadDomain::ui, ActionCancellation::teardown, ActionUndoPolicy::oneTransaction };
+    if constexpr (std::is_same_v<T, SetSoundCurveAction>) return { "SetSoundCurve", ActionThreadDomain::ui, ActionCancellation::superseded, ActionUndoPolicy::oneTransaction };
     return { "UnknownAction", ActionThreadDomain::ui, ActionCancellation::none, ActionUndoPolicy::none };
 }
 
@@ -148,6 +150,24 @@ template <typename T>
     {
         if (action.band < 0 || action.frame < 0 || !std::isfinite(action.value))
             return { false, "invalid_residual_edit", "residual band, frame, and value are required" };
+    }
+    else if constexpr (std::is_same_v<T, SetSoundCurveAction>)
+    {
+        if (static_cast<int>(action.curve) > static_cast<int>(SoundCurveKind::spectralWarp))
+            return { false, "invalid_curve", "curve kind is unknown" };
+        if (action.points.size() % 2 != 0 || action.points.size() > 128)
+            return { false, "invalid_curve", "curve points are x, y pairs, at most 64" };
+        for (const auto v : action.points)
+            if (!std::isfinite(v)) return { false, "invalid_curve", "curve points must be finite" };
+    }
+    else if constexpr (std::is_same_v<T, TimeEditAction>)
+    {
+        if (static_cast<int>(action.kind) > static_cast<int>(TimeEditKind::paste))
+            return { false, "invalid_time_edit", "time edit kind is unknown" };
+        if (action.firstFrame < 0 || (action.kind != TimeEditKind::paste && action.lastFrame < action.firstFrame))
+            return { false, "invalid_time_edit", "time edit requires an ordered, non-negative frame range" };
+        if (action.crossfadeFrames < 0 || action.crossfadeFrames > 4096)
+            return { false, "invalid_time_edit", "crossfade must be 0 to 4096 frames" };
     }
     else if constexpr (std::is_same_v<T, SpectrumEditAction>)
     {

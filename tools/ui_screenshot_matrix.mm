@@ -210,6 +210,9 @@ int main(int argc, char** argv)
                     std::cerr << "could not import " << atsPath << ": " << error.text << '\n';
                     return 1;
                 }
+            // A sample pitch curve for the timeline capture.
+            (void) host.applyEditorAction(ats::ui::SetSoundCurveAction {
+                ats::ui::SoundCurveKind::pitch, { 0.0f, 0.0f, 0.35f, 7.0f, 0.7f, -5.0f, 1.0f, 0.0f } }, error);
             realSession = host.editorSnapshot();
             if (!realSession->spectrum)
             {
@@ -317,6 +320,16 @@ int main(int argc, char** argv)
 
         for (const auto& size : sizes)
             runSize(size, [&](VisageEditor& editor) {
+                if (std::string(size.name) == "design")
+                {
+                    // The select-by-criteria panel over the Trace + Residual view.
+                    editor.showPartialSelectionPanel(true);
+                    capture(editor, "spectrum-selection-panel-ember", size, 0, 0, 0);
+                    editor.showPartialSelectionPanel(false);
+                    editor.selectTimelineCurve(1);
+                    capture(editor, "session-timeline-pitch-ember", size, 0, 0, 0);
+                    editor.selectTimelineCurve(0);
+                }
                 for (int page = 0; page < static_cast<int>(kPages.size()); ++page)
                     for (int theme = 0; theme < static_cast<int>(kThemes.size()); ++theme)
                         capture(editor, std::string("page-") + kPages[static_cast<std::size_t>(page)]

@@ -551,6 +551,24 @@ int main()
         assert(fillAlpha(residual) > fillAlpha(combined) && fillAlpha(combined) > 0.0f);
     }
 
+    // The Time... edit range is shaded in planar views only.
+    {
+        const auto shaded = [&bounds](ats::ui::SpectralTraceMode mode) {
+            auto snap = makeSnapshot(mode);
+            snap.frameCount = 101;
+            SpectrumRenderOptions options;
+            options.timeSelectionFirstFrame = 20;
+            options.timeSelectionLastFrame = 60;
+            for (const auto& c : SpectrumRenderer::render(snap, bounds, options))
+                if (c.kind == SpectrumDrawKind::selectionMarker && c.index == -30 && c.filled)
+                    return true;
+            return false;
+        };
+        assert(shaded(SpectralTraceMode::combined));
+        assert(shaded(SpectralTraceMode::partials));
+        assert(!shaded(SpectralTraceMode::isometric));
+    }
+
     // --- SpectrumLUT: the fixed blue/cyan/mint/lime ramp is theme independent ---
     {
         const auto c1 = SpectrumLUT::colorForAmp(0.5f, ThemeId::ember);

@@ -33,6 +33,8 @@ int main()
     source.timbreBrightnessDb = -7.5;
     source.timbreTiltDbPerOct = 3.25;
     source.timbreNoiseBalance = 0.8;
+    source.soundCurves[0] = { 0.0f, 0.0f, 0.5f, 0.25f, 1.0f, 1.0f }; // time warp
+    source.soundCurves[1] = { 0.0f, -3.0f, 1.0f, 12.0f };             // pitch
 
     for (std::uint32_t version = 2; version <= ats::LegacyStateCodec::kCurrentVersion; ++version)
     {
@@ -71,6 +73,11 @@ int main()
             assert(decoded->timbreBrightnessDb == 0.0 && decoded->timbreTiltDbPerOct == 0.0 &&
                    decoded->timbreNoiseBalance == 0.5);
         }
+        if (version >= 20)
+            assert(decoded->soundCurves == source.soundCurves);
+        else
+            for (const auto& curve : decoded->soundCurves)
+                assert(curve.empty()); // not carried before v20
         if (version >= 13)
             assert(decoded->frequencyShape.mode == ats::FrequencyShapeMode::Harmonic);
         auto truncated = bytes;
@@ -92,6 +99,14 @@ int main()
     tooManyPoints.morphTimeline.resize(33, 0.5f);
     assert(ats::LegacyStateCodec::encode(tooManyPoints).empty());
 
+    // v20 field validation: odd-length or non-finite curves fail to encode.
+    auto oddCurve = source;
+    oddCurve.soundCurves[2] = { 0.0f, 1.0f, 0.5f };
+    assert(ats::LegacyStateCodec::encode(oddCurve).empty());
+    auto nanCurve = source;
+    nanCurve.soundCurves[1] = { 0.0f, std::numeric_limits<float>::quiet_NaN() };
+    assert(ats::LegacyStateCodec::encode(nanCurve).empty());
+
     auto corrupt = ats::LegacyStateCodec::encode(source);
     // ATSP v17 stores outputTrim after analysis, synthesis, and
     // frequency-shape. Corrupting it must reject the whole state.
@@ -102,5 +117,5 @@ int main()
     for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
         corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
     assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
-    std::cout << "legacy_state_codec_test: ATSP v2-v19 payload round-trip ok\n";
+    std::cout << "legacy_state_codec_test: ATSP v2-v20 payload round-trip ok\n";
 }

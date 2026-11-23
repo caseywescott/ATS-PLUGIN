@@ -196,11 +196,16 @@ struct SpectrumChromeLayout
         }
         else
         {
-            add(SpectrumEditCommand::drawPartialFrequency, "Draw", 52.0f);
-            add(SpectrumEditCommand::soloPartials, "Solo", 48.0f);
-            add(SpectrumEditCommand::freezePartial, "Freeze", 56.0f);
-            add(SpectrumEditCommand::prunePartials, "Prune", 52.0f);
-            x += 4.0f + tiltSliderWidth(chrome) + 4.0f;
+            for (std::size_t i = 0; i < kPartialTools.size(); ++i)
+            {
+                add(kPartialTools[i].first, kPartialTools[i].second, kPartialToolWidths[i]);
+                // Selection tools work with nothing selected.
+                if (kPartialTools[i].first == SpectrumEditCommand::selectPartialsByCriteria
+                    || kPartialTools[i].first == SpectrumEditCommand::invertPartialSelection
+                    || kPartialTools[i].first == SpectrumEditCommand::timeEditMenu)
+                    result.back().enabled = true;
+            }
+            x += 4.0f + partialTiltSliderWidth(chrome) + 4.0f;
             add(SpectrumEditCommand::tiltPartialEnvelope, "Tilt", 44.0f);
         }
         return result;
@@ -240,8 +245,9 @@ struct SpectrumChromeLayout
         }
         else
         {
-            x += 52.0f + gap + 48.0f + gap + 56.0f + gap + 52.0f + 8.0f;
-            result.push_back({ ToolbarControlKind::slider, "Tilt", { x, y, tiltSliderWidth(chrome), h }, 0.5f });
+            x += toolsWidth(kPartialToolWidths, gap) + 8.0f;
+            result.push_back({ ToolbarControlKind::slider, "Tilt",
+                               { x, y, partialTiltSliderWidth(chrome), h }, 0.5f });
         }
         return result;
     }
@@ -255,6 +261,32 @@ private:
         { SpectrumEditCommand::swapResidual, "Swap" },
         { SpectrumEditCommand::redistResidual, "Redist" } }};
     static constexpr std::array<float, 6> kResidualToolWidths { 44.0f, 54.0f, 44.0f, 48.0f, 46.0f, 50.0f };
+    static constexpr std::array<std::pair<SpectrumEditCommand, std::string_view>, 7> kPartialTools {{
+        { SpectrumEditCommand::drawPartialFrequency, "Draw" },
+        { SpectrumEditCommand::soloPartials, "Solo" },
+        { SpectrumEditCommand::freezePartial, "Freeze" },
+        { SpectrumEditCommand::prunePartials, "Prune" },
+        { SpectrumEditCommand::selectPartialsByCriteria, "Select..." },
+        { SpectrumEditCommand::invertPartialSelection, "Invert" },
+        { SpectrumEditCommand::timeEditMenu, "Time..." } }};
+    static constexpr std::array<float, 7> kPartialToolWidths { 46.0f, 42.0f, 52.0f, 48.0f, 62.0f, 50.0f, 52.0f };
+
+    template <std::size_t N>
+    [[nodiscard]] static float toolsWidth(const std::array<float, N>& widths, float gap) noexcept
+    {
+        float width = 0.0f;
+        for (const auto w : widths) width += w;
+        return width + gap * static_cast<float>(N - 1);
+    }
+
+    // The partial row's slider takes what its buttons and the Tilt button
+    // leave, up to a quarter of the row.
+    [[nodiscard]] static float partialTiltSliderWidth(const SpectrumChromeLayout& chrome) noexcept
+    {
+        const auto fixed = 6.0f + toolsWidth(kPartialToolWidths, 4.0f) + 8.0f + 4.0f + 44.0f + 6.0f;
+        return std::clamp(chrome.toolbar.width - fixed, 40.0f,
+                          std::max(40.0f, chrome.toolbar.width / 4.0f));
+    }
     static constexpr float kResidualEditorWidth = 64.0f;
 
     [[nodiscard]] static float residualToolsWidth(float gap) noexcept
@@ -273,9 +305,6 @@ private:
         return std::clamp(chrome.toolbar.width - fixed, 40.0f,
                           std::max(40.0f, chrome.toolbar.width / 4.0f));
     }
-
-    [[nodiscard]] static float tiltSliderWidth(const SpectrumChromeLayout& chrome) noexcept
-    { return std::max(72.0f, chrome.toolbar.width / 4.0f); }
 
     [[nodiscard]] static float smoothSliderWidth(const SpectrumChromeLayout& chrome) noexcept
     { return std::max(120.0f, chrome.toolbar.width / 3.0f); }

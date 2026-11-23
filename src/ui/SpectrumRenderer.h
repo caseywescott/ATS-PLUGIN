@@ -104,6 +104,9 @@ struct SpectrumRenderOptions
     float envelopeTimeEnd = 1.0f;
     float envelopeFrequencyStart = 0.0f;
     float envelopeFrequencyEnd = 1.0f;
+    // Time... edit range, inclusive frames; -1 = none.  Planar views only.
+    int timeSelectionFirstFrame = -1;
+    int timeSelectionLastFrame = -1;
 };
 
 struct SpectrumLUT
@@ -1437,6 +1440,25 @@ private:
                                                     1.0f, bandId };
                 border.thickness = 1.4f;
                 commands.push_back(std::move(border));
+            }
+        }
+        if (!SpectrumGeometry::isIsometricDisplayMode(snapshot.mode) && snapshot.frameCount > 1
+            && o.timeSelectionFirstFrame >= 0 && o.timeSelectionLastFrame >= o.timeSelectionFirstFrame)
+        {
+            const auto timeRange = SpectrumGeometry::visibleTimeRange(o.viewport);
+            const auto last = static_cast<float>(snapshot.frameCount - 1);
+            const auto x0 = std::clamp(xForTime(static_cast<float>(o.timeSelectionFirstFrame) / last, plot, timeRange),
+                                       plot.x, plot.x + plot.width);
+            const auto x1 = std::clamp(xForTime(static_cast<float>(o.timeSelectionLastFrame) / last, plot, timeRange),
+                                       plot.x, plot.x + plot.width);
+            if (x1 > x0)
+            {
+                const auto colour = SpectralCanvasTokens::fixed().selection.argb;
+                commands.push_back(rectCommand(SpectrumDrawKind::selectionMarker,
+                                               { x0, plot.y, x1 - x0, plot.height }, colour, 0.07f, -30));
+                for (const auto x : { x0, x1 })
+                    commands.push_back(lineCommand(SpectrumDrawKind::selectionMarker, { x, plot.y },
+                                                   { x, plot.y + plot.height }, colour, 0.55f, 1.0f, -30));
             }
         }
         if (o.lassoActive && o.lassoBounds.width > 2.0f && o.lassoBounds.height > 2.0f)

@@ -135,6 +135,46 @@ Fixed alongside: in the VST3 build, ANALYZE CURRENT sent slot 0, so it analysed
 morph source A instead of the current model (the host path had been fixed in
 `f41a0240`; the VST3 controller and processor still used 0/1 only).
 
+## Partial selection tools (2026-11-23)
+
+The partial views' toolbar gains **Select...** and **Invert** (adapted from
+pyats `selection.py`). Select... opens a panel over the spectrum: frequency
+range (Hz), minimum SMR (dB), minimum level (dB) and duration range (s), each
+optional; SELECT replaces the selection, ADD unites with it. Matching uses
+whole-partial summaries carried on each `SpectralTrace` (mean frequency, mean
+level, active seconds, mean SMR). Mean SMR comes from the analysis or, for
+imported `.ats` files (which store none), ATSA's masking model per frame,
+cached per model revision. Tests: `partial_selection_criteria_test`,
+`host_partial_smr_test`, `spectrum_chrome_test`.
+
+## Time edits and automation curves (2026-11-23)
+
+- **Time edits** (adapted from pyats `clipboard.py`): in the planar views a
+  lasso also sets a time range (shaded). Toolbar **Time...** offers copy,
+  cut, delete, crop and paste at the playhead with or without a 2-frame
+  crossfade (`TimeEditAction`, `src/core/AtsTimeEdit`). Paste inserts; seams
+  crossfade amplitude (equal power), band energy (linear) and frequency only
+  where both sides are active. Edits are undoable and clear the frame-aligned
+  Smearnov overlays. Tests: `ats_time_edit_test`, `host_time_edit_test`.
+- **Automation curves** (pyats `timewarp.py`, `pitchmap.py`,
+  `spectralwarp.py`): time warp (output -> analysis position, same length),
+  pitch (+/-24 st) and spectral warp (gamma 0.5-2 about the frequency-shape
+  pivot or the estimated fundamental), all over output time
+  (`src/core/AtsAutomationCurves`). Applied to the render copy after the
+  static frequency shape; phases and slopes are dropped while active.
+  `SetSoundCurveAction`; state v20 carries them. Tests:
+  `ats_automation_curves_test`, `host_sound_curves_test` (440 -> 879 Hz at
+  +12 st), `legacy_state_codec_test`.
+- **SESSION timeline node editor** (spec §8.2): tabs MORPH / PITCH / TIME /
+  WARP, RESET, click to add and drag a point, double-click to remove, the
+  `"{t}s  {value}"` drag readout, axis labels; clicking the time strip seeks.
+  MORPH edits send typed `SetMorphTimelineAction` points. `CurveEditorModel`
+  holds the logic; test `curve_editor_model_test`. Not yet done from §8.2:
+  curve shapes per segment and BOUNCE.
+- Known limitation (pre-existing): typed morph-timeline points are not saved
+  in the state chunk (only their amounts), so after a reload the MORPH curve
+  shows its amounts evenly spaced.
+
 ## Open items
 
 - Logic session (T-204) and plugin validation (ARCH-HOST-001).
@@ -146,7 +186,5 @@ morph source A instead of the current model (the host path had been fixed in
   unreferenced): decide whether they belong in the repository.
 - T-402 remaining: tooltip text and keyboard navigation audit against
   `ats-mearcstapa-ui-spec.md`.
-- **SESSION morph timeline (spec §8.2) is a scrub track, not the node editor.**
-  Handles, double-click add/remove, curve/fill, BOUNCE/RESET, axis labels and
-  the `"{t}s  {amount}"` drag readout are not implemented. This is feature
-  work, not copy.
+- SESSION timeline (spec §8.2): node editor done (see 2026-11-23); per-segment
+  curve shapes and BOUNCE remain, and typed morph points are not persisted.

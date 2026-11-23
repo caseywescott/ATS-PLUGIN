@@ -24,6 +24,27 @@ struct AnalyzeCurrentAction {};
 // (lowest / highest frequency, window cycles, hop); applies the result and
 // re-analyses.  Runs on the analysis worker and is cancelled by CancelJobs.
 struct AutoTuneAnalysisAction {};
+// Structural time edits on the edited model (adapted from pyats clipboard):
+// copy / cut / remove / crop act on frames [firstFrame, lastFrame]; paste
+// inserts the clipboard at firstFrame with a crossfade at each seam.
+enum class TimeEditKind : std::uint8_t { copy, cut, remove, crop, paste };
+// Render-time automation curves over normalised output time.  points are
+// flattened x0, y0, x1, y1, ... (x in [0, 1]); y is the analysis position
+// (time warp, 0-1), semitones (pitch, +/-24) or gamma (spectral warp,
+// 0.5-2).  An empty list resets the curve.
+enum class SoundCurveKind : std::uint8_t { timeWarp, pitch, spectralWarp };
+struct SetSoundCurveAction
+{
+    SoundCurveKind curve = SoundCurveKind::pitch;
+    std::vector<float> points;
+};
+struct TimeEditAction
+{
+    TimeEditKind kind = TimeEditKind::copy;
+    std::int32_t firstFrame = 0;
+    std::int32_t lastFrame = 0;
+    std::int32_t crossfadeFrames = 0;
+};
 struct AnalyzeMorphSourceAction { int slot = 0; };
 struct ApplyAnalysisProfileAction { int profile = 0; };
 struct CancelJobsAction {};
@@ -85,7 +106,11 @@ enum class SpectrumEditCommand : std::uint8_t
     muteResidual,
     scaleResidual,
     drawResidual,
-    readResidual
+    readResidual,
+    // UI-only selection commands (like prunePartials); never sent to the host.
+    selectPartialsByCriteria,
+    invertPartialSelection,
+    timeEditMenu
 };
 struct SpectrumEditAction
 {
@@ -138,7 +163,9 @@ using EditorAction = std::variant<SetParameterAction,
                                   EditSmearnovOnsetsAction,
                                   EditSmearnovOnsetHandlesAction,
                                   SetTimbreMotionPlanAction,
-                                  AutoTuneAnalysisAction>;
+                                  AutoTuneAnalysisAction,
+                                  TimeEditAction,
+                                  SetSoundCurveAction>;
 
 enum class ActionStatus : std::uint8_t { success, failed, cancelled, stale };
 
@@ -200,6 +227,10 @@ struct EditorSnapshot
     std::vector<float> timeline { 0.0f, 1.0f };
     std::vector<float> timbrePlan;
     std::vector<float> onsets;
+    // Automation curves, indexed by SoundCurveKind, flattened as in SetSoundCurveAction.
+    std::array<std::vector<float>, 3> soundCurves {};
+    // The morph curve's typed points with their times, flattened (time, amount).
+    std::vector<float> morphCurve { 0.0f, 0.0f, 1.0f, 1.0f };
     std::string presetName;
     std::string undoLabel;
     std::string redoLabel;
