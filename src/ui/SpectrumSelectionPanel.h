@@ -13,9 +13,10 @@ namespace ats::ui
 {
 
 /**
-    Select-by-criteria panel over the spectrum (toolbar SELECT...).  Six
+    Select-by-criteria panel over the spectrum (toolbar SELECT...).  Seven
     optional numeric fields - frequency range (Hz), minimum SMR (dB),
-    minimum level (dB) and duration range (s) - and SELECT (replace the
+    minimum level (dB), duration range (s) and minimum activity (the
+    O'Sullivan "noisy partial" ratio, 0..1) - and SELECT (replace the
     selection), ADD (unite with it) and CLOSE.  Matching runs in the owner,
     which reports the result line back through setStatus().
 */
@@ -28,7 +29,7 @@ public:
     using Close = std::function<void()>;
 
     static constexpr float kWidth = 300.0f;
-    static constexpr float kHeight = 184.0f;
+    static constexpr float kHeight = 210.0f;
 
     SpectrumSelectionPanel(Apply apply, Close close, ThemeGetter theme)
         : apply_(std::move(apply)), close_(std::move(close)), theme_(std::move(theme))
@@ -96,11 +97,12 @@ public:
     /** Parses the fields; on an invalid one, reports it and returns false. */
     bool readCriteria(PartialCriteria& criteria)
     {
-        std::array<std::optional<double>*, 6> targets {
+        std::array<std::optional<double>*, 7> targets {
             &criteria.minFrequencyHz, &criteria.maxFrequencyHz, &criteria.minSmrDb,
-            &criteria.minLevelDb, &criteria.minSeconds, &criteria.maxSeconds };
-        static constexpr std::array<const char*, 6> kNames {
-            "frequency from", "frequency to", "min SMR", "min level", "duration from", "duration to" };
+            &criteria.minLevelDb, &criteria.minSeconds, &criteria.maxSeconds, &criteria.minActivity };
+        static constexpr std::array<const char*, 7> kNames {
+            "frequency from", "frequency to", "min SMR", "min level", "duration from", "duration to",
+            "min activity" };
         for (std::size_t i = 0; i < fields_.size(); ++i)
             if (!parseCriterion(fields_[i]->text(), *targets[i]))
             {
@@ -113,7 +115,7 @@ public:
         return true;
     }
 
-    /** For tests: field order is freq from/to, SMR, level, duration from/to. */
+    /** For tests: field order is freq from/to, SMR, level, duration from/to, activity. */
     void setFieldText(std::size_t index, std::string text) { fields_.at(index)->setText(std::move(text)); }
 
 private:
@@ -123,8 +125,8 @@ private:
     static constexpr float kLabelWidth = 96.0f;
     static constexpr float kToWidth = 22.0f;
     static constexpr float kFieldWidth = 72.0f;
-    static constexpr std::array<const char*, 4> kRowLabels {
-        "Frequency (Hz)", "Min SMR (dB)", "Min level (dB)", "Duration (s)" };
+    static constexpr std::array<const char*, 5> kRowLabels {
+        "Frequency (Hz)", "Min SMR (dB)", "Min level (dB)", "Duration (s)", "Min activity" };
     static constexpr std::array<const char*, 3> kButtons { "SELECT", "ADD", "CLOSE" };
 
     static bool contains(UiRect r, float x, float y)
@@ -138,14 +140,14 @@ private:
     [[nodiscard]] UiRect buttonRect(std::size_t i) const
     {
         const auto w = (width() - 2.0f * kPad - 2.0f * 6.0f) / 3.0f;
-        return { kPad + static_cast<float>(i) * (w + 6.0f), rowY(4) + 2.0f, w, 24.0f };
+        return { kPad + static_cast<float>(i) * (w + 6.0f), rowY(5) + 2.0f, w, 24.0f };
     }
 
     void layout()
     {
-        // fields_: freq from, freq to, SMR, level, duration from, duration to
-        const std::array<std::pair<std::size_t, int>, 6> place {{
-            { 0, 0 }, { 0, 1 }, { 1, 0 }, { 2, 0 }, { 3, 0 }, { 3, 1 } }};
+        // fields_: freq from, freq to, SMR, level, duration from, duration to, activity
+        const std::array<std::pair<std::size_t, int>, 7> place {{
+            { 0, 0 }, { 0, 1 }, { 1, 0 }, { 2, 0 }, { 3, 0 }, { 3, 1 }, { 4, 0 } }};
         for (std::size_t i = 0; i < fields_.size(); ++i)
         {
             const auto [row, column] = place[i];
@@ -173,7 +175,7 @@ private:
     Apply apply_;
     Close close_;
     ThemeGetter theme_;
-    std::array<AtsTextField*, 6> fields_ {};
+    std::array<AtsTextField*, 7> fields_ {};
     std::string status_ { "blank fields are not used" };
     bool statusIsError_ = false;
 };

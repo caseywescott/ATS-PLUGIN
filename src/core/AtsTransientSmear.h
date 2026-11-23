@@ -18,6 +18,10 @@ struct SmearnovDetectParams
     double weightHfcFlux = 0.6;   // D3: residual high-frequency-content flux
     double weightBirth = 0.7;     // D4: partial-birth rate
     double weightPhaseDev = 0.4;  // D5: phase deviation (type 2/4 only)
+    // D6: half-wave-rectified difference of an external per-frame transientness
+    // index (see AtsTransientness.h), passed to detectOnsets. 0 (default) keeps
+    // detection bit-identical to the five-stream fusion.
+    double weightTransientness = 0.0;
 
     // D5 is only meaningful when the model carries phase; off by default.
     bool usePhaseDeviation = false;
@@ -49,6 +53,7 @@ struct AtsOnset
     int preFrame = 0;     // f_pre: pre-onset margin start
     int peakFrame = 0;    // f_peak: attack end (post-onset energy peak)
     double strength = 0.0; // combined detection value D[f0]
+    double transientness = -1.0; // transientness index at f0 (0..1), -1 when none was supplied
 };
 
 enum class SmearnovTarget
@@ -67,6 +72,10 @@ struct SmearnovParams
     double maxDb = 12.0;
     double mix = 1.0; // dry/wet blend of the transformed envelope: 0 = dry, 1 = full effect
     SmearnovTarget targets = SmearnovTarget::Both;
+    // When true, each onset carrying a transientness index >= 0 has its effective
+    // blurMs / sharpenAmount / exaggerateDb scaled by that index, so tonal onsets
+    // (index near 0) are treated gently and clicks (index near 1) get the full amount.
+    bool scaleByTransientness = false;
 };
 
 /** Optional per-frame detection curves, for visualization and tests. */
@@ -83,10 +92,16 @@ struct SmearnovDetectionFunctions
 [[nodiscard]] double criticalBandEdgeHz(int edge);
 
 /** Detects onsets directly from the ATS model's partials + residual.
- *  `functionsOut` (optional) receives the combined detection curve and threshold. */
+ *  `functionsOut` (optional) receives the combined detection curve and threshold.
+ *  `transientness` (optional) is a per-frame index in [0,1] (one entry per model
+ *  frame; shorter vectors are clamped to their last entry). When supplied and
+ *  params.weightTransientness > 0 its half-wave-rectified difference joins the
+ *  normalisation + fusion as stream D6; each onset's `transientness` field is
+ *  set to the index at its frame whenever the vector is supplied. */
 [[nodiscard]] std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
                                                  const SmearnovDetectParams& params,
-                                                 SmearnovDetectionFunctions* functionsOut = nullptr);
+                                                 SmearnovDetectionFunctions* functionsOut = nullptr,
+                                                 const std::vector<double>* transientness = nullptr);
 
 /** Reshape partial amplitudes and/or residual band energy inside onset attack windows. */
 [[nodiscard]] bool smearAttacks(ATS_SOUND* sound,

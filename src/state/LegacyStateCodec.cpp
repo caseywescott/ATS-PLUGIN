@@ -268,6 +268,21 @@ std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::u
             writeFloatVec(writer, curve);
     if (version >= 21)
         writeFloatVec(writer, state.morphTimelinePoints);
+    if (version >= 22)
+    {
+        writer.writeU8(state.analysis.reverseTracking ? 1 : 0);
+        writer.writeU8(state.analysis.clampResidual ? 1 : 0);
+        writer.writeI32(state.synth.residualDensity);
+        writer.writeF64(state.synth.animationShimmerDb);
+        writer.writeF64(state.synth.animationJitterCents);
+        writer.writeF64(state.synth.animationRateHz);
+        writer.writeF64(state.synth.vibratoDepth);
+        writer.writeF64(state.synth.vibratoRateScale);
+        writer.writeU8(state.synth.transposeCharacter ? 1 : 0);
+        writer.writeF64(state.synth.transposeTiltDbPerOct);
+        writer.writeF64(state.smearnov.weightTransientness);
+        writer.writeU8(state.morphOnsetAlignedWarp ? 1 : 0);
+    }
     return std::move(writer).take();
 }
 
@@ -362,6 +377,27 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
         for (auto& curve : state.soundCurves)
             if (!readFloatVec(reader, curve, 128)) return std::nullopt;
     if (version >= 21 && !readFloatVec(reader, state.morphTimelinePoints, 4 * 64)) return std::nullopt;
+    if (version >= 22)
+    {
+        std::uint8_t reverse = 0, clamp = 0, character = 0, onsetWarp = 0;
+        std::int32_t density = 1;
+        if (!reader.readU8(reverse) || !reader.readU8(clamp) || !reader.readI32(density) ||
+            !reader.readF64(state.synth.animationShimmerDb) ||
+            !reader.readF64(state.synth.animationJitterCents) ||
+            !reader.readF64(state.synth.animationRateHz) ||
+            !reader.readF64(state.synth.vibratoDepth) ||
+            !reader.readF64(state.synth.vibratoRateScale) ||
+            !reader.readU8(character) ||
+            !reader.readF64(state.synth.transposeTiltDbPerOct) ||
+            !reader.readF64(state.smearnov.weightTransientness) ||
+            !reader.readU8(onsetWarp))
+            return std::nullopt;
+        state.morphOnsetAlignedWarp = onsetWarp != 0;
+        state.analysis.reverseTracking = reverse != 0;
+        state.analysis.clampResidual = clamp != 0;
+        state.synth.residualDensity = density;
+        state.synth.transposeCharacter = character != 0;
+    }
     if (!validState(state) || reader.remaining() != 0) return std::nullopt;
     return state;
 }

@@ -202,7 +202,8 @@ struct SpectrumChromeLayout
                 // Selection tools work with nothing selected.
                 if (kPartialTools[i].first == SpectrumEditCommand::selectPartialsByCriteria
                     || kPartialTools[i].first == SpectrumEditCommand::invertPartialSelection
-                    || kPartialTools[i].first == SpectrumEditCommand::timeEditMenu)
+                    || kPartialTools[i].first == SpectrumEditCommand::timeEditMenu
+                    || kPartialTools[i].first == SpectrumEditCommand::toolsMenu)
                     result.back().enabled = true;
             }
             x += 4.0f + partialTiltSliderWidth(chrome) + 4.0f;
@@ -261,15 +262,16 @@ private:
         { SpectrumEditCommand::swapResidual, "Swap" },
         { SpectrumEditCommand::redistResidual, "Redist" } }};
     static constexpr std::array<float, 6> kResidualToolWidths { 44.0f, 54.0f, 44.0f, 48.0f, 46.0f, 50.0f };
-    static constexpr std::array<std::pair<SpectrumEditCommand, std::string_view>, 7> kPartialTools {{
+    static constexpr std::array<std::pair<SpectrumEditCommand, std::string_view>, 8> kPartialTools {{
         { SpectrumEditCommand::drawPartialFrequency, "Draw" },
         { SpectrumEditCommand::soloPartials, "Solo" },
         { SpectrumEditCommand::freezePartial, "Freeze" },
         { SpectrumEditCommand::prunePartials, "Prune" },
         { SpectrumEditCommand::selectPartialsByCriteria, "Select..." },
         { SpectrumEditCommand::invertPartialSelection, "Invert" },
-        { SpectrumEditCommand::timeEditMenu, "Time..." } }};
-    static constexpr std::array<float, 7> kPartialToolWidths { 46.0f, 42.0f, 52.0f, 48.0f, 62.0f, 50.0f, 52.0f };
+        { SpectrumEditCommand::timeEditMenu, "Time..." },
+        { SpectrumEditCommand::toolsMenu, "Tools..." } }};
+    static constexpr std::array<float, 8> kPartialToolWidths { 46.0f, 42.0f, 52.0f, 48.0f, 62.0f, 50.0f, 52.0f, 56.0f };
 
     template <std::size_t N>
     [[nodiscard]] static float toolsWidth(const std::array<float, N>& widths, float gap) noexcept

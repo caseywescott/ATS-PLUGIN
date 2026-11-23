@@ -49,6 +49,13 @@ constexpr std::array<const char*, 4> kTransientPolicyNames = {
     "sustained_only_after_attack",
 };
 
+constexpr std::array<const char*, 4> kCorrespondenceStrategyNames = {
+    "frequency_rank",
+    "greedy_nearest",
+    "assignment_matrix",
+    "harmonic_locked",
+};
+
 constexpr double kDoubleTolerance = 1.0e-9;
 constexpr double kPi = 3.14159265358979323846264338327950288;
 constexpr double kTwoPi = 2.0 * kPi;
@@ -2114,6 +2121,27 @@ bool morphTransientPolicyFromName(const std::string& name, MorphTransientPolicy&
         if (name == kTransientPolicyNames[i])
         {
             policy = static_cast<MorphTransientPolicy>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* morphCorrespondenceStrategyName(MorphCorrespondenceStrategy strategy)
+{
+    const auto index = static_cast<size_t>(strategy);
+    if (index >= kCorrespondenceStrategyNames.size())
+        return "unknown";
+    return kCorrespondenceStrategyNames[index];
+}
+
+bool morphCorrespondenceStrategyFromName(const std::string& name, MorphCorrespondenceStrategy& strategy)
+{
+    for (size_t i = 0; i < kCorrespondenceStrategyNames.size(); ++i)
+    {
+        if (name == kCorrespondenceStrategyNames[i])
+        {
+            strategy = static_cast<MorphCorrespondenceStrategy>(i);
             return true;
         }
     }

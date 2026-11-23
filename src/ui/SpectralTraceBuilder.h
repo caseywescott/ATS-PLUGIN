@@ -120,6 +120,12 @@ struct SpectralTrace
     double meanLevelDb = -std::numeric_limits<double>::infinity();
     double activeSeconds = 0.0;
     double meanSmrDb = std::numeric_limits<double>::quiet_NaN();
+    // Fraction of interior active frames (an active frame with active
+    // neighbours) whose amplitude second difference a[f-1] - 2a[f] + a[f+1]
+    // is positive.  O'Sullivan & Fernstrom (ICAD 2003): partials whose
+    // envelope keeps changing curvature carry the instrument's noisy
+    // character; a smooth (linear) decay scores 0, a wiggly envelope ~0.5.
+    double activityRatio = 0.0;
 };
 
 struct SpectralResidualBandTrace
@@ -295,6 +301,25 @@ public:
                           / static_cast<double>(output.frameCount)
                     : 0.0;
                 trace.meanSmrDb = partial.meanSmrDb;
+                {
+                    // O'Sullivan & Fernstrom (ICAD 2003) noisiness: share of
+                    // interior active frames with a positive amplitude
+                    // second difference.
+                    std::size_t interior = 0, convex = 0;
+                    for (std::size_t f = 1; f + 1 < partial.frames.size(); ++f)
+                    {
+                        const auto& prev = partial.frames[f - 1];
+                        const auto& cur = partial.frames[f];
+                        const auto& next = partial.frames[f + 1];
+                        if (!activeFrame(prev) || !activeFrame(cur) || !activeFrame(next))
+                            continue;
+                        ++interior;
+                        if (prev.amplitude - 2.0 * cur.amplitude + next.amplitude > 0.0)
+                            ++convex;
+                    }
+                    trace.activityRatio = interior > 0
+                        ? static_cast<double>(convex) / static_cast<double>(interior) : 0.0;
+                }
 
                 const auto step = pointStep(output.frameCount, limits.maxPointsPerPartial);
                 trace.points.reserve(partial.frames.size() / step + 2);

@@ -146,7 +146,7 @@ void parameterEdges()
 
 int main()
 {
-    require(ats::ParameterRegistry::descriptors().size() == 81, "81-parameter contract");
+    require(ats::ParameterRegistry::descriptors().size() == 93, "93-parameter contract");
     const auto fixture = writeFixtureAts();
     audioMatrix(fixture);
     parameterEdges();

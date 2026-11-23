@@ -63,8 +63,8 @@ int main(int argc, char** argv)
                 getPropertyInfo(plugin, kAudioUnitProperty_ParameterList,
                                 kAudioUnitScope_Global, 0, &size, nullptr) == noErr,
             "parameter-list property info");
-    require(size == 81u * sizeof(AudioUnitParameterID), "81 parameter contract");
-    std::array<AudioUnitParameterID, 81> ids {};
+    require(size == 93u * sizeof(AudioUnitParameterID), "93 parameter contract");
+    std::array<AudioUnitParameterID, 93> ids {};
     auto getProperty = reinterpret_cast<GetPropertyFn>(
         plugin->Lookup(kAudioUnitGetPropertySelect));
     require(getProperty != nullptr &&
@@ -72,7 +72,7 @@ int main(int argc, char** argv)
                             kAudioUnitScope_Global, 0, ids.data(), &size) == noErr,
             "parameter-list property");
     count = size / sizeof(AudioUnitParameterID);
-    require(count == 81, "81 parameter list entries");
+    require(count == 93, "93 parameter list entries");
 
     UInt32 channelInfoSize = 0;
     require(getPropertyInfo(plugin, kAudioUnitProperty_SupportedNumChannels,
@@ -243,5 +243,5 @@ int main(int argc, char** argv)
     require(uninitialize != nullptr && uninitialize(plugin) == noErr, "AudioUnitUninitialize");
     require(plugin->Close(plugin) == noErr, "AudioComponent Close");
     dlclose(module);
-    std::cout << "ats_au_artifact_test: component identity, 81 parameters, automation, MIDI, format, and lifecycle ok\n";
+    std::cout << "ats_au_artifact_test: component identity, 93 parameters, automation, MIDI, format, and lifecycle ok\n";
 }

@@ -8,7 +8,7 @@
 int main()
 {
     const auto& descriptors = ats::ParameterRegistry::descriptors();
-    assert(descriptors.size() == 81);
+    assert(descriptors.size() == 93);
     for (std::size_t i = 0; i < descriptors.size(); ++i)
     {
         assert(!descriptors[i].id.empty());
@@ -43,14 +43,14 @@ int main()
     assert(ats::ParameterRegistry::find("smearnovMix")->group == "Smearnov");
 
     ats::ParameterStore store;
-    assert(store.size() == 81);
+    assert(store.size() == 93);
     assert(store.read("partGain") == 1.0f);
     assert(store.write("partGain", 2.12341f));
     assert(std::fabs(store.read("partGain") - 2.1234f) < 1.0e-5f);
     assert(store.write("morphQuality", 2.8f) && store.read("morphQuality") == 2.0f);
     store.resetToDefaults();
     assert(store.read("partGain") == 1.0f && store.read("morphQuality") == 1.0f);
-    std::cout << "parameter_registry_test: 81 descriptors ok\n";
+    std::cout << "parameter_registry_test: 93 descriptors ok\n";
 
     // Snapping must land exactly on interval multiples on every architecture;
     // arm64 FMA used to leave -12 + 1200 * 0.01f at 2.2e-7 ("2.2209e-07").

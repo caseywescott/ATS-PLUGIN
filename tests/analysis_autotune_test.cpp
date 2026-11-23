@@ -37,6 +37,33 @@ std::vector<double> tone()
     }
     return x;
 }
+
+// 1 s of uniform white noise (LCG, deterministic).
+std::vector<double> whiteNoise()
+{
+    std::vector<double> x(kSampleRate);
+    unsigned state = 777u;
+    for (auto& v : x)
+    {
+        state = state * 1103515245u + 12345u;
+        v = static_cast<double>((state >> 16) & 0x7fffu) / 32767.0 - 0.5;
+    }
+    return x;
+}
+
+// 1 s pure 440 Hz tone.
+std::vector<double> pureTone()
+{
+    std::vector<double> x(kSampleRate);
+    for (std::size_t i = 0; i < x.size(); ++i)
+        x[i] = 0.3 * std::sin(2.0 * kPi * 440.0 * static_cast<double>(i) / kSampleRate);
+    return x;
+}
+
+double parsimony(int partials)
+{
+    return ats::AnalysisAutoTune::kParsimonyWeight * partials / ats::AnalysisAutoTune::kParsimonyReference;
+}
 }
 
 int main()
@@ -57,6 +84,31 @@ int main()
         // the normalisation leaves a small residue in near-silent bins.
         REQUIRE(gain < 0.01);
         REQUIRE(worse > 0.1 && worse > 50.0 * gain);
+    }
+
+    // Residual terms: ~0 for white noise, large for a pure tone, level-independent.
+    {
+        const auto noise = whiteNoise();
+        const auto tone440 = pureTone();
+        const double noiseWhiteness = ats::AnalysisAutoTune::residualWhiteness(noise.data(), noise.size());
+        const double toneWhiteness = ats::AnalysisAutoTune::residualWhiteness(tone440.data(), tone440.size());
+        const double noiseTonality = ats::AnalysisAutoTune::residualTonality(noise.data(), noise.size(), kSampleRate);
+        const double toneTonality = ats::AnalysisAutoTune::residualTonality(tone440.data(), tone440.size(), kSampleRate);
+        std::cout << "whiteness noise " << noiseWhiteness << " tone " << toneWhiteness
+                  << "  tonality noise " << noiseTonality << " tone " << toneTonality << '\n';
+        REQUIRE(noiseWhiteness >= 0.0 && noiseWhiteness < 0.05);
+        REQUIRE(toneWhiteness > 0.5 && toneWhiteness <= 1.0);
+        REQUIRE(noiseTonality >= 0.0 && noiseTonality < 0.15);
+        REQUIRE(toneTonality > 0.6 && toneTonality <= 1.0);
+        std::vector<double> quiet(tone440);
+        for (auto& v : quiet) v *= 1.0e-3;
+        REQUIRE(std::abs(ats::AnalysisAutoTune::residualWhiteness(quiet.data(), quiet.size()) - toneWhiteness) < 1.0e-6);
+        REQUIRE(std::abs(ats::AnalysisAutoTune::residualTonality(quiet.data(), quiet.size(), kSampleRate) - toneTonality) < 1.0e-6);
+        REQUIRE(ats::AnalysisAutoTune::residualWhiteness(nullptr, 0) == 0.0);
+        REQUIRE(ats::AnalysisAutoTune::residualTonality(nullptr, 0, kSampleRate) == 0.0);
+        std::vector<double> silence(kSampleRate, 0.0);
+        REQUIRE(ats::AnalysisAutoTune::residualWhiteness(silence.data(), silence.size()) == 0.0);
+        REQUIRE(ats::AnalysisAutoTune::residualTonality(silence.data(), silence.size(), kSampleRate) == 0.0);
     }
 
     // Neighbours stay inside the parameter ranges and respect the cap.
@@ -97,6 +149,46 @@ int main()
         REQUIRE(result.value.lowestFrequencyCap < 220.0); // 0.9 x the 220 Hz fundamental
         REQUIRE(result.value.parameters.lowest_freq <= 220.0);
         REQUIRE(std::abs(lastProgress - 1.0) < 1.0e-9);
+        // Every step's score is its components combined with the default weights.
+        for (const auto& step : result.value.history)
+        {
+            REQUIRE(std::isfinite(step.spectralLoss) && step.spectralLoss >= 0.0);
+            REQUIRE(step.whiteness >= 0.0 && step.whiteness <= 1.0);
+            REQUIRE(step.tonality >= 0.0 && step.tonality <= 1.0);
+            REQUIRE(std::abs(step.loss - (step.spectralLoss + parsimony(step.partials)
+                                          + request.whitenessWeight * step.whiteness
+                                          + request.tonalityWeight * step.tonality)) < 1.0e-12);
+        }
+        const auto& last = result.value.history.back();
+        REQUIRE(last.loss == result.value.loss && last.spectralLoss == result.value.spectralLoss);
+        REQUIRE(last.whiteness == result.value.whiteness && last.tonality == result.value.tonality);
+        // The partials-only subtraction leaves a noise-like residual on a clean tone.
+        std::cout << "tone run: whiteness " << last.whiteness << " tonality " << last.tonality << '\n';
+        REQUIRE(last.whiteness < 0.5 && last.tonality < 0.6);
+    }
+
+    // Both weights 0: the score is exactly the spectral loss plus parsimony
+    // (the pre-residual-term behaviour) and the residual terms stay 0.
+    {
+        ats::AutoTuneRequest request;
+        request.samples = x.data();
+        request.sampleCount = x.size();
+        request.sampleRate = kSampleRate;
+        request.budget = 10;
+        request.whitenessWeight = 0.0;
+        request.tonalityWeight = 0.0;
+        ats::CancellationToken live;
+        const auto result = ats::AnalysisAutoTune::run({ 4 }, live, request);
+        REQUIRE(result.status == ats::JobResult<ats::AutoTuneResult>::Status::success);
+        REQUIRE(result.value.loss <= result.value.initialLoss);
+        for (const auto& step : result.value.history)
+        {
+            REQUIRE(step.whiteness == 0.0 && step.tonality == 0.0);
+            REQUIRE(step.loss == step.spectralLoss + parsimony(step.partials));
+        }
+        REQUIRE(result.value.whiteness == 0.0 && result.value.tonality == 0.0);
+        REQUIRE(result.value.loss == result.value.spectralLoss
+                    + parsimony(result.value.history.back().partials));
     }
 
     // Cancellation and invalid input.

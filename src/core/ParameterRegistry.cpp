@@ -18,7 +18,7 @@ bool hasPrefix(std::string_view value, std::string_view prefix) noexcept
 }
 
 constexpr std::array<std::string_view, 2> kBarkMel { "Bark", "Mel" };
-constexpr std::array<std::string_view, 4> kCorrespondence { "Frequency rank", "Greedy nearest", "Assignment matrix", "Optimal transport" };
+constexpr std::array<std::string_view, 5> kCorrespondence { "Frequency rank", "Greedy nearest", "Assignment matrix", "Optimal transport", "Harmonic locked" };
 constexpr std::array<std::string_view, 3> kQuality { "Max", "Default", "Economy" };
 constexpr std::array<std::string_view, 5> kPolicy { "Fade out", "Fade in", "Hold", "Merge residual", "Discard" };
 constexpr std::array<std::string_view, 2> kLogBark { "Log frequency", "Bark coordinate" };
@@ -71,7 +71,7 @@ constexpr D c(std::string_view id, std::string_view name, const std::array<std::
 std::vector<D> build()
 {
     std::vector<D> d;
-    d.reserve(81);
+    d.reserve(93);
     d.insert(d.end(), {
         f("partGain", "Partials gain", 0, 4, 1, 0.0001f, 0.35f),
         f("resGain", "Residual gain", 0, 4, 1, 0.0001f, 0.35f),
@@ -100,6 +100,7 @@ std::vector<D> build()
         f("smearnovWeightHfcFlux", "Smearnov HFC flux weight", 0, 4, 0.6f),
         f("smearnovWeightBirth", "Smearnov birth weight", 0, 4, 0.7f),
         f("smearnovWeightPhaseDev", "Smearnov phase-deviation weight", 0, 4, 0.4f),
+        f("smearnovWeightTransientness", "Smearnov transientness weight", 0, 4, 0),
         f("smearnovThresholdLambda", "Smearnov threshold lambda", 0, 24, 0, 0.001f, 0.45f),
         f("smearnovThresholdAutoScale", "Smearnov auto-threshold scale", 0, 8, 1.5f, 0.001f),
         i("smearnovPeakWindowFrames", "Smearnov peak window (frames)", 1, 64, 6),
@@ -154,7 +155,19 @@ std::vector<D> build()
         f("analysisLastPeakContribution", "Last peak tracking weight", 0, 1, 0),
         f("analysisSmrContribution", "SMR tracking weight", 0, 1, 0),
         b("analysisMultiRes", "Analysis multi-resolution", false),
-        b("useIfftSynth", "Use IFFT synthesis", false)
+        b("useIfftSynth", "Use IFFT synthesis", false),
+        // Research-derived options (2026-11-24); every default is the legacy behaviour.
+        b("analysisReverseTracking", "Reverse-time tracking (Serra)", false),
+        b("analysisClampResidual", "Clamp residual to source (Serra)", false),
+        i("residualDensity", "Residual density (carriers/band)", 1, 32, 1),
+        f("animationShimmerDb", "Animation shimmer (dB)", 0, 6, 0, 0.01f),
+        f("animationJitterCents", "Animation jitter (cents)", 0, 50, 0, 0.01f),
+        f("animationRateHz", "Animation rate (Hz)", 0.5f, 15, 4, 0.01f, 0.5f),
+        f("vibratoDepth", "Vibrato depth", 0, 2, 1, 0.001f),
+        f("vibratoRate", "Vibrato rate scale", 0.25f, 4, 1, 0.001f, 0.5f),
+        b("transposeCharacter", "Keep character when transposing", false),
+        f("transposeTiltDbPerOct", "Transpose tilt (dB/oct per octave)", -6, 6, -3, 0.01f),
+        b("morphOnsetAlignedWarp", "Morph onset-aligned time warp (Hatch)", false)
     });
     return d;
 }

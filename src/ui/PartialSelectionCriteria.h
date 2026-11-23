@@ -28,11 +28,15 @@ struct PartialCriteria
     std::optional<double> minLevelDb;
     std::optional<double> minSeconds;
     std::optional<double> maxSeconds;
+    // "Noisy partial" bound (O'Sullivan & Fernstrom, ICAD 2003): minimum
+    // SpectralTrace::activityRatio, the share of frames with a positive
+    // amplitude second difference (0 = smooth decay, ~0.5 = wiggly).
+    std::optional<double> minActivity;
 
     [[nodiscard]] bool empty() const noexcept
     {
         return !minFrequencyHz && !maxFrequencyHz && !minSmrDb && !minLevelDb && !minSeconds
-            && !maxSeconds;
+            && !maxSeconds && !minActivity;
     }
 };
 
@@ -77,6 +81,7 @@ struct PartialCriteria
         if (criteria.minLevelDb && !(trace.meanLevelDb >= *criteria.minLevelDb)) continue;
         if (shortest && !(trace.activeSeconds >= *shortest)) continue;
         if (longest && !(trace.activeSeconds <= *longest)) continue;
+        if (criteria.minActivity && !(trace.activityRatio >= *criteria.minActivity)) continue;
         // An unknown SMR never satisfies an SMR bound.
         if (criteria.minSmrDb && !(trace.meanSmrDb >= *criteria.minSmrDb)) continue;
         result.push_back(trace.partialIndex);

@@ -11,6 +11,13 @@
 #include "../core/AtsMathExpr.h"
 #include "../core/AtsMorphRecipe.h"
 #include "../core/AtsMorphTransportCorrespondence.h"
+#include "../core/AtsMorphHarmonicCorrespondence.h"
+#include "../core/AtsOnsetAlignedWarp.h"
+#include "../core/AtsResidualFixes.h"
+#include "../core/AtsSpectralSmoothness.h"
+#include "../core/AtsSubharmonics.h"
+#include "../core/AtsTransientness.h"
+#include "../core/AtsVibrato.h"
 #include "../dsp/MorphTrajectoryRenderer.h"
 #include "../engine/MorphTimelineService.h"
 #include "../engine/ResidualEditService.h"
@@ -1549,6 +1556,116 @@ public:
         if (const auto* spectrum = std::get_if<ui::SpectrumEditAction>(&action))
         {
             using Cmd = ui::SpectrumEditCommand;
+            // Whole-model tools (toolbar TOOLS...): one undoable replacement of
+            // the edited model; `value` is the tool's amount, bands/frames unused.
+            const auto modelTool = spectrum->command == Cmd::spectralSmoothness
+                || spectrum->command == Cmd::addSubharmonicsRough
+                || spectrum->command == Cmd::addSubharmonicsGrowl
+                || spectrum->command == Cmd::clampResidualToSource
+                || spectrum->command == Cmd::highPassResidual
+                || spectrum->command == Cmd::removeVibrato
+                || spectrum->command == Cmd::doubleVibrato
+                || spectrum->command == Cmd::reverseFrames;
+            if (modelTool)
+            {
+                const auto slot = previewSource_.load(std::memory_order_acquire);
+                auto* target = editableSource(slot);
+                if (target == nullptr || !target->sound || target->sound.get()->frames <= 0)
+                {
+                    error = { "no_model", "analyse a source before applying a model tool" };
+                    return true;
+                }
+                const auto* sound = target->sound.get();
+                const double value = std::isfinite(spectrum->value) ? static_cast<double>(spectrum->value) : 0.0;
+                AtsSoundPtr edited;
+                std::string label = "Model tool";
+                switch (spectrum->command)
+                {
+                case Cmd::spectralSmoothness:
+                {
+                    SpectralSmoothnessParams p;
+                    p.strength = std::clamp(value, 0.0, 1.0);
+                    edited = applySpectralSmoothness(sound, p);
+                    label = "Spectral smoothness";
+                    break;
+                }
+                case Cmd::addSubharmonicsRough:
+                case Cmd::addSubharmonicsGrowl:
+                {
+                    SubharmonicParams p;
+                    p.mode = spectrum->command == Cmd::addSubharmonicsRough ? SubharmonicMode::rough
+                                                                              : SubharmonicMode::growl;
+                    p.gainDb = std::clamp(value, -48.0, 12.0);
+                    auto added = applySubharmonics(sound, p);
+                    if (added.addedPartials <= 0 || !added.sound)
+                    {
+                        error = { "model_tool_failed", "no sub-harmonic partials could be added" };
+                        return true;
+                    }
+                    edited = std::move(added.sound);
+                    label = p.mode == SubharmonicMode::rough ? "Rough sub-harmonics" : "Growl sub-harmonics";
+                    break;
+                }
+                case Cmd::clampResidualToSource:
+                {
+                    if (sound->band_energy == nullptr || target->monoSamples.empty() || target->sampleRate <= 0)
+                    {
+                        error = { "no_source_audio", "clamping needs a residual and the analysed source audio" };
+                        return true;
+                    }
+                    edited.reset(copy_sound(const_cast<ATS_SOUND*>(sound)));
+                    if (edited)
+                        (void) clampResidualToSource(edited.get(), target->monoSamples.data(),
+                                                     target->monoSamples.size(), target->sampleRate,
+                                                     value > 0.0 ? value : 1.0);
+                    label = "Clamp residual to source";
+                    break;
+                }
+                case Cmd::highPassResidual:
+                {
+                    if (sound->band_energy == nullptr)
+                    {
+                        error = { "no_residual", "the model has no residual to filter" };
+                        return true;
+                    }
+                    edited.reset(copy_sound(const_cast<ATS_SOUND*>(sound)));
+                    if (edited && !highPassResidual(edited.get(), value > 0.0 ? value : 300.0))
+                        edited.reset();
+                    label = "High-pass residual";
+                    break;
+                }
+                case Cmd::removeVibrato:
+                case Cmd::doubleVibrato:
+                {
+                    VibratoParams p;
+                    p.depth = spectrum->command == Cmd::removeVibrato ? 0.0 : std::clamp(value > 0.0 ? value : 2.0, 0.0, 2.0);
+                    edited = applyVibrato(sound, p);
+                    label = spectrum->command == Cmd::removeVibrato ? "Remove vibrato" : "Scale vibrato";
+                    break;
+                }
+                case Cmd::reverseFrames:
+                    edited = reverseFrames(sound);
+                    label = "Reverse time";
+                    break;
+                default: break;
+                }
+                if (!edited)
+                {
+                    error = { "model_tool_noop", "the tool left the model unchanged" };
+                    return true;
+                }
+                const auto before = captureState();
+                target->sound = std::move(edited);
+                // Smearnov onsets and detector curves are frame-aligned to the old model.
+                onsetOverlay_.clear();
+                onsetHandleOverlay_.clear();
+                smearnovDetectionCurve_.clear();
+                smearnovThresholdCurve_.clear();
+                resetSpectrumDisplayReference(slot);
+                noteSourceMutation(slot);
+                recordMutation(label, before);
+                return true;
+            }
             const auto partialCommand = spectrum->command == Cmd::mutePartials
                 || spectrum->command == Cmd::scalePartials
                 || spectrum->command == Cmd::drawPartialFrequency
@@ -1938,6 +2055,18 @@ public:
         ls.analysis.last_peak_cont = static_cast<double>(parameters_.read("analysisLastPeakContribution"));
         ls.analysis.SMR_cont    = static_cast<double>(parameters_.read("analysisSmrContribution"));
         ls.analysis.multiRes    = parameters_.read("analysisMultiRes") >= 0.5f;
+        // v22 research-derived options.
+        ls.analysis.reverseTracking = parameters_.read("analysisReverseTracking") >= 0.5f;
+        ls.analysis.clampResidual   = parameters_.read("analysisClampResidual") >= 0.5f;
+        ls.synth.residualDensity      = static_cast<int>(std::lround(parameters_.read("residualDensity")));
+        ls.synth.animationShimmerDb   = static_cast<double>(parameters_.read("animationShimmerDb"));
+        ls.synth.animationJitterCents = static_cast<double>(parameters_.read("animationJitterCents"));
+        ls.synth.animationRateHz      = static_cast<double>(parameters_.read("animationRateHz"));
+        ls.synth.vibratoDepth         = static_cast<double>(parameters_.read("vibratoDepth"));
+        ls.synth.vibratoRateScale     = static_cast<double>(parameters_.read("vibratoRate"));
+        ls.synth.transposeCharacter   = parameters_.read("transposeCharacter") >= 0.5f;
+        ls.synth.transposeTiltDbPerOct = static_cast<double>(parameters_.read("transposeTiltDbPerOct"));
+        ls.morphOnsetAlignedWarp = parameters_.read("morphOnsetAlignedWarp") >= 0.5f;
 
         ls.morphAmount            = static_cast<double>(parameters_.read("morphAmount"));
         ls.morphPerformanceMacro  = static_cast<double>(parameters_.read("morphPerformanceMacro"));
@@ -1979,6 +2108,7 @@ public:
         ls.smearnov.weightHfcFlux       = static_cast<double>(parameters_.read("smearnovWeightHfcFlux"));
         ls.smearnov.weightBirth         = static_cast<double>(parameters_.read("smearnovWeightBirth"));
         ls.smearnov.weightPhaseDev      = static_cast<double>(parameters_.read("smearnovWeightPhaseDev"));
+        ls.smearnov.weightTransientness = static_cast<double>(parameters_.read("smearnovWeightTransientness"));
         ls.smearnov.thresholdLambda     = static_cast<double>(parameters_.read("smearnovThresholdLambda"));
         ls.smearnov.thresholdAutoScale  = static_cast<double>(parameters_.read("smearnovThresholdAutoScale"));
         ls.smearnov.peakWindowFrames    = static_cast<std::int32_t>(std::round(parameters_.read("smearnovPeakWindowFrames")));
@@ -2657,6 +2787,7 @@ private:
         params.weightHfcFlux = parameters_.read("smearnovWeightHfcFlux");
         params.weightBirth = parameters_.read("smearnovWeightBirth");
         params.weightPhaseDev = parameters_.read("smearnovWeightPhaseDev");
+        params.weightTransientness = parameters_.read("smearnovWeightTransientness");
         params.usePhaseDeviation = parameters_.read("smearnovUsePhaseDeviation") >= 0.5f;
         params.thresholdLambda = parameters_.read("smearnovThresholdLambda");
         params.thresholdAutoScale = parameters_.read("smearnovThresholdAutoScale");
@@ -2665,6 +2796,18 @@ private:
         params.preMarginSeconds = parameters_.read("smearnovPreMarginMs") / 1000.0;
         params.maxAttackFrames = static_cast<int>(parameters_.read("smearnovMaxAttackFrames"));
         return params;
+    }
+
+    // Molla & Torrésani transientness index for Smearnov's D6 stream, one value
+    // per model frame; empty when the stream is off or the source has no audio.
+    [[nodiscard]] std::vector<double> smearnovTransientness(const engine::ImportedSource* source,
+                                                            const ATS_SOUND* sound) const
+    {
+        if (source == nullptr || sound == nullptr || parameters_.read("smearnovWeightTransientness") <= 0.0f
+            || source->monoSamples.empty() || source->sampleRate <= 0)
+            return {};
+        return transientnessIndex(source->monoSamples.data(), source->monoSamples.size(),
+                                  source->sampleRate, sound).index;
     }
 
     [[nodiscard]] AnalysisParams analysisParams() const noexcept
@@ -2688,6 +2831,8 @@ private:
         params.last_peak_cont = parameters_.read("analysisLastPeakContribution");
         params.SMR_cont = parameters_.read("analysisSmrContribution");
         params.multiRes = parameters_.read("analysisMultiRes") >= 0.5f;
+        params.reverseTracking = parameters_.read("analysisReverseTracking") >= 0.5f;
+        params.clampResidual = parameters_.read("analysisClampResidual") >= 0.5f;
         return params;
     }
 
@@ -2716,6 +2861,8 @@ private:
         params.exaggerateDb = parameters_.read("smearnovExaggerateDb");
         params.mix = parameters_.read("smearnovMix") / 100.0;
         params.maxDb = parameters_.read("smearnovMaxDb");
+        // With the transientness stream in use, tonal onsets are smeared gently.
+        params.scaleByTransientness = parameters_.read("smearnovWeightTransientness") > 0.0f;
         switch (static_cast<int>(parameters_.read("smearnovTargets")))
         {
         case 0: params.targets = SmearnovTarget::Partials; break;
@@ -2752,6 +2899,8 @@ private:
         const auto scope = static_cast<int>(std::lround(parameters_.read("smearnovScope")));
         const auto selectionFirst = selectionFirstFrame_;
         const auto selectionLast = selectionLastFrame_;
+        auto transientness = std::make_shared<std::vector<double>>(
+            smearnovTransientness(&*sources_[static_cast<std::size_t>(slot)], copied));
         smearnovCancellation_.cancel();
         smearnovCancellation_ = CancellationSource {};
         const auto generation = sourceGenerations_.next();
@@ -2761,7 +2910,7 @@ private:
             smearnovFuture_ = promise->get_future();
             smearnovScheduler_.submitVoid(
                 [apply, slot, sourceRevision, snapshot = AtsSoundPtr { copied }, detect, transform,
-                 requested, scope, selectionFirst, selectionLast, token, promise]() mutable {
+                 requested, scope, selectionFirst, selectionLast, token, promise, transientness]() mutable {
                     SmearnovWorkResult result;
                     result.apply = apply;
                     result.slot = slot;
@@ -2773,7 +2922,8 @@ private:
                         return;
                     }
                     SmearnovDetectionFunctions functions;
-                    auto onsets = detectOnsets(snapshot.get(), detect, &functions);
+                    auto onsets = detectOnsets(snapshot.get(), detect, &functions,
+                                               transientness->empty() ? nullptr : transientness.get());
                     result.detectionCurve = std::move(functions.combined);
                     result.thresholdCurve = std::move(functions.threshold);
                     if (!requested.empty())
@@ -3099,6 +3249,12 @@ private:
             const auto minimumMass = quality == 0 ? 1.0e-5 : quality == 2 ? 1.0e-2 : 1.0e-3;
             recipe.correspondenceRecords = buildOptimalTransportRecords(a, b, { minimumMass });
         }
+        else if (strategy == 4)
+        {
+            // Hatch 2004 §4.4 harmonic alignment: match equal harmonic numbers
+            // within a semitone; unmatched partials pair with silence.
+            recipe.correspondenceRecords = buildHarmonicLockedCorrespondence(a, b).records;
+        }
         else
             recipe.correspondenceRecords = buildFrequencyRankCorrespondence(a, b, 0.25);
         recipe.defaultMorphAmount = parameters_.read("morphAmount");
@@ -3203,12 +3359,39 @@ private:
         AtsSoundPtr shapedB;
         const ATS_SOUND* renderA = sources_[0]->sound.get();
         const ATS_SOUND* renderB = sources_[1]->sound.get();
+        // Hatch 2004 §4.2: onset-aligned time warp. Both sources' onsets are
+        // moved to t = alpha * (tB - tA) + tA (alpha = the fixed morph amount),
+        // so attacks coincide instead of blurring; the warps are applied as
+        // same-length time maps per source, which lines the onsets up at the
+        // same normalised positions the trajectory renderer blends.
+        OnsetAlignedWarp onsetWarp;
+        const bool warpOnsets = parameters_.read("morphOnsetAlignedWarp") >= 0.5f;
+        if (warpOnsets)
+        {
+            const auto onsetSeconds = [&](const ATS_SOUND* sound, double hop) {
+                std::vector<double> seconds;
+                for (const auto& onset : detectOnsets(sound, smearnovDetectParams()))
+                    seconds.push_back(static_cast<double>(onset.frame) * hop);
+                return seconds;
+            };
+            OnsetAlignedWarpParams warpParams;
+            warpParams.morphAmount = std::clamp<double>(parameters_.read("morphAmount"), 0.0, 1.0);
+            warpParams.durationA = recipe.sourceA.durationSeconds;
+            warpParams.durationB = recipe.sourceB.durationSeconds;
+            onsetWarp = buildOnsetAlignedWarp(onsetSeconds(renderA, recipe.sourceA.frameHopSeconds),
+                                              onsetSeconds(renderB, recipe.sourceB.frameHopSeconds),
+                                              warpParams);
+        }
+        const auto transientnessA = smearnovTransientness(&*sources_[0], renderA);
+        const auto transientnessB = smearnovTransientness(&*sources_[1], renderB);
         const auto prepareSource = [&](const ATS_SOUND* original, AtsSoundPtr& holder,
-                                       const ATS_SOUND*& prepared) -> bool {
+                                       const ATS_SOUND*& prepared, const std::vector<double>& transientness,
+                                       const AutomationCurve& warp) -> bool {
             const auto shape = isFrequencyShapeActive(
                 resolveFrequencyShapeSettingsForSound(original, frequencyShape));
             const auto smear = liveSmearEnabled_.load(std::memory_order_acquire);
-            if (!shape && !smear) return true;
+            const auto warped = warpOnsets && !warp.empty();
+            if (!shape && !smear && !warped) return true;
             holder.reset(copy_sound(const_cast<ATS_SOUND*>(original)));
             if (!holder)
             {
@@ -3217,7 +3400,8 @@ private:
             }
             if (smear)
             {
-                auto onsets = detectOnsets(holder.get(), smearnovDetectParams());
+                auto onsets = detectOnsets(holder.get(), smearnovDetectParams(), nullptr,
+                                           transientness.empty() ? nullptr : &transientness);
                 std::string scopeError;
                 onsets = applySmearnovScope(
                     static_cast<int>(std::lround(parameters_.read("smearnovScope"))),
@@ -3230,10 +3414,18 @@ private:
                 if (!onsets.empty()) (void) smearAttacks(holder.get(), onsets, smearnovParams());
             }
             if (shape) applyFrequencyShapeToSound(holder.get(), frequencyShape);
+            if (warped)
+            {
+                SoundCurves curves;
+                curves.timeWarp = warp;
+                if (auto warpedSound = AtsAutomationCurves::apply(holder.get(), curves))
+                    holder = std::move(warpedSound);
+            }
             prepared = holder.get();
             return true;
         };
-        if (!prepareSource(renderA, shapedA, renderA) || !prepareSource(renderB, shapedB, renderB))
+        if (!prepareSource(renderA, shapedA, renderA, transientnessA, onsetWarp.warpA)
+            || !prepareSource(renderB, shapedB, renderB, transientnessB, onsetWarp.warpB))
             return false;
 
         const auto timelinePoints = morphTimelinePoints();
@@ -3409,7 +3601,9 @@ private:
             if (auto* copy = copy_sound(const_cast<ATS_SOUND*>(sound)))
             {
                 liveSmearSound.reset(copy);
-                auto onsets = detectOnsets(liveSmearSound.get(), smearnovDetectParams());
+                const auto transientness = smearnovTransientness(selected, sound);
+                auto onsets = detectOnsets(liveSmearSound.get(), smearnovDetectParams(), nullptr,
+                                           transientness.empty() ? nullptr : &transientness);
                 std::string scopeError;
                 onsets = applySmearnovScope(
                     static_cast<int>(std::lround(parameters_.read("smearnovScope"))),
@@ -3525,6 +3719,15 @@ private:
         params.usePartialsPhase = parameters_.read(usePhaseIndex_) >= 0.5f;
         params.useIfftSynth     = parameters_.read(useIfftSynthIndex_) >= 0.5f;
         params.sampleRate       = spec_.sampleRate > 0.0 ? spec_.sampleRate : 44100.0;
+        // Research-derived render options (by id: they are not hot-path lookups).
+        params.residualDensity       = std::clamp(static_cast<int>(std::lround(parameters_.read("residualDensity"))), 1, 32);
+        params.animationShimmerDb    = static_cast<double>(parameters_.read("animationShimmerDb"));
+        params.animationJitterCents  = static_cast<double>(parameters_.read("animationJitterCents"));
+        params.animationRateHz       = static_cast<double>(parameters_.read("animationRateHz"));
+        params.vibratoDepth          = static_cast<double>(parameters_.read("vibratoDepth"));
+        params.vibratoRateScale      = static_cast<double>(parameters_.read("vibratoRate"));
+        params.transposeCharacter    = parameters_.read("transposeCharacter") >= 0.5f;
+        params.transposeTiltDbPerOct = static_cast<double>(parameters_.read("transposeTiltDbPerOct"));
         params.frequencyShape.mode    = static_cast<FrequencyShapeMode>(
             static_cast<int>(std::round(parameters_.read(freqShapeModeIndex_))));
         params.frequencyShape.amount  = static_cast<double>(parameters_.read(freqShapeAmountIndex_));

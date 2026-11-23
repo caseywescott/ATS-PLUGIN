@@ -25,6 +25,8 @@ public:
     [[nodiscard]] explicit operator bool() const { return ptr != nullptr; }
 
     void reset(ATS_SOUND* p = nullptr);
+    /** Gives up ownership without freeing. */
+    [[nodiscard]] ATS_SOUND* release() noexcept { auto* p = ptr; ptr = nullptr; return p; }
 
 private:
     ATS_SOUND* ptr = nullptr;

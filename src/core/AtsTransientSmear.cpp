@@ -483,7 +483,8 @@ double criticalBandCentreHz(int band)
 
 std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
                                    const SmearnovDetectParams& params,
-                                   SmearnovDetectionFunctions* functionsOut)
+                                   SmearnovDetectionFunctions* functionsOut,
+                                   const std::vector<double>* transientness)
 {
     std::vector<AtsOnset> onsets;
     if (sound == nullptr || sound->frames < 2)
@@ -494,6 +495,16 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
     const double hop = hopSeconds(sound);
     const bool hasResidual = sound->band_energy != nullptr;
     const bool hasPhase = params.usePhaseDeviation && sound->pha != nullptr;
+
+    // D6: external transientness index (AtsTransientness.h), clamped to [0,1].
+    const bool hasTransientness = transientness != nullptr && !transientness->empty();
+    const auto indexAt = [&](int f) {
+        const int last = (int) transientness->size() - 1;
+        const double v = (*transientness)[(size_t) std::clamp(f, 0, last)];
+        return std::isfinite(v) ? std::clamp(v, 0.0, 1.0) : 0.0;
+    };
+    const bool useTransientness = hasTransientness && params.weightTransientness > 0.0
+                                  && std::isfinite(params.weightTransientness);
 
     // Perceptual SMR weighting reference.
     double maxSmr = 0.0;
@@ -598,6 +609,17 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
                              + params.weightHfcFlux * n3[(size_t) f]
                              + params.weightBirth * n4[(size_t) f]
                              + (hasPhase ? params.weightPhaseDev * n5[(size_t) f] : 0.0);
+
+    if (useTransientness)
+    {
+        // Half-wave-rectified difference of the index: a jump toward "transient".
+        std::vector<double> d6(frames, 0.0);
+        for (int f = 1; f < frames; ++f)
+            d6[(size_t) f] = std::max(0.0, indexAt(f) - indexAt(f - 1));
+        const auto n6 = normalizeStream(d6, params.normWindowRadiusFrames);
+        for (int f = 0; f < frames; ++f)
+            combined[(size_t) f] += params.weightTransientness * n6[(size_t) f];
+    }
 
     // Adaptive threshold: running median over the peak window + lambda.
     const double lambda = params.thresholdLambda > 0.0
@@ -710,6 +732,7 @@ std::vector<AtsOnset> detectOnsets(const ATS_SOUND* sound,
         onset.preFrame = std::max(0, f0 - preMargin);
         onset.peakFrame = std::max(fPeak, f0);
         onset.strength = combined[(size_t) f0];
+        onset.transientness = hasTransientness ? indexAt(f0) : -1.0;
         onsets.push_back(onset);
     }
 
@@ -730,18 +753,32 @@ bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const S
     if (!editPartials && !editResidual)
         return false;
 
-    // Blur needs room past the attack peak to spread energy forward into the decay;
-    // reach scales with the blur kernel (~3 sigma), bounded by the next onset.
-    const double sigmaFrames = (params.blurMs > 0.0 && finitePositive(hop))
-                                   ? (params.blurMs * 0.001) / hop
-                                   : 0.0;
-    const int blurExtend = sigmaFrames > 0.0 ? (int) std::ceil(3.0 * sigmaFrames) : 0;
-
     bool changed = false;
     EnvelopeScratch scratch;
     for (size_t i = 0; i < onsets.size(); ++i)
     {
         const auto& onset = onsets[i];
+
+        // Optional per-onset scaling of the effective amount by the transientness
+        // index: tonal onsets (index ~0) are barely touched, clicks get the full amount.
+        SmearnovParams effective = params;
+        if (params.scaleByTransientness && std::isfinite(onset.transientness) && onset.transientness >= 0.0)
+        {
+            const double scale = std::clamp(onset.transientness, 0.0, 1.0);
+            effective.blurMs = params.blurMs * scale;
+            effective.sharpenAmount = params.sharpenAmount * scale;
+            effective.exaggerateDb = params.exaggerateDb * scale;
+            if (!smearParamsActive(effective))
+                continue;
+        }
+
+        // Blur needs room past the attack peak to spread energy forward into the decay;
+        // reach scales with the blur kernel (~3 sigma), bounded by the next onset.
+        const double sigmaFrames = (effective.blurMs > 0.0 && finitePositive(hop))
+                                       ? (effective.blurMs * 0.001) / hop
+                                       : 0.0;
+        const int blurExtend = sigmaFrames > 0.0 ? (int) std::ceil(3.0 * sigmaFrames) : 0;
+
         int start = std::min(onset.preFrame, onset.peakFrame);
         int peak = std::max(onset.preFrame, onset.peakFrame);
         start = std::clamp(start, 0, sound->frames - 1);
@@ -768,7 +805,7 @@ bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const S
         {
             for (int p = 0; p < sound->partials; ++p)
                 if (sound->amp[p] != nullptr)
-                    changed = transformEnvelope(sound->amp[p], start, end, peakOffset, hop, params, false, scratch)
+                    changed = transformEnvelope(sound->amp[p], start, end, peakOffset, hop, effective, false, scratch)
                               || changed;
         }
 
@@ -776,7 +813,7 @@ bool smearAttacks(ATS_SOUND* sound, const std::vector<AtsOnset>& onsets, const S
         {
             for (int b = 0; b < ATSA_CRITICAL_BANDS; ++b)
                 if (sound->band_energy[b] != nullptr)
-                    changed = transformEnvelope(sound->band_energy[b], start, end, peakOffset, hop, params, true, scratch)
+                    changed = transformEnvelope(sound->band_energy[b], start, end, peakOffset, hop, effective, true, scratch)
                               || changed;
         }
     }

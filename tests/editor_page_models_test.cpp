@@ -7,7 +7,7 @@
 int main()
 {
     ats::ui::AnalysisPageModel analysis;
-    assert(analysis.controls().size() == 18);
+    assert(analysis.controls().size() == 20);
     assert(analysis.controls()[0].id == "analysisType");
     assert(analysis.setControl(9, -48.0f));
     assert(analysis.profile() == ats::ui::AnalysisProfile::custom);

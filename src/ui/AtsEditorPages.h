@@ -379,6 +379,8 @@ public:
             { PageRowKind::control,         15, nullptr,       42.0f, 0.0f, true,  true },
             { PageRowKind::control,         16, nullptr,       42.0f, 0.0f, false, true },
             { PageRowKind::control,         17, nullptr,       26.0f, 0.0f, false, false },
+            { PageRowKind::control,         18, nullptr,       26.0f, 0.0f, false, false },
+            { PageRowKind::control,         19, nullptr,       26.0f, 0.0f, false, false },
         };
         return rows;
     }
@@ -543,10 +545,13 @@ public:
     using ThemeGetter = std::function<ThemeTokens()>;
     using Emitter = std::function<void(const EditorAction&)>;
 
-    static constexpr std::array<std::string_view, 12> kControlIds {
+    static constexpr std::array<std::string_view, 20> kControlIds {
         "freq", "freqShapeMode", "freqShapeAmount", "freqShapePivotHz", "timeStretch",
         "synStart", "synDur", "usePhase", "useAllPartials", "residualOnly",
-        "useIfftSynth", "classicPreviewMode"
+        "useIfftSynth", "classicPreviewMode",
+        // Research-derived render options (2026-11-24).
+        "transposeCharacter", "transposeTiltDbPerOct", "vibratoDepth", "vibratoRate",
+        "animationShimmerDb", "animationJitterCents", "animationRateHz", "residualDensity"
     };
 
     AtsSynthesisPage(Emitter emit, ThemeGetter theme)
@@ -619,6 +624,16 @@ public:
             { PageRowKind::control,         9, nullptr,  26.0f, 0.0f, true,  false },
             { PageRowKind::control,        10, nullptr,  26.0f, 0.0f, false, false },
             { PageRowKind::control,        11, nullptr,  42.0f, 0.0f, false, true },
+            { PageRowKind::dividedHeading, -1, "CHARACTER", 0.0f, 0.0f, false, false },
+            { PageRowKind::control,        12, nullptr,  26.0f, 0.0f, false, false },
+            { PageRowKind::control,        13, nullptr,  42.0f, 0.0f, false, true },
+            { PageRowKind::control,        14, nullptr,  42.0f, 0.0f, true,  true },
+            { PageRowKind::control,        15, nullptr,  42.0f, 0.0f, false, true },
+            { PageRowKind::dividedHeading, -1, "ANIMATION", 0.0f, 0.0f, false, false },
+            { PageRowKind::control,        16, nullptr,  42.0f, 0.0f, true,  true },
+            { PageRowKind::control,        17, nullptr,  42.0f, 0.0f, false, true },
+            { PageRowKind::control,        18, nullptr,  42.0f, 0.0f, false, true },
+            { PageRowKind::control,        19, nullptr,  42.0f, 0.0f, false, true },
         };
         return rows;
     }

@@ -36,6 +36,19 @@ int main()
     source.soundCurves[0] = { 0.0f, 0.0f, 0.5f, 0.25f, 1.0f, 1.0f }; // time warp
     source.soundCurves[1] = { 0.0f, -3.0f, 1.0f, 12.0f };             // pitch
     source.morphTimelinePoints = { 0.0f, 0.0f, 0.0f, 1.0f, 0.4f, 0.8f, 0.0f, 3.0f, 1.0f, 1.0f, 0.0f, 0.0f };
+    // v22 research-derived options.
+    source.analysis.reverseTracking = true;
+    source.analysis.clampResidual = true;
+    source.synth.residualDensity = 12;
+    source.synth.animationShimmerDb = 1.5;
+    source.synth.animationJitterCents = 7.0;
+    source.synth.animationRateHz = 6.0;
+    source.synth.vibratoDepth = 0.25;
+    source.synth.vibratoRateScale = 1.75;
+    source.synth.transposeCharacter = true;
+    source.synth.transposeTiltDbPerOct = -2.5;
+    source.smearnov.weightTransientness = 0.6;
+    source.morphOnsetAlignedWarp = true;
 
     for (std::uint32_t version = 2; version <= ats::LegacyStateCodec::kCurrentVersion; ++version)
     {
@@ -78,6 +91,26 @@ int main()
             assert(decoded->morphTimelinePoints == source.morphTimelinePoints);
         else
             assert(decoded->morphTimelinePoints.empty());
+        if (version >= 22)
+        {
+            assert(decoded->analysis.reverseTracking && decoded->analysis.clampResidual);
+            assert(decoded->synth.residualDensity == 12);
+            assert(decoded->synth.animationShimmerDb == 1.5 && decoded->synth.animationJitterCents == 7.0
+                   && decoded->synth.animationRateHz == 6.0);
+            assert(decoded->synth.vibratoDepth == 0.25 && decoded->synth.vibratoRateScale == 1.75);
+            assert(decoded->synth.transposeCharacter && decoded->synth.transposeTiltDbPerOct == -2.5);
+            assert(decoded->smearnov.weightTransientness == 0.6);
+            assert(decoded->morphOnsetAlignedWarp);
+        }
+        else
+        {
+            // Not carried before v22: registry defaults.
+            assert(decoded->smearnov.weightTransientness == 0.0);
+            assert(!decoded->morphOnsetAlignedWarp);
+            assert(!decoded->analysis.reverseTracking && !decoded->analysis.clampResidual);
+            assert(decoded->synth.residualDensity == 1 && decoded->synth.animationShimmerDb == 0.0
+                   && decoded->synth.vibratoDepth == 1.0 && !decoded->synth.transposeCharacter);
+        }
         if (version >= 20)
             assert(decoded->soundCurves == source.soundCurves);
         else
@@ -122,5 +155,5 @@ int main()
     for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
         corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
     assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
-    std::cout << "legacy_state_codec_test: ATSP v2-v21 payload round-trip ok\n";
+    std::cout << "legacy_state_codec_test: ATSP v2-v22 payload round-trip ok\n";
 }

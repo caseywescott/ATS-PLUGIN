@@ -1467,6 +1467,58 @@ public:
                    origin);
     }
 
+    // Whole-model tools (toolbar TOOLS...). Each option is one undoable
+    // SpectrumEditAction whose `value` is the tool's single amount; the band
+    // and frame fields are placeholders the host ignores for these commands.
+    void showToolsMenu(visage::Point origin)
+    {
+        enum : int { kSmooth = 1, kRough, kGrowl, kClamp, kHighPass, kNoVibrato, kDoubleVibrato, kReverse };
+        const auto hasModel = spectrumSnapshot_.frameCount > 0;
+        visage::PopupMenu popup("Model tools");
+        popup.addOption(kSmooth, "Smooth harmonic envelope (Klapuri)").enable(hasModel);
+        popup.addBreak();
+        popup.addOption(kRough, "Add rough voice sub-harmonics (-6 dB)").enable(hasModel);
+        popup.addOption(kGrowl, "Add growl sub-harmonic series (-6 dB)").enable(hasModel);
+        popup.addBreak();
+        popup.addOption(kClamp, "Clamp residual to source (Serra)").enable(hasModel);
+        popup.addOption(kHighPass, "High-pass residual below 300 Hz (Serra)").enable(hasModel);
+        popup.addBreak();
+        popup.addOption(kNoVibrato, "Remove vibrato").enable(hasModel);
+        popup.addOption(kDoubleVibrato, "Double vibrato depth").enable(hasModel);
+        popup.addBreak();
+        popup.addOption(kReverse, "Reverse time").enable(hasModel);
+        popup.onSelection() += [this](int option) {
+            SpectrumEditAction edit;
+            edit.bands = { 0 };
+            edit.firstFrame = 0;
+            edit.lastFrame = static_cast<int>(std::max(1u, spectrumSnapshot_.frameCount)) - 1;
+            switch (option)
+            {
+            case kSmooth: edit.command = SpectrumEditCommand::spectralSmoothness; edit.value = 1.0f; break;
+            case kRough: edit.command = SpectrumEditCommand::addSubharmonicsRough; edit.value = -6.0f; break;
+            case kGrowl: edit.command = SpectrumEditCommand::addSubharmonicsGrowl; edit.value = -6.0f; break;
+            case kClamp: edit.command = SpectrumEditCommand::clampResidualToSource; edit.value = 1.0f; break;
+            case kHighPass: edit.command = SpectrumEditCommand::highPassResidual; edit.value = 300.0f; break;
+            case kNoVibrato: edit.command = SpectrumEditCommand::removeVibrato; edit.value = 0.0f; break;
+            case kDoubleVibrato: edit.command = SpectrumEditCommand::doubleVibrato; edit.value = 2.0f; break;
+            case kReverse: edit.command = SpectrumEditCommand::reverseFrames; edit.value = 0.0f; break;
+            default: return;
+            }
+            emitAction(edit);
+            if (sink_.popupDismissed)
+                sink_.popupDismissed(sink_.context);
+            redraw();
+        };
+        popup.onCancel() += [this] {
+            if (sink_.popupDismissed)
+                sink_.popupDismissed(sink_.context);
+        };
+        if (sink_.popupShown)
+            sink_.popupShown(sink_.context);
+        popup.show(sessionPageRaw_ != nullptr ? static_cast<visage::Frame*>(sessionPageRaw_) : this,
+                   origin);
+    }
+
     // Seam crossfade for "Paste at playhead (crossfade)": two frames each side.
     static constexpr int kTimeEditCrossfadeFrames = 2;
 
@@ -1660,6 +1712,11 @@ public:
             if (item.command == SpectrumEditCommand::timeEditMenu)
             {
                 showTimeEditMenu({ item.bounds.x, item.bounds.y + item.bounds.height + 4.0f });
+                return true;
+            }
+            if (item.command == SpectrumEditCommand::toolsMenu)
+            {
+                showToolsMenu({ item.bounds.x, item.bounds.y + item.bounds.height + 4.0f });
                 return true;
             }
             if (item.command == SpectrumEditCommand::invertPartialSelection)

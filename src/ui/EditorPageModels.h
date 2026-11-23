@@ -27,7 +27,7 @@ struct AnalysisControl
 class AnalysisPageModel
 {
 public:
-    static constexpr std::size_t kControlCount = 18;
+    static constexpr std::size_t kControlCount = 20;
 
     [[nodiscard]] static constexpr std::array<std::string_view, kControlCount> controlIds() noexcept
     {
@@ -35,7 +35,8 @@ public:
                  "analysisHighestFreq", "analysisFreqDev", "analysisWinCycles", "analysisWinType",
                  "analysisHopSize", "analysisLowestMag", "analysisTrackLen", "analysisMinSegLen",
                  "analysisMinGapLen", "analysisSmrThreshold", "analysisMinSegSmr",
-                 "analysisLastPeakContribution", "analysisSmrContribution", "analysisMultiRes" };
+                 "analysisLastPeakContribution", "analysisSmrContribution", "analysisMultiRes",
+                 "analysisReverseTracking", "analysisClampResidual" };
     }
 
     [[nodiscard]] const std::array<AnalysisControl, kControlCount>& controls() const noexcept

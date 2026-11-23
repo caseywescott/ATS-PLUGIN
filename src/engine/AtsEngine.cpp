@@ -1,8 +1,14 @@
 #include "AtsEngine.h"
 
 #include "../core/AtsFrequencyShape.h"
+#include "../core/AtsMicroModulation.h"
+#include "../core/AtsResidualFixes.h"
+#include "../core/AtsResidualSynth.h"
+#include "../core/AtsTransposeCharacter.h"
+#include "../core/AtsVibrato.h"
 
 #include <algorithm>
+#include <vector>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -68,14 +74,44 @@ JobResult<AnalysisOutput> AtsEngine::analyze(JobGeneration generation,
     arguments.progress_cb = progress ? progressCallback : nullptr;
     arguments.progress_user = progress ? &context : nullptr;
 
+    // Serra 1997: tracking backwards in time lets the guides lock onto the
+    // partials before they reach the attack. The tracker sees the reversed
+    // signal and the model is flipped back below. The analysis start/duration
+    // window is kept in forward time by mirroring it onto the reversed axis.
+    std::vector<double> reversed;
+    const double* trackerSamples = request.samples;
+    if (request.parameters.reverseTracking)
+    {
+        reversed = reversedSamples(request.samples, request.sampleCount);
+        trackerSamples = reversed.data();
+        const double total = static_cast<double>(request.sampleCount) / static_cast<double>(request.sampleRate);
+        const double start = std::clamp(arguments.start, 0.0, total);
+        const double duration = arguments.duration > 0.0 ? std::min(arguments.duration, total - start) : total - start;
+        arguments.start = std::max(0.0, total - start - duration);
+        arguments.duration = duration;
+    }
+
     double** residual = nullptr;
     int residualLength = 0;
     auto* rawSound = tracker(&arguments,
-                             const_cast<double*>(request.samples),
+                             const_cast<double*>(trackerSamples),
                              request.sampleRate,
                              static_cast<int>(request.sampleCount),
                              &residual,
                              &residualLength);
+    if (rawSound != nullptr && request.parameters.reverseTracking)
+    {
+        auto flipped = reverseFrames(rawSound);
+        free_sound(rawSound);
+        std::free(rawSound);
+        rawSound = flipped ? flipped.release() : nullptr;
+        if (residual != nullptr && residual[0] != nullptr && residualLength > 0)
+            std::reverse(residual[0], residual[0] + residualLength);
+    }
+    // Serra 1997: the residual must never carry more energy than the source in
+    // any band and frame (mis-tracked attacks inflate it).
+    if (rawSound != nullptr && request.parameters.clampResidual && rawSound->band_energy != nullptr)
+        (void) clampResidualToSource(rawSound, request.samples, request.sampleCount, request.sampleRate);
 
     AnalysisOutput output;
     if (residual != nullptr)
@@ -172,10 +208,70 @@ JobResult<RenderStats> AtsEngine::render(JobGeneration generation,
             renderSound = curvedSound.get();
     }
 
+    // Research-derived model-domain transforms (2026-11-24), each on a copy and
+    // each dropping the stored phases. Order: transposition character (so the
+    // envelope is read from the un-modulated partials), vibrato, animation.
+    bool phasesInvalid = static_cast<bool>(curvedSound);
+    double frequencyFactor = parameters.frequencyFactor;
+    AtsSoundPtr characterSound;
+    if (parameters.transposeCharacter && std::abs(frequencyFactor - 1.0) > 1.0e-9)
+    {
+        TransposeCharacterParams character;
+        character.frequencyFactor = frequencyFactor;
+        character.preserveEnvelope = true;
+        character.tiltDbPerOctavePerOctave = parameters.transposeTiltDbPerOct;
+        character.ceilingHz = 0.95 * 0.5 * parameters.sampleRate;
+        characterSound = applyTransposeCharacter(renderSound, character);
+        if (characterSound)
+        {
+            renderSound = characterSound.get();
+            frequencyFactor = 1.0; // realised in the model domain
+            phasesInvalid = true;
+        }
+    }
+    AtsSoundPtr vibratoSound;
+    {
+        VibratoParams vibrato;
+        vibrato.depth = std::clamp(parameters.vibratoDepth, 0.0, 2.0);
+        vibrato.rateScale = std::clamp(parameters.vibratoRateScale, 0.25, 4.0);
+        if (vibrato.active())
+        {
+            vibratoSound = applyVibrato(renderSound, vibrato);
+            if (vibratoSound)
+            {
+                renderSound = vibratoSound.get();
+                phasesInvalid = true;
+            }
+        }
+    }
+    AtsSoundPtr animatedSound;
+    {
+        MicroModulationParams animation;
+        animation.shimmerDb = std::max(0.0, parameters.animationShimmerDb);
+        animation.jitterCents = std::max(0.0, parameters.animationJitterCents);
+        animation.rateHz = std::clamp(parameters.animationRateHz, 0.5, 15.0);
+        if (animation.active())
+        {
+            animatedSound = applyMicroModulation(renderSound, animation);
+            if (animatedSound)
+            {
+                renderSound = animatedSound.get();
+                phasesInvalid = true;
+            }
+        }
+    }
+
     SPARAMS synthesis {};
     parameters.toSparams(synthesis, renderSound->dur);
-    if (curvedSound)
-        synthesis.upha = 0; // stored phases do not survive the curves
+    synthesis.frec = frequencyFactor;
+    if (phasesInvalid)
+        synthesis.upha = 0; // stored phases do not survive the model-domain transforms
+    // Hanna's noise density: with more than one carrier per band the plugin
+    // renders the whole residual as band noise and ATSA renders partials only.
+    const bool pluginResidual = parameters.residualDensity > 1 && parameters.residualGain > 0.0
+        && renderSound->band_energy != nullptr;
+    if (pluginResidual)
+        synthesis.ramp = 0.0;
     CURVE timeEnvelope {};
     curve_init(&timeEnvelope);
     double* raw = nullptr;
@@ -189,6 +285,21 @@ JobResult<RenderStats> AtsEngine::render(JobGeneration generation,
         result.status = JobResult<RenderStats>::Status::failed;
         result.error = { "render_failed", "ATSA synthesis returned no samples" };
         return result;
+    }
+    if (pluginResidual)
+    {
+        ResidualSynthParams residual;
+        residual.sampleRate = parameters.sampleRate;
+        residual.carriersPerBand = std::clamp(parameters.residualDensity, 1, 64);
+        residual.gain = parameters.residualGain;
+        residual.startTime = synthesis.beg;
+        residual.duration = std::max(0.0, synthesis.end - synthesis.beg);
+        residual.timeFactor = parameters.timeFactor;
+        std::vector<double> noise;
+        (void) renderResidualBands(renderSound, residual, noise);
+        const auto mixed = std::min<std::size_t>(noise.size(), static_cast<std::size_t>(rawFrames));
+        for (std::size_t i = 0; i < mixed; ++i)
+            raw[i] += noise[i];
     }
     const auto frames = std::min<std::size_t>(destination.frameCount, static_cast<std::size_t>(rawFrames));
     double sumSquares = 0.0;

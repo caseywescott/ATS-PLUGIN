@@ -69,7 +69,10 @@ enum class MorphCorrespondenceStrategy
 {
     FrequencyRank,
     GreedyNearest,
-    AssignmentMatrix
+    AssignmentMatrix,
+    // Hatch (2004) §4.4 harmonic alignment: pair partials by harmonic number
+    // h = round(f / f0) with pitch normalised out; see AtsMorphHarmonicCorrespondence.h.
+    HarmonicLocked
 };
 
 enum class MorphFrequencyInterpolationDomain
@@ -741,6 +744,8 @@ struct MorphCompatibilityReport
 [[nodiscard]] bool morphPhaseStrategyFromName(const std::string& name, MorphPhaseStrategy& strategy);
 [[nodiscard]] const char* morphTransientPolicyName(MorphTransientPolicy policy);
 [[nodiscard]] bool morphTransientPolicyFromName(const std::string& name, MorphTransientPolicy& policy);
+[[nodiscard]] const char* morphCorrespondenceStrategyName(MorphCorrespondenceStrategy strategy);
+[[nodiscard]] bool morphCorrespondenceStrategyFromName(const std::string& name, MorphCorrespondenceStrategy& strategy);
 [[nodiscard]] const char* morphFrequencyGridTypeName(MorphFrequencyGridType type);
 [[nodiscard]] bool morphFrequencyGridTypeFromName(const std::string& name, MorphFrequencyGridType& type);
 [[nodiscard]] const char* morphBandAssignmentKindName(MorphBandAssignmentKind kind);

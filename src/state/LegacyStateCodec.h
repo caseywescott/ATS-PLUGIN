@@ -62,6 +62,8 @@ struct SmearnovState
     bool useRpcaFallback = false;
     std::int32_t controlTab = 0;
     double mix = 100.0;
+    // v22: weight of the D6 transientness stream (Molla & Torrésani index).
+    double weightTransientness = 0.0;
 };
 
 struct LegacyState
@@ -107,12 +109,18 @@ struct LegacyState
     std::array<std::vector<float>, 3> soundCurves {};
     // v21: typed morph-timeline points, flattened (time, amount, kind, curve).
     std::vector<float> morphTimelinePoints;
+    // v22: research-derived analysis and render options (docs/STATUS.md
+    // 2026-11-24). analysis.reverseTracking / clampResidual, the synth
+    // residualDensity, animation*, vibrato* and transpose* fields,
+    // smearnov.weightTransientness and morphOnsetAlignedWarp are serialized
+    // from v22; older chunks keep the registry defaults.
+    bool morphOnsetAlignedWarp = false;
 };
 
 class LegacyStateCodec
 {
 public:
-    static constexpr std::uint32_t kCurrentVersion = 21;
+    static constexpr std::uint32_t kCurrentVersion = 22;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     [[nodiscard]] static std::vector<std::byte> encode(const LegacyState& state,

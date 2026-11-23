@@ -94,7 +94,7 @@ int main()
     assert(residualTools[6].bounds.width == 44.0f);
     const auto partialTools = ats::ui::SpectrumChromeLayout::toolbarItems(
         { 0.0f, 0.0f, 1200.0f, 800.0f }, ats::ui::SpectralTraceMode::partials, false);
-    assert(partialTools.size() == 8 && !partialTools.front().enabled);
+    assert(partialTools.size() == 9 && !partialTools.front().enabled);
     assert(partialTools[3].command == ats::ui::SpectrumEditCommand::prunePartials);
     // Selection tools stay enabled with nothing selected.
     assert(partialTools[4].command == ats::ui::SpectrumEditCommand::selectPartialsByCriteria
@@ -103,8 +103,10 @@ int main()
            && partialTools[5].enabled);
     assert(partialTools[6].command == ats::ui::SpectrumEditCommand::timeEditMenu
            && partialTools[6].enabled);
-    assert(partialTools[7].command == ats::ui::SpectrumEditCommand::tiltPartialEnvelope
-           && partialTools[7].bounds.width == 44.0f);
+    assert(partialTools[7].command == ats::ui::SpectrumEditCommand::toolsMenu
+           && partialTools[7].enabled && partialTools[7].bounds.width == 56.0f);
+    assert(partialTools[8].command == ats::ui::SpectrumEditCommand::tiltPartialEnvelope
+           && partialTools[8].bounds.width == 44.0f);
     const auto residualControls = ats::ui::SpectrumChromeLayout::toolbarControls(
         { 0.0f, 0.0f, 1200.0f, 800.0f }, ats::ui::SpectralTraceMode::residual);
     assert(residualControls.size() == 2);

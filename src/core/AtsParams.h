@@ -52,6 +52,13 @@ struct AnalysisParams
     bool multiRes = false;
     double mrWinMult = ATSA_MRWINMULT;
     double mrCrossover = ATSA_MRCROSS;
+    /** Serra 1997: analyse the sound backwards so the tracker has locked onto
+        the partials before it reaches the attack; the model is flipped back
+        afterwards (AtsResidualFixes::reverseFrames). Plugin-side; not an ANARGS field. */
+    bool reverseTracking = false;
+    /** Serra 1997: after analysis, cap each residual band's energy at the
+        source's own band energy for that frame (AtsResidualFixes::clampResidualToSource). */
+    bool clampResidual = false;
 
     void toAnargs(ANARGS& out) const;
     static AnalysisParams fromAnargs(const ANARGS& a);
@@ -74,6 +81,24 @@ struct SynthParams
     FrequencyShapeSettings frequencyShape;
     /** Render-time automation (time warp, pitch, spectral warp). */
     SoundCurves curves;
+
+    // Research-derived render options (docs/STATUS.md, 2026-11-24). All
+    // defaults reproduce the legacy render bit for bit.
+    /** Sinusoidal carriers per Bark band for the residual (Hanna DAFx-00/01).
+        1 = ATSA's own single-carrier band noise; 2..32 use the plugin renderer. */
+    int residualDensity = 1;
+    /** Shimmer (rms dB) and jitter (rms cents) of low-rate Gaussian micro-modulation
+        (Jensen's Timbre Model; Torvmark). 0 = off. */
+    double animationShimmerDb = 0.0;
+    double animationJitterCents = 0.0;
+    double animationRateHz = 4.0;
+    /** Vibrato depth (0 removes, 1 keeps, 2 doubles) and rate scale (Herrera & Bonada DAFx-98). */
+    double vibratoDepth = 1.0;
+    double vibratoRateScale = 1.0;
+    /** Character-preserving transposition (Serra & Bonada DAFx-98; O'Leary & Griffith
+        DAFx-24): formant-preserving amplitude re-read plus a tilt change per octave. */
+    bool transposeCharacter = false;
+    double transposeTiltDbPerOct = -3.0;
 
     void toSparams(SPARAMS& out, double soundDurationSec) const;
     static SynthParams fromSparams(const SPARAMS& s, double soundDurationSec, bool useAll, bool usePhase);

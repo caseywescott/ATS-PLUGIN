@@ -434,13 +434,24 @@ add_library(ats_core STATIC
   src/core/AtsModel.cpp
   src/core/AtsTimeEdit.cpp
   src/core/AtsAutomationCurves.cpp
+  src/core/AtsResidualSynth.cpp
+  src/core/AtsMicroModulation.cpp
+  src/core/AtsVibrato.cpp
+  src/core/AtsDescriptors.cpp
+  src/core/AtsTransposeCharacter.cpp
+  src/core/AtsSpectralSmoothness.cpp
+  src/core/AtsSubharmonics.cpp
+  src/core/AtsMorphHarmonicCorrespondence.cpp
   src/core/AtsMorphRecipe.cpp
   src/core/AtsMorphTransport.cpp
   src/core/AtsMorphTransportCorrespondence.cpp
+  src/core/AtsOnsetAlignedWarp.cpp
   src/core/AtsParams.cpp
   src/core/AtsSpectralEnvelope.cpp
   src/core/AtsTransientLayer.cpp
   src/core/AtsTransientSmear.cpp
+  src/core/AtsTransientness.cpp
+  src/core/AtsResidualFixes.cpp
   src/core/ParameterRegistry.cpp
   src/core/ResampleLinear.cpp
   src/core/TimbreMotionPlan.cpp

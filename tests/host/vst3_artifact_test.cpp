@@ -288,8 +288,8 @@ int main(int argc, char** argv)
                                     reinterpret_cast<void**>(&controller)) == Steinberg::kResultTrue,
             "controller instance");
     require(controller->initialize(nullptr) == Steinberg::kResultTrue, "controller initialize");
-    require(controller->getParameterCount() == 81, "81 parameter contract");
-    for (Steinberg::Vst::ParamID id = 1; id <= 81; ++id)
+    require(controller->getParameterCount() == 93, "93 parameter contract");
+    for (Steinberg::Vst::ParamID id = 1; id <= 93; ++id)
     {
         require(controller->setParamNormalized(id, 0.5) == Steinberg::kResultTrue,
                 "controller parameter write");
@@ -345,7 +345,7 @@ int main(int argc, char** argv)
     output.channelBuffers32 = channels;
 
     TestParameterChanges parameterChanges;
-    for (Steinberg::Vst::ParamID id = 1; id <= 81; ++id)
+    for (Steinberg::Vst::ParamID id = 1; id <= 93; ++id)
     {
         Steinberg::int32 parameterQueueIndex = -1;
         auto* parameterQueue = parameterChanges.addParameterData(id, parameterQueueIndex);
@@ -357,7 +357,7 @@ int main(int argc, char** argv)
         require(parameterQueue->addPoint(32, 0.75, pointIndex) == Steinberg::kResultTrue,
                 "automation end point");
     }
-    require(parameterChanges.getParameterCount() == 81, "81 automation queues");
+    require(parameterChanges.getParameterCount() == 93, "93 automation queues");
 
     TestEventList events;
     Steinberg::Vst::Event noteOn {};

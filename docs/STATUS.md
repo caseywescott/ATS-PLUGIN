@@ -6,7 +6,7 @@
 historical and carry a banner pointing here. Update this file in the same
 commit as any change that moves a ledger row or closes a task.
 
-**As of:** 2026-09-27, branch `remove-juce`. Evidence was produced at
+**As of:** 2026-11-24, branch `remove-juce`. Evidence was produced at
 `f2057a51` and ledgers promoted at `f708d883`.
 
 ## Verdict
@@ -195,6 +195,113 @@ same path as the VST3 event input (notes transpose the next render around
 middle C). Test: `standalone_audio_midi_test` (menu rows and id decoding,
 MIDI decoding, queue order/overflow, all-notes-off on selection change). Not
 verified by hand: the popup itself and a real MIDI keyboard.
+
+## Research-corpus features (2026-11-24)
+
+A review of `/Volumes/Extreme SSD/Research` (the user's spectral/timbre paper
+corpus) against the plugin produced the additions below. Every default
+reproduces the previous render bit for bit; the state chunk is **v22** and the
+registry grows from 81 to **93 parameters** (`release_matrix_test`,
+`parameter_registry_test`, `host_lifecycle_test` and both artifact tests carry
+the new contract). Suites after the change: `build-core-arm64` 116/116,
+`build-arm64-ui` 121/121 (`-LE 'windowed|perf'`).
+
+Analysis (ANALYSIS page, two new toggles; `AnalysisParams`, `AtsEngine::analyze`):
+
+- **Reverse-time tracking** (Serra 1997): the tracker sees the reversed signal
+  so its guides are locked before they reach the attack; the model is flipped
+  back (`AtsResidualFixes::reverseFrames`), phases dropped.
+- **Clamp residual to source** (Serra 1997): per frame and Bark band the
+  residual energy is capped at the source's own band energy, measured with the
+  same N / block / binning as ATSA's `residual-analysis.c`
+  (`AtsResidualFixes::clampResidualToSource`).
+- **Auto-tune residual terms** (`AnalysisAutoTune`): the score adds Serra's
+  residual whiteness (lag-1..63 autocorrelation of input − phase-locked
+  partials render; noise 0.018, tone 0.69) and Jehan/Johnston per-band
+  tonality (SFM_dB / −60; noise 0.04, tone 0.90), weights 0.15 each. On the
+  four `spectral-envelope-audio` recordings they changed no decision at a
+  budget of 12; they only bite in close calls. `tools/ats_autotune
+  --no-residual-terms` reproduces the old score exactly.
+
+Render (SYNTHESIS page, CHARACTER and ANIMATION groups; `SynthParams`,
+`AtsEngine::render`, applied on a copy after the automation curves):
+
+- **Keep character when transposing** + **transpose tilt** (Serra & Bonada
+  DAFx-98; O'Leary & Griffith DAFx-24): the global frequency factor (knob and
+  MIDI) is realised in the model domain, amplitudes are re-read from each
+  frame's True Envelope so formants stay put, a tilt of N dB/oct per octave
+  of transposition is applied about 1 kHz, and partials crossing 0.95 Nyquist
+  fade out (`AtsTransposeCharacter`). Covers the "formant-preserving pitch"
+  gap in the feature matrix.
+- **Vibrato depth / rate scale** (Herrera & Bonada DAFx-98): carrier = moving
+  median plus one-period mean, modulation scaled 0..2 and resampled in rate;
+  the amplitude ripple of a partial moving through formants is removed with
+  the vibrato rather than kept as tremolo. `analyseVibrato` reports rate,
+  depth and extent with Kaminskyj's 20-cent threshold (`AtsVibrato`; test:
+  5.5 Hz ±40 cents read as 5.50 Hz / 40.0 cents).
+- **Animation shimmer / jitter / rate** (Jensen's Timbre Model; Torvmark):
+  low-pass Gaussian AM (dB rms) and FM (cents rms) with a shared + independent
+  split (correlation 0.3) and emphasis on the three lowest partials
+  (`AtsMicroModulation`).
+- **Residual density** (Hanna DAFx-00/01): 1 = ATSA's single carrier per Bark
+  band (unchanged); 2..32 render the whole residual in the plugin with N
+  jittered carriers per band at 1/√N amplitude each (`AtsResidualSynth`;
+  RMS within 6% of the ATSA reference at N = 1, 4, 16; out-of-band leakage
+  −26 → −61 dB). Note Hanna's fluctuation effect is bounded by the band's
+  BT product; the audible change is mainly smoothness and leakage.
+
+Model tools (partial-view toolbar **Tools...**, each one undoable
+`SpectrumEditCommand`; VST3 forwards them through the existing spectrum-edit
+message):
+
+- Smooth harmonic envelope (Klapuri 2003, `AtsSpectralSmoothness`): two-sided
+  triangular mean of the octave neighbours in (log2 h, dB); a +20 dB outlier
+  returns to within 3 dB of the 1/h line, unboosted partials move < 0.5 dB.
+- Rough voice / growl sub-harmonics (Loscos & Bonada DAFx-04,
+  `AtsSubharmonics`): octave-down copies with 3% period and 3 dB amplitude
+  jitter up to 8 kHz, or the f0·(m + k/4) series.
+- Clamp residual to source, high-pass residual below 300 Hz (Serra), remove /
+  double vibrato, reverse time.
+
+Smearnov and morph:
+
+- **Transientness weight** (Molla & Torrésani, `AtsTransientness`): a sixth
+  detection stream from the source audio, the ratio of the sparsity-based
+  size estimates of a DCT-II (local cosine) and Daubechies-4 expansion per
+  frame (clicks 0.996, steady sine 0.0002, white noise 0.65). With the weight
+  on, each onset's blur/sharpen/exaggerate amount is also scaled by its index
+  so tonal onsets are treated gently. Weight 0 is bit-identical.
+- **Harmonic locked** correspondence (Hatch 2004 §4.4; choice 4 of
+  `morphCorrespondenceStrategy`, `AtsMorphHarmonicCorrespondence`): partials
+  labelled by harmonic number, matched within a semitone after pitch
+  normalisation, unmatched ones paired with silence; static 100 Hz grid when
+  no f0 is reliable.
+- **Morph onset-aligned time warp** (Hatch 2004 §4.2, `AtsOnsetAlignedWarp`):
+  onsets of A and B (Smearnov detector) are moved to α·(tB − tA) + tA with a
+  5 ms unwarped attack hold and a 4:1 slope clamp, applied as same-length
+  time maps on the prepared morph sources; α is the fixed morph amount.
+- **Select... ▸ Min activity** (O'Sullivan & Fernström ICAD 2003): fraction of
+  active frames with positive amplitude curvature, carried on `SpectralTrace`.
+
+Descriptors: `AtsDescriptors` (centroid Hz/Bark, spread, skewness, kurtosis,
+tilt, Serra/Bonada f0 and harmonic distortion, inharmonicity, Menon's
+harmonic-rank centroid, tristimulus, odd/even, noisiness, per-band centroids,
+attack centroid) and `tools/ats_describe <file.ats>` (CSV per frame plus a
+summary footer). Not yet surfaced in the UI.
+
+Tests added: `ats_transientness_test`, `ats_residual_fixes_test`,
+`ats_residual_synth_test`, `ats_micro_modulation_test`, `ats_vibrato_test`,
+`ats_descriptors_test`, `ats_transpose_character_test`,
+`ats_spectral_smoothness_test`, `ats_subharmonics_test`,
+`morph_harmonic_correspondence_test`, `ats_onset_aligned_warp_test`; extended:
+`partial_selection_criteria_test`, `analysis_autotune_test`,
+`legacy_state_codec_test` (v22), `spectrum_chrome_test` (Tools... button).
+
+Not verified by hand: the Tools... popup, the new SYNTHESIS rows (the left
+column is now taller than the panel at small window sizes; overflow rows hide),
+and the audible result of each render option. Housekeeping done in the research
+folder: the two dead `repos/` symlinks now point at the SSD checkouts and
+`Feature_Matrix.md` was refreshed from the vault copy.
 
 ## Open items
 

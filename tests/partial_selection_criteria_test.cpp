@@ -83,6 +83,53 @@ int main()
     assert(invertPartials(snapshot, { 0, 1, 2 }).empty());
     assert((unitePartials({ 2, 0 }, { 0, 1 }) == std::vector<int> { 0, 1, 2 }));
 
+    // Noisy-partial criterion (O'Sullivan & Fernstrom, ICAD 2003): the share
+    // of interior frames with a positive amplitude second difference.  A
+    // wiggly envelope alternating 0.5 / 0.3 is convex on every other frame
+    // (ratio 0.5); a linear decay has zero curvature (ratio 0).
+    SpectralTraceInput noisy;
+    noisy.durationSeconds = 1.0;
+    noisy.frameCount = 10;
+    {
+        SpectralPartialInput wiggly;
+        wiggly.partialIndex = 0;
+        for (int f = 0; f < 10; ++f)
+            wiggly.frames.push_back(SpectralPartialFrame { 2000.0, f % 2 == 0 ? 0.5 : 0.3 });
+        SpectralPartialInput smooth;
+        smooth.partialIndex = 1;
+        for (int f = 0; f < 10; ++f) // 1/16 steps are exact in binary: zero curvature, no roundoff
+            smooth.frames.push_back(SpectralPartialFrame { 3000.0, 1.0 - 0.0625 * f });
+        SpectralPartialInput brief; // two active frames: no interior frame, ratio 0
+        brief.partialIndex = 2;
+        for (int f = 0; f < 10; ++f)
+            brief.frames.push_back(f < 2 ? SpectralPartialFrame { 500.0, 0.4 } : SpectralPartialFrame {});
+        noisy.partials = { wiggly, smooth, brief };
+    }
+    const auto noisySnapshot = SpectralTraceBuilder::build(noisy);
+    for (const auto& trace : noisySnapshot.partials)
+    {
+        if (trace.partialIndex == 0)
+            assert(std::abs(trace.activityRatio - 0.5) < 1.0e-12);
+        if (trace.partialIndex == 1)
+            assert(trace.activityRatio == 0.0);
+        if (trace.partialIndex == 2)
+            assert(trace.activityRatio == 0.0);
+    }
+    // The first snapshot's constant / flat envelopes all score 0.
+    for (const auto& trace : snapshot.partials)
+        assert(trace.activityRatio == 0.0);
+
+    PartialCriteria active;
+    assert(active.empty());
+    active.minActivity = 0.3;
+    assert(!active.empty());
+    assert((matchPartials(noisySnapshot, active) == std::vector<int> { 0 }));
+    active.minActivity = 0.0; // every active partial has ratio >= 0
+    assert((matchPartials(noisySnapshot, active) == std::vector<int> { 0, 1, 2 }));
+    active.minActivity = 0.3;
+    active.minFrequencyHz = 2500.0; // combined with another bound: nothing is both
+    assert(matchPartials(noisySnapshot, active).empty());
+
     std::cout << "partial_selection_criteria_test: ok\n";
     return 0;
 }

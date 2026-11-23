@@ -49,7 +49,7 @@ int main()
     assert(host.identity().tailSeconds == 0.0);
     assert(host.identity().midiInput && !host.identity().midiOutput);
     const auto parameterInfo = host.parameterInfo();
-    assert(parameterInfo.size() == 81);
+    assert(parameterInfo.size() == 93);
     assert(parameterInfo.front().hostNumericId == 1);
     assert(parameterInfo.front().id == "partGain");
     assert(host.setParameterNormalized(parameterInfo.front().hostNumericId, 0.5f));

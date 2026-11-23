@@ -62,6 +62,18 @@ inline void applyLegacyStateToParameterStore(const LegacyState& ls, ParameterSto
     set("analysisLastPeakContribution", static_cast<float>(ls.analysis.last_peak_cont));
     set("analysisSmrContribution",      static_cast<float>(ls.analysis.SMR_cont));
     set("analysisMultiRes",             ls.analysis.multiRes ? 1.0f : 0.0f);
+    // v22; older chunks keep the registry defaults held by LegacyState.
+    set("analysisReverseTracking",      ls.analysis.reverseTracking ? 1.0f : 0.0f);
+    set("analysisClampResidual",        ls.analysis.clampResidual ? 1.0f : 0.0f);
+    set("residualDensity",              static_cast<float>(ls.synth.residualDensity));
+    set("animationShimmerDb",           static_cast<float>(ls.synth.animationShimmerDb));
+    set("animationJitterCents",         static_cast<float>(ls.synth.animationJitterCents));
+    set("animationRateHz",              static_cast<float>(ls.synth.animationRateHz));
+    set("vibratoDepth",                 static_cast<float>(ls.synth.vibratoDepth));
+    set("vibratoRate",                  static_cast<float>(ls.synth.vibratoRateScale));
+    set("transposeCharacter",           ls.synth.transposeCharacter ? 1.0f : 0.0f);
+    set("transposeTiltDbPerOct",        static_cast<float>(ls.synth.transposeTiltDbPerOct));
+    set("morphOnsetAlignedWarp",        ls.morphOnsetAlignedWarp ? 1.0f : 0.0f);
 
     // Morph
     set("morphAmount",                        static_cast<float>(ls.morphAmount));
@@ -113,6 +125,7 @@ inline void applyLegacyStateToParameterStore(const LegacyState& ls, ParameterSto
     set("smearnovMaxAttackFrames",    static_cast<float>(ls.smearnov.maxAttackFrames));
     set("smearnovUsePhaseDeviation",  ls.smearnov.usePhaseDeviation ? 1.0f : 0.0f);
     set("smearnovUseRpcaFallback",    ls.smearnov.useRpcaFallback   ? 1.0f : 0.0f);
+    set("smearnovWeightTransientness", static_cast<float>(ls.smearnov.weightTransientness)); // v22
 }
 
 } // namespace ats

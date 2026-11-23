@@ -52,9 +52,21 @@ std::vector<std::vector<double>> stftMagnitudes(const std::vector<double>& signa
     return frames;
 }
 
+// Zwicker & Fastl critical-band edges (ATSA_CRITICAL_BAND_EDGES); band b spans
+// [edges[b], edges[b+1]).
+constexpr double kBandEdges[] = {
+    0.0, 100.0, 200.0, 300.0, 400.0, 510.0, 630.0, 770.0, 920.0,
+    1080.0, 1270.0, 1480.0, 1720.0, 2000.0, 2320.0, 2700.0, 3150.0,
+    3700.0, 4400.0, 5300.0, 6400.0, 7700.0, 9500.0, 12000.0, 15500.0, 20000.0
+};
+
 struct Evaluation
 {
+    /** Combined score; infinity when the settings produce no model. */
     double loss = std::numeric_limits<double>::infinity();
+    double spectralLoss = std::numeric_limits<double>::infinity();
+    double whiteness = 0.0;
+    double tonality = 0.0;
     int partials = 0;
     /** Mean frequency of the lowest partial within kStrongPartialDb of the
         loudest partial's peak amplitude; 0 when the model has none. */
@@ -108,32 +120,210 @@ Evaluation evaluate(const AutoTuneRequest& request, AnalysisParams parameters,
     result.partials = sound->partials;
     result.lowestStrongPartialHz = lowestStrongPartial(sound);
 
-    SynthParams synth;
-    synth.sampleRate = request.sampleRate;
-    synth.partialsGain = 1.0;
-    synth.residualGain = 1.0;
     const auto frames = static_cast<std::size_t>(
         std::ceil(std::max(0.0, sound->dur) * request.sampleRate)) + 1;
     std::vector<float> rendered(frames, 0.0f);
-    float* channel = rendered.data();
-    AudioBufferView view { &channel, 1, static_cast<std::uint32_t>(frames) };
-    const auto stats = AtsEngine::render(JobGeneration {}, cancellation, sound, synth, view);
-    if (stats.status != JobResult<RenderStats>::Status::success || stats.value.framesWritten == 0
-        || !stats.value.finite)
+    const auto render = [&](double residualGain, bool usePhase) -> std::size_t {
+        SynthParams synth;
+        synth.sampleRate = request.sampleRate;
+        synth.partialsGain = 1.0;
+        synth.residualGain = residualGain;
+        synth.usePartialsPhase = usePhase;
+        std::fill(rendered.begin(), rendered.end(), 0.0f);
+        float* channel = rendered.data();
+        AudioBufferView view { &channel, 1, static_cast<std::uint32_t>(frames) };
+        const auto stats = AtsEngine::render(JobGeneration {}, cancellation, sound, synth, view);
+        if (stats.status != JobResult<RenderStats>::Status::success || !stats.value.finite)
+            return 0;
+        return stats.value.framesWritten;
+    };
+    const auto written = render(1.0, false);
+    if (written == 0)
         return result;
 
     // Score against the analysed span: the model starts at `start` seconds.
     const auto first = std::min(request.sampleCount, static_cast<std::size_t>(
         std::max(0.0, parameters.start) * request.sampleRate));
     std::vector<double> candidate(rendered.begin(),
-                                  rendered.begin() + static_cast<std::ptrdiff_t>(stats.value.framesWritten));
-    result.loss = AnalysisAutoTune::spectralLoss(request.samples + first, request.sampleCount - first,
-                                                 candidate.data(), candidate.size())
+                                  rendered.begin() + static_cast<std::ptrdiff_t>(written));
+    result.spectralLoss = AnalysisAutoTune::spectralLoss(request.samples + first,
+                                                         request.sampleCount - first,
+                                                         candidate.data(), candidate.size());
+    result.loss = result.spectralLoss
         + AnalysisAutoTune::kParsimonyWeight * sound->partials
               / AnalysisAutoTune::kParsimonyReference;
+
+    // Residual terms: r = input - phase-locked partials-only resynthesis over
+    // the same span (ATSA computes its own residual the same way).
+    if (request.whitenessWeight > 0.0 || request.tonalityWeight > 0.0)
+    {
+        const auto partialsOnly = render(0.0, true);
+        if (partialsOnly == 0)
+            return result;
+        const auto n = std::min(request.sampleCount - first, partialsOnly);
+        std::vector<double> residual(n);
+        for (std::size_t i = 0; i < n; ++i)
+            residual[i] = request.samples[first + i] - static_cast<double>(rendered[i]);
+        if (request.whitenessWeight > 0.0)
+            result.whiteness = AnalysisAutoTune::residualWhiteness(residual.data(), n);
+        if (request.tonalityWeight > 0.0)
+            result.tonality = AnalysisAutoTune::residualTonality(residual.data(), n,
+                                                                 request.sampleRate);
+        result.loss += request.whitenessWeight * result.whiteness
+            + request.tonalityWeight * result.tonality;
+    }
     return result;
 }
+
+AutoTuneStep toStep(const AnalysisParams& parameters, const Evaluation& evaluation)
+{
+    AutoTuneStep step;
+    step.parameters = parameters;
+    step.loss = evaluation.loss;
+    step.partials = evaluation.partials;
+    step.spectralLoss = evaluation.spectralLoss;
+    step.whiteness = evaluation.whiteness;
+    step.tonality = evaluation.tonality;
+    return step;
+}
 } // namespace
+
+double AnalysisAutoTune::residualWhiteness(const double* residual, std::size_t count)
+{
+    // Serra (1997) tests the residual's stochasticity with the mean of its
+    // normalised autocorrelation over the first L lags.  The lag sum here is
+    // of |r_xx(l)|: with signed terms a sinusoid whose period is shorter than
+    // ~L samples cancels itself (e.g. a 1 kHz tone at 44.1 kHz would read as
+    // white).  Mean removal and the r_xx(0) normalisation make the value
+    // independent of the residual's level.
+    constexpr auto lags = kWhitenessLags;
+    if (residual == nullptr || count < 2 * lags)
+        return 0.0;
+    double sum = 0.0;
+    std::size_t blocks = 0;
+    for (std::size_t start = 0; start < count; start += kWhitenessBlock)
+    {
+        const auto length = std::min(kWhitenessBlock, count - start);
+        if (length < 2 * lags)
+            break;
+        const double* x = residual + start;
+        double mean = 0.0;
+        for (std::size_t i = 0; i < length; ++i)
+            mean += x[i];
+        mean /= static_cast<double>(length);
+        double r0 = 0.0;
+        for (std::size_t i = 0; i < length; ++i)
+            r0 += (x[i] - mean) * (x[i] - mean);
+        r0 /= static_cast<double>(length);
+        if (!(r0 > 1.0e-30)) // digital silence: no evidence either way
+            continue;
+        double c = 0.0;
+        for (std::size_t lag = 1; lag < lags; ++lag)
+        {
+            double r = 0.0;
+            for (std::size_t i = 0; i + lag < length; ++i)
+                r += (x[i] - mean) * (x[i + lag] - mean);
+            c += std::abs(r / static_cast<double>(length - lag));
+        }
+        sum += c / (static_cast<double>(lags - 1) * r0);
+        ++blocks;
+    }
+    return blocks > 0 ? sum / static_cast<double>(blocks) : 0.0;
+}
+
+double AnalysisAutoTune::residualTonality(const double* residual, std::size_t count, int sampleRate)
+{
+    // Johnston (1988) maps the spectral flatness measure to a tonality
+    // coefficient, alpha = min(SFM_dB / -60, 1); Jehan & Schoner (2001) apply
+    // it per critical band.  A Hann main lobe spans 4 bins, so a band of
+    // fewer bins is "flat" even when it holds a pure tone: bands narrower
+    // than kTonalityMinBandBins are widened symmetrically about their centre
+    // (690 Hz for 2048 bins at 44.1 kHz), the Bark spacing is kept.
+    constexpr int n = kTonalityFftSize;
+    constexpr int bins = n / 2 + 1;
+    if (residual == nullptr || count == 0 || sampleRate <= 0)
+        return 0.0;
+    const double binHz = static_cast<double>(sampleRate) / n;
+    struct Band { int lo, hi; };
+    std::vector<Band> bands;
+    for (std::size_t b = 0; b + 1 < sizeof(kBandEdges) / sizeof(kBandEdges[0]); ++b)
+    {
+        if (kBandEdges[b] >= 0.5 * sampleRate)
+            break;
+        int lo = std::max(1, static_cast<int>(std::lround(kBandEdges[b] / binHz)));
+        int hi = std::min(bins, static_cast<int>(std::lround(kBandEdges[b + 1] / binHz)));
+        if (hi - lo < kTonalityMinBandBins)
+        {
+            const int centre = (lo + hi) / 2;
+            lo = std::max(1, centre - kTonalityMinBandBins / 2);
+            hi = std::min(bins, lo + kTonalityMinBandBins);
+            lo = std::max(1, hi - kTonalityMinBandBins);
+        }
+        if (hi - lo >= 2)
+            bands.push_back({ lo, hi });
+    }
+    if (bands.empty())
+        return 0.0;
+
+    std::vector<double> x(residual, residual + count);
+    if (x.size() < static_cast<std::size_t>(n))
+        x.resize(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> window(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i)
+        window[static_cast<std::size_t>(i)] = 0.5 - 0.5 * std::cos(2.0 * kPi * i / (n - 1));
+    std::vector<double> re(static_cast<std::size_t>(n)), im(static_cast<std::size_t>(n));
+    std::vector<double> power(static_cast<std::size_t>(bins));
+    std::vector<double> arithmetic(bands.size()), geometric(bands.size());
+    const auto floorRatio = std::pow(10.0, kTonalityFloorDb / 10.0);
+    double sum = 0.0;
+    std::size_t counted = 0;
+    for (std::size_t start = 0; start + static_cast<std::size_t>(n) <= x.size();
+         start += static_cast<std::size_t>(kTonalityHop))
+    {
+        double peak = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            re[static_cast<std::size_t>(i)] = x[start + static_cast<std::size_t>(i)]
+                * window[static_cast<std::size_t>(i)];
+            im[static_cast<std::size_t>(i)] = 0.0;
+        }
+        fft(re.data(), im.data(), n, 1);
+        for (int k = 0; k < bins; ++k)
+        {
+            const auto idx = static_cast<std::size_t>(k);
+            power[idx] = re[idx] * re[idx] + im[idx] * im[idx];
+            peak = std::max(peak, power[idx]);
+        }
+        if (!(peak > 0.0))
+            continue; // silent frame
+        // Relative floor (-120 dB) keeps log() finite without depending on level.
+        const auto powerFloor = peak * 1.0e-12;
+        double loudest = 0.0;
+        for (std::size_t b = 0; b < bands.size(); ++b)
+        {
+            double am = 0.0, logSum = 0.0;
+            for (int k = bands[b].lo; k < bands[b].hi; ++k)
+            {
+                const auto p = power[static_cast<std::size_t>(k)] + powerFloor;
+                am += p;
+                logSum += std::log(p);
+            }
+            const auto width = static_cast<double>(bands[b].hi - bands[b].lo);
+            arithmetic[b] = am / width;
+            geometric[b] = std::exp(logSum / width);
+            loudest = std::max(loudest, arithmetic[b]);
+        }
+        for (std::size_t b = 0; b < bands.size(); ++b)
+        {
+            if (arithmetic[b] < loudest * floorRatio)
+                continue; // negligible energy: no tonality evidence
+            const auto sfmDb = 10.0 * std::log10(geometric[b] / arithmetic[b]);
+            sum += std::min(1.0, std::max(0.0, sfmDb / kTonalitySfmDb));
+            ++counted;
+        }
+    }
+    return counted > 0 ? sum / static_cast<double>(counted) : 0.0;
+}
 
 double AnalysisAutoTune::spectralLoss(const double* reference, std::size_t referenceCount,
                                       const double* candidate, std::size_t candidateCount)
@@ -249,12 +439,20 @@ JobResult<AutoTuneResult> AnalysisAutoTune::run(JobGeneration generation,
         result.error = { "analysis_failed", "the current analysis settings do not produce a model" };
         return result;
     }
-    tuned.loss = tuned.initialLoss = initial.loss;
+    const auto accept = [&](const AnalysisParams& parameters, const Evaluation& evaluation) {
+        tuned.parameters = parameters;
+        tuned.loss = evaluation.loss;
+        tuned.spectralLoss = evaluation.spectralLoss;
+        tuned.whiteness = evaluation.whiteness;
+        tuned.tonality = evaluation.tonality;
+        tuned.history.push_back(toStep(parameters, evaluation));
+    };
+    tuned.initialLoss = initial.loss;
     // Guard the starting model's fundamental (see the class comment).
     tuned.lowestFrequencyCap = initial.lowestStrongPartialHz > 0.0
         ? std::max(request.start.lowest_freq, kFundamentalGuard * initial.lowestStrongPartialHz)
         : 0.0;
-    tuned.history.push_back({ request.start, initial.loss, initial.partials });
+    accept(request.start, initial);
 
     // Coordinate descent: sweep every neighbour of the current best, accept
     // each improvement immediately, repeat while a sweep improves.
@@ -278,9 +476,7 @@ JobResult<AutoTuneResult> AnalysisAutoTune::run(JobGeneration generation,
             }
             if (trial.loss < tuned.loss - kMinImprovement)
             {
-                tuned.parameters = candidate;
-                tuned.loss = trial.loss;
-                tuned.history.push_back({ candidate, trial.loss, trial.partials });
+                accept(candidate, trial);
                 improved = true;
                 break; // re-derive neighbours around the new best
             }

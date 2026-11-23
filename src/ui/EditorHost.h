@@ -110,7 +110,18 @@ enum class SpectrumEditCommand : std::uint8_t
     // UI-only selection commands (like prunePartials); never sent to the host.
     selectPartialsByCriteria,
     invertPartialSelection,
-    timeEditMenu
+    timeEditMenu,
+    // Whole-model tools (toolbar TOOLS... menu, 2026-11-24). They ignore the
+    // band/frame selection; `value` carries the single amount each takes.
+    spectralSmoothness,      // Klapuri harmonic-envelope smoothing; value = strength 0..1
+    addSubharmonicsRough,    // Loscos/Bonada octave-down rough voice; value = gain dB
+    addSubharmonicsGrowl,    // Loscos/Bonada growl sub-harmonic series; value = gain dB
+    clampResidualToSource,   // Serra: band energy <= source band energy (needs source audio)
+    highPassResidual,        // Serra: attenuate residual bands below value Hz
+    removeVibrato,           // Herrera/Bonada: flatten frequency and amplitude modulation
+    doubleVibrato,           // Herrera/Bonada: depth x2
+    reverseFrames,           // time-reverse the model
+    toolsMenu                // UI-only: opens the menu
 };
 struct SpectrumEditAction
 {
