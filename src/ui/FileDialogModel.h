@@ -41,6 +41,9 @@ public:
             return EditorAction{ SavePresetAction{ path } };
         case NativeFileDialogKind::loadPreset:
             return EditorAction{ LoadPresetAction{ path } };
+        case NativeFileDialogKind::bounceWav:
+            // `slot` carries the audition layer (0 both, 1 partials, 2 residual).
+            return EditorAction{ BounceMorphTimelineAction{ path, slot } };
         }
         return std::nullopt;
     }

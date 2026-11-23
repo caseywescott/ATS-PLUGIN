@@ -169,11 +169,15 @@ cached per model revision. Tests: `partial_selection_criteria_test`,
   WARP, RESET, click to add and drag a point, double-click to remove, the
   `"{t}s  {value}"` drag readout, axis labels; clicking the time strip seeks.
   MORPH edits send typed `SetMorphTimelineAction` points. `CurveEditorModel`
-  holds the logic; test `curve_editor_model_test`. Not yet done from §8.2:
-  curve shapes per segment and BOUNCE.
-- Known limitation (pre-existing): typed morph-timeline points are not saved
-  in the state chunk (only their amounts), so after a reload the MORPH curve
-  shows its amounts evenly spaced.
+  holds the logic; test `curve_editor_model_test`.
+- Follow-up (same day): shift-click a MORPH point to cycle the easing of the
+  segment it starts (linear / ease in / ease out / ease in-out, drawn with
+  `applyMorphCurve`'s formulas); BOUNCE saves the morph render of the current
+  audition layer as WAV (`NativeFileDialogKind::bounceWav` ->
+  `BounceMorphTimelineAction`); state v21 saves the typed morph points (time,
+  amount, kind, easing), which used to be reduced to evenly spaced amounts on
+  reload. Tests: `curve_editor_model_test`, `legacy_state_codec_test`,
+  `host_sound_curves_test`, `preset_file_workflow_test`.
 
 ## Open items
 
@@ -186,5 +190,5 @@ cached per model revision. Tests: `partial_selection_criteria_test`,
   unreferenced): decide whether they belong in the repository.
 - T-402 remaining: tooltip text and keyboard navigation audit against
   `ats-mearcstapa-ui-spec.md`.
-- SESSION timeline (spec §8.2): node editor done (see 2026-11-23); per-segment
-  curve shapes and BOUNCE remain, and typed morph points are not persisted.
+- SESSION timeline (spec §8.2): done, including segment easing, BOUNCE and
+  saved morph point times (see 2026-11-23).

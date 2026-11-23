@@ -13,6 +13,7 @@ enum class NativeFileDialogKind : int
     exportAts = 2,
     savePreset = 3
     , loadPreset = 4
+    , bounceWav = 5   // SESSION timeline BOUNCE: save the morph render as WAV
 };
 
 enum class NativeFileDialogStatus : std::uint8_t

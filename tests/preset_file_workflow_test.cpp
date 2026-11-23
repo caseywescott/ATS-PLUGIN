@@ -348,5 +348,13 @@ int main()
     test_factory_preset_codec_roundtrip(factFolder);
 
     std::filesystem::remove_all(folder, ec);
+    // BOUNCE: a save-panel path becomes a bounce of the given audition layer.
+    {
+        const auto bounce = ats::ui::FileDialogModel::resolve(ats::ui::NativeFileDialogKind::bounceWav,
+                                                              { true, "/out/morph.wav" }, 1);
+        assert(bounce);
+        const auto* action = std::get_if<ats::ui::BounceMorphTimelineAction>(&*bounce);
+        assert(action != nullptr && action->path.utf8 == "/out/morph.wav" && action->layer == 1);
+    }
     return 0;
 }

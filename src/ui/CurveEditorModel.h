@@ -21,6 +21,9 @@ struct CurvePoint
 {
     float x = 0.0f; // normalised time
     float y = 0.0f; // curve units
+    // MORPH only: easing of the segment that starts here (MorphCurveShape
+    // order: 0 linear, 1 ease in, 2 ease out, 3 ease in-out).
+    std::uint8_t shape = 0;
 };
 
 struct CurveRange
@@ -171,6 +174,69 @@ public:
         dragging_ = -1;
         moved_ = false;
         return changed;
+    }
+
+    /** MORPH segment easing, matching applyMorphCurve in AtsMorphRecipe.cpp. */
+    [[nodiscard]] static double ease(double t, std::uint8_t shape) noexcept
+    {
+        t = std::clamp(t, 0.0, 1.0);
+        switch (shape)
+        {
+        case 1: return t * t;
+        case 2: return 1.0 - (1.0 - t) * (1.0 - t);
+        case 3: return t * t * (3.0 - 2.0 * t);
+        default: return t;
+        }
+    }
+
+    [[nodiscard]] static const char* shapeName(std::uint8_t shape) noexcept
+    {
+        switch (shape)
+        {
+        case 1: return "ease in";
+        case 2: return "ease out";
+        case 3: return "ease in-out";
+        default: return "linear";
+        }
+    }
+
+    /** MORPH: cycles the easing of the segment starting at the point under
+        `s`.  True when a point was hit. */
+    bool cycleShape(UiPoint s)
+    {
+        if (tab_ != CurveTab::morph)
+            return false;
+        const auto at = hit(s);
+        if (at < 0)
+            return false;
+        auto& point = points_[index(tab_)][static_cast<std::size_t>(at)];
+        point.shape = static_cast<std::uint8_t>((point.shape + 1) % 4);
+        return true;
+    }
+
+    /** Screen polyline of the current curve, held to both ends, with MORPH
+        segments sampled through their easing. */
+    [[nodiscard]] std::vector<UiPoint> polyline() const
+    {
+        std::vector<UiPoint> line;
+        const auto& pts = points();
+        if (pts.empty())
+            return line;
+        line.push_back(toScreen({ 0.0f, pts.front().y }));
+        for (std::size_t i = 0; i < pts.size(); ++i)
+        {
+            if (i > 0 && tab_ == CurveTab::morph && pts[i - 1].shape != 0)
+                for (int k = 1; k < 16; ++k)
+                {
+                    const auto t = k / 16.0;
+                    const auto e = ease(t, pts[i - 1].shape);
+                    line.push_back(toScreen({ static_cast<float>(pts[i - 1].x + t * (pts[i].x - pts[i - 1].x)),
+                                              static_cast<float>(pts[i - 1].y + e * (pts[i].y - pts[i - 1].y)) }));
+                }
+            line.push_back(toScreen(pts[i]));
+        }
+        line.push_back(toScreen({ 1.0f, pts.back().y }));
+        return line;
     }
 
     /** Empties the current curve (its identity), or MORPH back to 0 -> 1. */

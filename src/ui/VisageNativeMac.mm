@@ -113,7 +113,8 @@ NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& reques
     NSOpenPanel* openPanel = nil;
     const auto kind = request.kind;
     const bool save = kind == NativeFileDialogKind::exportAts ||
-                      kind == NativeFileDialogKind::savePreset;
+                      kind == NativeFileDialogKind::savePreset ||
+                      kind == NativeFileDialogKind::bounceWav;
     if (save)
         savePanel = [NSSavePanel savePanel];
     else
@@ -124,8 +125,8 @@ NativeFileDialogResult runNativeFileDialog(const NativeFileDialogRequest& reques
         savePanel.canCreateDirectories = YES;
         savePanel.canSelectHiddenExtension = YES;
         savePanel.nameFieldStringValue = [NSString stringWithUTF8String:request.suggestedName.c_str()];
-        savePanel.allowedFileTypes = kind == NativeFileDialogKind::savePreset
-            ? @[ @"atspreset" ] : @[ @"ats" ];
+        savePanel.allowedFileTypes = kind == NativeFileDialogKind::savePreset ? @[ @"atspreset" ]
+            : kind == NativeFileDialogKind::bounceWav ? @[ @"wav" ] : @[ @"ats" ];
     }
     if (openPanel != nil)
     {

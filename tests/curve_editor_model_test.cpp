@@ -71,6 +71,24 @@ int main()
     model.reset();
     assert(model.points().size() == 2 && model.points().back().y == 1.0f);
 
+    // MORPH segment shapes: shift-click cycles the segment that starts at a
+    // point; the polyline follows the easing; other tabs ignore it.
+    model.setTab(CurveTab::morph);
+    model.setPoints(CurveTab::morph, { { 0.0f, 0.0f }, { 1.0f, 1.0f } });
+    assert(model.cycleShape(model.toScreen({ 0.0f, 0.0f })));
+    assert(model.points().front().shape == 1);
+    const auto eased = model.polyline();
+    assert(eased.size() > 4); // sampled segment
+    // Ease-in at the midpoint: 0.25 of the way up, not 0.5.
+    const auto halfway = eased[1 + 8];
+    assert(std::abs(model.fromScreen(halfway).y - 0.25f) < 0.02f);
+    for (int i = 0; i < 3; ++i) (void) model.cycleShape(model.toScreen({ 0.0f, 0.0f }));
+    assert(model.points().front().shape == 0); // wraps after ease in-out
+    assert(std::abs(CurveEditorModel::ease(0.5, 3) - 0.5) < 1.0e-12);
+    assert(std::abs(CurveEditorModel::ease(0.5, 2) - 0.75) < 1.0e-12);
+    model.setTab(CurveTab::pitch);
+    assert(!model.cycleShape(model.toScreen({ 0.25f, 12.0f })));
+
     // Flattening round-trips.
     const std::vector<CurvePoint> pts { { 0.0f, 1.0f }, { 0.5f, -3.0f } };
     const auto flat = CurveEditorModel::flatten(pts);

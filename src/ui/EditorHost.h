@@ -231,6 +231,8 @@ struct EditorSnapshot
     std::array<std::vector<float>, 3> soundCurves {};
     // The morph curve's typed points with their times, flattened (time, amount).
     std::vector<float> morphCurve { 0.0f, 0.0f, 1.0f, 1.0f };
+    // Easing per morph point (MorphCurveShape ordinal), same order as morphCurve.
+    std::vector<std::uint8_t> morphCurveShapes { 0, 0 };
     std::string presetName;
     std::string undoLabel;
     std::string redoLabel;

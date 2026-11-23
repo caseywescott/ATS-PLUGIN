@@ -35,6 +35,7 @@ int main()
     source.timbreNoiseBalance = 0.8;
     source.soundCurves[0] = { 0.0f, 0.0f, 0.5f, 0.25f, 1.0f, 1.0f }; // time warp
     source.soundCurves[1] = { 0.0f, -3.0f, 1.0f, 12.0f };             // pitch
+    source.morphTimelinePoints = { 0.0f, 0.0f, 0.0f, 1.0f, 0.4f, 0.8f, 0.0f, 3.0f, 1.0f, 1.0f, 0.0f, 0.0f };
 
     for (std::uint32_t version = 2; version <= ats::LegacyStateCodec::kCurrentVersion; ++version)
     {
@@ -73,6 +74,10 @@ int main()
             assert(decoded->timbreBrightnessDb == 0.0 && decoded->timbreTiltDbPerOct == 0.0 &&
                    decoded->timbreNoiseBalance == 0.5);
         }
+        if (version >= 21)
+            assert(decoded->morphTimelinePoints == source.morphTimelinePoints);
+        else
+            assert(decoded->morphTimelinePoints.empty());
         if (version >= 20)
             assert(decoded->soundCurves == source.soundCurves);
         else
@@ -117,5 +122,5 @@ int main()
     for (unsigned byte = 0; byte < sizeof(nanBits); ++byte)
         corrupt[outputTrimOffset + byte] = static_cast<std::byte>(nanBits >> (byte * 8));
     assert(!ats::LegacyStateCodec::decode(corrupt.data(), corrupt.size()));
-    std::cout << "legacy_state_codec_test: ATSP v2-v20 payload round-trip ok\n";
+    std::cout << "legacy_state_codec_test: ATSP v2-v21 payload round-trip ok\n";
 }

@@ -36,6 +36,22 @@ int main()
     assert(restored.restoreState(chunk));
     assert(restored.editorSnapshot().soundCurves[1] == expected);
 
+    // Typed morph points (time + easing) survive save / restore (state v21).
+    ats::ui::SetMorphTimelineAction morph;
+    morph.points = { { 0.0f, 0.0f, 0, 2 }, { 0.3f, 0.9f, 0, 3 }, { 1.0f, 0.2f, 0, 0 } };
+    assert(host.applySessionAction(morph, error) && !error);
+    const auto morphChunk = host.captureState();
+    ats::host::HostAdapter morphRestored;
+    assert(morphRestored.initialize(ats::host::HostFormat::standalone));
+    assert(morphRestored.restoreState(morphChunk));
+    const auto restoredSnapshot = morphRestored.editorSnapshot();
+    const std::vector<float> morphExpected { 0.0f, 0.0f, 0.3f, 0.9f, 1.0f, 0.2f };
+    assert(restoredSnapshot.morphCurve.size() == morphExpected.size());
+    for (std::size_t i = 0; i < morphExpected.size(); ++i)
+        assert(std::abs(restoredSnapshot.morphCurve[i] - morphExpected[i]) < 1.0e-6f);
+    assert((restoredSnapshot.morphCurveShapes == std::vector<std::uint8_t> { 2, 3, 0 }));
+    assert(host.applyEditorAction(ats::ui::HistoryAction { false }, error) && !error); // undo the morph edit
+
     // Undo returns to the empty curve.
     assert(host.applyEditorAction(ats::ui::HistoryAction { false }, error) && !error);
     assert(host.editorSnapshot().soundCurves[1].empty());

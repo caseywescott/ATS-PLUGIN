@@ -175,6 +175,9 @@ bool validState(const LegacyState& state) noexcept
         if (!std::isfinite(v) || v < 0.0f || v > 1.0f) return false;
     if (state.timbreJson.size() > kMaxBlobBytes) return false;
     if (state.smearnovOnsets.size() > 4096) return false;
+    if (state.morphTimelinePoints.size() % 4 != 0 || state.morphTimelinePoints.size() > 4 * 64) return false;
+    for (float v : state.morphTimelinePoints)
+        if (!std::isfinite(v)) return false;
     for (const auto& curve : state.soundCurves)
     {
         if (curve.size() % 2 != 0 || curve.size() > 128) return false;
@@ -263,6 +266,8 @@ std::vector<std::byte> LegacyStateCodec::encode(const LegacyState& state, std::u
     if (version >= 20)
         for (const auto& curve : state.soundCurves)
             writeFloatVec(writer, curve);
+    if (version >= 21)
+        writeFloatVec(writer, state.morphTimelinePoints);
     return std::move(writer).take();
 }
 
@@ -356,6 +361,7 @@ std::optional<LegacyState> LegacyStateCodec::decode(const void* data, std::size_
     if (version >= 20)
         for (auto& curve : state.soundCurves)
             if (!readFloatVec(reader, curve, 128)) return std::nullopt;
+    if (version >= 21 && !readFloatVec(reader, state.morphTimelinePoints, 4 * 64)) return std::nullopt;
     if (!validState(state) || reader.remaining() != 0) return std::nullopt;
     return state;
 }

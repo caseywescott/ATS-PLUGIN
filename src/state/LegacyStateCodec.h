@@ -105,12 +105,14 @@ struct LegacyState
     // v20: render-time automation curves (time warp, pitch, spectral warp),
     // flattened x, y pairs as in ui::SetSoundCurveAction.
     std::array<std::vector<float>, 3> soundCurves {};
+    // v21: typed morph-timeline points, flattened (time, amount, kind, curve).
+    std::vector<float> morphTimelinePoints;
 };
 
 class LegacyStateCodec
 {
 public:
-    static constexpr std::uint32_t kCurrentVersion = 20;
+    static constexpr std::uint32_t kCurrentVersion = 21;
     static constexpr std::uint32_t kMinimumReadableVersion = 2;
 
     [[nodiscard]] static std::vector<std::byte> encode(const LegacyState& state,

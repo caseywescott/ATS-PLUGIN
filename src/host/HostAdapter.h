@@ -370,11 +370,13 @@ public:
         snapshot.timeline = timeline_;
         snapshot.soundCurves = soundCurvesFlat();
         snapshot.morphCurve.clear();
+        snapshot.morphCurveShapes.clear();
         for (const auto& point : morphTimelinePoints())
             if (point.kind == engine::TimelinePointKind::morph)
             {
                 snapshot.morphCurve.push_back(static_cast<float>(point.timeNorm));
                 snapshot.morphCurve.push_back(static_cast<float>(point.amount));
+                snapshot.morphCurveShapes.push_back(static_cast<std::uint8_t>(point.curve));
             }
         snapshot.timbrePlan = timbrePlan_;
         snapshot.onsets = onsetOverlay_;
@@ -1988,6 +1990,14 @@ public:
 
         ls.morphTimeline   = timeline_;
         ls.soundCurves     = soundCurvesFlat();
+        ls.morphTimelinePoints.clear();
+        for (const auto& point : typedTimeline_)
+        {
+            ls.morphTimelinePoints.push_back(static_cast<float>(point.timeNorm));
+            ls.morphTimelinePoints.push_back(static_cast<float>(point.amount));
+            ls.morphTimelinePoints.push_back(static_cast<float>(point.kind));
+            ls.morphTimelinePoints.push_back(static_cast<float>(point.curve));
+        }
         ls.smearnovOnsets  = onsetOverlay_;
         ls.timbreJson      = timbrePlanJson_.empty()
             ? serializeTimbreMotionPlan(makeTimbreMotionPlan()) : timbrePlanJson_;
@@ -2535,6 +2545,13 @@ private:
         for (std::size_t i = 0; i < ls.soundCurves.size(); ++i)
             setSoundCurveFromFlat(static_cast<ui::SoundCurveKind>(i), ls.soundCurves[i]);
         typedTimeline_.clear();
+        // v21: typed morph points (time, amount, kind, curve).
+        for (std::size_t i = 0; i + 3 < ls.morphTimelinePoints.size(); i += 4)
+            typedTimeline_.push_back({ ls.morphTimelinePoints[i], ls.morphTimelinePoints[i + 1],
+                static_cast<engine::TimelinePointKind>(std::clamp(static_cast<int>(ls.morphTimelinePoints[i + 2]), 0, 2)),
+                static_cast<MorphCurveShape>(std::clamp(static_cast<int>(ls.morphTimelinePoints[i + 3]), 0, 3)) });
+        if (!typedTimeline_.empty())
+            typedTimeline_ = engine::MorphTimelineService::sanitize(std::move(typedTimeline_));
         timbrePlanJson_ = ls.timbreJson;
         onsetOverlay_ = ls.smearnovOnsets;
         onsetHandleOverlay_.clear();

@@ -495,7 +495,12 @@ public:
         }
         if (snapshot.timeline.size() >= 2)
             shell_.session().setTimeline(snapshot.timeline);
-        curveEditor_.setPoints(CurveTab::morph, CurveEditorModel::unflatten(snapshot.morphCurve));
+        {
+            auto morph = CurveEditorModel::unflatten(snapshot.morphCurve);
+            for (std::size_t i = 0; i < morph.size() && i < snapshot.morphCurveShapes.size(); ++i)
+                morph[i].shape = static_cast<std::uint8_t>(std::min<int>(snapshot.morphCurveShapes[i], 3));
+            curveEditor_.setPoints(CurveTab::morph, std::move(morph));
+        }
         curveEditor_.setPoints(CurveTab::timeWarp, CurveEditorModel::unflatten(snapshot.soundCurves[0]));
         curveEditor_.setPoints(CurveTab::pitch, CurveEditorModel::unflatten(snapshot.soundCurves[1]));
         curveEditor_.setPoints(CurveTab::spectralWarp, CurveEditorModel::unflatten(snapshot.soundCurves[2]));
@@ -1098,8 +1103,9 @@ public:
             canvas.text(CurveEditorModel::range(tab).label, buttonFont, visage::Font::kCenter,
                         layout.tabs[i].x, layout.tabs[i].y, layout.tabs[i].width, layout.tabs[i].height);
         }
-        const std::array<std::pair<const char*, UiRect>, 3> buttons {{
-            { "RESET", layout.reset }, { "DETECT", layout.detect }, { "APPLY", layout.apply } }};
+        const std::array<std::pair<const char*, UiRect>, 4> buttons {{
+            { "RESET", layout.reset }, { "BOUNCE", layout.bounce },
+            { "DETECT", layout.detect }, { "APPLY", layout.apply } }};
         for (const auto& [label, rect] : buttons)
         {
             paintThemeOps(canvas, ThemeRecipes::buttonBackground(tokens, rect, false, false));
@@ -1145,11 +1151,7 @@ public:
         const auto& points = curveEditor_.points();
         if (!points.empty())
         {
-            std::vector<UiPoint> line;
-            line.push_back(curveEditor_.toScreen({ 0.0f, points.front().y }));
-            for (const auto& p : points)
-                line.push_back(curveEditor_.toScreen(p));
-            line.push_back(curveEditor_.toScreen({ 1.0f, points.back().y }));
+            const auto line = curveEditor_.polyline();
             if (curveEditor_.tab() == CurveTab::morph)
             {
                 canvas.setColor((tokens.accent.argb & 0x00ffffffu) | 0x22000000u);
@@ -1190,7 +1192,7 @@ public:
     struct CurveEditorLayout
     {
         std::array<UiRect, 4> tabs {};
-        UiRect reset {}, detect {}, apply {}, plot {}, seek {};
+        UiRect reset {}, bounce {}, detect {}, apply {}, plot {}, seek {};
     };
 
     // Every timeline rect is derived here so paint and hit tests agree.
@@ -1202,6 +1204,7 @@ public:
         for (std::size_t i = 0; i < l.tabs.size(); ++i)
             l.tabs[i] = { timeline.x + 10.0f + static_cast<float>(i) * (tabW + 2.0f), y, tabW, h };
         l.reset = { l.tabs.back().x + tabW + 8.0f, y, 50.0f, h };
+        l.bounce = { l.reset.x + l.reset.width + 6.0f, y, 58.0f, h };
         l.apply = { timeline.x + timeline.width - 10.0f - 64.0f, y, 64.0f, h };
         l.detect = { l.apply.x - 6.0f - 64.0f, y, 64.0f, h };
         l.plot = { timeline.x + 42.0f, y + h + 6.0f, std::max(0.0f, timeline.width - 52.0f),
@@ -1220,7 +1223,7 @@ public:
         {
             SetMorphTimelineAction action;
             for (const auto& p : points)
-                action.points.push_back({ p.x, std::clamp(p.y, 0.0f, 1.0f), 0, 0 });
+                action.points.push_back({ p.x, std::clamp(p.y, 0.0f, 1.0f), 0, p.shape });
             if (action.points.empty())
                 action.points = { { 0.0f, 0.0f, 0, 0 }, { 1.0f, 1.0f, 0, 0 } };
             emitAction(action);
@@ -1809,6 +1812,13 @@ public:
             redraw();
             return true;
         }
+        if (pointInRect(point, layout.bounce))
+        {
+            // The morph render of the current audition layer, saved as WAV.
+            runSourceImportDialog(NativeFileDialogKind::bounceWav,
+                                  shell_.session().previewAction(false).layer);
+            return true;
+        }
         if (pointInRect(point, layout.seek))
         {
             const auto normalized = std::clamp(
@@ -1819,6 +1829,13 @@ public:
             return true;
         }
         curveEditor_.setPlot(layout.plot);
+        // Shift-click a MORPH point: cycle the easing of the segment it starts.
+        if (shift && curveEditor_.cycleShape({ point.x, point.y }))
+        {
+            commitCurve();
+            redraw();
+            return true;
+        }
         if (curveEditor_.inPlot({ point.x, point.y }))
         {
             // A removal commits at once; an added or grabbed point commits on
