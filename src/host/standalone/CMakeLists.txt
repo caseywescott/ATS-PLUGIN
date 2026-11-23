@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-add_executable(ats_resynth_standalone MACOSX_BUNDLE AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm)
+add_executable(ats_resynth_standalone MACOSX_BUNDLE AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm StandaloneMidiInput.mm)
 target_compile_features(ats_resynth_standalone PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_standalone PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
@@ -8,7 +8,7 @@ target_include_directories(ats_resynth_standalone PRIVATE
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_standalone PRIVATE
   ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa"
-  "-framework AudioToolbox" "-framework CoreAudio")
+  "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreMIDI")
 set_target_properties(ats_resynth_standalone PROPERTIES
   OUTPUT_NAME "ATS Resynth"
   MACOSX_BUNDLE_GUI_IDENTIFIER "com.atsplugin.resynth"
@@ -58,7 +58,7 @@ add_custom_command(TARGET ats_resynth_standalone POST_BUILD
   COMMENT "Embedding dependencies and signing ATS Resynth.app"
   VERBATIM)
 
-add_executable(ats_resynth_standalone_smoke AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm)
+add_executable(ats_resynth_standalone_smoke AtsStandaloneMain.mm StandaloneDispatchMatrix.mm StandaloneAudioOutput.mm StandaloneMidiInput.mm)
 target_compile_features(ats_resynth_standalone_smoke PRIVATE cxx_std_17)
 target_include_directories(ats_resynth_standalone_smoke PRIVATE
   "${CMAKE_SOURCE_DIR}/src/core"
@@ -66,7 +66,7 @@ target_include_directories(ats_resynth_standalone_smoke PRIVATE
   "${CMAKE_SOURCE_DIR}/src/ui")
 target_link_libraries(ats_resynth_standalone_smoke PRIVATE
   ats_host_vst3 ats_file_service ats_preset_service ats_visage_editor visage "-framework Cocoa"
-  "-framework AudioToolbox" "-framework CoreAudio")
+  "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreMIDI")
 enable_testing()
 add_test(NAME ats_resynth_standalone_smoke
   COMMAND ats_resynth_standalone_smoke --smoke)
@@ -82,3 +82,12 @@ set_tests_properties(ats_resynth_standalone_smoke ats_resynth_standalone_close_s
   ats_resynth_standalone_dispatch_matrix
   PROPERTIES LABELS windowed RUN_SERIAL TRUE)
 set_tests_properties(ats_resynth_standalone_dispatch_matrix PROPERTIES SKIP_RETURN_CODE 77)
+
+# Device-free logic of the AUDIO menu and MIDI input.
+add_executable(standalone_audio_midi_test
+  "${CMAKE_SOURCE_DIR}/tests/host/standalone_audio_midi_test.mm" StandaloneMidiInput.mm)
+target_compile_features(standalone_audio_midi_test PRIVATE cxx_std_17)
+target_include_directories(standalone_audio_midi_test PRIVATE
+  "${CMAKE_SOURCE_DIR}/src/core" "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/src/ui")
+target_link_libraries(standalone_audio_midi_test PRIVATE "-framework Foundation" "-framework CoreMIDI")
+add_test(NAME standalone_audio_midi_test COMMAND standalone_audio_midi_test)

@@ -179,13 +179,29 @@ cached per model revision. Tests: `partial_selection_criteria_test`,
   reload. Tests: `curve_editor_model_test`, `legacy_state_codec_test`,
   `host_sound_curves_test`, `preset_file_workflow_test`.
 
+## Standalone audio device and MIDI input (2026-11-23)
+
+The legacy JUCE standalone holder had both; the native app now does too.
+An AUDIO header button (standalone only, via `VisageEditor::setAudioMenu`)
+lists output devices ("System default" follows the macOS default through the
+default-output unit; a named device is pinned through AUHAL) and MIDI inputs
+(all sources, none, or one). Choices persist in `NSUserDefaults`
+(`AudioOutputDeviceUID`, `MidiInputMode`, `MidiInputSourceID`); a saved device
+that is gone falls back to the system default for that launch. Switching
+devices stops the preview and re-prepares the host at the new rate.
+`StandaloneMidiInput` decodes CoreMIDI UMP note on/off and CC 120/123 into an
+SPSC queue drained by the render callback into `HostAdapter::process()`, the
+same path as the VST3 event input (notes transpose the next render around
+middle C). Test: `standalone_audio_midi_test` (menu rows and id decoding,
+MIDI decoding, queue order/overflow, all-notes-off on selection change). Not
+verified by hand: the popup itself and a real MIDI keyboard.
+
 ## Open items
 
 - Logic session (T-204) and plugin validation (ARCH-HOST-001).
 - `DSP-METER-001`: `tests/ui/spectrum_real_dispatch_test.cpp` does not exist.
 - State corpus from a legacy JUCE binary (the current corpus is produced by
   the byte-compatible codec).
-- Standalone: device selection and MIDI input (legacy holder had both).
 - `assets/` and `slider/` (UI design assets, ~80 MB, untracked and
   unreferenced): decide whether they belong in the repository.
 - T-402 remaining: tooltip text and keyboard navigation audit against

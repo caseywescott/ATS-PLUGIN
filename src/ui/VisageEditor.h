@@ -4,11 +4,23 @@
 #include "SpectralTraceBuilder.h"
 #include "ThemeTokens.h"
 
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ats::ui
 {
+
+/** One row of the standalone AUDIO menu (output device, MIDI input). */
+struct AudioMenuOption
+{
+    int id = 0;               // passed back to the chosen handler; <= 0 = a heading
+    std::string label;
+    bool checked = false;
+    bool enabled = true;
+    bool breakBefore = false; // separator above this row
+};
 
 class VisageEditor final : public IEditor
 {
@@ -34,6 +46,10 @@ public:
     EditorSize constrainSize(EditorSize requested) const override;
 
     void setTheme(ThemeId theme);
+    // Standalone only: shows an AUDIO header button.  `options` is called on
+    // each click (devices come and go); `chosen` receives the picked id.
+    void setAudioMenu(std::function<std::vector<AudioMenuOption>()> options,
+                      std::function<void(int)> chosen);
     // Opt-in per-user preferences (theme). Wrappers call this; tests that
     // build an editor directly stay independent of the user's file. An empty
     // path uses ~/Library/Application Support/ATS Resynth.

@@ -4,7 +4,9 @@
 #include "../../state/ParameterPresetCodec.h"
 #include "../../platform/FileService.h"
 #include "../../ui/VisageEditor.h"
+#include "StandaloneAudioMenu.h"
 #include "StandaloneAudioOutput.h"
+#include "StandaloneMidiInput.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -12,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <thread>
 #include <variant>
 
@@ -46,6 +49,109 @@ void drainEvents(NSApplication* application, double seconds)
         else
             std::this_thread::yield();
     }
+}
+
+// NSUserDefaults keys (domain com.atsplugin.resynth).
+NSString* const kOutputDeviceKey = @"AudioOutputDeviceUID";
+NSString* const kMidiModeKey = @"MidiInputMode";     // "all", "none" or "one"
+NSString* const kMidiSourceKey = @"MidiInputSourceID";
+
+std::string savedOutputDevice()
+{
+    NSString* uid = [[NSUserDefaults standardUserDefaults] stringForKey:kOutputDeviceKey];
+    return uid.UTF8String != nullptr ? std::string(uid.UTF8String) : std::string();
+}
+
+void restoreMidiSelection(ats::standalone::StandaloneMidiInput& midi)
+{
+    using Mode = ats::standalone::StandaloneMidiInput::Mode;
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+    NSString* mode = [defaults stringForKey:kMidiModeKey];
+    if ([mode isEqualToString:@"none"])
+        midi.select(Mode::none);
+    else if ([mode isEqualToString:@"one"])
+        midi.select(Mode::one, static_cast<MIDIUniqueID>([defaults integerForKey:kMidiSourceKey]));
+    else
+        midi.select(Mode::all);
+}
+
+// Starts the saved device, falling back to the system default when it is
+// gone (unplugged interface); the saved choice is kept for next launch.
+void startAudio(ats::standalone::StandaloneAudioOutput& audio, ats::host::HostAdapter& host,
+                const std::string& uid)
+{
+    std::string error;
+    if (audio.start(host, false, error, uid))
+        return;
+    if (!uid.empty())
+    {
+        std::cerr << "ATS Resynth: " << error << "; using the system default output\n";
+        error.clear();
+        if (audio.start(host, false, error))
+            return;
+    }
+    std::cerr << "ATS Resynth: audio output unavailable: " << error << '\n';
+}
+
+void installAudioMenu(ats::ui::VisageEditor& editor, ats::standalone::StandaloneAudioOutput& audio,
+                      ats::standalone::StandaloneMidiInput& midi, ats::host::HostAdapter& host)
+{
+    using namespace ats::standalone;
+    // The lists the menu was last built from; a pick indexes into them.
+    struct Lists
+    {
+        std::vector<AudioMenuDevice> devices;
+        std::vector<AudioMenuMidiSource> sources;
+    };
+    auto lists = std::make_shared<Lists>();
+    auto* audioOut = &audio;
+    auto* midiIn = &midi;
+    auto* hostAdapter = &host;
+    editor.setAudioMenu(
+        [lists, audioOut, midiIn] {
+            lists->devices.clear();
+            for (const auto& device : StandaloneAudioOutput::outputDevices())
+                lists->devices.push_back({ device.uid, device.name });
+            lists->sources.clear();
+            for (const auto& source : StandaloneMidiInput::sources())
+                lists->sources.push_back({ source.id, source.name });
+            const auto mode = midiIn->mode() == StandaloneMidiInput::Mode::none ? MidiMenuMode::none
+                            : midiIn->mode() == StandaloneMidiInput::Mode::one ? MidiMenuMode::one
+                                                                               : MidiMenuMode::all;
+            return buildAudioMenu(lists->devices, audioOut->deviceUid(), audioOut->running(),
+                                  lists->sources, mode, midiIn->selectedId());
+        },
+        [lists, audioOut, midiIn, hostAdapter](int id) {
+            const auto choice = resolveAudioMenuChoice(id, lists->devices, lists->sources);
+            if (!choice)
+                return;
+            NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+            if (choice->kind == AudioMenuChoice::Kind::midiInput)
+            {
+                using Mode = StandaloneMidiInput::Mode;
+                const auto mode = choice->midiMode == MidiMenuMode::none ? Mode::none
+                                : choice->midiMode == MidiMenuMode::one ? Mode::one : Mode::all;
+                midiIn->select(mode, choice->midiSourceId);
+                [defaults setObject:(mode == Mode::none ? @"none" : mode == Mode::one ? @"one" : @"all")
+                             forKey:kMidiModeKey];
+                [defaults setInteger:choice->midiSourceId forKey:kMidiSourceKey];
+                return;
+            }
+            if (audioOut->running() && choice->deviceUid == audioOut->deviceUid())
+                return;
+            // Re-preparing clears the rendered preview, so stop it first; the
+            // next PLAY renders at the new device's rate.
+            ats::Error error;
+            (void) hostAdapter->applyEditorAction(ats::ui::StopPreviewAction {}, error);
+            startAudio(*audioOut, *hostAdapter, choice->deviceUid);
+            if (audioOut->running() && audioOut->deviceUid() == choice->deviceUid)
+            {
+                if (choice->deviceUid.empty())
+                    [defaults removeObjectForKey:kOutputDeviceKey];
+                else
+                    [defaults setObject:@(choice->deviceUid.c_str()) forKey:kOutputDeviceKey];
+            }
+        });
 }
 
 int runSmoke(NSApplication* application)
@@ -212,14 +318,23 @@ int main(int argc, char** argv)
         if (!host.initialize(ats::host::HostFormat::standalone) ||
             !host.attachStandaloneEditor(editor, 1.0f, 1280.0f, 940.0f))
             return 2;
-        // Default-output audio so SESSION preview is audible (JUCE's standalone
-        // holder did this). The close smoke stays device-independent.
+        // Audio output and MIDI input so SESSION preview is audible and a
+        // keyboard transposes it (JUCE's standalone holder did both). The
+        // close smoke stays device-independent.
         ats::standalone::StandaloneAudioOutput audio;
+        ats::standalone::StandaloneMidiInput midi;
         if (!closeSmoke)
         {
-            std::string audioError;
-            if (!audio.start(host, false, audioError))
-                std::cerr << "ATS Resynth: audio output unavailable: " << audioError << '\n';
+            std::string midiError;
+            if (midi.open(midiError))
+            {
+                restoreMidiSelection(midi);
+                audio.setMidiInput(&midi);
+            }
+            else
+                std::cerr << "ATS Resynth: MIDI input unavailable: " << midiError << '\n';
+            startAudio(audio, host, savedOutputDevice());
+            installAudioMenu(editor, audio, midi, host);
         }
         auto* hostAdapter = &host;
         auto* editorView = &editor;
@@ -256,6 +371,7 @@ int main(int argc, char** argv)
         // message a delegate whose C++ window has already been destroyed.
         [application setDelegate:nil];
         audio.stop();
+        midi.close();
         const bool closed = !editor.isShowing();
         host.detachEditor();
         const int exitCode = closeSmoke && !closed ? 3

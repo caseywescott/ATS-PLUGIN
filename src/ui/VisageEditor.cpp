@@ -270,6 +270,12 @@ public:
                 requestKeyboardFocus();
                 return;
             }
+            if (audioMenuOptions_ && point.y < 48.0f && point.x >= kAudioButtonX
+                && point.x < kAudioButtonX + kAudioButtonWidth)
+            {
+                showAudioMenu();
+                return;
+            }
             if (point.y < 48.0f && point.x >= width() - 220.0f)
             {
                 visage::PopupMenu popup("Theme");
@@ -387,6 +393,14 @@ public:
 
     void setThemeChosenHandler(std::function<void(ThemeId)> handler)
     { onThemeChosen_ = std::move(handler); }
+
+    void setAudioMenu(std::function<std::vector<AudioMenuOption>()> options,
+                      std::function<void(int)> chosen)
+    {
+        audioMenuOptions_ = std::move(options);
+        audioMenuChosen_ = std::move(chosen);
+        redraw();
+    }
 
     void selectPage(std::size_t page)
     {
@@ -572,6 +586,11 @@ public:
         canvas.circle(448.0f, 17.0f, 8.0f);
         canvas.setColor(tokens.textSecondary.argb);
         canvas.text("RND", labelFont, visage::Font::kLeft, 460.0f, 14.0f, 30.0f, 18.0f);
+        if (audioMenuOptions_)
+        {
+            canvas.setColor(tokens.textPrimary.argb);
+            canvas.text("AUDIO", labelFont, visage::Font::kCenter, kAudioButtonX, 14.0f, kAudioButtonWidth, 18.0f);
+        }
         canvas.setColor(tokens.textSecondary.argb);
         canvas.text(shell_.state().theme == ThemeId::porcelain ? "PORCELAIN" : "EMBER",
                     labelFont, visage::Font::kCenter, width() - 220.0f, 14.0f, 200.0f, 18.0f);
@@ -1360,6 +1379,38 @@ public:
     // Wide wells: the views are buttons, so the chip only picks the source.
     // Time... menu: structural edits on the selected time range (drag a box
     // in a planar view), and paste at the playhead.
+    // Header AUDIO button (standalone only), right of the ANL/RND lamps.
+    static constexpr float kAudioButtonX = 500.0f;
+    static constexpr float kAudioButtonWidth = 64.0f;
+
+    void showAudioMenu()
+    {
+        visage::PopupMenu popup("Audio");
+        for (const auto& option : audioMenuOptions_())
+        {
+            if (option.breakBefore)
+                popup.addBreak();
+            // Visage menus have no heading rows (a disabled option stands in)
+            // and the in-window popup does not draw select(): mark in the label.
+            const auto label = option.id <= 0 ? option.label
+                             : (option.checked ? "\xE2\x80\xA2  " : "    ") + option.label;
+            popup.addOption(option.id > 0 ? option.id : -2, label)
+                .enable(option.id > 0 && option.enabled);
+        }
+        popup.onSelection() += [this](int optionId) {
+            if (optionId > 0 && audioMenuChosen_)
+                audioMenuChosen_(optionId);
+            redraw();
+        };
+        popup.onCancel() += [this] {
+            if (sink_.popupDismissed)
+                sink_.popupDismissed(sink_.context);
+        };
+        if (sink_.popupShown)
+            sink_.popupShown(sink_.context);
+        popup.show(this, { kAudioButtonX, 40.0f });
+    }
+
     void showTimeEditMenu(visage::Point origin)
     {
         enum : int { kCopy = 1, kCut, kDelete, kCrop, kPasteFade, kPasteHard };
@@ -2478,6 +2529,8 @@ private:
     std::array<bool, 2> sourceDropActive_ {};
     EditorShellModel shell_{};
     std::function<void(ThemeId)> onThemeChosen_;
+    std::function<std::vector<AudioMenuOption>()> audioMenuOptions_;
+    std::function<void(int)> audioMenuChosen_;
     std::unique_ptr<AtsPageContainer> pageContainer_;
     SpectrumSelectionPanel* selectionPanelRaw_ = nullptr;
     CurveEditorModel curveEditor_;
@@ -2618,6 +2671,12 @@ void VisageEditor::selectPage(int page)
 {
     if (page >= 0)
         impl_->frame.selectPage(static_cast<std::size_t>(page));
+}
+
+void VisageEditor::setAudioMenu(std::function<std::vector<AudioMenuOption>()> options,
+                                std::function<void(int)> chosen)
+{
+    impl_->frame.setAudioMenu(std::move(options), std::move(chosen));
 }
 
 void VisageEditor::selectTimelineCurve(int tab)

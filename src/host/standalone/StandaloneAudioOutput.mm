@@ -1,17 +1,96 @@
 #include "StandaloneAudioOutput.h"
+#include "StandaloneMidiInput.h"
+
+#include <CoreAudio/CoreAudio.h>
+#import <Foundation/Foundation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace ats::standalone
 {
+namespace
+{
+std::string deviceString(AudioDeviceID device, AudioObjectPropertySelector selector)
+{
+    const AudioObjectPropertyAddress address { selector, kAudioObjectPropertyScopeGlobal,
+                                               kAudioObjectPropertyElementMain };
+    CFStringRef value = nullptr;
+    UInt32 size = sizeof(value);
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &value) != noErr || value == nullptr)
+        return {};
+    // Not ARC: the copied string is released here.
+    NSString* text = (__bridge NSString*) value;
+    std::string result = text.UTF8String != nullptr ? std::string(text.UTF8String) : std::string();
+    CFRelease(value);
+    return result;
+}
 
-bool StandaloneAudioOutput::start(host::HostAdapter& host, bool silent, std::string& error)
+bool hasOutputChannels(AudioDeviceID device)
+{
+    const AudioObjectPropertyAddress address { kAudioDevicePropertyStreamConfiguration,
+                                               kAudioObjectPropertyScopeOutput,
+                                               kAudioObjectPropertyElementMain };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &address, 0, nullptr, &size) != noErr || size == 0)
+        return false;
+    std::vector<std::byte> storage(size);
+    auto* list = reinterpret_cast<AudioBufferList*>(storage.data());
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, list) != noErr)
+        return false;
+    for (UInt32 i = 0; i < list->mNumberBuffers; ++i)
+        if (list->mBuffers[i].mNumberChannels > 0)
+            return true;
+    return false;
+}
+} // namespace
+
+std::vector<AudioOutputDevice> StandaloneAudioOutput::outputDevices()
+{
+    std::vector<AudioOutputDevice> devices;
+    const AudioObjectPropertyAddress address { kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal,
+                                               kAudioObjectPropertyElementMain };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, nullptr, &size) != noErr)
+        return devices;
+    std::vector<AudioDeviceID> ids(size / sizeof(AudioDeviceID));
+    if (ids.empty() ||
+        AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, ids.data()) != noErr)
+        return devices;
+    for (const auto id : ids)
+    {
+        if (!hasOutputChannels(id))
+            continue;
+        AudioOutputDevice device { id, deviceString(id, kAudioDevicePropertyDeviceUID),
+                                   deviceString(id, kAudioObjectPropertyName) };
+        if (!device.uid.empty())
+            devices.push_back(std::move(device));
+    }
+    return devices;
+}
+
+bool StandaloneAudioOutput::start(host::HostAdapter& host, bool silent, std::string& error,
+                                  const std::string& deviceUid)
 {
     stop();
+    AudioDeviceID device = 0;
+    if (!deviceUid.empty())
+    {
+        for (const auto& candidate : outputDevices())
+            if (candidate.uid == deviceUid)
+                device = candidate.id;
+        if (device == 0)
+        {
+            error = "audio output device not found";
+            return false;
+        }
+    }
     AudioComponentDescription description {};
     description.componentType = kAudioUnitType_Output;
-    description.componentSubType = kAudioUnitSubType_DefaultOutput;
+    // The default-output unit follows system device changes; AUHAL is needed
+    // to pin one device.
+    description.componentSubType = device != 0 ? kAudioUnitSubType_HALOutput : kAudioUnitSubType_DefaultOutput;
     description.componentManufacturer = kAudioUnitManufacturer_Apple;
     AudioComponent component = AudioComponentFindNext(nullptr, &description);
     if (component == nullptr || AudioComponentInstanceNew(component, &unit_) != noErr)
@@ -20,6 +99,15 @@ bool StandaloneAudioOutput::start(host::HostAdapter& host, bool silent, std::str
         error = "no default audio output device";
         return false;
     }
+    if (device != 0 &&
+        AudioUnitSetProperty(unit_, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                             &device, sizeof(device)) != noErr)
+    {
+        error = "audio output device rejected";
+        stop();
+        return false;
+    }
+    deviceUid_ = deviceUid;
 
     // Device rate and the largest slice CoreAudio will request.
     AudioStreamBasicDescription deviceFormat {};
@@ -89,7 +177,9 @@ OSStatus StandaloneAudioOutput::render(void* context, AudioUnitRenderActionFlags
         return noErr;
     float* channels[2] { static_cast<float*>(buffers->mBuffers[0].mData),
                          static_cast<float*>(buffers->mBuffers[1].mData) };
-    if (self->host_ == nullptr || !self->host_->process({ channels, 2, frames }, {}))
+    std::array<MidiEvent, 64> midi {};
+    const auto midiCount = self->midi_ != nullptr ? self->midi_->drain(midi.data(), midi.size()) : 0u;
+    if (self->host_ == nullptr || !self->host_->process({ channels, 2, frames }, { midi.data(), midiCount }))
     {
         std::fill(channels[0], channels[0] + frames, 0.0f);
         std::fill(channels[1], channels[1] + frames, 0.0f);
