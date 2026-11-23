@@ -111,7 +111,16 @@ JobResult<AnalysisOutput> AtsEngine::analyze(JobGeneration generation,
     // Serra 1997: the residual must never carry more energy than the source in
     // any band and frame (mis-tracked attacks inflate it).
     if (rawSound != nullptr && request.parameters.clampResidual && rawSound->band_energy != nullptr)
-        (void) clampResidualToSource(rawSound, request.samples, request.sampleCount, request.sampleRate);
+    {
+        // ATSA frame times are relative to first_smp = floor(start * srate), so
+        // the clamp must read the source from there (with reverse tracking the
+        // flipped model's frame 0 also sits at the forward start, to within a hop).
+        const auto startSample = request.parameters.start > 0.0
+            ? static_cast<std::size_t>(std::floor(request.parameters.start * request.sampleRate)) : 0u;
+        if (startSample < request.sampleCount)
+            (void) clampResidualToSource(rawSound, request.samples + startSample,
+                                         request.sampleCount - startSample, request.sampleRate);
+    }
 
     AnalysisOutput output;
     if (residual != nullptr)

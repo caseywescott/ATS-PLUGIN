@@ -144,6 +144,16 @@ int main()
     auto nanCurve = source;
     nanCurve.soundCurves[1] = { 0.0f, std::numeric_limits<float>::quiet_NaN() };
     assert(ats::LegacyStateCodec::encode(nanCurve).empty());
+    // v22 fields are validated like the older ones.
+    auto nanVibrato = source;
+    nanVibrato.synth.vibratoDepth = std::numeric_limits<double>::quiet_NaN();
+    assert(ats::LegacyStateCodec::encode(nanVibrato).empty());
+    auto nanWeight = source;
+    nanWeight.smearnov.weightTransientness = std::numeric_limits<double>::infinity();
+    assert(ats::LegacyStateCodec::encode(nanWeight).empty());
+    auto badDensity = source;
+    badDensity.synth.residualDensity = 0;
+    assert(ats::LegacyStateCodec::encode(badDensity).empty());
 
     auto corrupt = ats::LegacyStateCodec::encode(source);
     // ATSP v17 stores outputTrim after analysis, synthesis, and

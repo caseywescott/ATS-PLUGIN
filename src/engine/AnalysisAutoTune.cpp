@@ -159,7 +159,12 @@ Evaluation evaluate(const AutoTuneRequest& request, AnalysisParams parameters,
     {
         const auto partialsOnly = render(0.0, true);
         if (partialsOnly == 0)
+        {
+            // Unscored residual terms would undercut fully scored candidates;
+            // treat the settings as unusable, as when the first render fails.
+            result.loss = std::numeric_limits<double>::infinity();
             return result;
+        }
         const auto n = std::min(request.sampleCount - first, partialsOnly);
         std::vector<double> residual(n);
         for (std::size_t i = 0; i < n; ++i)

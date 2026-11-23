@@ -40,30 +40,78 @@ std::vector<MorphBandAssignment> collectCandidates(const std::vector<MorphBandAs
     return candidates;
 }
 
-// Median over frames of the lowest active frequency (pyats estimate_fundamental),
-// refined by the amplitude-weighted mean of f / round(f / f0). 0 when no estimate
-// is possible (fewer than two candidates).
+// Harmonic sieve over the candidate set, independent of how candidates are
+// spread over frames (the host passes one entry per partial at its own peak
+// frame, so a "lowest per frame" median lands mid-spectrum). Candidate f0s are
+// f / k (k = 1..8) for the strongest partials and the lowest one; a candidate
+// scores the amplitude of partials within 10% of a harmonic of it. Every
+// subharmonic of the true f0 scores as well as the f0 itself, so the highest
+// candidate within 90% of the best score is chosen. The result is refined by
+// the amplitude-weighted mean of f / round(f / f0). 0 when no estimate is
+// possible (fewer than two candidates).
 double estimateFundamental(const std::vector<MorphBandAssignment>& candidates)
 {
     if (candidates.size() < 2)
         return 0.0;
 
-    std::map<int, double> lowestPerFrame;
+    constexpr double kMinF0 = 20.0;
+    constexpr double kMaxF0 = 4000.0;
+    constexpr double kTolerance = 0.1; // fraction of a harmonic spacing
+    constexpr int kMaxDivisor = 8;
+    constexpr size_t kSeeds = 8;
+
+    std::vector<const MorphBandAssignment*> byAmplitude;
+    byAmplitude.reserve(candidates.size());
     for (const auto& candidate : candidates)
-    {
-        auto it = lowestPerFrame.find(candidate.frameIndex);
-        if (it == lowestPerFrame.end())
-            lowestPerFrame.emplace(candidate.frameIndex, candidate.frequencyHz);
-        else
-            it->second = std::min(it->second, candidate.frequencyHz);
-    }
-    std::vector<double> lowest;
-    lowest.reserve(lowestPerFrame.size());
-    for (const auto& entry : lowestPerFrame)
-        lowest.push_back(entry.second);
-    std::sort(lowest.begin(), lowest.end());
-    const size_t n = lowest.size();
-    const double initial = (n % 2 == 1) ? lowest[n / 2] : 0.5 * (lowest[n / 2 - 1] + lowest[n / 2]);
+        byAmplitude.push_back(&candidate);
+    std::sort(byAmplitude.begin(), byAmplitude.end(),
+              [](const MorphBandAssignment* a, const MorphBandAssignment* b) {
+                  return a->amplitude != b->amplitude ? a->amplitude > b->amplitude
+                                                      : a->frequencyHz < b->frequencyHz;
+              });
+    std::vector<double> seeds;
+    for (size_t i = 0; i < byAmplitude.size() && i < kSeeds; ++i)
+        seeds.push_back(byAmplitude[i]->frequencyHz);
+    const auto lowest = std::min_element(candidates.begin(), candidates.end(),
+                                         [](const MorphBandAssignment& a, const MorphBandAssignment& b) {
+                                             return a.frequencyHz < b.frequencyHz;
+                                         });
+    seeds.push_back(lowest->frequencyHz);
+
+    const auto score = [&](double f0) {
+        double total = 0.0;
+        for (const auto& candidate : candidates)
+        {
+            const double ratio = candidate.frequencyHz / f0;
+            const double h = std::round(ratio);
+            if (h < 1.0)
+                continue;
+            const double deviation = std::abs(ratio - h);
+            if (deviation < kTolerance)
+                total += std::max(0.0, candidate.amplitude) * (1.0 - deviation / kTolerance);
+        }
+        return total;
+    };
+
+    std::vector<std::pair<double, double>> scored; // (f0, score)
+    for (const double seed : seeds)
+        for (int k = 1; k <= kMaxDivisor; ++k)
+        {
+            const double f0 = seed / static_cast<double>(k);
+            if (f0 >= kMinF0 && f0 <= kMaxF0)
+                scored.emplace_back(f0, score(f0));
+        }
+    if (scored.empty())
+        return 0.0;
+    double best = 0.0;
+    for (const auto& entry : scored)
+        best = std::max(best, entry.second);
+    if (!(best > 0.0))
+        return 0.0;
+    double initial = 0.0;
+    for (const auto& entry : scored)
+        if (entry.second >= 0.9 * best)
+            initial = std::max(initial, entry.first);
     if (!(initial > 0.0))
         return 0.0;
 

@@ -32,6 +32,12 @@ struct ImportedSource
     std::vector<double> monoSamples;
     std::vector<double> residual;
     ats::AtsSoundPtr sound;
+    // ATSA frame times count from the analysis start sample. Tools that read
+    // monoSamples at a model frame's time (residual clamp, transientness)
+    // need that offset, and must not run once a time edit or reverse has
+    // broken the frame <-> audio correspondence.
+    std::size_t analysisStartSample = 0;
+    bool modelAlignedToAudio = false;
 };
 
 class SourceImportService

@@ -297,6 +297,18 @@ Tests added: `ats_transientness_test`, `ats_residual_fixes_test`,
 `partial_selection_criteria_test`, `analysis_autotune_test`,
 `legacy_state_codec_test` (v22), `spectrum_chrome_test` (Tools... button).
 
+Review fixes (same day, after `fc56e877`): the residual clamp and the
+transientness index read the source from the analysis start sample (ATSA frame
+times are relative to it) and are skipped once a time edit or Reverse time has
+re-timed the model (`ImportedSource::modelAlignedToAudio`; an undo does not
+restore the flag, so the features stay off for that model until re-analysis);
+the harmonic-locked f0 is a harmonic sieve instead of a per-frame median, which
+read ~2 kHz on the host's one-entry-per-partial input; v22 doubles and the
+residual density are validated on encode/decode; an auto-tune candidate whose
+partials-only render fails now scores infinity. Tests: `ats_engine_test`
+(offset clamp; fails before the fix), `morph_harmonic_correspondence_test`,
+`legacy_state_codec_test`.
+
 Not verified by hand: the Tools... popup, the new SYNTHESIS rows (the left
 column is now taller than the panel at small window sizes; overflow rows hide),
 and the audible result of each render option. Housekeeping done in the research

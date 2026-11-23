@@ -673,6 +673,8 @@ public:
         }
         source.sound = std::move(analysed.value.sound);
         source.residual = std::move(analysed.value.residual);
+        source.analysisStartSample = startSampleFor(parameters, source.sampleRate);
+        source.modelAlignedToAudio = true;
         if (slot == 3)
             ++currentSourceRevision_;
         if (state_ != HostState::prepared)
@@ -742,6 +744,7 @@ public:
         auto samples = source.monoSamples;
         const auto sampleRate = source.sampleRate;
         const auto parameters = analysisParamsForSource(source);
+        analysisStartSample_ = startSampleFor(parameters, sampleRate);
         const auto token = analysisCancellation_.token();
         {
             auto promise = std::make_shared<std::promise<JobResult<AnalysisOutput>>>();
@@ -961,6 +964,8 @@ public:
         auto& source = *const_cast<engine::ImportedSource*>(analysedSource);
         source.sound = std::move(analysed.value.sound);
         source.residual = std::move(analysed.value.residual);
+        source.analysisStartSample = analysisStartSample_;
+        source.modelAlignedToAudio = true;
         if (analysisSlot_ == 3)
             ++currentSourceRevision_;
         const auto displayReferenceIndex = analysisSlot_ == 3 ? 0 : analysisSlot_ + 1;
@@ -1543,6 +1548,7 @@ public:
             }
             const auto before = captureState();
             target->sound = std::move(edited);
+            target->modelAlignedToAudio = false; // frames no longer map to the source audio
             // Smearnov onsets and detector curves are frame-aligned to the old grid.
             onsetOverlay_.clear();
             onsetHandleOverlay_.clear();
@@ -1608,16 +1614,18 @@ public:
                 }
                 case Cmd::clampResidualToSource:
                 {
-                    if (sound->band_energy == nullptr || target->monoSamples.empty() || target->sampleRate <= 0)
+                    const auto audio = alignedAudio(target);
+                    if (sound->band_energy == nullptr || audio.samples == nullptr)
                     {
-                        error = { "no_source_audio", "clamping needs a residual and the analysed source audio" };
+                        error = { "no_source_audio",
+                                  "clamping needs a residual and the source audio it was analysed from "
+                                  "(not available after a time edit or reverse)" };
                         return true;
                     }
                     edited.reset(copy_sound(const_cast<ATS_SOUND*>(sound)));
                     if (edited)
-                        (void) clampResidualToSource(edited.get(), target->monoSamples.data(),
-                                                     target->monoSamples.size(), target->sampleRate,
-                                                     value > 0.0 ? value : 1.0);
+                        (void) clampResidualToSource(edited.get(), audio.samples, audio.count,
+                                                     target->sampleRate, value > 0.0 ? value : 1.0);
                     label = "Clamp residual to source";
                     break;
                 }
@@ -1656,6 +1664,8 @@ public:
                 }
                 const auto before = captureState();
                 target->sound = std::move(edited);
+                if (spectrum->command == Cmd::reverseFrames)
+                    target->modelAlignedToAudio = false;
                 // Smearnov onsets and detector curves are frame-aligned to the old model.
                 onsetOverlay_.clear();
                 onsetHandleOverlay_.clear();
@@ -2803,11 +2813,42 @@ private:
     [[nodiscard]] std::vector<double> smearnovTransientness(const engine::ImportedSource* source,
                                                             const ATS_SOUND* sound) const
     {
-        if (source == nullptr || sound == nullptr || parameters_.read("smearnovWeightTransientness") <= 0.0f
-            || source->monoSamples.empty() || source->sampleRate <= 0)
+        if (sound == nullptr || parameters_.read("smearnovWeightTransientness") <= 0.0f)
             return {};
-        return transientnessIndex(source->monoSamples.data(), source->monoSamples.size(),
-                                  source->sampleRate, sound).index;
+        const auto audio = alignedAudio(source);
+        if (audio.samples == nullptr)
+            return {};
+        auto index = transientnessIndex(audio.samples, audio.count, source->sampleRate, sound).index;
+        // A length mismatch means the model is not the one this audio produced.
+        if (index.size() != static_cast<std::size_t>(sound->frames))
+            return {};
+        return index;
+    }
+
+    // ATSA's tracker: first_smp = floor(start * srate); frame times are relative to it.
+    [[nodiscard]] static std::size_t startSampleFor(const AnalysisParams& parameters, int sampleRate) noexcept
+    {
+        if (sampleRate <= 0 || !(parameters.start > 0.0))
+            return 0;
+        return static_cast<std::size_t>(std::floor(parameters.start * static_cast<double>(sampleRate)));
+    }
+
+    struct AlignedAudio
+    {
+        const double* samples = nullptr;
+        std::size_t count = 0;
+    };
+
+    // The source audio from the analysis start sample on, so sample
+    // time[0][f] * sampleRate is the audio of model frame f. Empty when the
+    // source has no audio or its model was re-timed (time edit, reverse).
+    [[nodiscard]] static AlignedAudio alignedAudio(const engine::ImportedSource* source) noexcept
+    {
+        if (source == nullptr || !source->modelAlignedToAudio || source->sampleRate <= 0
+            || source->analysisStartSample >= source->monoSamples.size())
+            return {};
+        return { source->monoSamples.data() + source->analysisStartSample,
+                 source->monoSamples.size() - source->analysisStartSample };
     }
 
     [[nodiscard]] AnalysisParams analysisParams() const noexcept
@@ -3776,6 +3817,7 @@ private:
     std::future<JobResult<AnalysisOutput>> analysisFuture_;
     int analysisSlot_ = -1;
     std::uint64_t analysisSourceRevision_ = 0;
+    std::size_t analysisStartSample_ = 0;
     // AUTO-TUNE: shares analysisRunning_ / analysisProgress_ / analysisCancellation_.
     std::future<JobResult<AutoTuneResult>> autoTuneFuture_;
     struct PartialSmrCacheEntry

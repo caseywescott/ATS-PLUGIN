@@ -218,6 +218,30 @@ int main()
         }
     }
 
+    // Host-shaped input: one entry per partial, each at its own peak frame
+    // (makeMorphAssignments). A per-frame "lowest" median read ~2 kHz here.
+    {
+        auto a = series(100.0, 40);
+        auto b = series(150.0, 30);
+        for (std::size_t i = 0; i < a.size(); ++i) a[i].frameIndex = static_cast<int>(i * 3);
+        for (std::size_t i = 0; i < b.size(); ++i) b[i].frameIndex = static_cast<int>(i * 5 + 1);
+        const auto result = ats::buildHarmonicLockedCorrespondence(a, b);
+        assert(!result.usedGrid);
+        assert(near(result.fundamentalSourceHz, 100.0, 1.0));
+        assert(near(result.fundamentalTargetHz, 150.0, 1.5));
+        assert(result.matched == 30 && result.unmatchedSource == 10 && result.unmatchedTarget == 0);
+        for (const auto& r : result.records)
+            if (r.kind == ats::MorphCorrespondenceKind::Matched)
+                assert(near(r.targetFrequencyHz / r.sourceFrequencyHz, 1.5, 1.0e-9));
+    }
+    // A missing fundamental must not halve the estimate: harmonics 2..10 of 200 Hz.
+    {
+        auto a = series(200.0, 10);
+        a.erase(a.begin());
+        const auto result = ats::buildHarmonicLockedCorrespondence(a, series(200.0, 10));
+        assert(near(result.fundamentalSourceHz, 200.0, 2.0));
+    }
+
     std::cout << "morph_harmonic_correspondence_test: ok\n";
     return 0;
 }

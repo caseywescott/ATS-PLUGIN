@@ -165,9 +165,18 @@ bool validState(const LegacyState& state) noexcept
     const double smearValues[] { smear.blurMs, smear.sharpen, smear.exaggerateDb, smear.maxDb,
                                  smear.weightDetFlux, smear.weightResFlux, smear.weightHfcFlux,
                                  smear.weightBirth, smear.weightPhaseDev, smear.thresholdLambda,
-                                 smear.thresholdAutoScale, smear.preMarginMs, smear.mix };
+                                 smear.thresholdAutoScale, smear.preMarginMs, smear.mix,
+                                 smear.weightTransientness };
     for (const auto value : smearValues)
         if (!finite(value)) return false;
+    // v22 render options: finite, and the carrier count within the registry range.
+    const auto& synth = state.synth;
+    const double renderValues[] { synth.animationShimmerDb, synth.animationJitterCents,
+                                  synth.animationRateHz, synth.vibratoDepth,
+                                  synth.vibratoRateScale, synth.transposeTiltDbPerOct };
+    for (const auto value : renderValues)
+        if (!finite(value)) return false;
+    if (synth.residualDensity < 1 || synth.residualDensity > 32) return false;
     for (const auto& blob : state.morphSoundData)
         if (blob.size() > kMaxBlobBytes) return false;
     if (state.morphTimeline.size() > 32) return false;
